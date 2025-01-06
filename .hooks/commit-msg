@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+
+repo_root="$(git rev-parse --show-toplevel)"
+commit_msg_file="$1"
+
+# Use frontend's commitlint for message validation
+cd "${repo_root}/frontend" && ./.husky/commit-msg "$commit_msg_file" && cd "${repo_root}"
+result=$?
+
+if [ $result -ne 0 ]; then
+    exit 1
+fi
+
+exit 0

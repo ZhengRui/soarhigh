@@ -16,7 +16,7 @@ repos:
       - id: mypy
         files: ^backend/
         entry: bash -c 'cd backend && mypy .'
-        additional_dependencies:
-            - "types-sqlalchemy"
-            - "types-python-jose"
-            - "fastapi"
+        language: python
+        types: [python]
+        require_serial: true
+        verbose: true

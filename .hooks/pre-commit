@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+# Run frontend checks
+cd "${repo_root}/frontend" && ./.husky/pre-commit && cd "${repo_root}"
+result1=$?
+
+# Run backend checks
+cd "${repo_root}/backend" && ./.hooks/pre-commit && cd "${repo_root}"
+result2=$?
+
+if [ $result1 -ne 0 ] || [ $result2 -ne 0 ]; then
+    exit 1
+fi
+
+exit 0
