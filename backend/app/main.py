@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="SoarHigh Toastmasters API")
+app = FastAPI(title="SoarHigh Toastmaster Club API")
 
 # Configure CORS
 app.add_middleware(
@@ -15,4 +15,4 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to SoarHigh Toastmasters API"}
+    return {"message": "Welcome to SoarHigh Toastmaster Club API"}
