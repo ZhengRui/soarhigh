@@ -1,0 +1,10 @@
+node_modules
+build
+out
+dist
+coverage
+
+.next
+.vscode
+.git
+.husky
