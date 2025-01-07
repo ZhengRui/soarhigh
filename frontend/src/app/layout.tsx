@@ -13,7 +13,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang='en'>
-      <body>{children}</body>
+      <body>
+        <main className='pt-16'>{children}</main>
+      </body>
     </html>
   );
 }
