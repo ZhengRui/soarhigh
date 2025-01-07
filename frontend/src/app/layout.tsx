@@ -1,5 +1,9 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import Header from './Header';
+import QueryProvider from './QueryProvider';
+import { Provider } from 'jotai';
+import { Toaster } from 'react-hot-toast';
 
 export const metadata: Metadata = {
   title: 'SoarHigh Toastmaster Club',
@@ -14,7 +18,15 @@ export default function RootLayout({
   return (
     <html lang='en'>
       <body>
-        <main className='pt-16'>{children}</main>
+        <QueryProvider>
+          <Provider>
+            <main>
+              <Header />
+              {children}
+              <Toaster position='bottom-right' />
+            </main>
+          </Provider>
+        </QueryProvider>
       </body>
     </html>
   );
