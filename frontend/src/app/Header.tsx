@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Menu, X, LogOut } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -32,7 +32,7 @@ const NavLink = ({
   );
 };
 
-const MobileHeader = ({
+const MobileMenu = ({
   isOpen,
   onToggle,
   onSignOut,
@@ -41,9 +41,27 @@ const MobileHeader = ({
   onToggle: () => void;
   onSignOut: () => void;
 }) => {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        onToggle();
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen, onToggle]);
+
   const { data: user } = useAuth();
   return (
-    <div className='md:hidden'>
+    <div className='md:hidden' ref={menuRef}>
       <button
         onClick={onToggle}
         className='p-2 rounded-md text-gray-700 hover:bg-gray-100'
@@ -127,7 +145,7 @@ const Header = () => {
             )}
           </div>
 
-          <MobileHeader
+          <MobileMenu
             isOpen={isOpen}
             onToggle={() => setIsOpen(!isOpen)}
             onSignOut={signout}
