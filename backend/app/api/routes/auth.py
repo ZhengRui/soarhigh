@@ -1,3 +1,5 @@
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import ExpiredSignatureError, JWTError, jwt
@@ -42,5 +44,15 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(http_sc
 
 
 @r.get("/whoami")
-async def whoami(user: User = Depends(get_current_user)):
+async def whoami(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@r.get("/members")
+async def members(user: User = Depends(get_current_user)) -> List[User]:
+    return [
+        User(uid="a1", username="john", full_name="John Smith"),
+        User(uid="a2", username="sarah", full_name="Sarah Johnson"),
+        User(uid="a3", username="michael", full_name="Michael Chen"),
+        User(uid="a4", username="emily", full_name="Emily Brown"),
+    ]

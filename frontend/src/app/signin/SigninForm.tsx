@@ -1,31 +1,11 @@
 'use client';
 
 import React from 'react';
-import toast from 'react-hot-toast';
 import { LoadingSpinner } from '@/components/Spinner';
-import { useQueryClient, useMutation } from '@tanstack/react-query';
-import { signin } from '@/utils/auth';
-import { useRouter } from 'next/navigation';
+import { useSigninMutation } from '@/hooks/useSignin';
 
 export const SigninForm = () => {
-  const queryClient = useQueryClient();
-  const router = useRouter();
-  const { mutate, isPending: isLoading } = useMutation({
-    mutationFn: ({
-      username,
-      password,
-    }: {
-      username: string;
-      password: string;
-    }) => signin(username, password),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['whoami'] });
-      router.push('/');
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : (err as string));
-    },
-  });
+  const { mutate, isPending: isLoading } = useSigninMutation();
 
   const handleSignin = async (e: React.FormEvent) => {
     e.preventDefault();

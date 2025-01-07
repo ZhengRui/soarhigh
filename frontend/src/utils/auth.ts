@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { requestTemplate, responseHandlerTemplate } from './requestTemplate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -56,3 +57,13 @@ export const signin = async (username: string, password: string) => {
     full_name: data.user.user_metadata.full_name,
   };
 };
+
+export const getMembers = requestTemplate(
+  () => ({
+    url: apiEndpoint + '/members',
+    method: 'GET',
+  }),
+  responseHandlerTemplate,
+  null,
+  true
+);
