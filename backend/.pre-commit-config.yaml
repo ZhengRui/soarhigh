@@ -10,13 +10,13 @@ repos:
         files: ^backend/
         entry: bash -c 'cd backend && ruff format .'
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.8.0
+  - repo: local
     hooks:
       - id: mypy
+        name: mypy
         files: ^backend/
         entry: bash -c 'cd backend && mypy .'
-        language: python
+        language: system
         types: [python]
         require_serial: true
         verbose: true

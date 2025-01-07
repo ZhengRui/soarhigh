@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .routes.auth import auth_router
+
 
 def get_application():
     app = FastAPI(
@@ -19,6 +21,8 @@ def get_application():
     )
 
     app.mount("/static", StaticFiles(directory="static"), name="static")
+
+    app.include_router(auth_router)
 
     return app
 
