@@ -5,6 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import ExpiredSignatureError, JWTError, jwt
 
 from ...config import SUPABASE_JWT_SECRET
+from ...db.core import get_members
 from ...models.users import User
 
 http_scheme = HTTPBearer()
@@ -50,9 +51,5 @@ async def whoami(user: User = Depends(get_current_user)) -> User:
 
 @r.get("/members")
 async def members(user: User = Depends(get_current_user)) -> List[User]:
-    return [
-        User(uid="a1", username="john", full_name="John Smith"),
-        User(uid="a2", username="sarah", full_name="Sarah Johnson"),
-        User(uid="a3", username="michael", full_name="Michael Chen"),
-        User(uid="a4", username="emily", full_name="Emily Brown"),
-    ]
+    members = get_members()
+    return [User(uid=member["id"], username=member["username"], full_name=member["full_name"]) for member in members]
