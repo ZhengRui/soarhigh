@@ -1,7 +1,7 @@
 [project]
 name = "soarhigh-backend"
 version = "0.1.0"
-description = "Backend for SoarHigh Toastmaster Club"
+description = "Backend for SoarHigh Toastmasters Club"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.109.0",

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Menu, X, LogOut } from 'lucide-react';
+import { Menu, X, LogOut, ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
@@ -76,8 +76,13 @@ const MobileMenu = ({
             <NavLink href='/meetings'>Meetings</NavLink>
             {user ? (
               <>
-                <NavLink href='/onboarding'>Onboarding</NavLink>
-                <NavLink href='/awards'>Awards</NavLink>
+                <div className='pl-4 space-y-2'>
+                  <div className='text-sm font-medium text-gray-500'>
+                    Operations
+                  </div>
+                  <NavLink href='/growth'>Growth</NavLink>
+                  <NavLink href='/awards'>Awards</NavLink>
+                </div>
                 <button
                   onClick={onSignOut}
                   className='flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-full'
@@ -120,7 +125,7 @@ const Header = () => {
                 SoarHigh
               </span>
               <span className='text-xs sm:text-sm font-medium tracking-widest uppercase bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent transform transition-all group-hover:tracking-[0.2em]'>
-                Toast Master Club
+                Toast Masters Club
               </span>
             </div>
           </Link>
@@ -130,8 +135,19 @@ const Header = () => {
             <NavLink href='/meetings'>Meetings</NavLink>
             {user ? (
               <>
-                <NavLink href='/onboarding'>Onboarding</NavLink>
-                <NavLink href='/awards'>Awards</NavLink>
+                <div className='relative group'>
+                  <div className='flex items-center gap-1 px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 cursor-pointer'>
+                    Operations
+                    <ChevronDown
+                      size={16}
+                      className={`transform transition-transform group-hover:rotate-180`}
+                    />
+                  </div>
+                  <div className='absolute top-full right-0 mt-1 w-48 bg-white rounded-xl shadow-lg px-4 py-2 flex flex-col space-y-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200'>
+                    <NavLink href='/growth'>Growth</NavLink>
+                    <NavLink href='/awards'>Awards</NavLink>
+                  </div>
+                </div>
                 <button
                   onClick={signout}
                   className='flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900'

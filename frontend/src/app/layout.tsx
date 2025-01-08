@@ -6,8 +6,8 @@ import { Provider } from 'jotai';
 import { Toaster } from 'react-hot-toast';
 
 export const metadata: Metadata = {
-  title: 'SoarHigh Toastmaster Club',
-  description: 'SoarHigh Toastmaster Club Website',
+  title: 'SoarHigh Toastmasters Club',
+  description: 'SoarHigh Toastmasters Club Website',
 };
 
 export default function RootLayout({
