@@ -211,7 +211,7 @@ const Landing = () => {
             </h2>
             <div className='prose prose-lg mx-auto text-gray-600'>
               <p className='mb-4'>
-                Founded in 2020, SoarHigh is more than just a Toastmasters
+                Founded in 2014, SoarHigh is more than just a Toastmasters
                 club—it&apos;s a community of passionate individuals committed
                 to personal and professional growth through the art of public
                 speaking.
@@ -234,7 +234,7 @@ const Landing = () => {
                 <div className='flex justify-center items-center gap-1'>
                   <p className='text-purple-700'>{LOCATION.address}</p>
                   <button
-                    className='p-1.5 hover:bg-purple-100 rounded-full transition-colors'
+                    className='p-1.5 hover:bg-purple-100 hover:scale-110 hover:text-purple-900 rounded-full transition-colors duration-200'
                     aria-label='Open in maps'
                     onClick={() => setShowMapMenu(!showMapMenu)}
                   >
