@@ -101,7 +101,11 @@ const MAP_LINKS = [
 
 const Landing = () => {
   const [currentSlide, setCurrentSlide] = useState(0);
+
+  const [showFloatingCTA, setShowFloatingCTA] = useState(false);
+
   const [showMapMenu, setShowMapMenu] = useState(false);
+
   const mapMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -129,6 +133,17 @@ const Landing = () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [showMapMenu]);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      // Show CTA when scrolled past 300px
+      const shouldShow = window.scrollY > 300;
+      setShowFloatingCTA(shouldShow);
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   const nextSlide = () => {
     setCurrentSlide((prev) => (prev + 1) % SLIDER_IMAGES.length);
@@ -284,7 +299,13 @@ const Landing = () => {
             </div>
 
             {/* Mobile Floating CTA */}
-            <div className='fixed bottom-4 left-0 px-2 w-full flex justify-center sm:hidden z-50'>
+            <div
+              className={`fixed bottom-4 left-0 px-2 w-full flex justify-center sm:hidden z-50 transition-all duration-300 ${
+                showFloatingCTA
+                  ? 'opacity-100 translate-y-0'
+                  : 'opacity-0 translate-y-10 pointer-events-none'
+              }`}
+            >
               <Link
                 href='/meetings'
                 className='flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-blue-600 to-purple-600 rounded-full shadow-lg'
