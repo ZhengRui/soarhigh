@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -9,6 +9,8 @@ import {
   Award,
   Lightbulb,
   Calendar,
+  MapPin,
+  Navigation,
 } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -71,8 +73,36 @@ const ACTIVITY_GRID = [
   },
 ];
 
+const LOCATION = {
+  address: '宝安区宝体众里创新社区2楼',
+  coordinates: {
+    lat: 22.562474235254037,
+    lng: 113.8739984820493,
+  },
+};
+
+const MAP_LINKS = [
+  {
+    name: 'Google Maps',
+    url: 'https://maps.app.goo.gl/t7qzRs4K3RumCw3x7',
+    icon: Navigation,
+  },
+  {
+    name: 'Baidu Maps',
+    url: 'https://j.map.baidu.com/50/DFjg',
+    icon: MapPin,
+  },
+  {
+    name: 'Apple Maps',
+    url: `http://maps.apple.com/?ll=${LOCATION.coordinates.lat},${LOCATION.coordinates.lng}&q=Joinin%20Hub`,
+    icon: MapPin,
+  },
+];
+
 const Landing = () => {
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [showMapMenu, setShowMapMenu] = useState(false);
+  const mapMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -80,6 +110,25 @@ const Landing = () => {
     }, 5000);
     return () => clearInterval(timer);
   }, [currentSlide]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        mapMenuRef.current &&
+        !mapMenuRef.current.contains(event.target as Node)
+      ) {
+        setShowMapMenu(false);
+      }
+    };
+
+    if (showMapMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showMapMenu]);
 
   const nextSlide = () => {
     setCurrentSlide((prev) => (prev + 1) % SLIDER_IMAGES.length);
@@ -176,13 +225,44 @@ const Landing = () => {
               </p>
             </div>
             <div className='mt-8 flex flex-col sm:flex-row gap-4 justify-center'>
-              <div className='bg-blue-50 p-4 rounded-lg sm:w-[248px]'>
+              <div className='bg-blue-50 p-4 rounded-lg sm:w-[280px]'>
                 <h3 className='font-semibold text-blue-900'>Weekly Meetings</h3>
                 <p className='text-blue-700'>Every Wednesday at 7:00 PM</p>
               </div>
-              <div className='bg-purple-50 p-4 rounded-lg sm:w-[248px]'>
+              <div className='bg-purple-50 p-4 rounded-lg sm:w-[280px] relative'>
                 <h3 className='font-semibold text-purple-900'>Location</h3>
-                <p className='text-purple-700'>宝安区宝体众里创新社区2楼</p>
+                <div className='flex justify-center items-center gap-1'>
+                  <p className='text-purple-700'>{LOCATION.address}</p>
+                  <button
+                    className='p-1.5 hover:bg-purple-100 rounded-full transition-colors'
+                    aria-label='Open in maps'
+                    onClick={() => setShowMapMenu(!showMapMenu)}
+                  >
+                    <MapPin className='w-4 h-4 text-purple-700' />
+                  </button>
+                </div>
+
+                {/* Map Options Menu */}
+                {showMapMenu && (
+                  <div
+                    className='absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg py-1 z-50'
+                    ref={mapMenuRef}
+                  >
+                    {MAP_LINKS.map((map) => (
+                      <a
+                        key={map.name}
+                        href={map.url}
+                        target='_blank'
+                        rel='noopener noreferrer'
+                        className='flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100'
+                        onClick={() => setShowMapMenu(false)}
+                      >
+                        <map.icon className='w-4 h-4 mr-2' />
+                        {map.name}
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
