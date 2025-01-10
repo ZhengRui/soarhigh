@@ -11,6 +11,8 @@ import {
   Calendar,
   MapPin,
   Navigation,
+  Plus,
+  Minus,
 } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -99,12 +101,38 @@ const MAP_LINKS = [
   },
 ];
 
+const FAQ_ITEMS = [
+  {
+    question:
+      'What makes SoarHigh special compared to other Toastmasters clubs?',
+    answer:
+      'SoarHigh stands out in several unique ways. As a fully English-speaking club, our standard meetings are conducted entirely in English, though we occasionally host special and fun events in Chinese, like "相亲会" (dating events). What truly sets us apart is our family-like atmosphere. We\'re a close-knit community where members genuinely support and celebrate each other\'s growth and success. Our experienced mentors are dedicated to helping members improve their public speaking skills through personalized guidance and constructive feedback.',
+  },
+  {
+    question: 'Is it free to join SoarHigh?',
+    answer:
+      'We always warmly welcome you to attend our weekly meetings as a guest, and it is completely free. For those interested in becoming members, there is a modest membership fee that covers Toastmasters International dues and club resources. This investment gives you access to all club benefits, educational materials, and the global Toastmasters network.',
+  },
+  {
+    question: 'What benefits do I get as a SoarHigh member?',
+    answer:
+      "Members receive access to structured learning paths, regular speaking opportunities, personalized feedback, leadership development, networking opportunities, and official Toastmasters educational materials. You'll also get mentorship support and the chance to participate in speech contests.",
+  },
+  {
+    question: 'Do I need prior public speaking experience?',
+    answer:
+      'Not at all! SoarHigh welcomes members of all experience levels. Our supportive environment and structured program are designed to help both beginners and experienced speakers improve their skills at their own pace.',
+  },
+];
+
 const Landing = () => {
   const [currentSlide, setCurrentSlide] = useState(0);
 
   const [showFloatingCTA, setShowFloatingCTA] = useState(false);
 
   const [showMapMenu, setShowMapMenu] = useState(false);
+
+  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
 
   const mapMenuRef = useRef<HTMLDivElement>(null);
 
@@ -153,6 +181,10 @@ const Landing = () => {
     setCurrentSlide(
       (prev) => (prev - 1 + SLIDER_IMAGES.length) % SLIDER_IMAGES.length
     );
+  };
+
+  const toggleFaq = (index: number) => {
+    setOpenFaqIndex(openFaqIndex === index ? null : index);
   };
 
   const getNextWednesday = () => {
@@ -401,6 +433,56 @@ const Landing = () => {
                       {activity.title}
                     </h3>
                   </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* FAQ Section */}
+      <div className='py-16 bg-white'>
+        <div className='max-w-3xl mx-auto px-4 sm:px-6 lg:px-8'>
+          <div className='text-center mb-8 sm:mb-12'>
+            <h2 className='text-2xl sm:text-3xl font-bold text-gray-900'>
+              Frequently Asked Questions
+            </h2>
+            <p className='mt-3 sm:mt-4 text-base sm:text-lg text-gray-600'>
+              Everything you need to know about SoarHigh
+            </p>
+          </div>
+
+          <div className='space-y-3 sm:space-y-4'>
+            {FAQ_ITEMS.map((item, index) => (
+              <div
+                key={index}
+                className='bg-gray-50 rounded-lg overflow-hidden transition-all duration-200'
+              >
+                <button
+                  onClick={() => toggleFaq(index)}
+                  className='w-full px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between text-left hover:bg-gray-100 transition-colors gap-4'
+                >
+                  <span className='text-base sm:text-lg font-medium text-gray-900 flex-1 pr-2'>
+                    {item.question}
+                  </span>
+                  <div className='p-1 rounded-full bg-gray-100 flex-shrink-0'>
+                    {openFaqIndex === index ? (
+                      <Minus className='w-4 h-4 sm:w-5 sm:h-5 text-gray-500' />
+                    ) : (
+                      <Plus className='w-4 h-4 sm:w-5 sm:h-5 text-gray-500' />
+                    )}
+                  </div>
+                </button>
+                <div
+                  className={`px-4 sm:px-6 transition-all duration-200 ease-in-out ${
+                    openFaqIndex === index
+                      ? 'py-3 sm:py-4 opacity-100'
+                      : 'max-h-0 py-0 opacity-0'
+                  }`}
+                >
+                  <p className='text-sm sm:text-base text-gray-600 leading-relaxed'>
+                    {item.answer}
+                  </p>
                 </div>
               </div>
             ))}
