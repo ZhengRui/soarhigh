@@ -7,6 +7,7 @@ export interface AwardResult {
   category: AwardCategory;
   member: UserIF;
   date: string;
+  customTitle?: string;
 }
 
 export const AwardPreview = ({ award }: { award: AwardResult }) => {
@@ -22,21 +23,66 @@ export const AwardPreview = ({ award }: { award: AwardResult }) => {
     // Create new image object
     const img = new Image();
     // Set the source - replace this URL with your actual award image URL
-    img.src = `/images/awards/${award.category.toLowerCase().replace(/\s+/g, '-')}.webp`;
+    img.src =
+      award.category === 'Custom Award'
+        ? `/images/awards/customizable.webp`
+        : `/images/awards/${award.category.toLowerCase().replace(/\s+/g, '-')}.webp`;
 
     // Wait for image to load before drawing
     img.onload = () => {
       // Draw the image to fill the canvas
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-      // Add text with shadow for better visibility
+      // basic text settings
       ctx.textAlign = 'center';
+
+      // Add shadow for better visibility
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+      ctx.shadowBlur = 12;
+      ctx.shadowOffsetX = 6;
+      ctx.shadowOffsetY = 6;
+
+      // If it's a custom award, add the custom title to the canvas
+      if (award.category === 'Custom Award') {
+        // Add your custom title drawing logic here
+        ctx.font = 'bold 600px serif';
+
+        // Get text metrics to create gradient
+        const text = (award.customTitle || 'Custom Award').toUpperCase();
+        const metrics = ctx.measureText(text);
+        const textWidth = metrics.width;
+
+        // Create golden gradient
+        const gradient = ctx.createLinearGradient(
+          canvas.width / 2 - textWidth / 2, // start x
+          0, // start y
+          canvas.width / 2 + textWidth / 2, // end x
+          0 // end y
+        );
+
+        // Vibrant gradient colors
+        gradient.addColorStop(0, '#FFD700'); // Bright gold
+        gradient.addColorStop(0.5, '#FDB931'); // Deep gold
+        gradient.addColorStop(1, '#FFD700'); // Bright gold
+
+        // Apply gradient
+        ctx.fillStyle = gradient;
+
+        ctx.fillText(
+          (award.customTitle || 'Custom Award').toUpperCase(),
+          canvas.width / 2,
+          1800
+        );
+      }
+
       ctx.fillStyle = 'black';
 
       // Determine y-coordinate based on award category
-      const yOffset = ['Best Evaluator', 'Best Partner'].includes(
-        award.category
-      )
+      const yOffset = [
+        'Best Evaluator',
+        'Best Partner',
+        'Custom Award',
+      ].includes(award.category)
         ? -80
         : 0;
 
@@ -51,17 +97,8 @@ export const AwardPreview = ({ award }: { award: AwardResult }) => {
       ctx.font = 'lighter 200px serif';
       ctx.fillText('Libra Lee', 4925, 4050 + yOffset);
 
-      // Add award category if it's Customized Award
-      //   ctx.fillText(award.category, 400, 300);
-
       // Add member name
       ctx.font = '480px Brush Script MT';
-
-      // Add shadow for better visibility
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
-      ctx.shadowBlur = 12;
-      ctx.shadowOffsetX = 6;
-      ctx.shadowOffsetY = 6;
 
       const text = award.member.full_name;
       const metrics = ctx.measureText(text);
@@ -92,7 +129,12 @@ export const AwardPreview = ({ award }: { award: AwardResult }) => {
     if (!canvas) return;
 
     const link = document.createElement('a');
-    link.download = `${award.category.toLowerCase().replace(/\s+/g, '-')}.png`;
+    const filename =
+      award.category === 'Custom Award'
+        ? `${award.customTitle?.toLowerCase().replace(/\s+/g, '-') || 'custom-award'}.png`
+        : `${award.category.toLowerCase().replace(/\s+/g, '-')}.png`;
+
+    link.download = filename;
     link.href = canvas.toDataURL();
     link.click();
   };

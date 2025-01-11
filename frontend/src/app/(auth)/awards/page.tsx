@@ -14,25 +14,16 @@ export default function AwardsPage() {
       // Check if the selection is a member ID
       const member = members?.find((m) => m.uid === selection.memberId);
 
-      if (member) {
-        // If it's a member ID, use the member's data
-        return {
-          category: selection.category,
-          member: member,
-          date: selection.date,
-        };
-      } else {
-        // If it's not a member ID, treat the memberId as a custom name
-        return {
-          category: selection.category,
-          member: {
-            uid: selection.memberId,
-            username: selection.memberId,
-            full_name: selection.memberId,
-          },
-          date: selection.date,
-        };
-      }
+      return {
+        category: selection.category,
+        member: member || {
+          uid: selection.memberId,
+          username: selection.memberId,
+          full_name: selection.memberId,
+        },
+        date: selection.date,
+        customTitle: selection.customTitle,
+      };
     });
     setAwards(results);
   };
