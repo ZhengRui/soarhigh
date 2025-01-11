@@ -18,18 +18,18 @@ import Image from 'next/image';
 import Link from 'next/link';
 const SLIDER_IMAGES = [
   {
-    url: 'https://images.unsplash.com/photo-1475721027785-f74eccf877e2?auto=format&fit=crop&q=80',
+    url: 'https://soarhigh.oss-cn-shenzhen.aliyuncs.com/public/images/web/publicspeaking.jpeg?x-oss-process=image/quality,q_80/format,webp',
     title: 'Public Speaking Excellence',
     description:
       'Develop your communication skills through practice and feedback',
   },
   {
-    url: 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&q=80',
+    url: 'https://soarhigh.oss-cn-shenzhen.aliyuncs.com/public/images/web/colearning.jpeg?x-oss-process=image/quality,q_80/format,webp',
     title: 'Collaborative Learning',
     description: 'Learn and grow together in a supportive environment',
   },
   {
-    url: 'https://images.unsplash.com/photo-1544531585-9847b68c8c86?auto=format&fit=crop&q=80',
+    url: 'https://soarhigh.oss-cn-shenzhen.aliyuncs.com/public/images/web/leadership.jpeg?x-oss-process=image/quality,q_80/format,webp',
     title: 'Leadership Development',
     description:
       'Build confidence and leadership skills through hands-on experience',
