@@ -6,6 +6,7 @@ import { UserIF } from '@/interfaces';
 export interface AwardResult {
   category: AwardCategory;
   member: UserIF;
+  date: string;
 }
 
 export const AwardPreview = ({ award }: { award: AwardResult }) => {
@@ -32,9 +33,12 @@ export const AwardPreview = ({ award }: { award: AwardResult }) => {
       ctx.textAlign = 'center';
       ctx.fillStyle = 'black';
 
+      // Format date from YYYY-MM-DD to YYYY/MM/DD
+      const formattedDate = award.date.replace(/-/g, '/');
+
       // add date
       ctx.font = 'lighter 180px Courier New';
-      ctx.fillText('2025/01/11', 1700, 4050);
+      ctx.fillText(formattedDate, 1700, 4050);
 
       // add president signature
       ctx.font = 'lighter 200px serif';

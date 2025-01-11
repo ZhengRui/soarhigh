@@ -22,6 +22,7 @@ const AWARD_CATEGORIES: AwardCategory[] = [
 export interface AwardSelection {
   category: AwardCategory;
   memberId: string;
+  date: string;
 }
 
 const AwardSelect = ({
@@ -119,8 +120,14 @@ export const AwardForm = ({
   members: UserIF[];
   onSubmit: (selections: AwardSelection[]) => void;
 }) => {
+  const today = new Date().toISOString().split('T')[0];
+  const [selectedDate, setSelectedDate] = useState(today);
   const [selections, setSelections] = useState<AwardSelection[]>(
-    AWARD_CATEGORIES.map((category) => ({ category, memberId: '' }))
+    AWARD_CATEGORIES.map((category) => ({
+      category,
+      memberId: '',
+      date: today,
+    }))
   );
 
   const handleSelectionChange = (category: AwardCategory, value: string) => {
@@ -131,6 +138,12 @@ export const AwardForm = ({
     );
   };
 
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newDate = e.target.value;
+    setSelectedDate(newDate);
+    setSelections((prev) => prev.map((sel) => ({ ...sel, date: newDate })));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit(selections.filter((sel) => sel.memberId));
@@ -138,6 +151,22 @@ export const AwardForm = ({
 
   return (
     <form onSubmit={handleSubmit} className='space-y-6'>
+      <div>
+        <label
+          htmlFor='awardDate'
+          className='block text-sm font-medium text-gray-700'
+        >
+          Award Date
+        </label>
+        <input
+          type='date'
+          id='awardDate'
+          value={selectedDate}
+          onChange={handleDateChange}
+          className='mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500'
+        />
+      </div>
+
       {AWARD_CATEGORIES.map((category) => (
         <AwardSelect
           key={category}

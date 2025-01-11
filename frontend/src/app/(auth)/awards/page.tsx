@@ -19,6 +19,7 @@ export default function AwardsPage() {
         return {
           category: selection.category,
           member: member,
+          date: selection.date,
         };
       } else {
         // If it's not a member ID, treat the memberId as a custom name
@@ -29,6 +30,7 @@ export default function AwardsPage() {
             username: selection.memberId,
             full_name: selection.memberId,
           },
+          date: selection.date,
         };
       }
     });
