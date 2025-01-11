@@ -1,3 +1,9 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@font-face {
+  font-family: 'Brush Script MT';
+  src: url('/fonts/brush-script-mt.ttf') format('truetype');
+  font-display: swap;
+}

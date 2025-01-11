@@ -20,108 +20,125 @@ export const AwardPreview = ({ award }: { award: AwardResult }) => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Create new image object
-    const img = new Image();
-    // Set the source - replace this URL with your actual award image URL
-    img.src =
-      award.category === 'Custom Award'
-        ? `/images/awards/customizable.webp`
-        : `/images/awards/${award.category.toLowerCase().replace(/\s+/g, '-')}.webp`;
+    // Add this at the beginning of the useEffect
+    const font = new FontFace(
+      'Brush Script MT',
+      'url(/fonts/brush-script-mt.ttf)'
+    );
 
-    // Wait for image to load before drawing
-    img.onload = () => {
-      // Draw the image to fill the canvas
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    // Load the font first, then proceed with drawing
+    font
+      .load()
+      .then(() => {
+        // Add the font to the document
+        document.fonts.add(font);
 
-      // basic text settings
-      ctx.textAlign = 'center';
+        // Create new image object
+        const img = new Image();
+        // Set the source - replace this URL with your actual award image URL
+        img.src =
+          award.category === 'Custom Award'
+            ? `/images/awards/customizable.webp`
+            : `/images/awards/${award.category.toLowerCase().replace(/\s+/g, '-')}.webp`;
 
-      // Add shadow for better visibility
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
-      ctx.shadowBlur = 12;
-      ctx.shadowOffsetX = 6;
-      ctx.shadowOffsetY = 6;
+        // Wait for image to load before drawing
+        img.onload = () => {
+          // Draw the image to fill the canvas
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-      // If it's a custom award, add the custom title to the canvas
-      if (award.category === 'Custom Award') {
-        // Add your custom title drawing logic here
-        ctx.font = 'bold 600px serif';
+          // basic text settings
+          ctx.textAlign = 'center';
 
-        // Get text metrics to create gradient
-        const text = (award.customTitle || 'Custom Award').toUpperCase();
-        const metrics = ctx.measureText(text);
-        const textWidth = metrics.width;
+          // Add shadow for better visibility
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+          ctx.shadowBlur = 12;
+          ctx.shadowOffsetX = 6;
+          ctx.shadowOffsetY = 6;
 
-        // Create golden gradient
-        const gradient = ctx.createLinearGradient(
-          canvas.width / 2 - textWidth / 2, // start x
-          0, // start y
-          canvas.width / 2 + textWidth / 2, // end x
-          0 // end y
-        );
+          // If it's a custom award, add the custom title to the canvas
+          if (award.category === 'Custom Award') {
+            // Add your custom title drawing logic here
+            ctx.font = 'bold 600px serif';
 
-        // Vibrant gradient colors
-        gradient.addColorStop(0, '#FFD700'); // Bright gold
-        gradient.addColorStop(0.5, '#FDB931'); // Deep gold
-        gradient.addColorStop(1, '#FFD700'); // Bright gold
+            // Get text metrics to create gradient
+            const text = (award.customTitle || 'Custom Award').toUpperCase();
+            const metrics = ctx.measureText(text);
+            const textWidth = metrics.width;
 
-        // Apply gradient
-        ctx.fillStyle = gradient;
+            // Create golden gradient
+            const gradient = ctx.createLinearGradient(
+              canvas.width / 2 - textWidth / 2, // start x
+              0, // start y
+              canvas.width / 2 + textWidth / 2, // end x
+              0 // end y
+            );
 
-        ctx.fillText(
-          (award.customTitle || 'Custom Award').toUpperCase(),
-          canvas.width / 2,
-          1800
-        );
-      }
+            // Vibrant gradient colors
+            gradient.addColorStop(0, '#FFD700'); // Bright gold
+            gradient.addColorStop(0.5, '#FDB931'); // Deep gold
+            gradient.addColorStop(1, '#FFD700'); // Bright gold
 
-      ctx.fillStyle = 'black';
+            // Apply gradient
+            ctx.fillStyle = gradient;
 
-      // Determine y-coordinate based on award category
-      const yOffset = [
-        'Best Evaluator',
-        'Best Partner',
-        'Custom Award',
-      ].includes(award.category)
-        ? -80
-        : 0;
+            ctx.fillText(
+              (award.customTitle || 'Custom Award').toUpperCase(),
+              canvas.width / 2,
+              1800
+            );
+          }
 
-      // Format date from YYYY-MM-DD to YYYY/MM/DD
-      const formattedDate = award.date.replace(/-/g, '/');
+          ctx.fillStyle = 'black';
 
-      // add date
-      ctx.font = 'lighter 180px Courier New';
-      ctx.fillText(formattedDate, 1700, 4050 + yOffset);
+          // Determine y-coordinate based on award category
+          const yOffset = [
+            'Best Evaluator',
+            'Best Partner',
+            'Custom Award',
+          ].includes(award.category)
+            ? -80
+            : 0;
 
-      // add president signature
-      ctx.font = 'lighter 200px serif';
-      ctx.fillText('Libra Lee', 4925, 4050 + yOffset);
+          // Format date from YYYY-MM-DD to YYYY/MM/DD
+          const formattedDate = award.date.replace(/-/g, '/');
 
-      // Add member name
-      ctx.font = '480px Brush Script MT';
+          // add date
+          ctx.font = 'lighter 180px Courier New';
+          ctx.fillText(formattedDate, 1700, 4050 + yOffset);
 
-      const text = award.member.full_name;
-      const metrics = ctx.measureText(text);
-      const textWidth = metrics.width;
+          // add president signature
+          ctx.font = 'lighter 200px serif';
+          ctx.fillText('Libra Lee', 4925, 4050 + yOffset);
 
-      // Create gradient matching NavLink colors
-      const gradient = ctx.createLinearGradient(
-        canvas.width / 2 - textWidth / 2, // start x
-        0, // start y
-        canvas.width / 2 + textWidth / 2, // end x
-        0 // end y
-      );
+          // Add member name
+          ctx.font = '480px Brush Script MT';
 
-      // Match the "from-blue-600 to-purple-600" colors
-      gradient.addColorStop(0, '#2563eb'); // blue-600
-      gradient.addColorStop(1, '#9333ea'); // purple-600
+          const text = award.member.full_name;
+          const metrics = ctx.measureText(text);
+          const textWidth = metrics.width;
 
-      // Apply gradient
-      ctx.fillStyle = gradient;
+          // Create gradient matching NavLink colors
+          const gradient = ctx.createLinearGradient(
+            canvas.width / 2 - textWidth / 2, // start x
+            0, // start y
+            canvas.width / 2 + textWidth / 2, // end x
+            0 // end y
+          );
 
-      // Draw text
-      ctx.fillText(text, canvas.width / 2, 2850 + yOffset);
-    };
+          // Match the "from-blue-600 to-purple-600" colors
+          gradient.addColorStop(0, '#2563eb'); // blue-600
+          gradient.addColorStop(1, '#9333ea'); // purple-600
+
+          // Apply gradient
+          ctx.fillStyle = gradient;
+
+          // Draw text
+          ctx.fillText(text, canvas.width / 2, 2850 + yOffset);
+        };
+      })
+      .catch((err) => {
+        console.error('Failed to load font:', err);
+      });
   }, [award]);
 
   const handleDownload = () => {
