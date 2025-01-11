@@ -33,16 +33,23 @@ export const AwardPreview = ({ award }: { award: AwardResult }) => {
       ctx.textAlign = 'center';
       ctx.fillStyle = 'black';
 
+      // Determine y-coordinate based on award category
+      const yOffset = ['Best Evaluator', 'Best Partner'].includes(
+        award.category
+      )
+        ? -80
+        : 0;
+
       // Format date from YYYY-MM-DD to YYYY/MM/DD
       const formattedDate = award.date.replace(/-/g, '/');
 
       // add date
       ctx.font = 'lighter 180px Courier New';
-      ctx.fillText(formattedDate, 1700, 4050);
+      ctx.fillText(formattedDate, 1700, 4050 + yOffset);
 
       // add president signature
       ctx.font = 'lighter 200px serif';
-      ctx.fillText('Libra Lee', 4925, 4050);
+      ctx.fillText('Libra Lee', 4925, 4050 + yOffset);
 
       // Add award category if it's Customized Award
       //   ctx.fillText(award.category, 400, 300);
@@ -76,7 +83,7 @@ export const AwardPreview = ({ award }: { award: AwardResult }) => {
       ctx.fillStyle = gradient;
 
       // Draw text
-      ctx.fillText(text, canvas.width / 2, 2850);
+      ctx.fillText(text, canvas.width / 2, 2850 + yOffset);
     };
   }, [award]);
 
