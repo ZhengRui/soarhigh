@@ -25,6 +25,11 @@ export default function RootLayout({
           type='font/ttf'
           crossOrigin='anonymous'
         />
+        <link
+          rel='preload'
+          href='https://soarhigh.oss-cn-shenzhen.aliyuncs.com/public/images/web/publicspeaking.jpeg?x-oss-process=image/quality,q_75/format,webp'
+          as='image'
+        />
       </head>
       <body>
         <QueryProvider>
