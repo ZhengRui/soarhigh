@@ -1,5 +1,6 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+
+# from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .routes.auth import auth_router
@@ -13,7 +14,7 @@ def get_application():
     )
 
     app.add_middleware(
-        CORSMiddleware,
+        # CORSMiddleware, # handled by nginx
         allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
