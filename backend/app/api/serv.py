@@ -9,8 +9,8 @@ from .routes.auth import auth_router
 def get_application():
     app = FastAPI(
         title="SoarHigh Toastmasters Club API",
-        docs_url="/api/docs",
-        openapi_url="/api/openapi.json",
+        docs_url="/docs",
+        openapi_url="/openapi.json",
     )
 
     app.add_middleware(
