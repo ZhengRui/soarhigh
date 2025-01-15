@@ -16,3 +16,5 @@ def parse_cors_origins(v: str) -> List[str]:
 
 
 CORS_ORIGINS = config("CORS_ORIGINS", cast=parse_cors_origins, default="*")
+
+OPENAI_API_KEY = config("OPENAI_API_KEY", cast=str)

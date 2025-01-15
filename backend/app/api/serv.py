@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import CORS_ORIGINS
 from .routes.auth import auth_router
+from .routes.meeting import meeting_router
 
 
 def get_application():
@@ -24,6 +25,7 @@ def get_application():
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
     app.include_router(auth_router)
+    app.include_router(meeting_router)
 
     return app
 
