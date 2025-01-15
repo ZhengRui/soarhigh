@@ -1,9 +1,11 @@
-from os import environ
+from os import path
 from typing import List
 
 from starlette.config import Config
 
-config = Config(environ.get("DOTENV_PATH", ".env"))
+# Check if .env file exists first
+env_path = ".env"
+config = Config(env_path if path.exists(env_path) else None)
 
 SUPABASE_URL = config("SUPABASE_URL", cast=str)
 SUPABASE_ANON_KEY = config("SUPABASE_ANON_KEY", cast=str)
