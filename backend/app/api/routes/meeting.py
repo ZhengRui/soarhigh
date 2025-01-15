@@ -1,13 +1,17 @@
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from ...models.meeting import Meeting
+from ...models.users import User
 from ...utils.meeting import parse_meeting_agenda_image
+from .auth import get_current_user
 
 meeting_router = r = APIRouter()
 
 
 @r.post("/meeting/parse_agenda_image")
-async def r_parse_meeting_agenda_image(image: UploadFile = File(...)) -> Meeting:
+async def r_parse_meeting_agenda_image(
+    image: UploadFile = File(...), user: User = Depends(get_current_user)
+) -> Meeting:
     if not image.content_type or not image.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload an image.")
 
