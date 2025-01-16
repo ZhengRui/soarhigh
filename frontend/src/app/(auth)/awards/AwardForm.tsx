@@ -8,7 +8,7 @@ export type AwardCategory =
   | 'Best Table Topic Speaker'
   | 'Best Facilitator'
   | 'Best Evaluator'
-  | 'Best Partner'
+  | 'Best Supporter'
   | 'Custom Award';
 
 const AWARD_CATEGORIES: AwardCategory[] = [
@@ -17,7 +17,7 @@ const AWARD_CATEGORIES: AwardCategory[] = [
   'Best Table Topic Speaker',
   'Best Facilitator',
   'Best Evaluator',
-  'Best Partner',
+  'Best Supporter',
 ];
 
 export interface AwardSelection {
