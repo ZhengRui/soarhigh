@@ -8,6 +8,8 @@ export const meetings = [
     end_time: '21:30',
     location:
       "JOININ HUB, 6th Xin'an Rd, Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+    introduction:
+      "Join us for an engaging Toastmasters session where we'll explore various aspects of public speaking. This meeting promises to be an enriching experience with prepared speeches, impromptu speaking sessions, and constructive evaluations. Whether you're a seasoned speaker or just starting out, you'll find valuable opportunities to grow.",
     segments: [
       {
         segment_id: '1',
@@ -262,6 +264,8 @@ export const meetings = [
     end_time: '21:30',
     location:
       "JOININ HUB, 6th Xin'an Rd,Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+    introduction:
+      "Join us for an engaging Toastmasters session where we'll explore various aspects of public speaking. This meeting promises to be an enriching experience with prepared speeches, impromptu speaking sessions, and constructive evaluations. Whether you're a seasoned speaker or just starting out, you'll find valuable opportunities to grow.",
     segments: [
       {
         segment_id: '1',

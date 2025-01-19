@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { getNextWednesday } from '@/utils/utils';
+
 const SLIDER_IMAGES = [
   {
     url: 'https://soarhigh.oss-cn-shenzhen.aliyuncs.com/public/images/web/publicspeaking.jpeg?x-oss-process=image/interlace,1/resize,w_1920/quality,q_50/format,webp',
@@ -187,23 +189,6 @@ const Landing = () => {
     setOpenFaqIndex(openFaqIndex === index ? null : index);
   };
 
-  const getNextWednesday = () => {
-    const today = new Date();
-    const day = today.getDay(); // 0 is Sunday, 3 is Wednesday
-    let daysUntilWednesday = (3 - day + 7) % 7;
-
-    // If it's Wednesday but after 7 PM, show next Wednesday
-    if (daysUntilWednesday === 0 && today.getHours() >= 19) {
-      daysUntilWednesday = 7;
-    }
-
-    const nextWednesday = new Date(today);
-    nextWednesday.setDate(today.getDate() + daysUntilWednesday);
-
-    // Format: "This Wednesday" or "Next Wednesday"
-    return daysUntilWednesday === 0 ? 'This Wednesday' : 'Next Wednesday';
-  };
-
   return (
     <div className='min-h-screen bg-gray-50 w-full'>
       {/* Hero Section with Image Slider */}
@@ -323,7 +308,7 @@ const Landing = () => {
                 <Calendar className='w-5 h-5' />
                 Join Our Next Meeting
                 <span className='ml-2 text-sm bg-white/20 px-3 py-1 rounded-full'>
-                  {getNextWednesday()}
+                  {getNextWednesday().display}
                 </span>
               </Link>
               <p className='mt-4 text-sm text-gray-500'>
@@ -346,7 +331,7 @@ const Landing = () => {
                 <Calendar className='w-4 h-4' />
                 Join Our Next Meeting
                 <span className='text-xs bg-white/20 px-2 py-0.5 rounded-full'>
-                  {getNextWednesday()}
+                  {getNextWednesday().display}
                 </span>
               </Link>
             </div>

@@ -2,35 +2,9 @@
 
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, Clock, MapPin, Trophy } from 'lucide-react';
+import { MeetingIF, AwardIF } from '@/interfaces';
 
-interface Award {
-  category: string;
-  winner: string;
-}
-
-interface Segment {
-  segment_id: string;
-  segment_type: string;
-  start_time: string;
-  duration: string;
-  end_time: string;
-  role_taker: string;
-  title?: string;
-  content?: string;
-}
-
-interface MeetingCardProps {
-  meeting_type: string;
-  theme: string;
-  meeting_manager: string;
-  date: string;
-  start_time: string;
-  end_time: string;
-  location: string;
-  segments: Segment[];
-}
-
-export const MeetingCard: React.FC<MeetingCardProps> = ({
+export const MeetingCard: React.FC<MeetingIF> = ({
   meeting_type,
   theme,
   meeting_manager,
@@ -38,16 +12,12 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   start_time,
   end_time,
   location,
+  introduction,
   segments,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  // This is a placeholder intro - will be added to the data model later
-  const meetingIntro =
-    "Join us for an engaging Toastmasters session where we'll explore various aspects of public speaking. This meeting promises to be an enriching experience with prepared speeches, impromptu speaking sessions, and constructive evaluations. Whether you're a seasoned speaker or just starting out, you'll find valuable opportunities to grow.";
-
-  // Mock awards data - will be added to the meeting data model later
-  const mockAwards: Award[] = [
+  const mockAwards: AwardIF[] = [
     { category: 'Best Prepared Speaker', winner: 'Frank Chen' },
     { category: 'Best Host', winner: 'Jessica Wang' },
     { category: 'Best Table Topic Speaker', winner: 'Emily Liu' },
@@ -84,7 +54,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
 
         <div className='flex flex-col gap-2 text-gray-500 text-sm'>
           <p className='flex items-center gap-2'>
-            <Clock className='w-4 h-4' />
+            <Clock className='min-w-4 min-h-4 w-4 h-4' />
             {date} | {start_time} - {end_time}
           </p>
           <p className='flex items-center gap-2'>
@@ -94,7 +64,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
         </div>
 
         <p className='mt-4 text-sm text-gray-500 leading-relaxed'>
-          {meetingIntro}
+          {introduction}
         </p>
 
         {hasPassed && (

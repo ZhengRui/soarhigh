@@ -33,6 +33,7 @@ class Meeting(BaseModel):
     start_time: str = Field(description="The start time of the meeting.")
     end_time: str = Field(description="The end time of the meeting.")
     location: str = Field(description="The location where the meeting is held.")
+    introduction: str = Field(description="The introduction of the meeting.")
     segments: List[MeetingSegment] = Field(description="A list of segments that the meeting is composed of.")
 
     class Config:
