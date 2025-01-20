@@ -241,3 +241,31 @@ export const DEFAULT_REGULAR_MEETING: Omit<MeetingIF, 'segments'> & {
   introduction: '',
   segments: DEFAULT_SEGMENTS_REGULAR_MEETING,
 };
+
+// Create a dummy params object for temporary instances
+const dummyParams = { segment_id: '', start_time: '', duration: '' };
+
+export const SEGMENT_TYPE_MAP = {
+  [new WarmUpSegment(dummyParams).segment_type]: WarmUpSegment,
+  [new SAASegment(dummyParams).segment_type]: SAASegment,
+  [new OpeningRemarksSegment(dummyParams).segment_type]: OpeningRemarksSegment,
+  [new TOMIntroSegment(dummyParams).segment_type]: TOMIntroSegment,
+  [new TimerIntroSegment(dummyParams).segment_type]: TimerIntroSegment,
+  [new HarkMasterIntroSegment(dummyParams).segment_type]:
+    HarkMasterIntroSegment,
+  [new GuestsIntroSegment(dummyParams).segment_type]: GuestsIntroSegment,
+  [new TTMOpeningSegment(dummyParams).segment_type]: TTMOpeningSegment,
+  [new TableTopicSessionSegment(dummyParams).segment_type]:
+    TableTopicSessionSegment,
+  'Prepared Speech': PreparedSpeechSegment, // Special case since it includes a number
+  [new TeaBreakSegment(dummyParams).segment_type]: TeaBreakSegment,
+  [new TableTopicEvalSegment(dummyParams).segment_type]: TableTopicEvalSegment,
+  'Prepared Speech Evaluation': PreparedSpeechEvalSegment, // Special case since it includes a number
+  [new TimerReportSegment(dummyParams).segment_type]: TimerReportSegment,
+  [new GeneralEvalSegment(dummyParams).segment_type]: GeneralEvalSegment,
+  [new VotingSegment(dummyParams).segment_type]: VotingSegment,
+  [new AwardsSegment(dummyParams).segment_type]: AwardsSegment,
+  [new ClosingRemarksSegment(dummyParams).segment_type]: ClosingRemarksSegment,
+} as const;
+
+export type SegmentType = keyof typeof SEGMENT_TYPE_MAP;
