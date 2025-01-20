@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
 import { Users, X, Plus } from 'lucide-react';
-import { SegmentIF } from '@/interfaces';
-import { DEFAULT_REGULAR_MEETING } from './default';
+import { BaseSegment, DEFAULT_SEGMENTS_REGULAR_MEETING } from './default';
 
 interface SegmentsEditorProps {
-  segments: SegmentIF[];
+  segments: BaseSegment[];
   onSegmentChange: (
     index: number,
-    field: keyof SegmentIF,
+    field: keyof BaseSegment,
     value: string
   ) => void;
   onSegmentDelete?: (index: number) => void;
@@ -15,7 +14,7 @@ interface SegmentsEditorProps {
 }
 
 export function SegmentsEditor({
-  segments = DEFAULT_REGULAR_MEETING.segments,
+  segments = DEFAULT_SEGMENTS_REGULAR_MEETING,
   onSegmentChange,
   onSegmentDelete,
   onSegmentAdd,
@@ -70,28 +69,41 @@ export function SegmentsEditor({
               {segment.segment_type}
             </div>
 
-            <div className='relative'>
-              <input
-                type='text'
-                value={segment.role_taker}
-                onChange={(e) =>
-                  onSegmentChange(index, 'role_taker', e.target.value)
-                }
-                placeholder='Assign role taker'
-                className={inputWithIconClasses}
-              />
-              <Users className='absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400' />
-            </div>
+            {segment.role_taker.editable && (
+              <div className='relative'>
+                <input
+                  type='text'
+                  value=''
+                  onChange={(e) =>
+                    onSegmentChange(index, 'role_taker', e.target.value)
+                  }
+                  placeholder={segment.role_taker.placeholder}
+                  className={inputWithIconClasses}
+                />
+                <Users className='absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400' />
+              </div>
+            )}
 
-            {(segment.segment_type.includes('Prepared Speech') ||
-              segment.segment_type.includes('Table Topic')) && (
+            {segment.title.editable && (
               <input
                 type='text'
-                value={segment.title}
+                value=''
                 onChange={(e) =>
                   onSegmentChange(index, 'title', e.target.value)
                 }
-                placeholder='Enter title (optional)'
+                placeholder={segment.title.placeholder}
+                className={inputClasses}
+              />
+            )}
+
+            {segment.content.editable && (
+              <input
+                type='text'
+                value=''
+                onChange={(e) =>
+                  onSegmentChange(index, 'content', e.target.value)
+                }
+                placeholder={segment.content.placeholder}
                 className={inputClasses}
               />
             )}

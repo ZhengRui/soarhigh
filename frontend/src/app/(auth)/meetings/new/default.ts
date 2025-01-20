@@ -1,230 +1,235 @@
 import { SegmentIF, MeetingIF } from '@/interfaces';
 import { getNextWednesday } from '@/utils/utils';
 
-const DEFAULT_SEGMENTS_REGULAR_MEETING: SegmentIF[] = [
-  {
-    segment_id: '1',
-    segment_type: 'Members and Guests Registration, Warm up',
-    start_time: '19:15',
-    duration: '15',
-    end_time: '19:30',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
-    segment_id: '2',
-    segment_type: 'Meeting Rules Introduction (SAA)',
-    start_time: '19:30',
-    duration: '3',
-    end_time: '19:33',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
+type EditableField = {
+  editable: boolean;
+  placeholder: string;
+};
+
+interface EditableSegmentIF
+  extends Omit<SegmentIF, 'title' | 'content' | 'role_taker'> {
+  title: EditableField;
+  content: EditableField;
+  role_taker: EditableField;
+}
+
+interface SegmentParams {
+  segment_id: string;
+  start_time: string;
+  duration: string;
+}
+
+export class BaseSegment implements EditableSegmentIF {
+  segment_id: string = '';
+  segment_type: string = '';
+  start_time: string = '';
+  duration: string = '';
+  end_time: string = '';
+  role_taker: EditableField = {
+    editable: true,
+    placeholder: 'Assign role taker',
+  };
+  title: EditableField = { editable: false, placeholder: '' };
+  content: EditableField = { editable: false, placeholder: '' };
+  related_segment_ids: string = '';
+
+  constructor(params: {
+    segment_id: string;
+    start_time: string;
+    duration: string;
+  }) {
+    this.segment_id = params.segment_id;
+    this.start_time = params.start_time;
+    this.duration = params.duration;
+  }
+}
+
+export class WarmUpSegment extends BaseSegment {
+  segment_type = 'Members and Guests Registration, Warm up';
+  role_taker = { editable: false, placeholder: 'All attendees' };
+}
+
+export class SAASegment extends BaseSegment {
+  segment_type = 'Meeting Rules Introduction (SAA)';
+  role_taker = { editable: true, placeholder: 'Assign SAA' };
+}
+
+export class OpeningRemarksSegment extends BaseSegment {
+  segment_type = 'Opening Remarks (President)';
+}
+
+export class TOMIntroSegment extends BaseSegment {
+  segment_type = 'TOM (Toastmaster of Meeting) Introduction';
+  role_taker = { editable: true, placeholder: 'Assign TOM' };
+}
+
+export class TimerIntroSegment extends BaseSegment {
+  segment_type = 'Timer';
+  role_taker = { editable: true, placeholder: 'Assign timer' };
+}
+
+export class HarkMasterIntroSegment extends BaseSegment {
+  segment_type = 'Hark Master';
+  role_taker = { editable: true, placeholder: 'Assign hark master' };
+}
+
+export class GuestsIntroSegment extends BaseSegment {
+  segment_type = 'Guests Self Introduction (30s per guest)';
+  role_taker = {
+    editable: true,
+    placeholder: 'Assign guest introduction host',
+  };
+}
+
+export class TTMOpeningSegment extends BaseSegment {
+  segment_type = 'TTM (Table Topic Master) Opening';
+  role_taker = { editable: true, placeholder: 'Assign TTM' };
+}
+
+export class TableTopicSessionSegment extends BaseSegment {
+  segment_type = 'Table Topic Session';
+  content = { editable: true, placeholder: 'Enter WOT (Word of Today)' };
+  role_taker = { editable: false, placeholder: '' };
+}
+
+export class PreparedSpeechSegment extends BaseSegment {
+  segment_type: string;
+  role_taker = { editable: true, placeholder: 'Assign Speaker' };
+  title = { editable: true, placeholder: 'Enter title (optional)' };
+
+  constructor(params: SegmentParams, speechNumber: number) {
+    super(params);
+    this.segment_type = `Prepared Speech ${speechNumber}`;
+  }
+}
+
+export class TeaBreakSegment extends BaseSegment {
+  segment_type = 'Tea Break & Group Photos';
+  role_taker = { editable: false, placeholder: '' };
+}
+
+export class TableTopicEvalSegment extends BaseSegment {
+  segment_type = 'Table Topic Evaluation';
+  role_taker = { editable: true, placeholder: 'Assign evaluator' };
+}
+
+export class PreparedSpeechEvalSegment extends BaseSegment {
+  segment_type: string;
+  role_taker = { editable: true, placeholder: 'Assign evaluator' };
+
+  constructor(params: SegmentParams, speechNumber: number) {
+    super(params);
+    this.segment_type = `Prepared Speech ${speechNumber} Evaluation`;
+  }
+}
+
+export class TimerReportSegment extends BaseSegment {
+  segment_type = "Timer's Report";
+  role_taker = { editable: false, placeholder: '' };
+}
+
+export class GeneralEvalSegment extends BaseSegment {
+  segment_type = 'General Evaluation';
+  role_taker = { editable: true, placeholder: 'Assign evaluator' };
+}
+
+export class VotingSegment extends BaseSegment {
+  segment_type = 'Voting Section (TOM)';
+  role_taker = { editable: false, placeholder: '' };
+}
+
+export class AwardsSegment extends BaseSegment {
+  segment_type = 'Awards (President)';
+  role_taker = { editable: false, placeholder: '' };
+}
+
+export class ClosingRemarksSegment extends BaseSegment {
+  segment_type = 'Closing Remarks (President)';
+  role_taker = { editable: false, placeholder: '' };
+}
+
+export const DEFAULT_SEGMENTS_REGULAR_MEETING: BaseSegment[] = [
+  new WarmUpSegment({ segment_id: '1', start_time: '19:15', duration: '15' }),
+  new SAASegment({ segment_id: '2', start_time: '19:30', duration: '3' }),
+  new OpeningRemarksSegment({
     segment_id: '3',
-    segment_type: 'Opening Remarks (President)',
     start_time: '19:33',
     duration: '2',
-    end_time: '19:35',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
-    segment_id: '4',
-    segment_type: 'TOM (Toastmaster of Meeting) Introduction',
-    start_time: '19:35',
-    duration: '2',
-    end_time: '19:37',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
+  }),
+  new TOMIntroSegment({ segment_id: '4', start_time: '19:35', duration: '2' }),
+  new TimerIntroSegment({
     segment_id: '5',
-    segment_type: 'Timer',
     start_time: '19:37',
     duration: '3',
-    end_time: '19:40',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
+  }),
+  new HarkMasterIntroSegment({
     segment_id: '6',
-    segment_type: 'Hark Master',
     start_time: '19:40',
     duration: '3',
-    end_time: '19:43',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
+  }),
+  new GuestsIntroSegment({
     segment_id: '7',
-    segment_type: 'Guests Self Introduction (30s per guest)',
     start_time: '19:43',
     duration: '8',
-    end_time: '19:51',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
+  }),
+  new TTMOpeningSegment({
     segment_id: '8',
-    segment_type: 'TTM (Table Topic Master) Opening',
     start_time: '19:52',
     duration: '4',
-    end_time: '19:56',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
+  }),
+  new TableTopicSessionSegment({
     segment_id: '9',
-    segment_type: 'Table Topic Session',
     start_time: '19:56',
     duration: '16',
-    end_time: '20:12',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
-    segment_id: '10',
-    segment_type: 'Prepared Speech 1',
-    start_time: '20:13',
-    duration: '7',
-    end_time: '20:20',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
-    segment_id: '11',
-    segment_type: 'Prepared Speech 2',
-    start_time: '20:21',
-    duration: '7',
-    end_time: '20:28',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
+  }),
+  new PreparedSpeechSegment(
+    { segment_id: '10', start_time: '20:13', duration: '7' },
+    1
+  ),
+  new PreparedSpeechSegment(
+    { segment_id: '11', start_time: '20:21', duration: '7' },
+    2
+  ),
+  new TeaBreakSegment({
     segment_id: '12',
-    segment_type: 'Tea Break & Group Photos',
     start_time: '20:29',
     duration: '12',
-    end_time: '20:41',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
+  }),
+  new TableTopicEvalSegment({
     segment_id: '13',
-    segment_type: 'Table Topic Evaluation',
     start_time: '20:42',
     duration: '7',
-    end_time: '20:49',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
-    segment_id: '14',
-    segment_type: 'Prepared Speech 1 Evaluation',
-    start_time: '20:50',
-    duration: '3',
-    end_time: '20:53',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '10',
-  },
-  {
-    segment_id: '15',
-    segment_type: 'Prepared Speech 2 Evaluation',
-    start_time: '20:54',
-    duration: '3',
-    end_time: '20:57',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '11',
-  },
-  {
+  }),
+  new PreparedSpeechEvalSegment(
+    { segment_id: '14', start_time: '20:50', duration: '3' },
+    1
+  ),
+  new PreparedSpeechEvalSegment(
+    { segment_id: '15', start_time: '20:54', duration: '3' },
+    2
+  ),
+  new TimerReportSegment({
     segment_id: '16',
-    segment_type: "Timer's Report",
     start_time: '20:58',
     duration: '2',
-    end_time: '21:00',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
+  }),
+  new GeneralEvalSegment({
     segment_id: '17',
-    segment_type: 'General Evaluation',
     start_time: '21:01',
     duration: '4',
-    end_time: '21:05',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
-    segment_id: '18',
-    segment_type: 'Voting Section (TOM)',
-    start_time: '21:06',
-    duration: '2',
-    end_time: '21:08',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
-    segment_id: '19',
-    segment_type: 'Awards/President',
-    start_time: '21:09',
-    duration: '3',
-    end_time: '21:12',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
-  {
+  }),
+  new VotingSegment({ segment_id: '18', start_time: '21:06', duration: '2' }),
+  new AwardsSegment({ segment_id: '19', start_time: '21:09', duration: '3' }),
+  new ClosingRemarksSegment({
     segment_id: '20',
-    segment_type: 'Closing Remarks/President',
     start_time: '21:13',
     duration: '2',
-    end_time: '21:15',
-    role_taker: '',
-    title: '',
-    content: '',
-    related_segment_ids: '',
-  },
+  }),
 ];
 
-export const DEFAULT_REGULAR_MEETING: MeetingIF = {
+export const DEFAULT_REGULAR_MEETING: Omit<MeetingIF, 'segments'> & {
+  segments: BaseSegment[];
+} = {
   meeting_type: 'Regular',
   theme: '',
   meeting_manager: '',

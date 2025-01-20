@@ -1,67 +1,104 @@
 import React, { useState } from 'react';
 import { Calendar, Clock, MapPin, Users } from 'lucide-react';
-import { MeetingIF, SegmentIF } from '@/interfaces';
-import { DEFAULT_REGULAR_MEETING } from './default';
+import { MeetingIF } from '@/interfaces';
+import {
+  DEFAULT_REGULAR_MEETING,
+  BaseSegment,
+  PreparedSpeechSegment,
+} from './default';
 import { SegmentsEditor } from './SegmentsEditor';
+import { v4 as uuidv4 } from 'uuid';
 
-const MEETING_TYPES = ['Regular', 'Workshop'] as const;
+const MEETING_TYPES = ['Regular', 'Workshop', 'Activity'] as const;
+
+type MeetingTemplateType = Omit<MeetingIF, 'segments'> & {
+  segments: BaseSegment[];
+};
+
+const transformSegmentsWithUUID = (segments: BaseSegment[]): BaseSegment[] => {
+  // Create a mapping of old IDs to new UUIDs
+  const idMap = new Map<string, string>();
+
+  const transformedSegments = segments.map((segment) => {
+    const newId = uuidv4();
+    idMap.set(segment.segment_id, newId);
+    return {
+      ...segment,
+      segment_id: newId,
+    };
+  });
+
+  // Update related_segment_ids with new UUIDs
+  return transformedSegments.map((segment) => ({
+    ...segment,
+    related_segment_ids: segment.related_segment_ids
+      ? segment.related_segment_ids
+          .split(',')
+          .map((id) => idMap.get(id) || '')
+          .join(',')
+      : '',
+  }));
+};
 
 export function MeetingFromTemplate() {
-  const [formData, setFormData] = useState<Partial<MeetingIF>>(
-    DEFAULT_REGULAR_MEETING
-  );
+  const [formData, setFormData] = useState<MeetingTemplateType>(() => ({
+    ...DEFAULT_REGULAR_MEETING,
+    segments: transformSegmentsWithUUID(DEFAULT_REGULAR_MEETING.segments),
+  }));
 
-  const handleInputChange = (field: keyof MeetingIF, value: string) => {
-    setFormData((prev: Partial<MeetingIF>) => ({ ...prev, [field]: value }));
+  const handleInputChange = (
+    field: keyof MeetingTemplateType,
+    value: string
+  ) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleSegmentChange = (
     index: number,
-    field: keyof SegmentIF,
+    field: keyof BaseSegment,
     value: string
   ) => {
-    setFormData((prev: Partial<MeetingIF>) => ({
+    setFormData((prev) => ({
       ...prev,
-      segments: prev.segments?.map((segment, i) =>
+      segments: prev.segments.map((segment, i) =>
         i === index ? { ...segment, [field]: value } : segment
       ),
     }));
   };
 
   const handleSegmentDelete = (index: number) => {
-    setFormData((prev: Partial<MeetingIF>) => ({
+    setFormData((prev) => ({
       ...prev,
-      segments: prev.segments?.filter((_, i) => i !== index),
+      segments: prev.segments.filter((_, i) => i !== index),
     }));
   };
 
   const handleSegmentAdd = (index: number) => {
-    setFormData((prev: Partial<MeetingIF>) => {
-      const newSegments = [...(prev.segments || [])];
+    setFormData((prev) => {
+      const newSegments = [...prev.segments];
       const prevSegment = newSegments[index];
 
       // Calculate new start time based on previous segment
       let newStartTime = '';
-      let newEndTime = '';
       if (prevSegment?.start_time && prevSegment?.duration) {
         const [hours, minutes] = prevSegment.start_time.split(':');
         const date = new Date();
         date.setHours(parseInt(hours), parseInt(minutes));
         date.setMinutes(date.getMinutes() + parseInt(prevSegment.duration));
         newStartTime = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-
-        date.setMinutes(date.getMinutes() + 7);
-        newEndTime = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
       }
 
-      const newSegment: SegmentIF = {
-        segment_id: `seg_${Date.now()}`,
-        segment_type: 'Prepared Speech',
-        start_time: newStartTime,
-        duration: '7',
-        end_time: newEndTime,
-        role_taker: '',
-      };
+      // Create new prepared speech segment
+      const newSegment = new PreparedSpeechSegment(
+        {
+          segment_id: uuidv4(),
+          start_time: newStartTime,
+          duration: '7',
+        },
+        newSegments.filter((s) => s.segment_type.startsWith('Prepared Speech'))
+          .length + 1
+      );
+
       newSegments.splice(index + 1, 0, newSegment);
       return { ...prev, segments: newSegments };
     });
