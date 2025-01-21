@@ -168,7 +168,7 @@ export function SegmentsEditor({
                 {segment.duration}min
               </span>
             </div>
-            <div className='text-[10px] text-gray-400 sm:pt-3 font-mono flex items-center gap-0.5'>
+            <div className='text-[10px] text-gray-400 sm:pt-1 font-mono flex items-center gap-0.5'>
               <Hash className='w-2 h-2' />
               <span>{segment.segment_id.slice(0, 5)}</span>
             </div>
@@ -316,58 +316,61 @@ export function SegmentsEditor({
             )}
 
             {/* Add Related Segment Dropdown */}
-            <div className='relative w-full sm:w-auto select-none'>
-              <div
-                ref={openRelatedDropdownIndex === index ? relatedRef : null}
-                className={`flex max-w-44 items-center gap-1 px-2 py-1 text-xs rounded-md border border-gray-300 bg-white text-gray-700 cursor-pointer hover:border-indigo-300
+
+            {segment.related_segment_ids_config.editable && (
+              <div className='relative w-full sm:w-auto select-none'>
+                <div
+                  ref={openRelatedDropdownIndex === index ? relatedRef : null}
+                  className={`flex max-w-44 items-center gap-1 px-2 py-1 text-xs rounded-md border border-gray-300 bg-white text-gray-700 cursor-pointer hover:border-indigo-300
                   ${hoveredClasses}
                   ${deletingClassesFunction(index)}`}
-                onClick={() =>
-                  setOpenRelatedDropdownIndex(
-                    openRelatedDropdownIndex === index ? null : index
-                  )
-                }
-              >
-                <Plus className='w-4 h-4 text-gray-400' />
-                <span>Add related segment...</span>
-              </div>
+                  onClick={() =>
+                    setOpenRelatedDropdownIndex(
+                      openRelatedDropdownIndex === index ? null : index
+                    )
+                  }
+                >
+                  <Plus className='w-4 h-4 text-gray-400' />
+                  <span>Add related segment...</span>
+                </div>
 
-              {openRelatedDropdownIndex === index && (
-                <div
-                  ref={relatedDropdownRef}
-                  className={`absolute left-0 top-full mt-1 w-full bg-gray-50 rounded-md shadow-lg border border-gray-200 z-30
+                {openRelatedDropdownIndex === index && (
+                  <div
+                    ref={relatedDropdownRef}
+                    className={`absolute left-0 top-full mt-1 w-full bg-gray-50 rounded-md shadow-lg border border-gray-200 z-30
                     ${hoveredClasses}
                     ${deletingClassesFunction(index)}`}
-                >
-                  <div className='py-1 max-h-60 overflow-auto'>
-                    {(() => {
-                      // Create Set once for O(1) lookups
-                      const relatedIds = new Set(
-                        segment.related_segment_ids?.split(',') || []
-                      );
+                  >
+                    <div className='py-1 max-h-60 overflow-auto'>
+                      {(() => {
+                        // Create Set once for O(1) lookups
+                        const relatedIds = new Set(
+                          segment.related_segment_ids?.split(',') || []
+                        );
 
-                      return segments
-                        .filter(
-                          (s) =>
-                            s.segment_id !== segment.segment_id &&
-                            !relatedIds.has(s.segment_id)
-                        )
-                        .map((s) => (
-                          <div
-                            key={s.segment_id}
-                            className='px-4 py-2 text-xs text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 cursor-pointer'
-                            onClick={() =>
-                              handleAddRelatedSegment(index, s.segment_id)
-                            }
-                          >
-                            {`${s.segment_type} (# ${s.segment_id.slice(0, 5)})`}
-                          </div>
-                        ));
-                    })()}
+                        return segments
+                          .filter(
+                            (s) =>
+                              s.segment_id !== segment.segment_id &&
+                              !relatedIds.has(s.segment_id)
+                          )
+                          .map((s) => (
+                            <div
+                              key={s.segment_id}
+                              className='px-4 py-2 text-xs text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 cursor-pointer'
+                              onClick={() =>
+                                handleAddRelatedSegment(index, s.segment_id)
+                              }
+                            >
+                              {`${s.segment_type} (# ${s.segment_id.slice(0, 5)})`}
+                            </div>
+                          ));
+                      })()}
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Thinner decorative gradient line */}

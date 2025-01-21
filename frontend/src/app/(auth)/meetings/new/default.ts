@@ -10,6 +10,7 @@ interface EditableSegmentIF extends SegmentIF {
   title_config: EditableConfig;
   content_config: EditableConfig;
   role_taker_config: EditableConfig;
+  related_segment_ids_config: EditableConfig;
 }
 
 export interface SegmentParams {
@@ -37,6 +38,10 @@ export class BaseSegment implements EditableSegmentIF {
   };
   title_config: EditableConfig = { editable: false, placeholder: '' };
   content_config: EditableConfig = { editable: false, placeholder: '' };
+  related_segment_ids_config: EditableConfig = {
+    editable: false,
+    placeholder: '',
+  };
 
   constructor(params: {
     segment_id: string;
@@ -137,6 +142,10 @@ export class TableTopicEvalSegment extends BaseSegment {
 export class PreparedSpeechEvalSegment extends BaseSegment {
   segment_type: string;
   role_taker_config = { editable: true, placeholder: 'Assign evaluator' };
+  related_segment_ids_config = {
+    editable: true,
+    placeholder: 'Add related speech',
+  };
 
   constructor(
     {
@@ -161,6 +170,10 @@ export class TimerReportSegment extends BaseSegment {
 export class GeneralEvalSegment extends BaseSegment {
   segment_type = 'General Evaluation';
   role_taker_config = { editable: true, placeholder: 'Assign evaluator' };
+  related_segment_ids_config = {
+    editable: true,
+    placeholder: 'Add related segments',
+  };
 }
 
 export class VotingSegment extends BaseSegment {
