@@ -1,16 +1,15 @@
 import { SegmentIF, MeetingIF } from '@/interfaces';
 import { getNextWednesday } from '@/utils/utils';
 
-type EditableField = {
+type EditableConfig = {
   editable: boolean;
   placeholder: string;
 };
 
-interface EditableSegmentIF
-  extends Omit<SegmentIF, 'title' | 'content' | 'role_taker'> {
-  title: EditableField;
-  content: EditableField;
-  role_taker: EditableField;
+interface EditableSegmentIF extends SegmentIF {
+  title_config: EditableConfig;
+  content_config: EditableConfig;
+  role_taker_config: EditableConfig;
 }
 
 export interface SegmentParams {
@@ -27,13 +26,17 @@ export class BaseSegment implements EditableSegmentIF {
   start_time: string = '';
   duration: string = '';
   end_time: string = '';
-  role_taker: EditableField = {
+  role_taker: string = '';
+  title: string = '';
+  content: string = '';
+  related_segment_ids: string = '';
+
+  role_taker_config: EditableConfig = {
     editable: true,
     placeholder: 'Assign role taker',
   };
-  title: EditableField = { editable: false, placeholder: '' };
-  content: EditableField = { editable: false, placeholder: '' };
-  related_segment_ids: string = '';
+  title_config: EditableConfig = { editable: false, placeholder: '' };
+  content_config: EditableConfig = { editable: false, placeholder: '' };
 
   constructor(params: {
     segment_id: string;
@@ -57,19 +60,19 @@ export class CustomSegment extends BaseSegment {
     this.segment_type = segment_type;
   }
 
-  title = { editable: true, placeholder: 'Enter title (optional)' };
-  content = { editable: true, placeholder: 'Enter content (optional)' };
-  role_taker = { editable: true, placeholder: 'Assign role taker' };
+  title_config = { editable: true, placeholder: 'Enter title (optional)' };
+  content_config = { editable: true, placeholder: 'Enter content (optional)' };
+  role_taker_config = { editable: true, placeholder: 'Assign role taker' };
 }
 
 export class WarmUpSegment extends BaseSegment {
   segment_type = 'Members and Guests Registration, Warm up';
-  role_taker = { editable: false, placeholder: 'All attendees' };
+  role_taker_config = { editable: false, placeholder: 'All attendees' };
 }
 
 export class SAASegment extends BaseSegment {
   segment_type = 'Meeting Rules Introduction (SAA)';
-  role_taker = { editable: true, placeholder: 'Assign SAA' };
+  role_taker_config = { editable: true, placeholder: 'Assign SAA' };
 }
 
 export class OpeningRemarksSegment extends BaseSegment {
@@ -78,22 +81,22 @@ export class OpeningRemarksSegment extends BaseSegment {
 
 export class TOMIntroSegment extends BaseSegment {
   segment_type = 'TOM (Toastmaster of Meeting) Introduction';
-  role_taker = { editable: true, placeholder: 'Assign TOM' };
+  role_taker_config = { editable: true, placeholder: 'Assign TOM' };
 }
 
 export class TimerIntroSegment extends BaseSegment {
   segment_type = 'Timer';
-  role_taker = { editable: true, placeholder: 'Assign timer' };
+  role_taker_config = { editable: true, placeholder: 'Assign timer' };
 }
 
 export class HarkMasterIntroSegment extends BaseSegment {
   segment_type = 'Hark Master';
-  role_taker = { editable: true, placeholder: 'Assign hark master' };
+  role_taker_config = { editable: true, placeholder: 'Assign hark master' };
 }
 
 export class GuestsIntroSegment extends BaseSegment {
   segment_type = 'Guests Self Introduction (30s per guest)';
-  role_taker = {
+  role_taker_config = {
     editable: true,
     placeholder: 'Assign guest introduction host',
   };
@@ -101,19 +104,19 @@ export class GuestsIntroSegment extends BaseSegment {
 
 export class TTMOpeningSegment extends BaseSegment {
   segment_type = 'TTM (Table Topic Master) Opening';
-  role_taker = { editable: true, placeholder: 'Assign TTM' };
+  role_taker_config = { editable: true, placeholder: 'Assign TTM' };
 }
 
 export class TableTopicSessionSegment extends BaseSegment {
   segment_type = 'Table Topic Session';
-  content = { editable: true, placeholder: 'Enter WOT (Word of Today)' };
-  role_taker = { editable: false, placeholder: '' };
+  content_config = { editable: true, placeholder: 'Enter WOT (Word of Today)' };
+  role_taker_config = { editable: false, placeholder: '' };
 }
 
 export class PreparedSpeechSegment extends BaseSegment {
   segment_type: string;
-  role_taker = { editable: true, placeholder: 'Assign Speaker' };
-  title = { editable: true, placeholder: 'Enter title (optional)' };
+  role_taker_config = { editable: true, placeholder: 'Assign Speaker' };
+  title_config = { editable: true, placeholder: 'Enter title (optional)' };
 
   constructor(params: SegmentParams, speechNumber?: number) {
     super(params);
@@ -123,17 +126,17 @@ export class PreparedSpeechSegment extends BaseSegment {
 
 export class TeaBreakSegment extends BaseSegment {
   segment_type = 'Tea Break & Group Photos';
-  role_taker = { editable: false, placeholder: '' };
+  role_taker_config = { editable: false, placeholder: '' };
 }
 
 export class TableTopicEvalSegment extends BaseSegment {
   segment_type = 'Table Topic Evaluation';
-  role_taker = { editable: true, placeholder: 'Assign evaluator' };
+  role_taker_config = { editable: true, placeholder: 'Assign evaluator' };
 }
 
 export class PreparedSpeechEvalSegment extends BaseSegment {
   segment_type: string;
-  role_taker = { editable: true, placeholder: 'Assign evaluator' };
+  role_taker_config = { editable: true, placeholder: 'Assign evaluator' };
 
   constructor(
     {
@@ -152,27 +155,27 @@ export class PreparedSpeechEvalSegment extends BaseSegment {
 
 export class TimerReportSegment extends BaseSegment {
   segment_type = "Timer's Report";
-  role_taker = { editable: false, placeholder: '' };
+  role_taker_config = { editable: false, placeholder: '' };
 }
 
 export class GeneralEvalSegment extends BaseSegment {
   segment_type = 'General Evaluation';
-  role_taker = { editable: true, placeholder: 'Assign evaluator' };
+  role_taker_config = { editable: true, placeholder: 'Assign evaluator' };
 }
 
 export class VotingSegment extends BaseSegment {
   segment_type = 'Voting Section (TOM)';
-  role_taker = { editable: false, placeholder: '' };
+  role_taker_config = { editable: false, placeholder: '' };
 }
 
 export class AwardsSegment extends BaseSegment {
   segment_type = 'Awards (President)';
-  role_taker = { editable: false, placeholder: '' };
+  role_taker_config = { editable: false, placeholder: '' };
 }
 
 export class ClosingRemarksSegment extends BaseSegment {
   segment_type = 'Closing Remarks (President)';
-  role_taker = { editable: false, placeholder: '' };
+  role_taker_config = { editable: false, placeholder: '' };
 }
 
 export const DEFAULT_SEGMENTS_REGULAR_MEETING: BaseSegment[] = [

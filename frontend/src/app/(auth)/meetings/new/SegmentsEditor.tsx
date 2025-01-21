@@ -220,7 +220,7 @@ export function SegmentsEditor({
               )}
             </div>
 
-            {segment.role_taker.editable && (
+            {segment.role_taker_config.editable && (
               <div
                 className={`relative
                   ${hoveredClasses}
@@ -228,18 +228,18 @@ export function SegmentsEditor({
               >
                 <input
                   type='text'
-                  value=''
+                  value={segment.role_taker}
                   onChange={(e) =>
                     onSegmentChange(index, 'role_taker', e.target.value)
                   }
-                  placeholder={segment.role_taker.placeholder}
+                  placeholder={segment.role_taker_config.placeholder}
                   className={inputWithIconClasses}
                 />
                 <Users className='absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400' />
               </div>
             )}
 
-            {segment.title.editable && (
+            {segment.title_config.editable && (
               <div
                 className={`relative
                   ${hoveredClasses}
@@ -247,17 +247,17 @@ export function SegmentsEditor({
               >
                 <input
                   type='text'
-                  value=''
+                  value={segment.title}
                   onChange={(e) =>
                     onSegmentChange(index, 'title', e.target.value)
                   }
-                  placeholder={segment.title.placeholder}
+                  placeholder={segment.title_config.placeholder}
                   className={inputClasses}
                 />
               </div>
             )}
 
-            {segment.content.editable && (
+            {segment.content_config.editable && (
               <div
                 className={`relative
                   ${hoveredClasses}
@@ -265,11 +265,11 @@ export function SegmentsEditor({
               >
                 <input
                   type='text'
-                  value=''
+                  value={segment.content}
                   onChange={(e) =>
                     onSegmentChange(index, 'content', e.target.value)
                   }
-                  placeholder={segment.content.placeholder}
+                  placeholder={segment.content_config.placeholder}
                   className={inputClasses}
                 />
               </div>
