@@ -89,23 +89,28 @@ export const MeetingCard: React.FC<MeetingIF> = ({
 
       <div
         className={`overflow-hidden transition-all duration-300 ease-in-out ${
-          isExpanded ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'
+          isExpanded ? 'max-h-[4000px] opacity-100' : 'max-h-0 opacity-0'
         }`}
       >
         <div className='p-6 border-t border-gray-300 bg-gradient-to-b from-white to-[#F9FAFB]'>
           <h3 className='text-lg font-semibold mb-4 text-gray-800'>
             Meeting Schedule
           </h3>
-          <div className='space-y-4'>
+          <div className='space-y-6 sm:space-y-4'>
             {segments.map((segment) => (
-              <div key={segment.segment_id} className='flex gap-4 relative'>
-                <div className='w-24 flex-shrink-0 flex flex-col items-start pt-0.5'>
-                  <span className='text-sm font-medium text-indigo-600'>
-                    {segment.start_time}
-                  </span>
-                  <span className='text-xs text-gray-500'>
-                    {segment.duration}min
-                  </span>
+              <div
+                key={segment.segment_id}
+                className='flex flex-col sm:flex-row gap-1 sm:gap-4 relative mb-4'
+              >
+                <div className='w-full sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between'>
+                  <div className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0'>
+                    <span className='text-sm font-medium text-indigo-600'>
+                      {segment.start_time}
+                    </span>
+                    <span className='text-xs text-gray-500'>
+                      {segment.duration}min
+                    </span>
+                  </div>
                 </div>
                 <div className='flex-grow'>
                   <div className='flex flex-col'>
@@ -116,14 +121,9 @@ export const MeetingCard: React.FC<MeetingIF> = ({
                       {segment.role_taker}
                       {segment.title && ` - ${segment.title}`}
                     </p>
-                    {/* {segment.content && (
-                      <p className='text-sm text-gray-500 mt-1'>
-                        {segment.content}
-                      </p>
-                    )} */}
                   </div>
                 </div>
-                <div className='absolute left-24 top-0 bottom-0 w-0.5 bg-gradient-to-b from-indigo-600 to-purple-600 -z-10' />
+                <div className='hidden sm:block absolute left-24 top-0 bottom-0 w-0.5 bg-gradient-to-b from-indigo-600 to-purple-600 -z-10' />
               </div>
             ))}
           </div>
