@@ -88,10 +88,22 @@ export function MeetingFromTemplate() {
   };
 
   const handleSegmentDelete = (index: number) => {
-    setFormData((prev) => ({
-      ...prev,
-      segments: prev.segments.filter((_, i) => i !== index),
-    }));
+    setFormData((prev) => {
+      const segmentToDelete = prev.segments[index];
+      const newSegments = prev.segments.filter((_, i) => i !== index);
+
+      // Update related_segment_ids in remaining segments
+      newSegments.forEach((segment) => {
+        if (segment.related_segment_ids) {
+          segment.related_segment_ids = segment.related_segment_ids
+            .split(',')
+            .filter((id) => id !== segmentToDelete.segment_id)
+            .join(',');
+        }
+      });
+
+      return { ...prev, segments: newSegments };
+    });
   };
 
   const handleSegmentAdd = (index: number) => {
@@ -133,7 +145,7 @@ export function MeetingFromTemplate() {
     'block w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-[0.5px] focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
 
   return (
-    <form onSubmit={handleSubmit} className='p-6'>
+    <form onSubmit={handleSubmit} className='px-6 pt-6 pb-60'>
       <div>
         <h2 className='text-2xl font-semibold text-gray-900'>
           Create from Template
