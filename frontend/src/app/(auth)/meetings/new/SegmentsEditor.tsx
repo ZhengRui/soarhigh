@@ -58,6 +58,11 @@ export function SegmentsEditor({
     }, 300);
   };
 
+  const handleSegmentTypeChange = (index: number, newType: string) => {
+    onSegmentChange(index, 'segment_type', newType);
+    setOpenDropdownIndex(null);
+  };
+
   const inputClasses =
     'block w-full px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-[0.5px] focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
   const inputWithIconClasses =
@@ -143,6 +148,7 @@ export function SegmentsEditor({
                       <div
                         key={type}
                         className='px-4 py-2 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 cursor-pointer'
+                        onClick={() => handleSegmentTypeChange(index, type)}
                       >
                         {type}
                       </div>

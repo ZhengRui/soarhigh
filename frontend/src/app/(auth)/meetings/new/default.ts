@@ -13,7 +13,7 @@ interface EditableSegmentIF
   role_taker: EditableField;
 }
 
-interface SegmentParams {
+export interface SegmentParams {
   segment_id: string;
   start_time: string;
   duration: string;
@@ -97,9 +97,9 @@ export class PreparedSpeechSegment extends BaseSegment {
   role_taker = { editable: true, placeholder: 'Assign Speaker' };
   title = { editable: true, placeholder: 'Enter title (optional)' };
 
-  constructor(params: SegmentParams, speechNumber: number) {
+  constructor(params: SegmentParams, speechNumber?: number) {
     super(params);
-    this.segment_type = `Prepared Speech ${speechNumber}`;
+    this.segment_type = `Prepared Speech ${speechNumber || ''}`;
   }
 }
 
@@ -117,9 +117,9 @@ export class PreparedSpeechEvalSegment extends BaseSegment {
   segment_type: string;
   role_taker = { editable: true, placeholder: 'Assign evaluator' };
 
-  constructor(params: SegmentParams, speechNumber: number) {
+  constructor(params: SegmentParams, speechNumber?: number) {
     super(params);
-    this.segment_type = `Prepared Speech ${speechNumber} Evaluation`;
+    this.segment_type = `Prepared Speech ${speechNumber || ''} Evaluation`;
   }
 }
 

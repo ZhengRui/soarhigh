@@ -5,6 +5,8 @@ import {
   DEFAULT_REGULAR_MEETING,
   BaseSegment,
   PreparedSpeechSegment,
+  SEGMENT_TYPE_MAP,
+  SegmentParams,
 } from './default';
 import { SegmentsEditor } from './SegmentsEditor';
 import { v4 as uuidv4 } from 'uuid';
@@ -19,25 +21,24 @@ const transformSegmentsWithUUID = (segments: BaseSegment[]): BaseSegment[] => {
   // Create a mapping of old IDs to new UUIDs
   const idMap = new Map<string, string>();
 
-  const transformedSegments = segments.map((segment) => {
+  // First pass: generate new IDs
+  segments.forEach((segment) => {
     const newId = uuidv4();
     idMap.set(segment.segment_id, newId);
-    return {
-      ...segment,
-      segment_id: newId,
-    };
+    segment.segment_id = newId;
   });
 
-  // Update related_segment_ids with new UUIDs
-  return transformedSegments.map((segment) => ({
-    ...segment,
-    related_segment_ids: segment.related_segment_ids
-      ? segment.related_segment_ids
-          .split(',')
-          .map((id) => idMap.get(id) || '')
-          .join(',')
-      : '',
-  }));
+  // Second pass: update related_segment_ids
+  segments.forEach((segment) => {
+    if (segment.related_segment_ids) {
+      segment.related_segment_ids = segment.related_segment_ids
+        .split(',')
+        .map((id) => idMap.get(id) || '')
+        .join(',');
+    }
+  });
+
+  return segments;
 };
 
 export function MeetingFromTemplate() {
@@ -58,12 +59,32 @@ export function MeetingFromTemplate() {
     field: keyof BaseSegment,
     value: string
   ) => {
-    setFormData((prev) => ({
-      ...prev,
-      segments: prev.segments.map((segment, i) =>
-        i === index ? { ...segment, [field]: value } : segment
-      ),
-    }));
+    setFormData((prev) => {
+      const newSegments = [...prev.segments];
+
+      if (field === 'segment_type') {
+        // Create new segment of the selected type
+        const oldSegment = newSegments[index];
+        const params = {
+          segment_id: oldSegment.segment_id,
+          start_time: oldSegment.start_time,
+          duration: '2',
+        };
+
+        const SegmentClass =
+          SEGMENT_TYPE_MAP[value as keyof typeof SEGMENT_TYPE_MAP];
+        if (SegmentClass) {
+          newSegments[index] = new (SegmentClass as new (
+            params: SegmentParams
+          ) => BaseSegment)(params);
+        }
+      } else {
+        // Handle other field changes
+        newSegments[index] = { ...newSegments[index], [field]: value };
+      }
+
+      return { ...prev, segments: newSegments };
+    });
   };
 
   const handleSegmentDelete = (index: number) => {
