@@ -15,6 +15,7 @@ interface EditableSegmentIF
 
 export interface SegmentParams {
   segment_id: string;
+  segment_type?: string;
   start_time: string;
   duration: string;
 }
@@ -42,6 +43,22 @@ export class BaseSegment implements EditableSegmentIF {
     this.start_time = params.start_time;
     this.duration = params.duration;
   }
+}
+
+export class CustomSegment extends BaseSegment {
+  constructor({
+    segment_id,
+    segment_type = 'Custom segment',
+    start_time,
+    duration,
+  }: SegmentParams) {
+    super({ segment_id, start_time, duration });
+    this.segment_type = segment_type;
+  }
+
+  title = { editable: true, placeholder: 'Enter title (optional)' };
+  content = { editable: true, placeholder: 'Enter content (optional)' };
+  role_taker = { editable: true, placeholder: 'Assign role taker' };
 }
 
 export class WarmUpSegment extends BaseSegment {
@@ -266,6 +283,7 @@ export const SEGMENT_TYPE_MAP = {
   [new VotingSegment(dummyParams).segment_type]: VotingSegment,
   [new AwardsSegment(dummyParams).segment_type]: AwardsSegment,
   [new ClosingRemarksSegment(dummyParams).segment_type]: ClosingRemarksSegment,
+  [new CustomSegment(dummyParams).segment_type]: CustomSegment,
 } as const;
 
 export type SegmentType = keyof typeof SEGMENT_TYPE_MAP;

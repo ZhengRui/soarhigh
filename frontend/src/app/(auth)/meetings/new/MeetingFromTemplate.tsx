@@ -4,7 +4,7 @@ import { MeetingIF } from '@/interfaces';
 import {
   DEFAULT_REGULAR_MEETING,
   BaseSegment,
-  PreparedSpeechSegment,
+  CustomSegment,
   SEGMENT_TYPE_MAP,
   SegmentParams,
 } from './default';
@@ -68,7 +68,7 @@ export function MeetingFromTemplate() {
         const params = {
           segment_id: oldSegment.segment_id,
           start_time: oldSegment.start_time,
-          duration: '2',
+          duration: oldSegment.duration,
         };
 
         const SegmentClass =
@@ -109,17 +109,13 @@ export function MeetingFromTemplate() {
         newStartTime = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
       }
 
-      // Create new prepared speech segment
-      const newSegment = new PreparedSpeechSegment(
-        {
-          segment_id: uuidv4(),
-          start_time: newStartTime,
-          duration: '7',
-        },
-        newSegments.filter((s) => s.segment_type.startsWith('Prepared Speech'))
-          .length + 1
-      );
-
+      // Create new custom segment
+      const newSegment = new CustomSegment({
+        segment_id: uuidv4(),
+        segment_type: 'New segment',
+        start_time: newStartTime,
+        duration: '5',
+      });
       newSegments.splice(index + 1, 0, newSegment);
       return { ...prev, segments: newSegments };
     });
