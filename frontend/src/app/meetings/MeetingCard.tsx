@@ -102,7 +102,7 @@ export const MeetingCard: React.FC<MeetingIF> = ({
                 key={segment.segment_id}
                 className='flex flex-col sm:flex-row gap-1 sm:gap-4 relative mb-4'
               >
-                <div className='w-full sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between'>
+                <div className='w-full sm:pt-1 sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between'>
                   <div className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0'>
                     <span className='text-sm font-medium text-indigo-600'>
                       {segment.start_time}

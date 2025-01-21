@@ -146,7 +146,7 @@ export function SegmentsEditor({
             <button
               type='button'
               onClick={() => handleDelete(index)}
-              className={`absolute -top-2 -right-2 p-1.5 rounded-full bg-white shadow-md opacity-0 group-hover:-translate-y-1 group-hover:opacity-100 transform scale-75 group-hover:scale-100 transition-all duration-200 hover:bg-red-50 z-20
+              className={`absolute -top-2 -translate-x-3.5 left-full p-1.5 rounded-full bg-white shadow-md opacity-0 group-hover:-translate-y-1 group-hover:opacity-100 transform scale-75 group-hover:scale-100 transition-all duration-200 hover:bg-red-50 z-20
                 ${deletingSegments.includes(index) ? 'opacity-0 group-hover:opacity-0' : ''}`}
               title='Delete segment'
               disabled={deletingSegments.includes(index)}
