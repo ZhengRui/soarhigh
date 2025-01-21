@@ -18,6 +18,7 @@ export interface SegmentParams {
   segment_type?: string;
   start_time: string;
   duration: string;
+  related_segment_ids?: string;
 }
 
 export class BaseSegment implements EditableSegmentIF {
@@ -134,9 +135,18 @@ export class PreparedSpeechEvalSegment extends BaseSegment {
   segment_type: string;
   role_taker = { editable: true, placeholder: 'Assign evaluator' };
 
-  constructor(params: SegmentParams, speechNumber?: number) {
-    super(params);
+  constructor(
+    {
+      segment_id,
+      start_time,
+      duration,
+      related_segment_ids = '',
+    }: SegmentParams,
+    speechNumber?: number
+  ) {
+    super({ segment_id, start_time, duration });
     this.segment_type = `Prepared Speech ${speechNumber || ''} Evaluation`;
+    this.related_segment_ids = related_segment_ids;
   }
 }
 
@@ -218,11 +228,21 @@ export const DEFAULT_SEGMENTS_REGULAR_MEETING: BaseSegment[] = [
     duration: '7',
   }),
   new PreparedSpeechEvalSegment(
-    { segment_id: '14', start_time: '20:50', duration: '3' },
+    {
+      segment_id: '14',
+      start_time: '20:50',
+      duration: '3',
+      related_segment_ids: '10',
+    },
     1
   ),
   new PreparedSpeechEvalSegment(
-    { segment_id: '15', start_time: '20:54', duration: '3' },
+    {
+      segment_id: '15',
+      start_time: '20:54',
+      duration: '3',
+      related_segment_ids: '11',
+    },
     2
   ),
   new TimerReportSegment({
