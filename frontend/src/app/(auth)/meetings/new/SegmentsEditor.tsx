@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Users, X, Plus, ChevronDown, Link } from 'lucide-react';
+import { Users, X, Plus, ChevronDown, Link, Hash } from 'lucide-react';
 import {
   BaseSegment,
   DEFAULT_SEGMENTS_REGULAR_MEETING,
@@ -116,9 +116,9 @@ export function SegmentsEditor({
   };
 
   const inputClasses =
-    'block w-full px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-[0.5px] focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
+    'block w-full px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
   const inputWithIconClasses =
-    'block w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-[0.5px] focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
+    'block w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
   const hoveredClasses =
     'group-hover:-translate-y-1 transition-all duration-300 ease-out';
   const deletingClassesFunction = (index: number) => {
@@ -156,14 +156,22 @@ export function SegmentsEditor({
           )}
 
           <div
-            className={`w-full sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0 sm:pt-1.5
+            className={`w-full sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between
               ${hoveredClasses}
               ${deletingClassesFunction(index)}`}
           >
-            <span className='text-sm font-medium text-indigo-600'>
-              {segment.start_time}
-            </span>
-            <span className='text-xs text-gray-500'>{segment.duration}min</span>
+            <div className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0'>
+              <span className='text-sm font-medium text-indigo-600'>
+                {segment.start_time}
+              </span>
+              <span className='text-xs text-gray-500'>
+                {segment.duration}min
+              </span>
+            </div>
+            <div className='text-[10px] text-gray-400 sm:pt-3 font-mono flex items-center gap-0.5'>
+              <Hash className='w-2 h-2' />
+              <span>{segment.segment_id.slice(0, 5)}</span>
+            </div>
           </div>
 
           <div className='flex-grow space-y-2 w-full'>
@@ -285,9 +293,10 @@ export function SegmentsEditor({
                         <div
                           key={segment_id}
                           className='inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-gradient-to-r from-indigo-50 to-purple-50 text-indigo-700 border border-indigo-100 shadow-sm group/tag hover:shadow-md transition-all duration-200'
+                          title={`# ${segment_id.slice(0, 5)}`}
                         >
                           <Link className='w-3.5 h-3.5 mr-1.5 text-indigo-500 flex-shrink-0' />
-                          <span className='font-semibold truncate'>
+                          <span className='font-semibold truncate max-w-40'>
                             {relatedSegment.segment_type}
                           </span>
                           <button
@@ -351,7 +360,7 @@ export function SegmentsEditor({
                               handleAddRelatedSegment(index, s.segment_id)
                             }
                           >
-                            {s.segment_type}
+                            {`${s.segment_type} (# ${s.segment_id.slice(0, 5)})`}
                           </div>
                         ));
                     })()}
