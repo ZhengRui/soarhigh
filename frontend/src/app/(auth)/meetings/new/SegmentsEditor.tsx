@@ -1,5 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Users, X, Plus, ChevronDown, Link, Hash } from 'lucide-react';
+import {
+  Users,
+  X,
+  Plus,
+  ChevronDown,
+  Link,
+  Hash,
+  PencilLine,
+} from 'lucide-react';
 import {
   BaseSegment,
   DEFAULT_SEGMENTS_REGULAR_MEETING,
@@ -89,7 +97,7 @@ export function SegmentsEditor({
 
   const handleSegmentTypeChange = (index: number, newType: string) => {
     onSegmentChange(index, 'segment_type', newType);
-    setOpenTypeDropdownIndex(null);
+    // setOpenTypeDropdownIndex(null);
   };
 
   const handleAddRelatedSegment = (index: number, relatedSegmentId: string) => {
@@ -99,7 +107,7 @@ export function SegmentsEditor({
       : relatedSegmentId;
 
     onSegmentChange(index, 'related_segment_ids', newRelatedIds);
-    setOpenRelatedDropdownIndex(null);
+    // setOpenRelatedDropdownIndex(null);
   };
 
   const handleRemoveRelatedSegment = (
@@ -177,26 +185,35 @@ export function SegmentsEditor({
           <div className='flex-grow space-y-2 w-full'>
             <div className='relative select-none'>
               <div
-                ref={openTypeDropdownIndex === index ? segmentTypeRef : null}
-                className={`flex items-center gap-1 cursor-pointer
-                  ${hoveredClasses}
-                  ${deletingClassesFunction(index)}`}
-                onClick={() => {
-                  setOpenTypeDropdownIndex(
-                    openTypeDropdownIndex === index ? null : index
-                  );
-                }}
+                className={`flex items-center gap-2 ${hoveredClasses} ${deletingClassesFunction(index)}`}
               >
-                <span className='text-sm font-medium text-gray-900'>
-                  {segment.segment_type}
-                </span>
-                <ChevronDown
-                  className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
-                    openTypeDropdownIndex === index
-                      ? 'transform rotate-180'
-                      : ''
-                  }`}
-                />
+                <div
+                  ref={openTypeDropdownIndex === index ? segmentTypeRef : null}
+                  className='flex items-center gap-1 cursor-pointer'
+                  onClick={() => {
+                    setOpenTypeDropdownIndex(
+                      openTypeDropdownIndex === index ? null : index
+                    );
+                  }}
+                >
+                  <span className='text-sm font-medium text-gray-900'>
+                    {segment.segment_type}
+                  </span>
+                  <ChevronDown
+                    className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
+                      openTypeDropdownIndex === index
+                        ? 'transform rotate-180'
+                        : ''
+                    }`}
+                  />
+                </div>
+                <button
+                  // onClick={() => handleEditClick(index)}
+                  className='text-gray-400 hover:text-gray-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 duration-300'
+                  title='Edit segment type'
+                >
+                  <PencilLine className='w-3.5 h-3.5' />
+                </button>
               </div>
               {openTypeDropdownIndex === index && (
                 <div
