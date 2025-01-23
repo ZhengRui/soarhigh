@@ -45,6 +45,8 @@ export function SegmentsEditor({
   const relatedDropdownRef = useRef<HTMLDivElement>(null);
   const relatedRef = useRef<HTMLDivElement>(null);
 
+  const [editingTypeIndex, setEditingTypeIndex] = useState<number | null>(null);
+
   useEffect(() => {
     function handleClickOutsideOfTypeDropdown(event: MouseEvent) {
       if (segmentTypeRef.current?.contains(event.target as Node)) {
@@ -123,6 +125,16 @@ export function SegmentsEditor({
     onSegmentChange(index, 'related_segment_ids', newRelatedIds);
   };
 
+  const handleEditClick = (index: number, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent dropdown from opening
+    setEditingTypeIndex(index);
+    setOpenTypeDropdownIndex(null); // Close dropdown if open
+  };
+
+  const handleTypeInputBlur = () => {
+    setEditingTypeIndex(null);
+  };
+
   const inputClasses =
     'block w-full px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
   const inputWithIconClasses =
@@ -187,33 +199,51 @@ export function SegmentsEditor({
               <div
                 className={`flex items-center gap-2 ${hoveredClasses} ${deletingClassesFunction(index)}`}
               >
-                <div
-                  ref={openTypeDropdownIndex === index ? segmentTypeRef : null}
-                  className='flex items-center gap-1 cursor-pointer'
-                  onClick={() => {
-                    setOpenTypeDropdownIndex(
-                      openTypeDropdownIndex === index ? null : index
-                    );
-                  }}
-                >
-                  <span className='text-sm font-medium text-gray-900'>
-                    {segment.segment_type}
-                  </span>
-                  <ChevronDown
-                    className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
-                      openTypeDropdownIndex === index
-                        ? 'transform rotate-180'
-                        : ''
-                    }`}
+                {editingTypeIndex === index ? (
+                  <input
+                    type='text'
+                    value={segment.segment_type}
+                    onChange={(e) =>
+                      onSegmentChange(index, 'segment_type', e.target.value)
+                    }
+                    onBlur={handleTypeInputBlur}
+                    className='text-sm font-medium text-gray-900 w-full px-0 py-1 border-b border-gray-100 focus:border-gray-200 bg-transparent focus:outline-none transition-colors'
+                    autoFocus
+                    onClick={(e) => e.stopPropagation()}
                   />
-                </div>
-                <button
-                  // onClick={() => handleEditClick(index)}
-                  className='text-gray-400 hover:text-gray-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 duration-300'
-                  title='Edit segment type'
-                >
-                  <PencilLine className='w-3.5 h-3.5' />
-                </button>
+                ) : (
+                  <>
+                    <div
+                      ref={
+                        openTypeDropdownIndex === index ? segmentTypeRef : null
+                      }
+                      className='flex items-center gap-1 cursor-pointer'
+                      onClick={() => {
+                        setOpenTypeDropdownIndex(
+                          openTypeDropdownIndex === index ? null : index
+                        );
+                      }}
+                    >
+                      <span className='text-sm font-medium text-gray-900 break-words border-b border-transparent py-1'>
+                        {segment.segment_type}
+                      </span>
+                      <ChevronDown
+                        className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
+                          openTypeDropdownIndex === index
+                            ? 'transform rotate-180'
+                            : ''
+                        }`}
+                      />
+                    </div>
+                    <button
+                      onClick={(e) => handleEditClick(index, e)}
+                      className='text-gray-400 hover:text-gray-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 duration-300'
+                      title='Edit segment type'
+                    >
+                      <PencilLine className='w-3.5 h-3.5' />
+                    </button>
+                  </>
+                )}
               </div>
               {openTypeDropdownIndex === index && (
                 <div

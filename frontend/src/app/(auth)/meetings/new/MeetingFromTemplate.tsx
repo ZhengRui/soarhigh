@@ -62,7 +62,7 @@ export function MeetingFromTemplate() {
     setFormData((prev) => {
       const newSegments = [...prev.segments];
 
-      if (field === 'segment_type') {
+      if (field === 'segment_type' && value in SEGMENT_TYPE_MAP) {
         // Create new segment of the selected type
         const oldSegment = newSegments[index];
         const params = {

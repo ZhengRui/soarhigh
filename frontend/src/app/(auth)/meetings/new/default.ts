@@ -125,7 +125,10 @@ export class PreparedSpeechSegment extends BaseSegment {
 
   constructor(params: SegmentParams, speechNumber?: number) {
     super(params);
-    this.segment_type = `Prepared Speech ${speechNumber || ''}`;
+    this.segment_type =
+      speechNumber !== undefined
+        ? `Prepared Speech ${speechNumber}`
+        : 'Prepared Speech';
   }
 }
 
@@ -157,7 +160,10 @@ export class PreparedSpeechEvalSegment extends BaseSegment {
     speechNumber?: number
   ) {
     super({ segment_id, start_time, duration });
-    this.segment_type = `Prepared Speech ${speechNumber || ''} Evaluation`;
+    this.segment_type =
+      speechNumber !== undefined
+        ? `Prepared Speech ${speechNumber} Evaluation`
+        : 'Prepared Speech Evaluation';
     this.related_segment_ids = related_segment_ids;
   }
 }
