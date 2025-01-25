@@ -13,6 +13,7 @@ import {
   DEFAULT_SEGMENTS_REGULAR_MEETING,
   SEGMENT_TYPE_MAP,
 } from './default';
+import { TimePickerModal } from './TimePickerModal';
 
 interface SegmentsEditorProps {
   segments: BaseSegment[];
@@ -46,6 +47,13 @@ export function SegmentsEditor({
   const relatedRef = useRef<HTMLDivElement>(null);
 
   const [editingTypeIndex, setEditingTypeIndex] = useState<number | null>(null);
+
+  const [timePickerIndex, setTimePickerIndex] = useState<number | null>(null);
+
+  const parseTime = (timeString: string) => {
+    const [hours, minutes] = timeString.split(':').map(Number);
+    return { hours, minutes };
+  };
 
   useEffect(() => {
     function handleClickOutsideOfTypeDropdown(event: MouseEvent) {
@@ -180,7 +188,10 @@ export function SegmentsEditor({
               ${hoveredClasses}
               ${deletingClassesFunction(index)}`}
           >
-            <div className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0'>
+            <div
+              className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0'
+              onClick={() => setTimePickerIndex(index)}
+            >
               <span className='text-sm font-medium text-indigo-600'>
                 {segment.start_time}
               </span>
@@ -441,6 +452,24 @@ export function SegmentsEditor({
           )}
         </div>
       ))}
+
+      {timePickerIndex !== null && (
+        <TimePickerModal
+          isOpen={true}
+          onClose={() => setTimePickerIndex(null)}
+          initialHour={parseTime(segments[timePickerIndex].start_time).hours}
+          initialMinute={
+            parseTime(segments[timePickerIndex].start_time).minutes
+          }
+          initialDuration={Number(segments[timePickerIndex].duration)}
+          segmentType={segments[timePickerIndex].segment_type}
+          onSave={(hour, minute, duration) => {
+            // handleTimePickerSave(timePickerIndex, hour, minute, duration);
+            console.log(hour, minute, duration);
+            setTimePickerIndex(null);
+          }}
+        />
+      )}
     </div>
   );
 }
