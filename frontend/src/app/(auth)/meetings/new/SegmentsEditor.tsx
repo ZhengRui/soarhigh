@@ -201,12 +201,12 @@ export function SegmentsEditor({
             )}
 
             <div
-              className={`w-full sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between
+              className={`w-full pt-1 sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between
                 ${hoveredClasses}
                 ${deletingClassesFunction(index)}`}
             >
               <div
-                className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0'
+                className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0 cursor-pointer'
                 onClick={() => setTimePickerIndex(index)}
               >
                 <span className='text-sm font-medium text-indigo-600'>
