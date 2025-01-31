@@ -136,7 +136,7 @@ export function TimePickerModal({
     unit: string,
     selectedValue: number
   ) => (
-    <div className='flex-1 relative'>
+    <div className='flex-1 relative -translate-x-4'>
       <div
         ref={ref}
         className='h-[180px] overflow-y-auto scrollbar-hide'
@@ -149,11 +149,11 @@ export function TimePickerModal({
           <div
             key={num}
             className={`h-[60px] flex items-center justify-center select-none transition-all duration-200 ${
-              num === selectedValue ? 'scale-110' : 'scale-100'
+              num === selectedValue ? 'scale-110' : 'scale-75'
             }`}
           >
             <div
-              className={`text-4xl font-medium w-[70px] text-center transition-colors ${
+              className={`text-4xl font-medium w-[50px] sm:w-[70px] text-center transition-colors ${
                 num === selectedValue ? 'text-gray-900' : 'text-gray-400'
               }`}
             >
@@ -165,7 +165,7 @@ export function TimePickerModal({
       </div>
       {/* Fixed unit label for the middle (selected) position */}
       <div className='absolute left-0 right-0 top-1/2 -translate-y-1/2 pointer-events-none h-[60px] flex items-center justify-center'>
-        <div className='relative w-[70px] text-center'>
+        <div className='relative w-[50px] sm:w-[70px] text-center'>
           <span className='absolute left-full pl-1 text-sm font-medium text-gray-500'>
             {unit}
           </span>
@@ -199,9 +199,15 @@ export function TimePickerModal({
           {/* Selection indicator */}
           <div className='absolute left-0 right-0 top-1/2 -translate-y-1/2 h-[60px] bg-gradient-to-r from-blue-50 to-purple-50 border-y border-blue-100/50 pointer-events-none' />
 
-          <div className='flex gap-8'>
+          <div className='flex'>
             {renderColumn(hours, hourRef, 'H', selectedHour)}
+            <div className='flex items-center z-50 w-6 justify-center -translate-x-2 sm:-translate-x-0'>
+              <span className='text-gray-500 text-2xl font-black'>:</span>
+            </div>
             {renderColumn(minutes, minuteRef, 'M', selectedMinute)}
+            <div className='flex items-center z-50 w-6 justify-center -translate-x-2 sm:-translate-x-0'>
+              <span className='text-gray-500 text-2xl font-bold'>+</span>
+            </div>
             {renderColumn(durations, durationRef, 'Min', selectedDuration)}
           </div>
         </div>
