@@ -62,25 +62,30 @@ export function MeetingFromTemplate() {
     setFormData((prev) => {
       const newSegments = [...prev.segments];
 
-      if (field === 'segment_type' && value in SEGMENT_TYPE_MAP) {
-        // Create new segment of the selected type
-        const oldSegment = newSegments[index];
-        const params = {
-          segment_id: oldSegment.segment_id,
-          start_time: oldSegment.start_time,
-          duration: oldSegment.duration,
-        };
+      if (field === 'segment_type') {
+        if (value in SEGMENT_TYPE_MAP) {
+          // Create new segment of the selected type
+          const oldSegment = newSegments[index];
+          const params = {
+            segment_id: oldSegment.segment_id,
+            start_time: oldSegment.start_time,
+            duration: oldSegment.duration,
+          };
 
-        const SegmentClass =
-          SEGMENT_TYPE_MAP[value as keyof typeof SEGMENT_TYPE_MAP];
-        if (SegmentClass) {
-          newSegments[index] = new (SegmentClass as new (
-            params: SegmentParams
-          ) => BaseSegment)(params);
+          const SegmentClass =
+            SEGMENT_TYPE_MAP[value as keyof typeof SEGMENT_TYPE_MAP];
+          if (SegmentClass) {
+            newSegments[index] = new (SegmentClass as new (
+              params: SegmentParams
+            ) => BaseSegment)(params);
+          }
+        } else {
+          newSegments[index] = { ...newSegments[index], [field]: value };
         }
       } else {
-        // Handle other field changes
-        newSegments[index] = { ...newSegments[index], [field]: value };
+        // Handle other field changes while preserving the class instance
+        const segment = newSegments[index];
+        (segment[field] as string) = value;
       }
 
       return { ...prev, segments: newSegments };

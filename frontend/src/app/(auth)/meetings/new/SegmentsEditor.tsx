@@ -155,6 +155,22 @@ export function SegmentsEditor({
       : 'opacity-100';
   };
 
+  const handleTimePickerSave = (
+    index: number,
+    hour: number,
+    minute: number,
+    duration: number
+  ) => {
+    // Update start time
+    const formattedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    onSegmentChange(index, 'start_time', formattedTime);
+
+    // Update duration
+    onSegmentChange(index, 'duration', String(duration));
+
+    setTimePickerIndex(null);
+  };
+
   return (
     <div>
       <div className='space-y-4'>
@@ -467,10 +483,9 @@ export function SegmentsEditor({
           }
           initialDuration={Number(segments[timePickerIndex].duration)}
           segmentType={segments[timePickerIndex].segment_type}
-          onSave={(hour, minute, duration) => {
-            console.log(hour, minute, duration);
-            setTimePickerIndex(null);
-          }}
+          onSave={(hour, minute, duration) =>
+            handleTimePickerSave(timePickerIndex, hour, minute, duration)
+          }
         />
       )}
     </div>

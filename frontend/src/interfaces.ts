@@ -9,7 +9,7 @@ export interface SegmentIF {
   segment_type: string;
   start_time: string;
   duration: string;
-  end_time: string;
+  end_time?: string;
   role_taker?: string;
   title?: string;
   content?: string;
