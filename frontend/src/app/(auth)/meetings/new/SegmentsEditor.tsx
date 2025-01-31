@@ -203,9 +203,10 @@ export function SegmentsEditor({
               className='group relative flex flex-col sm:flex-row gap-4 items-start py-4 px-2 sm:px-4 rounded-lg'
             >
               <div
-                className={`absolute inset-0 w-full h-full rounded-lg
+                className={`absolute inset-0 w-full h-full rounded-lg border border-opacity-0
+                group-hover:border-opacity-100
                 group-hover:shadow-[0_8px_16px_-6px_rgba(0,0,0,0.05),0_4px_8px_-4px_rgba(59,130,246,0.1)]
-                ${hasConflict ? 'bg-red-50/50' : ''}
+                ${hasConflict ? 'bg-red-50/50 border-red-300' : 'border-gray-300'}
                 ${hoveredClasses}
                 ${deletingClassesFunction(index)}`}
               />

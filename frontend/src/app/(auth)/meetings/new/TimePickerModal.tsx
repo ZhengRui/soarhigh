@@ -123,6 +123,19 @@ export function TimePickerModal({
     };
   }, [isOpen, initialHour, initialMinute, initialDuration]);
 
+  // Add this new useEffect to manage body scroll
+  useEffect(() => {
+    if (isOpen) {
+      // Disable scrolling on the body when modal is open
+      document.body.style.overflow = 'hidden';
+    }
+
+    return () => {
+      // Re-enable scrolling when modal is closed
+      document.body.style.overflow = 'unset';
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const handleSave = () => {
