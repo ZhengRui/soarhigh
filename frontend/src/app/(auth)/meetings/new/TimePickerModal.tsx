@@ -52,12 +52,11 @@ export function TimePickerModal({
 
   useEffect(() => {
     if (isBulkMode) {
-      const lastValidIndex = segments.length - 1;
-      setEndSegmentIndex(lastValidIndex);
+      setEndSegmentIndex(currentSegmentIndex);
     } else {
       setEndSegmentIndex(null);
     }
-  }, [isBulkMode, segments.length]);
+  }, [isBulkMode, currentSegmentIndex]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -178,7 +177,7 @@ export function TimePickerModal({
   };
 
   const handleSegmentClick = (index: number) => {
-    if (index <= currentSegmentIndex) return;
+    if (index < currentSegmentIndex) return;
     setEndSegmentIndex(index);
   };
 
@@ -230,9 +229,10 @@ export function TimePickerModal({
     <div className='fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50'>
       <div
         ref={modalRef}
-        className='bg-white rounded-xl p-6 w-[calc(100%-2rem)] sm:w-[440px] max-w-[440px] shadow-xl min-w-0'
+        className='bg-white rounded-xl w-[calc(100%-2rem)] sm:w-[440px] max-w-[440px] shadow-xl max-h-[90vh] flex flex-col'
       >
-        <div className='flex justify-between items-start mb-6'>
+        {/* Fixed Header */}
+        <div className='flex justify-between items-start p-6 pb-4'>
           <div>
             <h3 className='text-lg font-semibold text-gray-900'>Set Time</h3>
             <p className='text-sm text-gray-500 mt-0.5 line-clamp-1'>
@@ -247,98 +247,102 @@ export function TimePickerModal({
           </button>
         </div>
 
-        <div className='relative'>
-          {/* Selection indicator */}
-          <div className='absolute left-0 right-0 top-1/2 -translate-y-1/2 h-[60px] bg-gradient-to-r from-blue-50 to-purple-50 border-y border-blue-100/50 pointer-events-none' />
+        {/* Scrollable Content */}
+        <div className='flex-1 overflow-y-auto px-6 pb-6'>
+          <div className='relative'>
+            {/* Selection indicator */}
+            <div className='absolute left-0 right-0 top-1/2 -translate-y-1/2 h-[60px] bg-gradient-to-r from-blue-50 to-purple-50 border-y border-blue-100/50 pointer-events-none' />
 
-          <div className='flex'>
-            {renderColumn(hours, hourRef, 'H', selectedHour)}
-            <div className='flex items-center z-50 w-6 justify-center -translate-x-2 sm:-translate-x-0'>
-              <span className='text-gray-500 text-2xl font-black'>:</span>
+            <div className='flex'>
+              {renderColumn(hours, hourRef, 'H', selectedHour)}
+              <div className='flex items-center z-50 w-6 justify-center -translate-x-2 sm:-translate-x-0'>
+                <span className='text-gray-500 text-2xl font-black'>:</span>
+              </div>
+              {renderColumn(minutes, minuteRef, 'M', selectedMinute)}
+              <div className='flex items-center z-50 w-6 justify-center -translate-x-2 sm:-translate-x-0'>
+                <span className='text-gray-500 text-2xl font-bold'>+</span>
+              </div>
+              {renderColumn(durations, durationRef, 'Min', selectedDuration)}
             </div>
-            {renderColumn(minutes, minuteRef, 'M', selectedMinute)}
-            <div className='flex items-center z-50 w-6 justify-center -translate-x-2 sm:-translate-x-0'>
-              <span className='text-gray-500 text-2xl font-bold'>+</span>
-            </div>
-            {renderColumn(durations, durationRef, 'Min', selectedDuration)}
           </div>
+
+          {/* Bulk Mode Toggle */}
+          <button
+            type='button'
+            onClick={() => {
+              setIsBulkMode(!isBulkMode);
+            }}
+            className={`mt-6 w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md border transition-all duration-200 ${
+              isBulkMode
+                ? 'bg-blue-50 border-blue-200 text-blue-700'
+                : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Clock className='w-4 h-4' />
+            <span className='text-sm font-medium'>
+              {isBulkMode
+                ? 'Shift Multiple Segments'
+                : 'Enable Multiple Segments Shift'}
+            </span>
+          </button>
+
+          {/* Timeline Visualization */}
+          {isBulkMode && (
+            <div className='mt-6 border-t pt-4'>
+              <div className='text-sm font-medium text-gray-700 mb-3'>
+                Select ending segment:
+              </div>
+              <div className='space-y-2 max-h-[200px] overflow-y-auto pr-2'>
+                {segments.map((segment, index) => {
+                  const isSelected =
+                    index >= currentSegmentIndex &&
+                    index <= (endSegmentIndex ?? currentSegmentIndex);
+
+                  return (
+                    <button
+                      type='button'
+                      key={segment.segment_id}
+                      onClick={() => handleSegmentClick(index)}
+                      disabled={index < currentSegmentIndex}
+                      className={`w-full text-left p-2 rounded-md transition-all duration-200 ${
+                        isSelected
+                          ? 'bg-blue-50 border border-blue-200'
+                          : 'bg-gray-50 border border-gray-200'
+                      } ${
+                        index < currentSegmentIndex
+                          ? 'opacity-50 cursor-not-allowed'
+                          : 'hover:bg-blue-50'
+                      }`}
+                    >
+                      <div className='flex items-center gap-2'>
+                        {isSelected && (
+                          <div className='w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0' />
+                        )}
+                        <span className='text-sm font-medium'>
+                          {segment.start_time}
+                        </span>
+                        <span className='text-xs text-gray-500'>
+                          ({segment.duration}min)
+                        </span>
+                        <ChevronRight
+                          className={`w-4 h-4 shrink-0 ${
+                            isSelected ? 'text-blue-500' : 'text-gray-400'
+                          }`}
+                        />
+                        <span className='text-sm truncate'>
+                          {segment.segment_type}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Bulk Mode Toggle */}
-        <button
-          type='button'
-          onClick={() => {
-            setIsBulkMode(!isBulkMode);
-          }}
-          className={`mt-6 w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md border transition-all duration-200 ${
-            isBulkMode
-              ? 'bg-blue-50 border-blue-200 text-blue-700'
-              : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-          }`}
-        >
-          <Clock className='w-4 h-4' />
-          <span className='text-sm font-medium'>
-            {isBulkMode
-              ? 'Shift Multiple Segments'
-              : 'Enable Multiple Segments Shift'}
-          </span>
-        </button>
-
-        {/* Timeline Visualization */}
-        {isBulkMode && (
-          <div className='mt-6 border-t pt-4'>
-            <div className='text-sm font-medium text-gray-700 mb-3'>
-              Select ending segment:
-            </div>
-            <div className='space-y-2 max-h-[200px] overflow-y-auto pr-2'>
-              {segments.map((segment, index) => {
-                const isSelected =
-                  index >= currentSegmentIndex &&
-                  (endSegmentIndex === null || index <= endSegmentIndex);
-
-                return (
-                  <button
-                    type='button'
-                    key={segment.segment_id}
-                    onClick={() => handleSegmentClick(index)}
-                    disabled={index <= currentSegmentIndex}
-                    className={`w-full text-left p-2 rounded-md transition-all duration-200 ${
-                      isSelected
-                        ? 'bg-blue-50 border border-blue-200'
-                        : 'bg-gray-50 border border-gray-200'
-                    } ${
-                      index <= currentSegmentIndex
-                        ? 'opacity-50 cursor-not-allowed'
-                        : 'hover:bg-blue-50'
-                    }`}
-                  >
-                    <div className='flex items-center gap-2'>
-                      {isSelected && (
-                        <div className='w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0' />
-                      )}
-                      <span className='text-sm font-medium'>
-                        {segment.start_time}
-                      </span>
-                      <span className='text-xs text-gray-500'>
-                        ({segment.duration}min)
-                      </span>
-                      <ChevronRight
-                        className={`w-4 h-4 ${
-                          isSelected ? 'text-blue-500' : 'text-gray-400'
-                        }`}
-                      />
-                      <span className='text-sm truncate'>
-                        {segment.segment_type}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <div className='mt-6 flex justify-end gap-3'>
+        {/* Fixed Footer */}
+        <div className='mt-auto p-6 pt-4 border-t flex justify-end gap-3'>
           <button
             onClick={onClose}
             className='px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors'

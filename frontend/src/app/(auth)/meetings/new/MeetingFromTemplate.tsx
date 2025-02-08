@@ -8,7 +8,7 @@ import {
   SEGMENT_TYPE_MAP,
   SegmentParams,
 } from './default';
-import { SegmentsEditor } from './SegmentsEditor';
+import { SegmentsEditor, timeStringToMinutes } from './SegmentsEditor';
 import { v4 as uuidv4 } from 'uuid';
 
 const MEETING_TYPES = ['Regular', 'Workshop', 'Activity'] as const;
@@ -86,6 +86,45 @@ export function MeetingFromTemplate() {
         // Handle other field changes while preserving the class instance
         const segment = newSegments[index];
         (segment[field] as string) = value;
+      }
+
+      return { ...prev, segments: newSegments };
+    });
+  };
+
+  const handleSegmentsShift = (
+    startIndex: number,
+    endIndex: number,
+    startTime: string,
+    duration: string
+  ) => {
+    setFormData((prev) => {
+      const newSegments = [...prev.segments];
+      const firstSegment = newSegments[startIndex];
+
+      // Calculate time shift
+      const oldStartMinutes = timeStringToMinutes(firstSegment.start_time);
+      const newStartMinutes = timeStringToMinutes(startTime);
+      const startTimeShift = newStartMinutes - oldStartMinutes;
+
+      // Update duration shift
+      const durationShift =
+        parseInt(duration) - parseInt(firstSegment.duration);
+
+      // Update first segment directly
+      firstSegment.start_time = startTime;
+      firstSegment.duration = duration;
+
+      // Shift subsequent segments
+      for (let i = startIndex + 1; i <= endIndex; i++) {
+        const segment = newSegments[i];
+        const currentStartMinutes = timeStringToMinutes(segment.start_time);
+        const newStartMinutes =
+          currentStartMinutes + startTimeShift + durationShift;
+        const hours = Math.floor(newStartMinutes / 60);
+        const minutes = newStartMinutes % 60;
+
+        segment.start_time = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
       }
 
       return { ...prev, segments: newSegments };
@@ -325,6 +364,7 @@ export function MeetingFromTemplate() {
               onSegmentChange={handleSegmentChange}
               onSegmentDelete={handleSegmentDelete}
               onSegmentAdd={handleSegmentAdd}
+              onSegmentsShift={handleSegmentsShift}
             />
           </div>
         )}

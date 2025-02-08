@@ -25,13 +25,25 @@ interface SegmentsEditorProps {
   ) => void;
   onSegmentDelete?: (index: number) => void;
   onSegmentAdd?: (index: number) => void;
+  onSegmentsShift?: (
+    startIndex: number,
+    endIndex: number,
+    startTime: string,
+    duration: string
+  ) => void;
 }
+
+export const timeStringToMinutes = (timeString: string) => {
+  const [hours, minutes] = timeString.split(':').map(Number);
+  return hours * 60 + minutes;
+};
 
 export function SegmentsEditor({
   segments = DEFAULT_SEGMENTS_REGULAR_MEETING,
   onSegmentChange,
   onSegmentDelete,
   onSegmentAdd,
+  onSegmentsShift,
 }: SegmentsEditorProps) {
   const [deletingSegments, setDeletingSegments] = useState<number[]>([]);
 
@@ -179,13 +191,9 @@ export function SegmentsEditor({
     minute: number,
     duration: number
   ) => {
-    console.log(startIndex, endIndex, hour, minute, duration);
+    const formattedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    onSegmentsShift?.(startIndex, endIndex, formattedTime, String(duration));
     setTimePickerIndex(null);
-  };
-
-  const timeToMinutes = (timeString: string) => {
-    const [hours, minutes] = timeString.split(':').map(Number);
-    return hours * 60 + minutes;
   };
 
   const hasTimeConflict = (currentIndex: number) => {
@@ -195,11 +203,11 @@ export function SegmentsEditor({
     const currentSegment = segments[currentIndex];
 
     const previousEndMinutes = previousSegment.end_time
-      ? timeToMinutes(previousSegment.end_time)
-      : timeToMinutes(previousSegment.start_time) +
+      ? timeStringToMinutes(previousSegment.end_time)
+      : timeStringToMinutes(previousSegment.start_time) +
         parseInt(previousSegment.duration);
 
-    return previousEndMinutes > timeToMinutes(currentSegment.start_time);
+    return previousEndMinutes > timeStringToMinutes(currentSegment.start_time);
   };
 
   return (
