@@ -172,6 +172,17 @@ export function SegmentsEditor({
     setTimePickerIndex(null);
   };
 
+  const handleTimePickerBulkSave = (
+    startIndex: number,
+    endIndex: number,
+    hour: number,
+    minute: number,
+    duration: number
+  ) => {
+    console.log(startIndex, endIndex, hour, minute, duration);
+    setTimePickerIndex(null);
+  };
+
   const timeToMinutes = (timeString: string) => {
     const [hours, minutes] = timeString.split(':').map(Number);
     return hours * 60 + minutes;
@@ -528,8 +539,19 @@ export function SegmentsEditor({
           }
           initialDuration={Number(segments[timePickerIndex].duration)}
           segmentType={segments[timePickerIndex].segment_type}
+          currentSegmentIndex={timePickerIndex}
+          segments={segments}
           onSave={(hour, minute, duration) =>
             handleTimePickerSave(timePickerIndex, hour, minute, duration)
+          }
+          onBulkSave={(startIndex, endIndex, hour, minute, duration) =>
+            handleTimePickerBulkSave(
+              startIndex,
+              endIndex,
+              hour,
+              minute,
+              duration
+            )
           }
         />
       )}

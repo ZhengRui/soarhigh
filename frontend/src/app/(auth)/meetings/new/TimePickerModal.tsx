@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { X, Clock, ChevronRight } from 'lucide-react';
+import { BaseSegment } from './default';
 
 interface TimePickerModalProps {
   isOpen: boolean;
@@ -9,6 +10,15 @@ interface TimePickerModalProps {
   initialDuration: number;
   onSave: (hour: number, minute: number, duration: number) => void;
   segmentType: string;
+  currentSegmentIndex: number;
+  segments: BaseSegment[];
+  onBulkSave: (
+    startIndex: number,
+    endIndex: number,
+    hour: number,
+    minute: number,
+    duration: number
+  ) => void;
 }
 
 export function TimePickerModal({
@@ -19,10 +29,15 @@ export function TimePickerModal({
   initialDuration,
   onSave,
   segmentType,
+  currentSegmentIndex,
+  segments,
+  onBulkSave,
 }: TimePickerModalProps) {
   const [selectedHour, setSelectedHour] = useState(initialHour);
   const [selectedMinute, setSelectedMinute] = useState(initialMinute);
   const [selectedDuration, setSelectedDuration] = useState(initialDuration);
+  const [isBulkMode, setIsBulkMode] = useState(false);
+  const [endSegmentIndex, setEndSegmentIndex] = useState<number | null>(null);
 
   const modalRef = useRef<HTMLDivElement>(null);
   const hourRef = useRef<HTMLDivElement>(null);
@@ -34,6 +49,15 @@ export function TimePickerModal({
   const durations = Array.from({ length: 120 }, (_, i) => i + 1);
 
   const ITEM_HEIGHT = 60;
+
+  useEffect(() => {
+    if (isBulkMode) {
+      const lastValidIndex = segments.length - 1;
+      setEndSegmentIndex(lastValidIndex);
+    } else {
+      setEndSegmentIndex(null);
+    }
+  }, [isBulkMode, segments.length]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -139,8 +163,23 @@ export function TimePickerModal({
   if (!isOpen) return null;
 
   const handleSave = () => {
-    onSave(selectedHour, selectedMinute, selectedDuration);
+    if (isBulkMode && endSegmentIndex !== null && onBulkSave) {
+      onBulkSave(
+        currentSegmentIndex,
+        endSegmentIndex,
+        selectedHour,
+        selectedMinute,
+        selectedDuration
+      );
+    } else {
+      onSave(selectedHour, selectedMinute, selectedDuration);
+    }
     onClose();
+  };
+
+  const handleSegmentClick = (index: number) => {
+    if (index <= currentSegmentIndex) return;
+    setEndSegmentIndex(index);
   };
 
   const renderColumn = (
@@ -191,7 +230,7 @@ export function TimePickerModal({
     <div className='fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50'>
       <div
         ref={modalRef}
-        className='bg-white rounded-xl p-6 w-[440px] shadow-xl'
+        className='bg-white rounded-xl p-6 w-[calc(100%-2rem)] sm:w-[440px] max-w-[440px] shadow-xl min-w-0'
       >
         <div className='flex justify-between items-start mb-6'>
           <div>
@@ -224,6 +263,80 @@ export function TimePickerModal({
             {renderColumn(durations, durationRef, 'Min', selectedDuration)}
           </div>
         </div>
+
+        {/* Bulk Mode Toggle */}
+        <button
+          type='button'
+          onClick={() => {
+            setIsBulkMode(!isBulkMode);
+          }}
+          className={`mt-6 w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md border transition-all duration-200 ${
+            isBulkMode
+              ? 'bg-blue-50 border-blue-200 text-blue-700'
+              : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+          }`}
+        >
+          <Clock className='w-4 h-4' />
+          <span className='text-sm font-medium'>
+            {isBulkMode
+              ? 'Shift Multiple Segments'
+              : 'Enable Multiple Segments Shift'}
+          </span>
+        </button>
+
+        {/* Timeline Visualization */}
+        {isBulkMode && (
+          <div className='mt-6 border-t pt-4'>
+            <div className='text-sm font-medium text-gray-700 mb-3'>
+              Select ending segment:
+            </div>
+            <div className='space-y-2 max-h-[200px] overflow-y-auto pr-2'>
+              {segments.map((segment, index) => {
+                const isSelected =
+                  index >= currentSegmentIndex &&
+                  (endSegmentIndex === null || index <= endSegmentIndex);
+
+                return (
+                  <button
+                    type='button'
+                    key={segment.segment_id}
+                    onClick={() => handleSegmentClick(index)}
+                    disabled={index <= currentSegmentIndex}
+                    className={`w-full text-left p-2 rounded-md transition-all duration-200 ${
+                      isSelected
+                        ? 'bg-blue-50 border border-blue-200'
+                        : 'bg-gray-50 border border-gray-200'
+                    } ${
+                      index <= currentSegmentIndex
+                        ? 'opacity-50 cursor-not-allowed'
+                        : 'hover:bg-blue-50'
+                    }`}
+                  >
+                    <div className='flex items-center gap-2'>
+                      {isSelected && (
+                        <div className='w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0' />
+                      )}
+                      <span className='text-sm font-medium'>
+                        {segment.start_time}
+                      </span>
+                      <span className='text-xs text-gray-500'>
+                        ({segment.duration}min)
+                      </span>
+                      <ChevronRight
+                        className={`w-4 h-4 ${
+                          isSelected ? 'text-blue-500' : 'text-gray-400'
+                        }`}
+                      />
+                      <span className='text-sm truncate'>
+                        {segment.segment_type}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className='mt-6 flex justify-end gap-3'>
           <button
