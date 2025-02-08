@@ -111,6 +111,11 @@ export function SegmentsEditor({
   }, []);
 
   const handleDelete = (index: number) => {
+    // if only one segment, don't delete it
+    if (segments.length === 1) {
+      return;
+    }
+
     setDeletingSegments((prev) => [...prev, index]);
     setTimeout(() => {
       onSegmentDelete?.(index);

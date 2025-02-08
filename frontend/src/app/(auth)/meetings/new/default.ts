@@ -301,6 +301,43 @@ export const DEFAULT_REGULAR_MEETING: Omit<MeetingIF, 'segments'> & {
   segments: DEFAULT_SEGMENTS_REGULAR_MEETING,
 };
 
+export const DEFAULT_WORKSHOP_MEETING: Omit<MeetingIF, 'segments'> & {
+  segments: BaseSegment[];
+} = {
+  meeting_type: 'Workshop',
+  theme: '',
+  meeting_manager: '',
+  date: getNextWednesday().date,
+  start_time: '19:15',
+  end_time: '21:30',
+  location:
+    "JOININ HUB, 6th Xin'an Rd, Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+  introduction: '',
+  segments: [],
+};
+
+export const DEFAULT_CUSTOM_MEETING: Omit<MeetingIF, 'segments'> & {
+  segments: BaseSegment[];
+} = {
+  meeting_type: 'Custom',
+  theme: '',
+  meeting_manager: '',
+  date: getNextWednesday().date,
+  start_time: '19:15',
+  end_time: '21:30',
+  location:
+    "JOININ HUB, 6th Xin'an Rd, Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+  introduction: '',
+  segments: [
+    new CustomSegment({
+      segment_id: '1',
+      segment_type: 'New segment',
+      start_time: '19:15',
+      duration: '15',
+    }),
+  ],
+};
+
 // Create a dummy params object for temporary instances
 const dummyParams = { segment_id: '', start_time: '', duration: '' };
 
