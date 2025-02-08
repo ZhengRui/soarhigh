@@ -85,6 +85,8 @@ export function TimePickerModal({
       values: number[],
       key: string
     ) => {
+      if (isBulkMode && key === 'duration') return;
+
       if (!ref.current) return;
 
       // Clear existing timeout for this column
@@ -144,7 +146,7 @@ export function TimePickerModal({
         window.clearTimeout(timeout)
       );
     };
-  }, [isOpen, initialHour, initialMinute, initialDuration]);
+  }, [isOpen, initialHour, initialMinute, initialDuration, isBulkMode]);
 
   // Add this new useEffect to manage body scroll
   useEffect(() => {
@@ -185,12 +187,15 @@ export function TimePickerModal({
     numbers: number[],
     ref: React.RefObject<HTMLDivElement | null>,
     unit: string,
-    selectedValue: number
+    selectedValue: number,
+    isDisabled: boolean = false
   ) => (
     <div className='flex-1 relative -translate-x-4'>
       <div
         ref={ref}
-        className='h-[180px] overflow-y-auto scrollbar-hide'
+        className={`h-[180px] overflow-y-auto scrollbar-hide ${
+          isDisabled ? 'pointer-events-none opacity-50' : ''
+        }`}
         style={{
           scrollBehavior: 'smooth',
         }}
@@ -262,7 +267,13 @@ export function TimePickerModal({
               <div className='flex items-center z-50 w-6 justify-center -translate-x-2 sm:-translate-x-0'>
                 <span className='text-gray-500 text-2xl font-bold'>+</span>
               </div>
-              {renderColumn(durations, durationRef, 'Min', selectedDuration)}
+              {renderColumn(
+                durations,
+                durationRef,
+                'Min',
+                selectedDuration,
+                isBulkMode
+              )}
             </div>
           </div>
 
