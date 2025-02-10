@@ -15,8 +15,8 @@ export const useSigninMutation = () => {
       username: string;
       password: string;
     }) => signin(username, password),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['whoami'] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['whoami'] });
       router.push('/');
     },
     onError: (err) => {
