@@ -1,9 +1,14 @@
+'use client';
+
 import { MeetingCard } from './MeetingCard';
 import { meetings } from './meetings';
 import { Plus } from 'lucide-react';
 import Link from 'next/link';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function MeetingsPage() {
+  const { isPending, data: user } = useAuth();
+
   return (
     <div className='min-h-screen bg-gray-50 py-12'>
       <div className='container max-w-4xl mx-auto px-4'>
@@ -18,13 +23,15 @@ export default function MeetingsPage() {
             </p>
           </div>
 
-          <Link
-            href='/meetings/new'
-            className='self-start sm:self-center inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm rounded-md hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-sm hover:shadow-md whitespace-nowrap'
-          >
-            <Plus className='w-4 h-4' />
-            <span className='font-medium'>Create Meeting</span>
-          </Link>
+          {!isPending && user && (
+            <Link
+              href='/meetings/new'
+              className='self-start sm:self-center inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm rounded-md hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-sm hover:shadow-md whitespace-nowrap'
+            >
+              <Plus className='w-4 h-4' />
+              <span className='font-medium'>Create Meeting</span>
+            </Link>
+          )}
         </div>
         <div className='space-y-6'>
           {meetings.map((meeting, index) => (
