@@ -53,10 +53,19 @@ export function TimePickerModal({
   useEffect(() => {
     if (isBulkMode) {
       setEndSegmentIndex(currentSegmentIndex);
+      setSelectedDuration(initialDuration);
+      requestAnimationFrame(() => {
+        if (durationRef.current) {
+          durationRef.current.scrollTo({
+            top: (initialDuration - 1) * ITEM_HEIGHT,
+            behavior: 'smooth',
+          });
+        }
+      });
     } else {
       setEndSegmentIndex(null);
     }
-  }, [isBulkMode, currentSegmentIndex]);
+  }, [isBulkMode, currentSegmentIndex, initialDuration]);
 
   useEffect(() => {
     if (!isOpen) return;
