@@ -1,13 +1,23 @@
 'use client';
 
 import { MeetingCard } from './MeetingCard';
-import { meetings } from './meetings';
-import { Plus } from 'lucide-react';
+import { Plus, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
+import { useMeetings } from '@/hooks/useMeetings';
 
 export default function MeetingsPage() {
-  const { isPending, data: user } = useAuth();
+  const { isPending: isAuthPending, data: user } = useAuth();
+  const { data: meetings, isLoading, error } = useMeetings();
+
+  // Filter meetings based on user's authentication status
+  // Show only published meetings to non-members, show all to members
+  const filteredMeetings = meetings?.filter((meeting) => {
+    // If user is logged in, show all meetings
+    if (user) return true;
+    // If user is not logged in, only show published meetings
+    return meeting.status === 'published';
+  });
 
   return (
     <div className='min-h-screen bg-gray-50 py-12'>
@@ -23,7 +33,7 @@ export default function MeetingsPage() {
             </p>
           </div>
 
-          {!isPending && user && (
+          {!isAuthPending && user && (
             <Link
               href='/meetings/new'
               className='self-start sm:self-center inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm rounded-md hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-sm hover:shadow-md whitespace-nowrap'
@@ -33,11 +43,41 @@ export default function MeetingsPage() {
             </Link>
           )}
         </div>
-        <div className='space-y-6'>
-          {meetings.map((meeting, index) => (
-            <MeetingCard key={index} {...meeting} />
-          ))}
-        </div>
+
+        {/* Loading state */}
+        {isLoading && (
+          <div className='flex flex-col items-center justify-center py-12'>
+            <Loader2 className='w-8 h-8 text-blue-500 animate-spin mb-4' />
+            <p className='text-gray-600'>Loading meetings...</p>
+          </div>
+        )}
+
+        {/* Error state */}
+        {error && (
+          <div className='flex flex-col items-center justify-center py-12'>
+            <p className='text-red-500 mb-2'>Failed to load meetings</p>
+            <p className='text-gray-600'>Please try again later</p>
+          </div>
+        )}
+
+        {/* Meetings list */}
+        {!isLoading && !error && filteredMeetings && (
+          <div className='space-y-6'>
+            {filteredMeetings.length > 0 ? (
+              filteredMeetings.map((meeting) => (
+                <MeetingCard
+                  key={meeting.id}
+                  meeting={meeting}
+                  isAuthenticated={!!user}
+                />
+              ))
+            ) : (
+              <div className='text-center py-12'>
+                <p className='text-gray-500'>No meetings found</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

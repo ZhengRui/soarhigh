@@ -1,21 +1,42 @@
 'use client';
 
 import React, { useState } from 'react';
-import { ChevronDown, ChevronUp, Clock, MapPin, Trophy } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  MapPin,
+  Trophy,
+  Edit,
+} from 'lucide-react';
 import { MeetingIF, AwardIF } from '@/interfaces';
+import Link from 'next/link';
 
-export const MeetingCard: React.FC<MeetingIF> = ({
-  meeting_type,
-  theme,
-  meeting_manager,
-  date,
-  start_time,
-  end_time,
-  location,
-  introduction,
-  segments,
+type MeetingCardProps = {
+  meeting: MeetingIF;
+  isAuthenticated: boolean;
+};
+
+export const MeetingCard: React.FC<MeetingCardProps> = ({
+  meeting,
+  isAuthenticated,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Destructure the meeting object
+  const {
+    id,
+    meeting_type,
+    theme,
+    meeting_manager,
+    date,
+    start_time,
+    end_time,
+    location,
+    introduction,
+    segments,
+    status,
+  } = meeting;
 
   const mockAwards: AwardIF[] = [
     { category: 'Best Prepared Speaker', winner: 'Frank Chen' },
@@ -37,19 +58,50 @@ export const MeetingCard: React.FC<MeetingIF> = ({
       >
         <div className='flex justify-between items-start mb-4'>
           <div>
-            <span className='px-4 py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-full text-sm font-medium'>
-              {meeting_type}
-            </span>
+            <div className='flex items-center gap-2'>
+              <span className='px-4 py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-full text-sm font-medium'>
+                {meeting_type}
+              </span>
+
+              {/* Simple status indicator */}
+              {status && (
+                <span
+                  className={`px-3 py-1 rounded-full text-xs font-medium ${
+                    status === 'draft'
+                      ? 'bg-amber-100 text-amber-800'
+                      : 'bg-green-100 text-green-800'
+                  }`}
+                >
+                  {status === 'draft' ? 'Draft' : 'Published'}
+                </span>
+              )}
+            </div>
+
             <h2 className='text-2xl font-bold mt-3 text-gray-800'>{theme}</h2>
             <p className='text-gray-500 mt-1 text-sm'>
               Managed by {meeting_manager}
             </p>
           </div>
-          {isExpanded ? (
-            <ChevronUp className='w-5 h-5 text-gray-400' />
-          ) : (
-            <ChevronDown className='w-5 h-5 text-gray-400' />
-          )}
+
+          <div className='flex items-center gap-2'>
+            {/* Edit button - only show if the user is authenticated */}
+            {isAuthenticated && id && (
+              <Link
+                href={`/meetings/edit/${id}`}
+                className='p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors'
+                onClick={(e) => e.stopPropagation()}
+                title='Edit meeting'
+              >
+                <Edit className='w-4 h-4' />
+              </Link>
+            )}
+
+            {isExpanded ? (
+              <ChevronUp className='w-4 h-4 text-gray-400' />
+            ) : (
+              <ChevronDown className='w-4 h-4 text-gray-400' />
+            )}
+          </div>
         </div>
 
         <div className='flex flex-col gap-2 text-gray-500 text-sm'>
