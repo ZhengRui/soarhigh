@@ -26,6 +26,8 @@ export interface MeetingIF {
   location: string;
   introduction: string;
   segments: SegmentIF[];
+  status?: 'draft' | 'published';
+  id?: string;
 }
 
 export interface AwardIF {
