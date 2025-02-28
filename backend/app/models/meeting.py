@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -26,6 +26,15 @@ class MeetingSegment(BaseModel):
 
 
 class Meeting(BaseModel):
+    """
+    Single model for all meeting operations (create, update, response).
+
+    For create operations, id will be None.
+    For update operations, all fields should be provided.
+    For responses, id will be populated.
+    """
+
+    id: Optional[str] = Field(None, description="The unique identifier of the meeting.")
     meeting_type: str = Field(description="The type of meeting, e.g., Regular, Workshop, Activity.")
     theme: str = Field(description="The theme for the meeting.")
     meeting_manager: str = Field(description="The person organizing/managing the meeting.")
@@ -39,15 +48,3 @@ class Meeting(BaseModel):
 
     class Config:
         extra = "forbid"
-
-
-class MeetingCreate(Meeting):
-    """Model for creating a new meeting."""
-
-    pass
-
-
-class MeetingResponse(Meeting):
-    """Model for returning a meeting with its ID."""
-
-    id: str = Field(description="The unique identifier of the meeting.")
