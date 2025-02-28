@@ -35,6 +35,19 @@ class Meeting(BaseModel):
     location: str = Field(description="The location where the meeting is held.")
     introduction: str = Field(description="The introduction of the meeting.")
     segments: List[MeetingSegment] = Field(description="A list of segments that the meeting is composed of.")
+    status: str = Field(default="draft", description="The status of the meeting, either 'draft' or 'published'.")
 
     class Config:
         extra = "forbid"
+
+
+class MeetingCreate(Meeting):
+    """Model for creating a new meeting."""
+
+    pass
+
+
+class MeetingResponse(Meeting):
+    """Model for returning a meeting with its ID."""
+
+    id: str = Field(description="The unique identifier of the meeting.")
