@@ -1,4 +1,5 @@
 import { MeetingIF } from '@/interfaces';
+import { createMeeting } from '@/utils/meeting';
 import {
   BaseSegment,
   CustomSegment,
@@ -8,8 +9,18 @@ import {
 import { useState } from 'react';
 import { timeStringToMinutes } from './SegmentsEditor';
 import { v4 as uuidv4 } from 'uuid';
-import { Users, Calendar, Clock, MapPin } from 'lucide-react';
+import {
+  Users,
+  Calendar,
+  Clock,
+  MapPin,
+  Save,
+  Send,
+  Loader2,
+} from 'lucide-react';
 import { SegmentsEditor } from './SegmentsEditor';
+import { useRouter } from 'next/navigation';
+import toast from 'react-hot-toast';
 
 const MEETING_TYPES = ['Regular', 'Workshop', 'Custom'] as const;
 
@@ -22,11 +33,13 @@ export function MeetingForm({
 }: {
   initFormData: MeetingTemplateType;
 }) {
+  const router = useRouter();
   const [formData, setFormData] = useState<MeetingTemplateType>(() => ({
     ...initFormData,
     // Clone the segments to avoid mutating the original array
     segments: initFormData.segments.map((segment) => ({ ...segment })),
   }));
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleInputChange = (
     field: keyof MeetingTemplateType,
@@ -158,10 +171,41 @@ export function MeetingForm({
     });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent, shouldPublish = false) => {
     e.preventDefault();
-    // TODO: Handle form submission
-    console.log('Form submitted:', formData);
+
+    setIsSubmitting(true);
+
+    try {
+      // Set status based on the button clicked
+      const meetingData = {
+        ...formData,
+        status: shouldPublish ? 'published' : 'draft',
+      };
+
+      // Call the API to create the meeting
+      await createMeeting(meetingData);
+
+      // Show success toast notification
+      toast.success(
+        shouldPublish
+          ? 'Meeting published successfully!'
+          : 'Meeting saved as draft successfully!'
+      );
+
+      // Redirect to meetings list after a short delay
+      setTimeout(() => {
+        router.push('/meetings');
+      }, 1000);
+    } catch (err) {
+      console.error('Error creating meeting:', err);
+      // Show error toast notification
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to create meeting'
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const inputClasses =
@@ -170,7 +214,7 @@ export function MeetingForm({
     'block w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
 
   return (
-    <form onSubmit={handleSubmit} className='px-6 pt-6 pb-60'>
+    <form onSubmit={(e) => handleSubmit(e, false)} className='px-6 pt-6 pb-60'>
       <div>
         <h2 className='text-2xl font-semibold text-gray-900'>
           Create from Template
@@ -350,14 +394,35 @@ export function MeetingForm({
           </div>
         )}
 
-        {/* Submit Button */}
+        {/* Submit Buttons */}
         <div className='pt-6 border-t'>
-          <button
-            type='submit'
-            className='w-full flex justify-center py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500'
-          >
-            Create Meeting
-          </button>
+          <div className='flex gap-4'>
+            <button
+              type='submit'
+              disabled={isSubmitting}
+              className='flex-1 flex items-center justify-center gap-2 py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed'
+            >
+              {isSubmitting ? (
+                <Loader2 className='w-4 h-4 animate-spin' />
+              ) : (
+                <Save className='w-4 h-4' />
+              )}
+              Save as Draft
+            </button>
+            <button
+              type='button'
+              disabled={isSubmitting}
+              onClick={(e) => handleSubmit(e, true)}
+              className='flex-1 flex items-center justify-center gap-2 py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed'
+            >
+              {isSubmitting ? (
+                <Loader2 className='w-4 h-4 animate-spin' />
+              ) : (
+                <Send className='w-4 h-4' />
+              )}
+              Publish Meeting
+            </button>
+          </div>
         </div>
       </div>
     </form>
