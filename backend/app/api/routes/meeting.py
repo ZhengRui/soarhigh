@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile
+from pydantic import BaseModel
 
 from ...db.core import (
     create_meeting,
@@ -16,6 +17,11 @@ from ...utils.meeting import parse_meeting_agenda_image
 from .auth import get_current_user, get_optional_user
 
 meeting_router = r = APIRouter()
+
+
+# Add this new model for status updates
+class MeetingStatusUpdate(BaseModel):
+    status: str
 
 
 def meeting_db_to_pydantic(meeting_db: Dict) -> Dict:
@@ -186,7 +192,7 @@ async def r_update_meeting(
 
 @r.put("/meetings/{meeting_id}/status", response_model=Meeting)
 async def r_update_meeting_status(
-    meeting_data: Meeting,
+    meeting_status: MeetingStatusUpdate,
     meeting_id: str = Path(..., description="The ID of the meeting to update"),
     user: User = Depends(get_current_user),
 ) -> Meeting:
@@ -198,7 +204,7 @@ async def r_update_meeting_status(
     """
     try:
         # Get the status from the request body
-        status = meeting_data.status
+        status = meeting_status.status
 
         # Check if status is valid
         if status not in ["draft", "published"]:

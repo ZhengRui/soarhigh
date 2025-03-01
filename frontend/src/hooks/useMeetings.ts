@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { getMeetings } from '@/utils/meeting';
 import { MeetingIF } from '@/interfaces';
 
@@ -10,5 +10,7 @@ export function useMeetings() {
   return useQuery<MeetingIF[]>({
     queryKey: ['meetings'],
     queryFn: () => getMeetings(),
+    placeholderData: keepPreviousData,
+    refetchOnWindowFocus: false,
   });
 }

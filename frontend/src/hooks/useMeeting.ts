@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { getMeetingById } from '@/utils/meeting';
 import { MeetingIF } from '@/interfaces';
 
@@ -15,5 +15,7 @@ export function useMeeting(id?: string) {
       return getMeetingById(id);
     },
     enabled: !!id, // Only run the query if we have an ID
+    placeholderData: keepPreviousData,
+    refetchOnWindowFocus: false,
   });
 }

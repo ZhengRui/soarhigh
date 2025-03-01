@@ -374,7 +374,9 @@ def update_meeting_status(meeting_id: str, status: str, user_id: str) -> Optiona
     if not result.data:
         return None
 
-    return result.data[0]
+    meeting = result.data[0]
+    meeting["segments"] = existing_meeting["segments"]
+    return meeting
 
 
 def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:

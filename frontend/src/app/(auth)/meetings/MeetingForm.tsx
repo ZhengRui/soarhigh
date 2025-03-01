@@ -27,6 +27,7 @@ import { SegmentsEditor } from './SegmentsEditor';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { useMembers } from '@/hooks/useMember';
+import { useQueryClient } from '@tanstack/react-query';
 
 const MEETING_TYPES = ['Regular', 'Workshop', 'Custom'] as const;
 
@@ -85,6 +86,8 @@ export function MeetingForm({
   }));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+
+  const queryClient = useQueryClient();
 
   const handleInputChange = (
     field: keyof MeetingTemplateType,
@@ -231,6 +234,10 @@ export function MeetingForm({
       if (mode === 'create') {
         // Create new meeting
         await createMeeting(meetingData);
+
+        // Invalidate the meetings query to refresh the list
+        queryClient.invalidateQueries({ queryKey: ['meetings'] });
+
         toast.success('Meeting created successfully!');
       } else if (mode === 'edit' && meetingId) {
         // Update existing meeting
@@ -258,18 +265,31 @@ export function MeetingForm({
     setIsPublishing(true);
 
     try {
-      // Just update the status - we don't need to send the full meeting data
-      await updateMeetingStatus(meetingId, 'published');
-      toast.success('Meeting published successfully!');
+      // Toggle the status based on current status
+      const newStatus = formData.status === 'published' ? 'draft' : 'published';
+      await updateMeetingStatus(meetingId, newStatus);
 
-      // Redirect to meetings list after a short delay
-      setTimeout(() => {
-        router.push('/meetings');
-      }, 1000);
+      // Update local state to reflect the change
+      setFormData((prev) => ({ ...prev, status: newStatus }));
+
+      // Invalidate both the meetings list and the specific meeting
+      queryClient.invalidateQueries({ queryKey: ['meetings'] });
+      queryClient.invalidateQueries({ queryKey: ['meeting', meetingId] });
+
+      toast.success(
+        newStatus === 'published'
+          ? 'Meeting published successfully!'
+          : 'Meeting unpublished successfully!'
+      );
     } catch (err) {
-      console.error('Error publishing meeting:', err);
+      console.error(
+        `Error ${formData.status === 'published' ? 'unpublishing' : 'publishing'} meeting:`,
+        err
+      );
       toast.error(
-        err instanceof Error ? err.message : 'Failed to publish meeting'
+        err instanceof Error
+          ? err.message
+          : `Failed to ${formData.status === 'published' ? 'unpublish' : 'publish'} meeting`
       );
     } finally {
       setIsPublishing(false);
@@ -295,7 +315,7 @@ export function MeetingForm({
           </p>
         </div>
 
-        {/* Publish button - only shown in edit mode */}
+        {/* Publish/Unpublish button - only shown in edit mode */}
         {mode === 'edit' && meetingId && (
           <button
             type='button'
@@ -305,10 +325,16 @@ export function MeetingForm({
           >
             {isPublishing ? (
               <Loader2 className='w-4 h-4 animate-spin' />
+            ) : formData.status === 'published' ? (
+              <Send className='w-4 h-4 rotate-180' />
             ) : (
               <Send className='w-4 h-4' />
             )}
-            <span>Publish Meeting</span>
+            <span>
+              {formData.status === 'published'
+                ? 'Unpublish Meeting'
+                : 'Publish Meeting'}
+            </span>
           </button>
         )}
       </div>
