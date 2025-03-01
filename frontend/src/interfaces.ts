@@ -20,6 +20,7 @@ export interface MeetingIF {
   meeting_type: string;
   theme: string;
   meeting_manager: string;
+  meeting_manager_id?: string;
   date: string;
   start_time: string;
   end_time: string;

@@ -1,9 +1,10 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile
 
 from ...db.core import (
     create_meeting,
+    get_attendee_details,
     get_meeting_by_id,
     get_meetings,
     update_meeting,
@@ -15,6 +16,25 @@ from ...utils.meeting import parse_meeting_agenda_image
 from .auth import get_current_user, get_optional_user
 
 meeting_router = r = APIRouter()
+
+
+def meeting_db_to_pydantic(meeting_db: Dict) -> Dict:
+    if "type" in meeting_db:
+        meeting_db["meeting_type"] = meeting_db.pop("type")
+
+    if "manager_id" in meeting_db:
+        manager_id = meeting_db.pop("manager_id")
+        # Get attendee details (includes name and member_id)
+        attendee = get_attendee_details(manager_id)
+        # Map to meeting_manager (name) and meeting_manager_id (member_id)
+        meeting_db["meeting_manager"] = attendee["name"]
+        meeting_db["meeting_manager_id"] = attendee["member_id"]
+
+    # Remove created_at and updated_at
+    meeting_db.pop("created_at", None)
+    meeting_db.pop("updated_at", None)
+
+    return meeting_db
 
 
 @r.post("/meeting/parse_agenda_image")
@@ -49,15 +69,14 @@ async def r_create_meeting(meeting_data: Meeting, user: User = Depends(get_curre
         meeting_dict = meeting_data.dict(exclude={"id"})  # Exclude id for creation
 
         # Create the meeting in the database
-        meeting_db = create_meeting(meeting_dict, user.uid)
+        meeting_db = create_meeting(meeting_dict)
 
         # Convert database meeting to response model
         # We need to inject the segments data back into the response
         segments = meeting_dict.get("segments", [])
         meeting_db["segments"] = segments
 
-        # Convert type to meeting_type for consistency with our models
-        meeting_db["meeting_type"] = meeting_db.pop("type", "")
+        meeting_db = meeting_db_to_pydantic(meeting_db)
 
         return Meeting(**meeting_db)
     except ValueError as e:
@@ -88,9 +107,8 @@ async def r_list_meetings(
         # Convert database results to response models
         meetings_response = []
         for meeting in meetings_db:
-            # Convert type to meeting_type for consistency
-            if "type" in meeting:
-                meeting["meeting_type"] = meeting.pop("type")
+            meeting = meeting_db_to_pydantic(meeting)
+
             meetings_response.append(Meeting(**meeting))
 
         return meetings_response
@@ -119,9 +137,7 @@ async def r_get_meeting(
         if not meeting_db:
             raise HTTPException(status_code=404, detail="Meeting not found")
 
-        # Convert type to meeting_type for consistency
-        if "type" in meeting_db:
-            meeting_db["meeting_type"] = meeting_db.pop("type")
+        meeting_db = meeting_db_to_pydantic(meeting_db)
 
         return Meeting(**meeting_db)
     except HTTPException:
@@ -157,9 +173,7 @@ async def r_update_meeting(
         if "segments" in meeting_dict:
             meeting_db["segments"] = meeting_dict["segments"]
 
-        # Convert type to meeting_type for consistency
-        if "type" in meeting_db:
-            meeting_db["meeting_type"] = meeting_db.pop("type")
+        meeting_db = meeting_db_to_pydantic(meeting_db)
 
         return Meeting(**meeting_db)
     except ValueError as e:
@@ -196,9 +210,7 @@ async def r_update_meeting_status(
         if not meeting_db:
             raise HTTPException(status_code=404, detail="Meeting not found")
 
-        # Convert type to meeting_type for consistency
-        if "type" in meeting_db:
-            meeting_db["meeting_type"] = meeting_db.pop("type")
+        meeting_db = meeting_db_to_pydantic(meeting_db)
 
         return Meeting(**meeting_db)
     except ValueError as e:

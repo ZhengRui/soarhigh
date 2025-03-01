@@ -7,7 +7,7 @@ import {
   Clock,
   MapPin,
   Trophy,
-  Edit,
+  PencilLine,
 } from 'lucide-react';
 import { MeetingIF, AwardIF } from '@/interfaces';
 import Link from 'next/link';
@@ -53,27 +53,31 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   return (
     <div className='bg-white rounded-xl shadow-lg overflow-hidden transition-all duration-200 ease-in-out hover:shadow-xl border border-[#e5e7eb]'>
       <div
-        className='p-6 cursor-pointer'
+        className='p-6 cursor-pointer group relative'
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <div className='flex justify-between items-start mb-4'>
           <div>
             <div className='flex items-center gap-2'>
-              <span className='px-4 py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-full text-sm font-medium'>
+              <span className='px-4 py-1 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-full text-sm font-medium'>
                 {meeting_type}
               </span>
 
-              {/* Simple status indicator */}
-              {status && (
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-medium ${
-                    status === 'draft'
-                      ? 'bg-amber-100 text-amber-800'
-                      : 'bg-green-100 text-green-800'
-                  }`}
-                >
-                  {status === 'draft' ? 'Draft' : 'Published'}
+              {status === 'draft' && (
+                <span className='px-3 py-1.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800'>
+                  Draft
                 </span>
+              )}
+
+              {isAuthenticated && id && (
+                <Link
+                  href={`/meetings/edit/${id}`}
+                  className='rounded-full p-1.5 bg-gray-100 group-hover:bg-indigo-50 transition-colors'
+                  onClick={(e) => e.stopPropagation()}
+                  title='Edit meeting'
+                >
+                  <PencilLine className='w-4 h-4 text-gray-400 group-hover:text-indigo-500 transition-colors' />
+                </Link>
               )}
             </div>
 
@@ -83,25 +87,11 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
             </p>
           </div>
 
-          <div className='flex items-center gap-2'>
-            {/* Edit button - only show if the user is authenticated */}
-            {isAuthenticated && id && (
-              <Link
-                href={`/meetings/edit/${id}`}
-                className='p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors'
-                onClick={(e) => e.stopPropagation()}
-                title='Edit meeting'
-              >
-                <Edit className='w-4 h-4' />
-              </Link>
-            )}
-
-            {isExpanded ? (
-              <ChevronUp className='w-4 h-4 text-gray-400' />
-            ) : (
-              <ChevronDown className='w-4 h-4 text-gray-400' />
-            )}
-          </div>
+          {isExpanded ? (
+            <ChevronUp className='w-5 h-5 text-gray-400' />
+          ) : (
+            <ChevronDown className='w-5 h-5 text-gray-400' />
+          )}
         </div>
 
         <div className='flex flex-col gap-2 text-gray-500 text-sm'>

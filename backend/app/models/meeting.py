@@ -35,9 +35,11 @@ class Meeting(BaseModel):
     """
 
     id: Optional[str] = Field(None, description="The unique identifier of the meeting.")
+    no: Optional[int] = Field(None, description="The meeting number.")
     meeting_type: str = Field(description="The type of meeting, e.g., Regular, Workshop, Activity.")
     theme: str = Field(description="The theme for the meeting.")
     meeting_manager: str = Field(description="The person organizing/managing the meeting.")
+    meeting_manager_id: str = Field(description="The ID of the person organizing/managing the meeting.")
     date: str = Field(description="The date of the meeting.")
     start_time: str = Field(description="The start time of the meeting.")
     end_time: str = Field(description="The end time of the meeting.")

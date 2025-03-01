@@ -357,6 +357,7 @@ export function MeetingForm({
               onChange={(e) => handleInputChange('theme', e.target.value)}
               placeholder='Enter meeting theme'
               className={inputClasses}
+              required
             />
           </div>
 
@@ -371,12 +372,30 @@ export function MeetingForm({
             <div className='relative'>
               <select
                 id='meeting_manager'
-                value={formData.meeting_manager}
-                onChange={(e) =>
-                  handleInputChange('meeting_manager', e.target.value)
-                }
+                value={formData.meeting_manager_id}
+                onChange={(e) => {
+                  // Update the ID
+                  handleInputChange('meeting_manager_id', e.target.value);
+
+                  // Also update the manager name
+                  if (e.target.value) {
+                    const selectedMember = members.find(
+                      (member) => member.uid === e.target.value
+                    );
+                    if (selectedMember) {
+                      handleInputChange(
+                        'meeting_manager',
+                        selectedMember.full_name
+                      );
+                    }
+                  } else {
+                    // Clear the manager name if no selection
+                    handleInputChange('meeting_manager', '');
+                  }
+                }}
                 className={inputWithIconClasses}
                 disabled={membersLoading}
+                required
               >
                 <option value=''>Select a manager</option>
                 {members.map((member) => (
@@ -467,6 +486,7 @@ export function MeetingForm({
                 onChange={(e) => handleInputChange('location', e.target.value)}
                 placeholder='Enter meeting location'
                 className={inputWithIconClasses}
+                required
               />
               <MapPin className='absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400' />
             </div>

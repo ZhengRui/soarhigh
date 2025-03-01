@@ -49,7 +49,7 @@ CREATE TABLE meetings (
 CREATE TABLE segments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     meeting_id UUID REFERENCES meetings(id) NOT NULL,
-    attendee_id UUID REFERENCES attendees(id) NOT NULL,
+    attendee_id UUID REFERENCES attendees(id),
     type TEXT NOT NULL,
     start_time TIME NOT NULL,
     duration INTERVAL NOT NULL,

@@ -1,3 +1,4 @@
+import uuid
 from typing import Dict, List, Optional
 
 from .supabase import supabase
@@ -7,33 +8,57 @@ def get_members():
     return supabase.table("members").select("id, username, full_name").execute().data
 
 
-def get_or_create_attendee_for_member(member_id: str) -> str:
+def resolve_attendee_id(member_id_or_name: str) -> str:
     """
-    Get an existing attendee ID for a member, or create a new attendee record if one doesn't exist.
+    Resolves a member ID or custom name to an attendee ID.
+    - If input is a valid UUID (member ID): finds or creates an attendee record for that member
+    - If input is not a UUID: creates a guest attendee with the provided name
 
     Args:
-        member_id: The ID of the member
+        member_id_or_name: Either a member ID (UUID) or a custom name string
 
     Returns:
-        The ID of the attendee
+        The ID of the corresponding attendee
     """
+
+    # Check if the input is a valid UUID (member ID)
+    try:
+        uuid.UUID(member_id_or_name)
+        is_valid_uuid = True
+    except (ValueError, AttributeError):
+        is_valid_uuid = False
+
+    # If it's not a valid UUID, create a guest attendee with the provided name
+    if not is_valid_uuid:
+        # Create a new guest attendee
+        guest_name = member_id_or_name
+        create_result = supabase.table("attendees").insert({"name": guest_name, "type": "Guest"}).execute()
+
+        if not create_result.data:
+            raise ValueError("Failed to create guest attendee")
+
+        return create_result.data[0]["id"]
+
+    # If it's a valid UUID, proceed with member lookup
     # First try to find an existing attendee for this member
-    result = supabase.table("attendees").select("id").eq("member_id", member_id).execute()
+    result = supabase.table("attendees").select("id").eq("member_id", member_id_or_name).execute()
 
     if result.data:
         # Attendee exists, return the ID
         return result.data[0]["id"]
 
     # No attendee exists, get member info to create one
-    member_result = supabase.table("members").select("full_name").eq("id", member_id).execute()
+    member_result = supabase.table("members").select("full_name").eq("id", member_id_or_name).execute()
 
     if not member_result.data:
-        raise ValueError(f"Member with ID {member_id} not found")
+        raise ValueError(f"Member with ID {member_id_or_name} not found")
 
     # Create a new attendee for this member
     member_name = member_result.data[0]["full_name"]
     create_result = (
-        supabase.table("attendees").insert({"name": member_name, "type": "Member", "member_id": member_id}).execute()
+        supabase.table("attendees")
+        .insert({"name": member_name, "type": "Member", "member_id": member_id_or_name})
+        .execute()
     )
 
     if not create_result.data:
@@ -42,26 +67,28 @@ def get_or_create_attendee_for_member(member_id: str) -> str:
     return create_result.data[0]["id"]
 
 
-def create_meeting(meeting_data: Dict, user_id: str) -> Dict:
+def create_meeting(meeting_data: Dict) -> Dict:
     """
     Create a new meeting in the database.
 
     Args:
         meeting_data: Dictionary containing meeting information
-        user_id: ID of the user creating the meeting
 
     Returns:
         Dictionary containing the created meeting data including ID
     """
     # We need to extract segments data before inserting the meeting
-    segments_data = meeting_data.pop("segments", [])
+    segments_data = meeting_data.get("segments", [])
 
     # Handle member_id to attendee_id mapping
-    if "meeting_manager" in meeting_data:
-        member_id = meeting_data.get("meeting_manager")
-        if member_id:  # Only process non-empty member IDs
-            attendee_id = get_or_create_attendee_for_member(member_id)
-            meeting_data["meeting_manager"] = attendee_id
+    member_id = meeting_data.get("meeting_manager_id", "")
+    # If meeting_manager_id is empty, set a default value of "TBD"
+    if not member_id:
+        member_id = "TBD"
+
+    # Resolve the member_id or name to an attendee_id
+    attendee_id = resolve_attendee_id(member_id)
+    meeting_data["meeting_manager"] = attendee_id
 
     # Insert meeting into database
     result = (
@@ -103,7 +130,7 @@ def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) ->
         status: Optional status filter ('draft' or 'published')
 
     Returns:
-        List of meeting dictionaries
+        List of meeting dictionaries with their segments
     """
     query = supabase.table("meetings").select("*")
 
@@ -116,8 +143,70 @@ def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) ->
 
     # Execute query
     result = query.execute()
+    meetings = result.data
 
-    return result.data
+    if not meetings:
+        return []
+
+    # Get all meeting IDs
+    meeting_ids = [meeting["id"] for meeting in meetings]
+
+    # Batch fetch all segments for these meetings in a single query
+    all_segments_result = supabase.table("segments").select("*").in_("meeting_id", meeting_ids).execute()
+
+    # Collect all unique attendee IDs from segments using a set comprehension
+    attendee_ids = set(segment["attendee_id"] for segment in all_segments_result.data if segment["attendee_id"])
+
+    # Create a mapping of attendee details if there are any attendees
+    attendee_map = {}
+    if attendee_ids:
+        # Batch fetch all attendee details in a single query
+        attendee_details_result = supabase.table("attendees").select("*").in_("id", list(attendee_ids)).execute()
+
+        # Create a mapping of attendee ID to name
+        attendee_map = {
+            attendee["id"]: {"name": attendee.get("name", ""), "member_id": attendee.get("member_id", "")}
+            for attendee in attendee_details_result.data
+        }
+
+    # Group segments by meeting_id
+    segments_by_meeting: Dict[str, List[Dict]] = {}
+    for segment in all_segments_result.data:
+        meeting_id = segment["meeting_id"]
+        if meeting_id not in segments_by_meeting:
+            segments_by_meeting[meeting_id] = []
+        segments_by_meeting[meeting_id].append(segment)
+
+    # Assign segments to meetings with proper attendee names
+    for meeting in meetings:
+        meeting_segments = segments_by_meeting.get(meeting["id"], [])
+        processed_segments = []
+
+        for segment in meeting_segments:
+            attendee_id = segment["attendee_id"]
+            role_taker = attendee_map.get(attendee_id, {}).get("name", "") if attendee_id else ""
+
+            hours, minutes, _ = map(int, segment["duration"].split(":"))
+            duration_minutes = str(hours * 60 + minutes)
+
+            processed_segments.append(
+                {
+                    "segment_id": segment["id"],
+                    "segment_type": segment["type"],
+                    "start_time": segment["start_time"][:5],
+                    "duration": duration_minutes,
+                    "end_time": segment["end_time"][:5],
+                    "role_taker": role_taker,
+                    "title": segment["title"],
+                    "content": segment["content"],
+                    "related_segment_ids": segment["related_segment_ids"],
+                    # "meeting_id": segment["meeting_id"],
+                }
+            )
+
+        meeting["segments"] = processed_segments
+
+    return meetings
 
 
 def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optional[Dict]:
@@ -129,7 +218,7 @@ def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optiona
         user_id: Optional user ID. If None, only published meetings are returned.
 
     Returns:
-        Meeting dictionary or None if not found
+        Meeting dictionary with segments or None if not found
     """
     query = supabase.table("meetings").select("*").eq("id", meeting_id)
 
@@ -142,7 +231,59 @@ def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optiona
     if not result.data:
         return None
 
-    return result.data[0]
+    meeting = result.data[0]
+
+    # Fetch segments for this meeting
+    segments_result = supabase.table("segments").select("*").eq("meeting_id", meeting_id).execute()
+    segments_data = segments_result.data
+
+    # If there are no segments, return early
+    if not segments_data:
+        meeting["segments"] = []
+        return meeting
+
+    # Collect all unique attendee IDs from segments using a set comprehension
+    attendee_ids = set(segment["attendee_id"] for segment in segments_data if segment["attendee_id"])
+
+    # Create a mapping of attendee details if there are any attendees
+    attendee_map = {}
+    if attendee_ids:
+        # Batch fetch all attendee details in a single query
+        attendee_details_result = supabase.table("attendees").select("*").in_("id", list(attendee_ids)).execute()
+
+        # Create a mapping of attendee ID to name
+        attendee_map = {
+            attendee["id"]: {"name": attendee.get("name", ""), "member_id": attendee.get("member_id", "")}
+            for attendee in attendee_details_result.data
+        }
+
+    # Process segments with attendee names
+    processed_segments = []
+    for segment in segments_data:
+        attendee_id = segment["attendee_id"]
+        role_taker = attendee_map.get(attendee_id, {}).get("name", "") if attendee_id else ""
+
+        hours, minutes, _ = map(int, segment["duration"].split(":"))
+        duration_minutes = str(hours * 60 + minutes)
+
+        processed_segments.append(
+            {
+                "segment_id": segment["id"],
+                "segment_type": segment["type"],
+                "start_time": segment["start_time"][:5],
+                "duration": duration_minutes,
+                "end_time": segment["end_time"][:5],
+                "role_taker": role_taker,
+                "title": segment["title"],
+                "content": segment["content"],
+                "related_segment_ids": segment["related_segment_ids"],
+                # "meeting_id": segment["meeting_id"],
+            }
+        )
+
+    meeting["segments"] = processed_segments
+
+    return meeting
 
 
 def update_meeting(meeting_id: str, meeting_data: Dict, user_id: str) -> Optional[Dict]:
@@ -166,11 +307,14 @@ def update_meeting(meeting_id: str, meeting_data: Dict, user_id: str) -> Optiona
     segments_data = meeting_data.pop("segments", None)
 
     # Handle member_id to attendee_id mapping
-    if "meeting_manager" in meeting_data:
-        member_id = meeting_data.get("meeting_manager")
-        if member_id:  # Only process non-empty member IDs
-            attendee_id = get_or_create_attendee_for_member(member_id)
-            meeting_data["meeting_manager"] = attendee_id
+    member_id = meeting_data.get("meeting_manager_id", "")
+    # If meeting_manager_id is empty, set a default value of "TBD"
+    if not member_id:
+        member_id = "TBD"
+
+    # Resolve the member_id or name to an attendee_id
+    attendee_id = resolve_attendee_id(member_id)
+    meeting_data["meeting_manager"] = attendee_id
 
     # Update meeting in database
     result = (
@@ -247,25 +391,44 @@ def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:
     segments_to_insert = []
 
     for segment in segments_data:
-        # For role_taker, we also need to convert member_id to attendee_id
+        # For role_taker, we also need to convert member_id or name to attendee_id
         role_taker = segment.get("role_taker")
         attendee_id = None
 
         if role_taker:
-            try:
-                attendee_id = get_or_create_attendee_for_member(role_taker)
-            except ValueError:
-                # If conversion fails, just use the original value
-                attendee_id = role_taker
+            # This function now handles both member IDs and custom names
+            attendee_id = resolve_attendee_id(role_taker)
+
+        # Calculate end_time if it's empty or not provided
+        start_time = segment.get("start_time")
+        duration = segment.get("duration")
+        end_time = segment.get("end_time")
+
+        if start_time and duration and (not end_time or end_time == ""):
+            # Convert start_time to minutes
+            hours, minutes = map(int, start_time.split(":"))
+            start_minutes = hours * 60 + minutes
+
+            # Add duration
+            duration_minutes = int(duration)
+            total_minutes = start_minutes + duration_minutes
+
+            # Convert back to HH:MM format
+            end_hours = total_minutes // 60
+            end_minutes = total_minutes % 60
+            end_time = f"{end_hours:02d}:{end_minutes:02d}"
+
+        # Format duration as a proper interval with 'minutes' unit
+        formatted_duration = f"{duration} minutes" if duration else None
 
         segments_to_insert.append(
             {
                 "meeting_id": meeting_id,
                 "attendee_id": attendee_id,  # Use converted attendee ID
                 "type": segment.get("segment_type"),
-                "start_time": segment.get("start_time"),
-                "duration": segment.get("duration"),
-                "end_time": segment.get("end_time"),
+                "start_time": start_time,
+                "duration": formatted_duration,  # Now explicitly specify minutes
+                "end_time": end_time,
                 "title": segment.get("title"),
                 "content": segment.get("content"),
                 "related_segment_ids": segment.get("related_segment_ids"),
@@ -277,3 +440,25 @@ def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:
         return result.data
 
     return []
+
+
+def get_attendee_details(attendee_id: str) -> Dict:
+    """
+    Get details about an attendee, including their member_id if available.
+
+    Args:
+        attendee_id: ID of the attendee to look up
+
+    Returns:
+        Dictionary with attendee details, including member_id and name
+    """
+    result = supabase.table("attendees").select("*").eq("id", attendee_id).execute()
+
+    if not result.data:
+        return {"name": "", "member_id": ""}
+
+    attendee = result.data[0]
+    return {
+        "name": attendee.get("name", ""),
+        "member_id": attendee.get("member_id", ""),
+    }
