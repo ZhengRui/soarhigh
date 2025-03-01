@@ -26,8 +26,40 @@ import {
 import { SegmentsEditor } from './SegmentsEditor';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
+import { useMembers } from '@/hooks/useMember';
 
 const MEETING_TYPES = ['Regular', 'Workshop', 'Custom'] as const;
+
+// Helper function to clean segment data for API submission
+const transformSegmentsForAPI = (segments: BaseSegment[]) => {
+  return segments.map((segment) => {
+    // Extract only the properties needed by the API
+    const {
+      segment_id,
+      segment_type,
+      start_time,
+      duration,
+      end_time,
+      role_taker,
+      title,
+      content,
+      related_segment_ids,
+    } = segment;
+
+    // Return a clean object with only API-required fields
+    return {
+      segment_id,
+      segment_type,
+      start_time,
+      duration,
+      end_time,
+      role_taker,
+      title,
+      content,
+      related_segment_ids,
+    };
+  });
+};
 
 type MeetingTemplateType = Omit<MeetingIF, 'segments'> & {
   segments: BaseSegment[];
@@ -45,6 +77,7 @@ export function MeetingForm({
   meetingId,
 }: MeetingFormProps) {
   const router = useRouter();
+  const { data: members = [], isLoading: membersLoading } = useMembers();
   const [formData, setFormData] = useState<MeetingTemplateType>(() => ({
     ...initFormData,
     // Clone the segments to avoid mutating the original array
@@ -188,9 +221,10 @@ export function MeetingForm({
     setIsSubmitting(true);
 
     try {
-      // Default status is 'draft'
+      // Transform segments to remove UI-specific fields before sending to API
       const meetingData = {
         ...formData,
+        segments: transformSegmentsForAPI(formData.segments),
         status: 'draft',
       };
 
@@ -224,6 +258,7 @@ export function MeetingForm({
     setIsPublishing(true);
 
     try {
+      // Just update the status - we don't need to send the full meeting data
       await updateMeetingStatus(meetingId, 'published');
       toast.success('Meeting published successfully!');
 
@@ -334,16 +369,22 @@ export function MeetingForm({
               Meeting Manager
             </label>
             <div className='relative'>
-              <input
-                type='text'
+              <select
                 id='meeting_manager'
                 value={formData.meeting_manager}
                 onChange={(e) =>
                   handleInputChange('meeting_manager', e.target.value)
                 }
-                placeholder='Enter manager name'
                 className={inputWithIconClasses}
-              />
+                disabled={membersLoading}
+              >
+                <option value=''>Select a manager</option>
+                {members.map((member) => (
+                  <option key={member.uid} value={member.uid}>
+                    {member.full_name}
+                  </option>
+                ))}
+              </select>
               <Users className='absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400' />
             </div>
           </div>
