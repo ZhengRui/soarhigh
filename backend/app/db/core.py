@@ -7,6 +7,41 @@ def get_members():
     return supabase.table("members").select("id, username, full_name").execute().data
 
 
+def get_or_create_attendee_for_member(member_id: str) -> str:
+    """
+    Get an existing attendee ID for a member, or create a new attendee record if one doesn't exist.
+
+    Args:
+        member_id: The ID of the member
+
+    Returns:
+        The ID of the attendee
+    """
+    # First try to find an existing attendee for this member
+    result = supabase.table("attendees").select("id").eq("member_id", member_id).execute()
+
+    if result.data:
+        # Attendee exists, return the ID
+        return result.data[0]["id"]
+
+    # No attendee exists, get member info to create one
+    member_result = supabase.table("members").select("full_name").eq("id", member_id).execute()
+
+    if not member_result.data:
+        raise ValueError(f"Member with ID {member_id} not found")
+
+    # Create a new attendee for this member
+    member_name = member_result.data[0]["full_name"]
+    create_result = (
+        supabase.table("attendees").insert({"name": member_name, "type": "Member", "member_id": member_id}).execute()
+    )
+
+    if not create_result.data:
+        raise ValueError("Failed to create attendee for member")
+
+    return create_result.data[0]["id"]
+
+
 def create_meeting(meeting_data: Dict, user_id: str) -> Dict:
     """
     Create a new meeting in the database.
@@ -20,6 +55,13 @@ def create_meeting(meeting_data: Dict, user_id: str) -> Dict:
     """
     # We need to extract segments data before inserting the meeting
     segments_data = meeting_data.pop("segments", [])
+
+    # Handle member_id to attendee_id mapping
+    if "meeting_manager" in meeting_data:
+        member_id = meeting_data.get("meeting_manager")
+        if member_id:  # Only process non-empty member IDs
+            attendee_id = get_or_create_attendee_for_member(member_id)
+            meeting_data["meeting_manager"] = attendee_id
 
     # Insert meeting into database
     result = (
@@ -123,6 +165,13 @@ def update_meeting(meeting_id: str, meeting_data: Dict, user_id: str) -> Optiona
     # Extract segments data before updating the meeting
     segments_data = meeting_data.pop("segments", None)
 
+    # Handle member_id to attendee_id mapping
+    if "meeting_manager" in meeting_data:
+        member_id = meeting_data.get("meeting_manager")
+        if member_id:  # Only process non-empty member IDs
+            attendee_id = get_or_create_attendee_for_member(member_id)
+            meeting_data["meeting_manager"] = attendee_id
+
     # Update meeting in database
     result = (
         supabase.table("meetings")
@@ -198,10 +247,21 @@ def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:
     segments_to_insert = []
 
     for segment in segments_data:
+        # For role_taker, we also need to convert member_id to attendee_id
+        role_taker = segment.get("role_taker")
+        attendee_id = None
+
+        if role_taker:
+            try:
+                attendee_id = get_or_create_attendee_for_member(role_taker)
+            except ValueError:
+                # If conversion fails, just use the original value
+                attendee_id = role_taker
+
         segments_to_insert.append(
             {
                 "meeting_id": meeting_id,
-                "attendee_id": segment.get("role_taker"),  # This should be an attendee ID
+                "attendee_id": attendee_id,  # Use converted attendee ID
                 "type": segment.get("segment_type"),
                 "start_time": segment.get("start_time"),
                 "duration": segment.get("duration"),
