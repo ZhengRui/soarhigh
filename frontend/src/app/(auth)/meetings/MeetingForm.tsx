@@ -301,14 +301,14 @@ export function MeetingForm({
             type='button'
             disabled={isPublishing}
             onClick={handlePublish}
-            className='flex items-center justify-center gap-2 py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed'
+            className='flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed'
           >
             {isPublishing ? (
               <Loader2 className='w-4 h-4 animate-spin' />
             ) : (
               <Send className='w-4 h-4' />
             )}
-            Publish Meeting
+            <span>Publish Meeting</span>
           </button>
         )}
       </div>
