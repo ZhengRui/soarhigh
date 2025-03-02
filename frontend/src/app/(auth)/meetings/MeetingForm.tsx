@@ -322,14 +322,14 @@ export function MeetingForm({
             type='button'
             disabled={isDeleting}
             onClick={handleDeleteClick}
-            className='flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed'
+            className='flex items-center justify-center gap-1.5 p-3 rounded-full sm:py-1.5 sm:px-3 sm:rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed'
           >
             {isDeleting ? (
               <Loader2 className='w-4 h-4 animate-spin' />
             ) : (
               <Trash2 className='w-4 h-4' />
             )}
-            <span>Delete Meeting</span>
+            <span className='hidden sm:block'>Delete Meeting</span>
           </button>
         )}
       </div>
