@@ -8,16 +8,7 @@ import { useMeetings } from '@/hooks/useMeetings';
 
 export default function MeetingsPage() {
   const { isPending: isAuthPending, data: user } = useAuth();
-  const { data: meetings, isLoading, error } = useMeetings();
-
-  // Filter meetings based on user's authentication status
-  // Show only published meetings to non-members, show all to members
-  const filteredMeetings = meetings?.filter((meeting) => {
-    // If user is logged in, show all meetings
-    if (user) return true;
-    // If user is not logged in, only show published meetings
-    return meeting.status === 'published';
-  });
+  const { isPending: isMeetingPending, data: meetings } = useMeetings();
 
   return (
     <div className='min-h-screen bg-gray-50 py-12'>
@@ -45,26 +36,18 @@ export default function MeetingsPage() {
         </div>
 
         {/* Loading state */}
-        {isLoading && (
+        {isMeetingPending && (
           <div className='flex flex-col items-center justify-center py-12'>
             <Loader2 className='w-8 h-8 text-blue-500 animate-spin mb-4' />
             <p className='text-gray-600'>Loading meetings...</p>
           </div>
         )}
 
-        {/* Error state */}
-        {error && (
-          <div className='flex flex-col items-center justify-center py-12'>
-            <p className='text-red-500 mb-2'>Failed to load meetings</p>
-            <p className='text-gray-600'>Please try again later</p>
-          </div>
-        )}
-
         {/* Meetings list */}
-        {!isLoading && !error && filteredMeetings && (
+        {!isMeetingPending && meetings && (
           <div className='space-y-6'>
-            {filteredMeetings.length > 0 ? (
-              filteredMeetings.map((meeting) => (
+            {meetings.length > 0 ? (
+              meetings.map((meeting) => (
                 <MeetingCard
                   key={meeting.id}
                   meeting={meeting}

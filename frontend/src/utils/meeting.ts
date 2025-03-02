@@ -35,7 +35,8 @@ export const getMeetings = requestTemplate(
   }),
   responseHandlerTemplate,
   null,
-  true // Requires authentication
+  true, // Requires authentication
+  true // Soft authentication
 );
 
 /**
@@ -50,7 +51,8 @@ export const getMeetingById = requestTemplate(
   }),
   responseHandlerTemplate,
   null,
-  true // Requires authentication
+  true, // Requires authentication
+  true // Soft authentication
 );
 
 /**

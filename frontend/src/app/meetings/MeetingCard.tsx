@@ -8,9 +8,15 @@ import {
   MapPin,
   Trophy,
   PencilLine,
+  Eye,
+  EyeOff,
+  Loader2,
 } from 'lucide-react';
 import { MeetingIF, AwardIF } from '@/interfaces';
 import Link from 'next/link';
+import { updateMeetingStatus } from '@/utils/meeting';
+import toast from 'react-hot-toast';
+import { useQueryClient } from '@tanstack/react-query';
 
 type MeetingCardProps = {
   meeting: MeetingIF;
@@ -22,6 +28,8 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   isAuthenticated,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isToggling, setIsToggling] = useState(false);
+  const queryClient = useQueryClient();
 
   // Destructure the meeting object
   const {
@@ -48,7 +56,39 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   ];
 
   // Check if the meeting date has passed
-  const hasPassed = new Date(date) < new Date();
+  // const hasPassed = new Date(date) < new Date();
+  const hasPassed = true;
+
+  const handlePublishToggle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!id || !isAuthenticated || isToggling) return;
+
+    setIsToggling(true);
+    try {
+      const newStatus = status === 'published' ? 'draft' : 'published';
+      await updateMeetingStatus(id, newStatus);
+
+      // Immediately update the local meeting state with the new status
+      // This ensures the eye icon updates immediately without waiting for the query refetch
+      meeting.status = newStatus;
+
+      // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['meetings'] });
+
+      toast.success(
+        newStatus === 'published'
+          ? 'Meeting published successfully!'
+          : 'Meeting unpublished successfully!'
+      );
+    } catch (err) {
+      console.error('Error toggling meeting status:', err);
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to update meeting status'
+      );
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
   return (
     <div className='bg-white rounded-xl shadow-lg overflow-hidden transition-all duration-200 ease-in-out hover:shadow-xl border border-[#e5e7eb]'>
@@ -63,21 +103,40 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
                 {meeting_type}
               </span>
 
-              {status === 'draft' && (
-                <span className='px-3 py-1.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800'>
-                  Draft
-                </span>
-              )}
-
               {isAuthenticated && id && (
-                <Link
-                  href={`/meetings/edit/${id}`}
-                  className='rounded-full p-1.5 bg-gray-100 group-hover:bg-indigo-50 transition-colors'
-                  onClick={(e) => e.stopPropagation()}
-                  title='Edit meeting'
-                >
-                  <PencilLine className='w-4 h-4 text-gray-400 group-hover:text-indigo-500 transition-colors' />
-                </Link>
+                <>
+                  <button
+                    onClick={handlePublishToggle}
+                    disabled={isToggling}
+                    className={`rounded-full p-1.5 transition-colors bg-gray-100 text-gray-400 ${
+                      status === 'published'
+                        ? 'group-hover:bg-emerald-50 group-hover:text-emerald-500'
+                        : 'group-hover:bg-red-50 group-hover:text-red-500'
+                    }`}
+                    title={
+                      status === 'published'
+                        ? 'Unpublish meeting'
+                        : 'Publish meeting'
+                    }
+                  >
+                    {isToggling ? (
+                      <Loader2 className='w-4 h-4 animate-spin' />
+                    ) : status === 'published' ? (
+                      <Eye className='w-4 h-4' />
+                    ) : (
+                      <EyeOff className='w-4 h-4' />
+                    )}
+                  </button>
+
+                  <Link
+                    href={`/meetings/edit/${id}`}
+                    className='rounded-full p-1.5 bg-gray-100 group-hover:bg-indigo-50 transition-colors'
+                    onClick={(e) => e.stopPropagation()}
+                    title='Edit meeting'
+                  >
+                    <PencilLine className='w-4 h-4 text-gray-400 group-hover:text-indigo-500 transition-colors' />
+                  </Link>
+                </>
               )}
             </div>
 

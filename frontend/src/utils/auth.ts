@@ -8,12 +8,6 @@ const supabase = createClient(
 
 const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT;
 
-export const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers':
-    'authorization, x-client-info, apikey, content-type',
-};
-
 export const whoami = async (token?: string) => {
   const token_ = token || localStorage.getItem('token');
 
@@ -61,6 +55,16 @@ export const signin = async (username: string, password: string) => {
 export const getMembers = requestTemplate(
   () => ({
     url: apiEndpoint + '/members',
+    method: 'GET',
+  }),
+  responseHandlerTemplate,
+  null,
+  true
+);
+
+export const isAdmin = requestTemplate(
+  () => ({
+    url: `${apiEndpoint}/is-admin`,
     method: 'GET',
   }),
   responseHandlerTemplate,

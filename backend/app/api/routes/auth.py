@@ -7,6 +7,7 @@ from jose import ExpiredSignatureError, JWTError, jwt
 
 from ...config import SUPABASE_JWT_SECRET
 from ...db.core import get_members
+from ...db.supabase import supabase
 from ...models.users import User
 
 http_scheme = HTTPBearer()
@@ -73,6 +74,20 @@ def get_optional_user(
 @r.get("/whoami")
 async def whoami(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@r.get("/is-admin")
+async def is_admin(user: User = Depends(get_current_user)) -> bool:
+    """
+    Checks if the current authenticated user is an admin
+    Returns a dict with a boolean indicating admin status
+    """
+    # Query the members table to check admin status
+    result = supabase.table("members").select("is_admin").eq("id", user.uid).execute()
+    is_admin = False
+    if result.data and len(result.data) > 0:
+        is_admin = result.data[0].get("is_admin", False)
+    return is_admin
 
 
 @r.get("/members")

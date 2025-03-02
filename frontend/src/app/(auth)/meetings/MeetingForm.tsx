@@ -1,9 +1,5 @@
 import { MeetingIF } from '@/interfaces';
-import {
-  createMeeting,
-  updateMeeting,
-  updateMeetingStatus,
-} from '@/utils/meeting';
+import { createMeeting, updateMeeting, deleteMeeting } from '@/utils/meeting';
 import {
   BaseSegment,
   CustomSegment,
@@ -21,13 +17,15 @@ import {
   Save,
   PlusCircle,
   Loader2,
-  Send,
+  Trash2,
 } from 'lucide-react';
 import { SegmentsEditor } from './SegmentsEditor';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { useMembers } from '@/hooks/useMember';
 import { useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '@/hooks/useAuth';
+import { useIsAdmin } from '@/hooks/useIsAdmin';
 
 const MEETING_TYPES = ['Regular', 'Workshop', 'Custom'] as const;
 
@@ -79,15 +77,20 @@ export function MeetingForm({
 }: MeetingFormProps) {
   const router = useRouter();
   const { data: members = [], isLoading: membersLoading } = useMembers();
+  const { data: user } = useAuth();
+  const { data: isAdmin = false } = useIsAdmin();
   const [formData, setFormData] = useState<MeetingTemplateType>(() => ({
     ...initFormData,
     // Clone the segments to avoid mutating the original array
     segments: initFormData.segments.map((segment) => ({ ...segment })),
   }));
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isPublishing, setIsPublishing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const queryClient = useQueryClient();
+
+  const canDeleteMeeting = isAdmin || user?.uid === formData.meeting_manager_id;
 
   const handleInputChange = (
     field: keyof MeetingTemplateType,
@@ -259,41 +262,37 @@ export function MeetingForm({
     }
   };
 
-  const handlePublish = async () => {
+  const handleDeleteClick = () => {
+    setShowDeleteConfirm(true);
+  };
+
+  const handleDeleteConfirm = async () => {
     if (!meetingId) return;
 
-    setIsPublishing(true);
-
+    setIsDeleting(true);
     try {
-      // Toggle the status based on current status
-      const newStatus = formData.status === 'published' ? 'draft' : 'published';
-      await updateMeetingStatus(meetingId, newStatus);
+      await deleteMeeting(meetingId);
 
-      // Update local state to reflect the change
-      setFormData((prev) => ({ ...prev, status: newStatus }));
-
-      // Invalidate both the meetings list and the specific meeting
+      // Invalidate the meetings query to refresh the list
       queryClient.invalidateQueries({ queryKey: ['meetings'] });
-      queryClient.invalidateQueries({ queryKey: ['meeting', meetingId] });
 
-      toast.success(
-        newStatus === 'published'
-          ? 'Meeting published successfully!'
-          : 'Meeting unpublished successfully!'
-      );
+      toast.success('Meeting deleted successfully!');
+
+      // Redirect to meetings list
+      router.push('/meetings');
     } catch (err) {
-      console.error(
-        `Error ${formData.status === 'published' ? 'unpublishing' : 'publishing'} meeting:`,
-        err
-      );
+      console.error('Error deleting meeting:', err);
       toast.error(
-        err instanceof Error
-          ? err.message
-          : `Failed to ${formData.status === 'published' ? 'unpublish' : 'publish'} meeting`
+        err instanceof Error ? err.message : 'Failed to delete meeting'
       );
     } finally {
-      setIsPublishing(false);
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
     }
+  };
+
+  const handleDeleteCancel = () => {
+    setShowDeleteConfirm(false);
   };
 
   const inputClasses =
@@ -315,29 +314,56 @@ export function MeetingForm({
           </p>
         </div>
 
-        {/* Publish/Unpublish button - only shown in edit mode */}
-        {mode === 'edit' && meetingId && (
+        {/* Delete button - only shown in edit mode AND when user can delete (admin or manager) */}
+        {mode === 'edit' && meetingId && canDeleteMeeting && (
           <button
             type='button'
-            disabled={isPublishing}
-            onClick={handlePublish}
-            className='flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed'
+            disabled={isDeleting}
+            onClick={handleDeleteClick}
+            className='flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed'
           >
-            {isPublishing ? (
+            {isDeleting ? (
               <Loader2 className='w-4 h-4 animate-spin' />
-            ) : formData.status === 'published' ? (
-              <Send className='w-4 h-4 rotate-180' />
             ) : (
-              <Send className='w-4 h-4' />
+              <Trash2 className='w-4 h-4' />
             )}
-            <span>
-              {formData.status === 'published'
-                ? 'Unpublish Meeting'
-                : 'Publish Meeting'}
-            </span>
+            <span>Delete Meeting</span>
           </button>
         )}
       </div>
+
+      {/* Delete confirmation dialog */}
+      {showDeleteConfirm && (
+        <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50'>
+          <div className='bg-white rounded-lg p-6 max-w-md mx-auto'>
+            <h3 className='text-lg font-semibold text-gray-900 mb-2'>
+              Confirm Delete
+            </h3>
+            <p className='text-gray-600 mb-4'>
+              Are you sure you want to delete this meeting? This action cannot
+              be undone.
+            </p>
+            <div className='flex justify-end gap-3'>
+              <button
+                type='button'
+                onClick={handleDeleteCancel}
+                className='px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200'
+              >
+                Cancel
+              </button>
+              <button
+                type='button'
+                onClick={handleDeleteConfirm}
+                disabled={isDeleting}
+                className='px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2'
+              >
+                {isDeleting && <Loader2 className='w-4 h-4 animate-spin' />}
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className='mt-6 space-y-6'>
         {/* Basic Information */}

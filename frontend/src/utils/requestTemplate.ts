@@ -18,7 +18,8 @@ export const requestTemplate =
     requestConstructor: Function,
     responseHandler: Function = responseHandlerTemplate,
     dataTransformer: Function | null = null,
-    requireAuthentication: boolean = false
+    requireAuthentication: boolean = false,
+    softAuth: boolean = false
   ) =>
   async (...args: any[]) => {
     const { url, method, headers, body } = requestConstructor(...args);
@@ -26,7 +27,7 @@ export const requestTemplate =
 
     if (requireAuthentication) {
       const token = localStorage.getItem('token');
-      if (!token) {
+      if (!token && !softAuth) {
         throw new Error('Not Authorized');
       }
 

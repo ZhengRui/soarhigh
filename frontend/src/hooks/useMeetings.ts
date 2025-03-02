@@ -9,7 +9,7 @@ import { MeetingIF } from '@/interfaces';
 export function useMeetings() {
   return useQuery<MeetingIF[]>({
     queryKey: ['meetings'],
-    queryFn: () => getMeetings(),
+    queryFn: getMeetings,
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
   });
