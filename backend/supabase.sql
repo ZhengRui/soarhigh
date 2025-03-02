@@ -138,7 +138,11 @@ CREATE POLICY "Manager or admin can delete meetings"
 ON meetings FOR DELETE
 TO authenticated
 USING (
-    manager_id = auth.uid()
+    EXISTS (
+        SELECT 1 FROM attendees
+        WHERE attendees.id = meetings.manager_id
+        AND attendees.member_id = auth.uid()
+    )
     OR is_admin(auth.uid())
 );
 
@@ -193,6 +197,28 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Function to check if a user has permission to delete a meeting
+CREATE OR REPLACE FUNCTION can_delete_meeting(meeting_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+    -- This function explicitly checks the same conditions as the RLS policy
+    RETURN EXISTS (
+        SELECT 1 FROM meetings m
+        WHERE m.id = meeting_id
+        AND (
+            -- Check if user is the manager
+            EXISTS (
+                SELECT 1 FROM attendees a
+                WHERE a.id = m.manager_id
+                AND a.member_id = auth.uid()
+            )
+            -- Or check if user is admin
+            OR is_admin(auth.uid())
+        )
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY INVOKER;
 
 -- Function to handle new member creation on signup
 CREATE OR REPLACE FUNCTION handle_new_member()

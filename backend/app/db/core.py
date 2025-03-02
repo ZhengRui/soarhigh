@@ -1,7 +1,7 @@
 import uuid
 from typing import Dict, List, Optional
 
-from .supabase import supabase
+from .supabase import create_user_client, supabase
 
 
 def get_members():
@@ -377,6 +377,48 @@ def update_meeting_status(meeting_id: str, status: str, user_id: str) -> Optiona
     meeting = result.data[0]
     meeting["segments"] = existing_meeting["segments"]
     return meeting
+
+
+def delete_meeting(meeting_id: str, user_id: str, user_token: str) -> bool:
+    """
+    Delete a meeting and its associated segments.
+
+    Args:
+        meeting_id: ID of the meeting to delete
+        user_id: ID of the user deleting the meeting
+        user_token: Token of the user deleting the meeting
+
+    Returns:
+        Boolean indicating success or failure
+    """
+    # First verify the meeting exists
+    existing_meeting = get_meeting_by_id(meeting_id, user_id)
+    if not existing_meeting:
+        return False
+
+    user_client = create_user_client(user_token)
+
+    try:
+        # Check permission using the database function that respects RLS
+        # This will only return true if the user is allowed to delete the meeting
+        permission_check = user_client.rpc("can_delete_meeting", {"meeting_id": meeting_id}).execute()
+
+        # If the function returns false, the user doesn't have permission
+        if not permission_check.data:
+            print("Permission denied: User cannot delete this meeting")
+            return False
+
+        # Now we can safely proceed with deletion knowing RLS will allow it
+        # Delete segments first (using a transaction would be better but not available in client)
+        user_client.table("segments").delete().eq("meeting_id", meeting_id).execute()
+
+        # Delete the meeting
+        result = user_client.table("meetings").delete().eq("id", meeting_id).execute()
+
+        return len(result.data) > 0
+    except Exception as e:
+        print(f"Error in delete_meeting: {e}")
+        return False
 
 
 def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:

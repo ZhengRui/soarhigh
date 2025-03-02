@@ -2,7 +2,6 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi.security import HTTPBearer as HTTPBearerOptional
 from jose import ExpiredSignatureError, JWTError, jwt
 
 from ...config import SUPABASE_JWT_SECRET
@@ -11,7 +10,7 @@ from ...db.supabase import supabase
 from ...models.users import User
 
 http_scheme = HTTPBearer()
-http_scheme_optional = HTTPBearerOptional(auto_error=False)
+http_scheme_optional = HTTPBearer(auto_error=False)
 auth_router = r = APIRouter()
 
 credentials_exception = HTTPException(

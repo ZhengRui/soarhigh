@@ -1,10 +1,12 @@
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from ...db.core import (
     create_meeting,
+    delete_meeting,
     get_attendee_details,
     get_meeting_by_id,
     get_meetings,
@@ -14,7 +16,9 @@ from ...db.core import (
 from ...models.meeting import Meeting
 from ...models.users import User
 from ...utils.meeting import parse_meeting_agenda_image
-from .auth import get_current_user, get_optional_user
+from .auth import get_current_user, get_optional_user, verify_access_token
+
+http_scheme = HTTPBearer()
 
 meeting_router = r = APIRouter()
 
@@ -221,6 +225,36 @@ async def r_update_meeting_status(
         return Meeting(**meeting_db)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.delete("/meetings/{meeting_id}")
+async def r_delete_meeting(
+    meeting_id: str = Path(..., description="The ID of the meeting to delete"),
+    credentials: HTTPAuthorizationCredentials = Depends(http_scheme),
+):
+    """
+    Delete a meeting.
+
+    This endpoint deletes a meeting and all its associated segments.
+    Only authenticated users can delete meetings.
+    The Row Level Security policies will ensure that only the meeting manager
+    or admin users can delete a meeting.
+    """
+    try:
+        user_token = credentials.credentials
+        payload = verify_access_token(user_token)
+
+        # Delete the meeting from the database
+        success = delete_meeting(meeting_id, payload["sub"], user_token)
+
+        if not success:
+            raise HTTPException(status_code=404, detail="Meeting not found or you don't have permission to delete it")
+
+        return {"success": True, "message": "Meeting deleted successfully"}
     except HTTPException:
         raise
     except Exception as e:

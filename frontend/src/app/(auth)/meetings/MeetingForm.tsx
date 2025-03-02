@@ -239,7 +239,7 @@ export function MeetingForm({
         await createMeeting(meetingData);
 
         // Invalidate the meetings query to refresh the list
-        queryClient.invalidateQueries({ queryKey: ['meetings'] });
+        await queryClient.invalidateQueries({ queryKey: ['meetings'] });
 
         toast.success('Meeting created successfully!');
       } else if (mode === 'edit' && meetingId) {
@@ -274,12 +274,14 @@ export function MeetingForm({
       await deleteMeeting(meetingId);
 
       // Invalidate the meetings query to refresh the list
-      queryClient.invalidateQueries({ queryKey: ['meetings'] });
+      await queryClient.invalidateQueries({ queryKey: ['meetings'] });
 
       toast.success('Meeting deleted successfully!');
 
-      // Redirect to meetings list
-      router.push('/meetings');
+      // Redirect to meetings list after a short delay
+      setTimeout(() => {
+        router.push('/meetings');
+      }, 1000);
     } catch (err) {
       console.error('Error deleting meeting:', err);
       toast.error(

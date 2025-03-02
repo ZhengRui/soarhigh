@@ -110,9 +110,8 @@ const Header = () => {
 
   const signout = () => {
     localStorage.removeItem('token');
-    queryClient.invalidateQueries({
-      queryKey: ['whoami'],
-    });
+    queryClient.invalidateQueries({ queryKey: ['whoami'] });
+    queryClient.invalidateQueries({ queryKey: ['isAdmin'] });
   };
 
   return (
