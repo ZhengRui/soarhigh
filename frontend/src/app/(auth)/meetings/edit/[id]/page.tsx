@@ -139,10 +139,16 @@ export default function EditMeetingPage() {
   };
 
   return (
-    <MeetingForm
-      initFormData={convertedMeeting}
-      mode='edit'
-      meetingId={meetingId}
-    />
+    <div className='min-h-screen bg-gray-50 py-12'>
+      <div className='container max-w-4xl mx-auto px-4'>
+        <div className='bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden'>
+          <MeetingForm
+            initFormData={convertedMeeting}
+            mode='edit'
+            meetingId={meetingId}
+          />
+        </div>
+      </div>
+    </div>
   );
 }
