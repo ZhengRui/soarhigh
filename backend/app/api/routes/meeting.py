@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -28,23 +28,31 @@ class MeetingStatusUpdate(BaseModel):
     status: str
 
 
-def meeting_db_to_pydantic(meeting_db: Dict) -> Dict:
-    if "type" in meeting_db:
-        meeting_db["meeting_type"] = meeting_db.pop("type")
+def meeting_db_to_pydantic(meeting_db):
+    is_list = isinstance(meeting_db, list)
 
-    if "manager_id" in meeting_db:
-        manager_id = meeting_db.pop("manager_id")
-        # Get attendee details (includes name and member_id)
-        attendee = get_attendee_details(manager_id)
-        # Map to meeting_manager (name) and meeting_manager_id (member_id)
-        meeting_db["meeting_manager"] = attendee["name"]
-        meeting_db["meeting_manager_id"] = attendee["member_id"]
+    if is_list:
+        meeting_dbs = meeting_db
+    else:
+        meeting_dbs = [meeting_db]
 
-    # Remove created_at and updated_at
-    meeting_db.pop("created_at", None)
-    meeting_db.pop("updated_at", None)
+    manager_ids = []
+    for meeting_db in meeting_dbs:
+        manager_ids.append(meeting_db.pop("manager_id", ""))
 
-    return meeting_db
+    attendee_details = get_attendee_details(manager_ids)
+
+    for meeting_db, attendee_detail in zip(meeting_dbs, attendee_details):
+        if "type" in meeting_db:
+            meeting_db["meeting_type"] = meeting_db.pop("type")
+
+        meeting_db["meeting_manager"] = attendee_detail["name"]
+        meeting_db["meeting_manager_id"] = attendee_detail["member_id"]
+
+        meeting_db.pop("created_at", None)
+        meeting_db.pop("updated_at", None)
+
+    return meeting_dbs if is_list else meeting_dbs[0]
 
 
 @r.post("/meeting/parse_agenda_image")
@@ -116,9 +124,9 @@ async def r_list_meetings(
 
         # Convert database results to response models
         meetings_response = []
-        for meeting in meetings_db:
-            meeting = meeting_db_to_pydantic(meeting)
 
+        meetings_db = meeting_db_to_pydantic(meetings_db)
+        for meeting in meetings_db:
             meetings_response.append(Meeting(**meeting))
 
         return meetings_response
@@ -149,7 +157,7 @@ async def r_get_meeting(
 
         meeting_db = meeting_db_to_pydantic(meeting_db)
 
-        return Meeting(**meeting_db)
+        return Meeting(**meeting_db)  # type: ignore
     except HTTPException:
         raise
     except Exception as e:
@@ -185,7 +193,7 @@ async def r_update_meeting(
 
         meeting_db = meeting_db_to_pydantic(meeting_db)
 
-        return Meeting(**meeting_db)
+        return Meeting(**meeting_db)  # type: ignore
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -222,7 +230,7 @@ async def r_update_meeting_status(
 
         meeting_db = meeting_db_to_pydantic(meeting_db)
 
-        return Meeting(**meeting_db)
+        return Meeting(**meeting_db)  # type: ignore
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:

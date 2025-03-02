@@ -45,7 +45,7 @@ const transformSegmentsForAPI = (segments: BaseSegment[]) => {
       related_segment_ids,
     } = segment;
 
-    // Return a clean object with only API-required fields
+    // Return a clean object with only API-required fields e.g. *_config
     return {
       segment_id,
       segment_type,
@@ -238,20 +238,26 @@ export function MeetingForm({
         // Create new meeting
         await createMeeting(meetingData);
 
-        // Invalidate the meetings query to refresh the list
+        await queryClient.invalidateQueries({
+          queryKey: ['meeting', meetingId],
+        });
         await queryClient.invalidateQueries({ queryKey: ['meetings'] });
 
         toast.success('Meeting created successfully!');
+
+        // Redirect to meetings list after a short delay
+        setTimeout(() => {
+          router.push('/meetings');
+        }, 1000);
       } else if (mode === 'edit' && meetingId) {
         // Update existing meeting
+        console.log(meetingId, meetingData);
         await updateMeeting(meetingId, meetingData);
+
+        await queryClient.invalidateQueries({ queryKey: ['meetings'] });
+
         toast.success('Meeting updated successfully!');
       }
-
-      // Redirect to meetings list after a short delay
-      setTimeout(() => {
-        router.push('/meetings');
-      }, 1000);
     } catch (err) {
       console.error('Error saving meeting:', err);
       toast.error(

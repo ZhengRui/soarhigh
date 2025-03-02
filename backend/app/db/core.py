@@ -486,23 +486,30 @@ def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:
     return []
 
 
-def get_attendee_details(attendee_id: str) -> Dict:
+def get_attendee_details(attendee_ids: List[str]) -> List[Dict]:
     """
     Get details about an attendee, including their member_id if available.
 
     Args:
-        attendee_id: ID of the attendee to look up
+        attendee_ids: List of IDs of the attendees to look up
 
     Returns:
-        Dictionary with attendee details, including member_id and name
+        List of dictionaries with attendee details, including member_id and name
     """
-    result = supabase.table("attendees").select("*").eq("id", attendee_id).execute()
+    result = supabase.table("attendees").select("*").in_("id", attendee_ids).execute()
 
-    if not result.data:
-        return {"name": "", "member_id": ""}
+    details_map = {}
+    for attendee in result.data:
+        details_map[attendee["id"]] = {
+            "name": attendee.get("name", ""),
+            "member_id": attendee.get("member_id", ""),
+        }
 
-    attendee = result.data[0]
-    return {
-        "name": attendee.get("name", ""),
-        "member_id": attendee.get("member_id", ""),
-    }
+    attendee_details = []
+    for attendee_id in attendee_ids:
+        if attendee_id not in details_map:
+            attendee_details.append({"name": "", "member_id": ""})
+        else:
+            attendee_details.append(details_map[attendee_id].copy())
+
+    return attendee_details
