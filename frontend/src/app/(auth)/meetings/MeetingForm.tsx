@@ -251,7 +251,6 @@ export function MeetingForm({
         }, 1000);
       } else if (mode === 'edit' && meetingId) {
         // Update existing meeting
-        console.log(meetingId, meetingData);
         await updateMeeting(meetingId, meetingData);
 
         await queryClient.invalidateQueries({ queryKey: ['meetings'] });
