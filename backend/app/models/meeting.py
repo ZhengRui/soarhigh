@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class Attendee(BaseModel):
-    id: str = Field(description="The unique identifier of the attendee.")
+    id: Optional[str] = Field(default=None, description="The unique identifier of the attendee.")
     name: str = Field(description="The name of the attendee.")
     member_id: str = Field(description="The member ID of the attendee.")
 
@@ -18,7 +18,9 @@ class Segment(BaseModel):
     start_time: str = Field(description="The start time of the segment.")
     duration: str = Field(description="The duration of the segment.")
     end_time: str = Field(description="The end time of the segment.")
-    role_taker: Optional[Attendee] = Field(description="The attendee/attendees who is/are performing the segment.")
+    role_taker: Optional[Attendee] = Field(
+        default=None, description="The attendee/attendees who is/are performing the segment."
+    )
     title: str = Field(
         description="The title of the speech or workshop, applicable if the segment is a prepared speech or workshop."
     )

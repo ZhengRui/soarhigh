@@ -234,12 +234,10 @@ export function MeetingForm({
       const meetingData = {
         ...formData,
         segments: transformSegmentsForAPI(formData.segments),
-        status: 'draft',
       };
 
-      console.log('meetingData', meetingData);
       if (mode === 'create') {
-        return;
+        meetingData.status = 'draft';
 
         // Create new meeting
         await createMeeting(meetingData);

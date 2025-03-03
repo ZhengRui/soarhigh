@@ -12,7 +12,7 @@ evaluations, etc.
 
 # Schemas
 Meeting:
-- meeting_type (e.g., Regular, Workshop, Activity): The type of meeting
+- meeting_type (e.g., Regular, Workshop, Custom): The type of meeting
 - theme: The theme for the meeting.
 - meeting_manager: The person organizing/managing the meeting.
 - date: The date of the meeting.

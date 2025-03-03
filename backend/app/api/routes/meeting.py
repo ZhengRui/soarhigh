@@ -89,13 +89,6 @@ async def r_create_meeting(meeting_data: Meeting, user: User = Depends(get_curre
         # Create the meeting in the database
         meeting_db = create_meeting(meeting_dict)
 
-        # Convert database meeting to response model
-        # We need to inject the segments data back into the response
-        segments = meeting_dict.get("segments", [])
-        meeting_db["segments"] = segments
-
-        meeting_db = meeting_db_to_pydantic(meeting_db)
-
         return Meeting(**meeting_db)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
