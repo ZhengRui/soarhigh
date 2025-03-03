@@ -7,7 +7,6 @@ from pydantic import BaseModel
 from ...db.core import (
     create_meeting,
     delete_meeting,
-    get_attendee_details,
     get_meeting_by_id,
     get_meetings,
     update_meeting,
@@ -26,33 +25,6 @@ meeting_router = r = APIRouter()
 # Add this new model for status updates
 class MeetingStatusUpdate(BaseModel):
     status: str
-
-
-def meeting_db_to_pydantic(meeting_db):
-    is_list = isinstance(meeting_db, list)
-
-    if is_list:
-        meeting_dbs = meeting_db
-    else:
-        meeting_dbs = [meeting_db]
-
-    manager_ids = []
-    for meeting_db in meeting_dbs:
-        manager_ids.append(meeting_db.pop("manager_id", ""))
-
-    attendee_details = get_attendee_details(manager_ids)
-
-    for meeting_db, attendee_detail in zip(meeting_dbs, attendee_details):
-        if "type" in meeting_db:
-            meeting_db["meeting_type"] = meeting_db.pop("type")
-
-        meeting_db["meeting_manager"] = attendee_detail["name"]
-        meeting_db["meeting_manager_id"] = attendee_detail["member_id"]
-
-        meeting_db.pop("created_at", None)
-        meeting_db.pop("updated_at", None)
-
-    return meeting_dbs if is_list else meeting_dbs[0]
 
 
 @r.post("/meeting/parse_agenda_image")
@@ -176,14 +148,7 @@ async def r_update_meeting(
         if not meeting_db:
             raise HTTPException(status_code=404, detail="Meeting not found")
 
-        # Convert database meeting to response model
-        # We need to inject the segments data back into the response
-        if "segments" in meeting_dict:
-            meeting_db["segments"] = meeting_dict["segments"]
-
-        meeting_db = meeting_db_to_pydantic(meeting_db)
-
-        return Meeting(**meeting_db)  # type: ignore
+        return Meeting(**meeting_db)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:

@@ -373,7 +373,6 @@ export function SegmentsEditor({
                   <RoleTakerInput
                     value={segment.role_taker}
                     onChange={(attendee) => {
-                      console.log(attendee);
                       onSegmentChange(index, 'role_taker', attendee);
                     }}
                     placeholder={segment.role_taker_config.placeholder}

@@ -35,7 +35,7 @@ def resolve_attendee_id(member_id_or_name: str) -> str:
         # Check if the guest name already exists
         # role taker better pass in a member id or a unique name, otherwise it will
         # clash with other guest attendees
-        result = supabase.table("attendees").select("id").eq("name", guest_name).execute()
+        result = supabase.table("attendees").select("id").eq("name", guest_name).eq("type", "Guest").execute()
         if result.data:
             return result.data[0]["id"]
 
@@ -90,8 +90,8 @@ def create_meeting(meeting_data: Dict) -> Dict:
 
     # Handle member_id to attendee_id mapping
     manager = meeting_data.get("manager") or {}
-    member_id = manager.get("member_id", "")
-    name = manager.get("name", "")
+    member_id = manager.get("member_id") or ""
+    name = manager.get("name") or ""
 
     # Resolve the member_id or name to an attendee_id
     attendee_id = resolve_attendee_id(member_id or name or "TBD")
@@ -194,7 +194,10 @@ def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) ->
 
         # Create a mapping of attendee ID to name
         attendee_map = {
-            attendee["id"]: {"name": attendee.get("name", ""), "member_id": attendee.get("member_id", "")}
+            attendee["id"]: {
+                "name": attendee.get("name") or "",
+                "member_id": attendee.get("member_id") or "",
+            }
             for attendee in attendee_details_result.data
         }
 
@@ -299,8 +302,8 @@ def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optiona
         attendee_map = {
             attendee["id"]: {
                 "id": attendee["id"],
-                "name": attendee.get("name", ""),
-                "member_id": attendee.get("member_id", ""),
+                "name": attendee.get("name") or "",
+                "member_id": attendee.get("member_id") or "",
             }
             for attendee in attendee_details_result.data
         }
@@ -354,47 +357,83 @@ def update_meeting(meeting_id: str, meeting_data: Dict, user_id: str) -> Optiona
     if not existing_meeting:
         return None
 
-    # Extract segments data before updating the meeting
+    existing_segments = existing_meeting.pop("segments", [])
+
+    manager = meeting_data.get("manager") or {}
+    member_id = manager.get("member_id") or ""
+    name = manager.get("name") or ""
+
+    diff = {}
+    for key, value in existing_meeting.items():
+        if key == "manager":
+            existing_manager = value or {}
+            existing_member_id = existing_manager.get("member_id") or ""
+            existing_name = existing_manager.get("name") or ""
+
+            if member_id != existing_member_id or name != existing_name:
+                diff["manager_id"] = resolve_attendee_id(member_id or name or "TBD")
+
+        elif key in meeting_data and meeting_data[key] != value:
+            diff[key] = meeting_data[key]
+
+    if diff:
+        supabase.table("meetings").update(diff).eq("id", meeting_id).execute()
+
     segments_data = meeting_data.get("segments", [])
 
-    # Handle member_id to attendee_id mapping
-    member_id = meeting_data.pop("meeting_manager_id", "")
-    # If meeting_manager_id is empty, set a default value of "TBD"
-    if not member_id:
-        member_id = "TBD"
+    ids = set([segment["id"] for segment in segments_data])
+    existing_ids = set([segment["id"] for segment in existing_segments])
+    existing_by_ids = {segment["id"]: segment for segment in existing_segments}
 
-    # Resolve the member_id or name to an attendee_id
-    attendee_id = resolve_attendee_id(member_id)
-    meeting_data["manager_id"] = attendee_id
+    ids_to_delete = list(existing_ids - ids)
+    segments_to_add = []
+    segments_to_update = []
 
-    # Update meeting in database
-    result = (
-        supabase.table("meetings")
-        .update(
-            {
-                "type": meeting_data.get("type"),
-                "theme": meeting_data.get("theme"),
-                "manager_id": meeting_data.get("manager_id"),
-                "date": meeting_data.get("date"),
-                "start_time": meeting_data.get("start_time"),
-                "end_time": meeting_data.get("end_time"),
-                "location": meeting_data.get("location"),
-                "introduction": meeting_data.get("introduction"),
-                # Don't update status here - that's handled by update_meeting_status
-            }
-        )
-        .eq("id", meeting_id)
-        .execute()
-    )
+    for segment in segments_data:
+        segment_id = segment["id"]
 
-    if not result.data:
-        return None
+        if segment_id not in existing_ids:
+            segments_to_add.append(segment)
+            continue
 
-    if segments_data:
-        supabase.table("segments").delete().eq("meeting_id", meeting_id).execute()
-        create_segments(segments_data, meeting_id)
+        existing_segment = existing_by_ids[segment_id]
 
-    return result.data[0]
+        for key, value in existing_segment.items():
+            if key == "attendee_id":
+                role_taker = segment.get("role_taker") or {}
+                member_id = role_taker.get("member_id") or ""
+                name = role_taker.get("name") or ""
+
+                existing_role_taker = existing_segment.get("role_taker") or {}
+                existing_member_id = existing_role_taker.get("member_id") or ""
+                existing_name = existing_role_taker.get("name") or ""
+
+                if member_id != existing_member_id or (
+                    not member_id and not existing_member_id and name != existing_name
+                ):
+                    segments_to_update.append(segment)
+                    break
+
+            elif value != segment[key]:
+                segments_to_update.append(segment)
+                break
+
+    if ids_to_delete:
+        supabase.table("segments").delete().in_("id", ids_to_delete).execute()
+
+    if segments_to_update:
+        segments_to_update = [
+            prepare_segment_data(segment, meeting_id, ignore_id=False) for segment in segments_to_update
+        ]
+        supabase.table("segments").upsert(segments_to_update).execute()
+
+    if segments_to_add:
+        segments_to_add = [prepare_segment_data(segment, meeting_id, ignore_id=False) for segment in segments_to_add]
+        supabase.table("segments").insert(segments_to_add).execute()
+
+    meeting_data["id"] = meeting_id
+
+    return meeting_data
 
 
 def update_meeting_status(meeting_id: str, status: str, user_id: str) -> Optional[Dict]:
@@ -481,54 +520,7 @@ def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:
     Returns:
         List of dictionaries containing the created segments data
     """
-    segments_to_insert = []
-
-    for segment in segments_data:
-        # For role_taker, we also need to convert member_id or name to attendee_id
-        role_taker = segment.get("role_taker") or {}
-        member_id = role_taker.get("member_id", "")
-        name = role_taker.get("name", "")
-        attendee_id = None
-
-        if member_id or name:
-            # This function now handles both member IDs and custom names
-            attendee_id = resolve_attendee_id(member_id or name)
-
-        # Calculate end_time if it's empty or not provided
-        start_time = segment.get("start_time")
-        duration = segment.get("duration")
-        end_time = segment.get("end_time")
-
-        if start_time and duration and (not end_time or end_time == ""):
-            # Convert start_time to minutes
-            hours, minutes = map(int, start_time.split(":"))
-            start_minutes = hours * 60 + minutes
-
-            # Add duration
-            duration_minutes = int(duration)
-            total_minutes = start_minutes + duration_minutes
-
-            # Convert back to HH:MM format
-            end_hours = total_minutes // 60
-            end_minutes = total_minutes % 60
-            end_time = f"{end_hours:02d}:{end_minutes:02d}"
-
-        # Format duration as a proper interval with 'minutes' unit
-        formatted_duration = f"{duration} minutes" if duration else None
-
-        segments_to_insert.append(
-            {
-                "meeting_id": meeting_id,
-                "attendee_id": attendee_id,
-                "type": segment.get("type"),
-                "start_time": start_time,
-                "duration": formatted_duration,  # Now explicitly specify minutes
-                "end_time": end_time,
-                "title": segment.get("title"),
-                "content": segment.get("content"),
-                "related_segment_ids": segment.get("related_segment_ids"),
-            }
-        )
+    segments_to_insert = [prepare_segment_data(segment, meeting_id) for segment in segments_data]
 
     if segments_to_insert:
         result = supabase.table("segments").insert(segments_to_insert).execute()
@@ -537,36 +529,7 @@ def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:
     return []
 
 
-def get_attendee_details(attendee_ids: List[str]) -> List[Dict]:
-    """
-    Get details about an attendee, including their member_id if available.
-
-    Args:
-        attendee_ids: List of IDs of the attendees to look up
-
-    Returns:
-        List of dictionaries with attendee details, including member_id and name
-    """
-    result = supabase.table("attendees").select("*").in_("id", attendee_ids).execute()
-
-    details_map = {}
-    for attendee in result.data:
-        details_map[attendee["id"]] = {
-            "name": attendee.get("name", ""),
-            "member_id": attendee.get("member_id", ""),
-        }
-
-    attendee_details = []
-    for attendee_id in attendee_ids:
-        if attendee_id not in details_map:
-            attendee_details.append({"name": "", "member_id": ""})
-        else:
-            attendee_details.append(details_map[attendee_id].copy())
-
-    return attendee_details
-
-
-def prepare_segment_data(segment: Dict, meeting_id: str) -> Dict:
+def prepare_segment_data(segment: Dict, meeting_id: str, ignore_id: bool = True) -> Dict:
     """
     Prepare segment data for insertion or update by handling role_taker,
     calculating end_time, and formatting duration.
@@ -579,10 +542,13 @@ def prepare_segment_data(segment: Dict, meeting_id: str) -> Dict:
         Dictionary prepared for database insertion/update
     """
     # For role_taker, convert to attendee_id
-    role_taker = segment.get("role_taker", None)
-    attendee_id = segment.get("attendee_id", None)
-    if role_taker and not attendee_id:
-        attendee_id = resolve_attendee_id(role_taker)
+    role_taker = segment.get("role_taker") or {}
+    member_id = role_taker.get("member_id") or ""
+    name = role_taker.get("name") or ""
+    attendee_id = None
+
+    if member_id or name:
+        attendee_id = resolve_attendee_id(member_id or name)
 
     # Calculate end_time if needed
     start_time = segment.get("start_time")
@@ -606,10 +572,10 @@ def prepare_segment_data(segment: Dict, meeting_id: str) -> Dict:
     # Format duration as a proper interval
     formatted_duration = f"{duration} minutes" if duration else None
 
-    return {
+    prepared_segment = {
         "meeting_id": meeting_id,
         "attendee_id": attendee_id,
-        "type": segment.get("segment_type"),
+        "type": segment.get("type"),
         "start_time": start_time,
         "duration": formatted_duration,
         "end_time": end_time,
@@ -617,3 +583,8 @@ def prepare_segment_data(segment: Dict, meeting_id: str) -> Dict:
         "content": segment.get("content"),
         "related_segment_ids": segment.get("related_segment_ids"),
     }
+
+    if not ignore_id and segment.get("id"):
+        prepared_segment["id"] = segment["id"]
+
+    return prepared_segment

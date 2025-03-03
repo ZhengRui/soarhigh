@@ -258,6 +258,9 @@ export function MeetingForm({
         await updateMeeting(meetingId, meetingData);
 
         await queryClient.invalidateQueries({ queryKey: ['meetings'] });
+        await queryClient.invalidateQueries({
+          queryKey: ['meeting', meetingId],
+        });
 
         toast.success('Meeting updated successfully!');
       }
