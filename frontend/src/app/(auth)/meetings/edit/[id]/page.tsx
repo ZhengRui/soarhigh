@@ -87,7 +87,7 @@ export default function EditMeetingPage() {
   // Handle loading state
   if (isLoading) {
     return (
-      <div className='flex flex-col items-center justify-center min-h-[60vh] p-8'>
+      <div className='flex flex-col items-center justify-center min-h-[80vh] p-8'>
         <Loader2 className='w-8 h-8 text-blue-500 animate-spin mb-4' />
         <p className='text-gray-600'>Loading meeting data...</p>
       </div>
@@ -108,7 +108,7 @@ export default function EditMeetingPage() {
     }, 1500);
 
     return (
-      <div className='flex flex-col items-center justify-center min-h-[60vh] p-8'>
+      <div className='flex flex-col items-center justify-center min-h-[80vh] p-8'>
         <p className='text-red-500 mb-2'>Error loading meeting data</p>
         <p className='text-gray-600'>Redirecting to meetings list...</p>
       </div>
@@ -125,7 +125,7 @@ export default function EditMeetingPage() {
     }, 1500);
 
     return (
-      <div className='flex flex-col items-center justify-center min-h-[60vh] p-8'>
+      <div className='flex flex-col items-center justify-center min-h-[80vh] p-8'>
         <p className='text-red-500 mb-2'>Meeting not found</p>
         <p className='text-gray-600'>Redirecting to meetings list...</p>
       </div>

@@ -37,9 +37,9 @@ export default function MeetingsPage() {
 
         {/* Loading state */}
         {isMeetingPending && (
-          <div className='flex flex-col items-center justify-center py-12'>
+          <div className='flex flex-col min-h-[70vh] items-center justify-center py-12'>
             <Loader2 className='w-8 h-8 text-blue-500 animate-spin mb-4' />
-            <p className='text-gray-600'>Loading meetings...</p>
+            {/* <p className='text-gray-600'>Loading meetings...</p> */}
           </div>
         )}
 
@@ -55,7 +55,7 @@ export default function MeetingsPage() {
                 />
               ))
             ) : (
-              <div className='text-center py-12'>
+              <div className='flex justify-center items-center min-h-[70vh] py-12'>
                 <p className='text-gray-500'>No meetings found</p>
               </div>
             )}
