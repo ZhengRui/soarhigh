@@ -156,6 +156,21 @@ def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) ->
     if not meetings:
         return []
 
+    manager_ids = [meeting["manager_id"] for meeting in meetings]
+    result = supabase.table("attendees").select("*").in_("id", manager_ids).execute()
+    manager_map = {manager["id"]: manager for manager in result.data}
+    for meeting in meetings:
+        manager_id = meeting.pop("manager_id")
+        if manager_id not in manager_map:
+            meeting["manager"] = {"id": manager_id, "name": "", "member_id": ""}
+        else:
+            manager = manager_map[manager_id]
+            meeting["manager"] = {
+                "id": manager_id,
+                "name": manager["name"],
+                "member_id": manager["member_id"],
+            }
+
     # Get all meeting IDs
     meeting_ids = [meeting["id"] for meeting in meetings]
 
@@ -192,15 +207,18 @@ def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) ->
 
         for segment in meeting_segments:
             attendee_id = segment["attendee_id"]
-            role_taker = attendee_map.get(attendee_id, {}).get("name", "") if attendee_id else ""
+            if attendee_id:
+                role_taker = attendee_map[attendee_id]
+            else:
+                role_taker = None
 
             hours, minutes, _ = map(int, segment["duration"].split(":"))
             duration_minutes = str(hours * 60 + minutes)
 
             processed_segments.append(
                 {
-                    "segment_id": segment["id"],
-                    "segment_type": segment["type"],
+                    "id": segment["id"],
+                    "type": segment["type"],
                     "start_time": segment["start_time"][:5],
                     "duration": duration_minutes,
                     "end_time": segment["end_time"][:5],
@@ -244,10 +262,10 @@ def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optiona
     manager_id = meeting.pop("manager_id")
     result = supabase.table("attendees").select("*").eq("id", manager_id).execute()
     if not result.data:
-        meeting["meeting_manager"] = {"id": manager_id, "name": "", "member_id": ""}
+        meeting["manager"] = {"id": manager_id, "name": "", "member_id": ""}
     else:
         manager = result.data[0]
-        meeting["meeting_manager"] = {
+        meeting["manager"] = {
             "id": manager_id,
             "name": manager["name"],
             "member_id": manager["member_id"],
@@ -295,8 +313,8 @@ def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optiona
 
         processed_segments.append(
             {
-                "segment_id": segment["id"],
-                "segment_type": segment["type"],
+                "id": segment["id"],
+                "type": segment["type"],
                 "start_time": segment["start_time"][:5],
                 "duration": duration_minutes,
                 "end_time": segment["end_time"][:5],

@@ -5,22 +5,28 @@ export interface UserIF {
 }
 
 export interface SegmentIF {
-  segment_id: string;
-  segment_type: string;
+  id: string;
+  type: string;
   start_time: string;
   duration: string;
   end_time?: string;
-  role_taker?: string;
+  role_taker?: AttendeeIF;
   title?: string;
   content?: string;
   related_segment_ids?: string;
 }
 
+export interface AttendeeIF {
+  id?: string;
+  name: string;
+  member_id: string;
+}
+
 export interface MeetingIF {
-  meeting_type: string;
+  id?: string;
+  type: string;
   theme: string;
-  meeting_manager: string;
-  meeting_manager_id?: string;
+  manager?: AttendeeIF;
   date: string;
   start_time: string;
   end_time: string;
@@ -28,7 +34,6 @@ export interface MeetingIF {
   introduction: string;
   segments: SegmentIF[];
   status?: 'draft' | 'published';
-  id?: string;
 }
 
 export interface AwardIF {

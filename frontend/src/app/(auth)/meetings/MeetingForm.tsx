@@ -1,4 +1,4 @@
-import { MeetingIF } from '@/interfaces';
+import { AttendeeIF, MeetingIF } from '@/interfaces';
 import { createMeeting, updateMeeting, deleteMeeting } from '@/utils/meeting';
 import {
   BaseSegment,
@@ -34,8 +34,8 @@ const transformSegmentsForAPI = (segments: BaseSegment[]) => {
   return segments.map((segment) => {
     // Extract only the properties needed by the API
     const {
-      segment_id,
-      segment_type,
+      id,
+      type,
       start_time,
       duration,
       end_time,
@@ -47,8 +47,8 @@ const transformSegmentsForAPI = (segments: BaseSegment[]) => {
 
     // Return a clean object with only API-required fields e.g. *_config
     return {
-      segment_id,
-      segment_type,
+      id,
+      type,
       start_time,
       duration,
       end_time,
@@ -90,11 +90,11 @@ export function MeetingForm({
 
   const queryClient = useQueryClient();
 
-  const canDeleteMeeting = isAdmin || user?.uid === formData.meeting_manager_id;
+  const canDeleteMeeting = isAdmin || user?.uid === formData.manager?.member_id;
 
   const handleInputChange = (
     field: keyof MeetingTemplateType,
-    value: string
+    value: string | AttendeeIF | undefined
   ) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
@@ -107,12 +107,12 @@ export function MeetingForm({
     setFormData((prev) => {
       const newSegments = [...prev.segments];
 
-      if (field === 'segment_type') {
+      if (field === 'type') {
         if (value in SEGMENT_TYPE_MAP) {
           // Create new segment of the selected type
           const oldSegment = newSegments[index];
           const params = {
-            segment_id: oldSegment.segment_id,
+            id: oldSegment.id,
             start_time: oldSegment.start_time,
             duration: oldSegment.duration,
           };
@@ -186,7 +186,7 @@ export function MeetingForm({
         if (segment.related_segment_ids) {
           segment.related_segment_ids = segment.related_segment_ids
             .split(',')
-            .filter((id) => id !== segmentToDelete.segment_id)
+            .filter((id) => id !== segmentToDelete.id)
             .join(',');
         }
       });
@@ -212,8 +212,8 @@ export function MeetingForm({
 
       // Create new custom segment
       const newSegment = new CustomSegment({
-        segment_id: uuidv4(),
-        segment_type: 'New segment',
+        id: uuidv4(),
+        type: 'New segment',
         start_time: newStartTime,
         duration: '5',
       });
@@ -234,7 +234,10 @@ export function MeetingForm({
         status: 'draft',
       };
 
+      console.log('meetingData', meetingData);
       if (mode === 'create') {
+        return;
+
         // Create new meeting
         await createMeeting(meetingData);
 
@@ -378,18 +381,16 @@ export function MeetingForm({
           {/* Meeting Type */}
           <div>
             <label
-              htmlFor='meeting_type'
+              htmlFor='type'
               className='block text-sm font-medium text-gray-700 mb-1'
             >
               Meeting Type
             </label>
             <div className='relative'>
               <select
-                id='meeting_type'
-                value={formData.meeting_type}
-                onChange={(e) =>
-                  handleInputChange('meeting_type', e.target.value)
-                }
+                id='type'
+                value={formData.type}
+                onChange={(e) => handleInputChange('type', e.target.value)}
                 className={inputClasses}
               >
                 {MEETING_TYPES.map((type) => (
@@ -423,33 +424,28 @@ export function MeetingForm({
           {/* Meeting Manager */}
           <div>
             <label
-              htmlFor='meeting_manager'
+              htmlFor='manager'
               className='block text-sm font-medium text-gray-700 mb-1'
             >
               Meeting Manager
             </label>
             <div className='relative'>
               <select
-                id='meeting_manager'
-                value={formData.meeting_manager_id}
+                id='manager'
+                value={formData.manager?.member_id}
                 onChange={(e) => {
-                  // Update the ID
-                  handleInputChange('meeting_manager_id', e.target.value);
-
-                  // Also update the manager name
                   if (e.target.value) {
                     const selectedMember = members.find(
                       (member) => member.uid === e.target.value
                     );
                     if (selectedMember) {
-                      handleInputChange(
-                        'meeting_manager',
-                        selectedMember.full_name
-                      );
+                      handleInputChange('manager', {
+                        name: selectedMember.full_name,
+                        member_id: selectedMember.uid,
+                      });
                     }
                   } else {
-                    // Clear the manager name if no selection
-                    handleInputChange('meeting_manager', '');
+                    handleInputChange('manager', undefined);
                   }
                 }}
                 className={inputWithIconClasses}

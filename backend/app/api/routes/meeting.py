@@ -125,7 +125,6 @@ async def r_list_meetings(
         # Convert database results to response models
         meetings_response = []
 
-        meetings_db = meeting_db_to_pydantic(meetings_db)
         for meeting in meetings_db:
             meetings_response.append(Meeting(**meeting))
 
@@ -155,9 +154,7 @@ async def r_get_meeting(
         if not meeting_db:
             raise HTTPException(status_code=404, detail="Meeting not found")
 
-        meeting_db = meeting_db_to_pydantic(meeting_db)
-
-        return Meeting(**meeting_db)  # type: ignore
+        return Meeting(**meeting_db)
     except HTTPException:
         raise
     except Exception as e:
@@ -228,9 +225,7 @@ async def r_update_meeting_status(
         if not meeting_db:
             raise HTTPException(status_code=404, detail="Meeting not found")
 
-        meeting_db = meeting_db_to_pydantic(meeting_db)
-
-        return Meeting(**meeting_db)  # type: ignore
+        return Meeting(**meeting_db)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:

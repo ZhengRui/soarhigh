@@ -124,7 +124,7 @@ export function SegmentsEditor({
   };
 
   const handleSegmentTypeChange = (index: number, newType: string) => {
-    onSegmentChange(index, 'segment_type', newType);
+    onSegmentChange(index, 'type', newType);
     // setOpenTypeDropdownIndex(null);
   };
 
@@ -223,7 +223,7 @@ export function SegmentsEditor({
 
           return (
             <div
-              key={segment.segment_id}
+              key={segment.id}
               className='group relative flex flex-col sm:flex-row gap-4 items-start py-4 px-2 sm:px-4 rounded-lg'
             >
               <div
@@ -269,7 +269,7 @@ export function SegmentsEditor({
                 </div>
                 <div className='text-[10px] text-gray-400 sm:pt-1 font-mono flex items-center gap-0.5'>
                   <Hash className='w-2 h-2' />
-                  <span>{segment.segment_id.slice(0, 5)}</span>
+                  <span>{segment.id.slice(0, 5)}</span>
                 </div>
               </div>
 
@@ -281,9 +281,9 @@ export function SegmentsEditor({
                     {editingTypeIndex === index ? (
                       <input
                         type='text'
-                        value={segment.segment_type}
+                        value={segment.type}
                         onChange={(e) =>
-                          onSegmentChange(index, 'segment_type', e.target.value)
+                          onSegmentChange(index, 'type', e.target.value)
                         }
                         onBlur={handleTypeInputBlur}
                         className='text-sm font-medium text-gray-900 w-full px-0 py-1 border-b border-gray-100 focus:border-gray-200 bg-transparent focus:outline-none transition-colors'
@@ -306,7 +306,7 @@ export function SegmentsEditor({
                           }}
                         >
                           <span className='text-sm font-medium text-gray-900 break-words border-b border-transparent py-1'>
-                            {segment.segment_type}
+                            {segment.type}
                           </span>
                           <ChevronDown
                             className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
@@ -356,7 +356,7 @@ export function SegmentsEditor({
                   >
                     <input
                       type='text'
-                      value={segment.role_taker}
+                      value={segment.role_taker?.name}
                       onChange={(e) =>
                         onSegmentChange(index, 'role_taker', e.target.value)
                       }
@@ -412,24 +412,24 @@ export function SegmentsEditor({
                   >
                     {segment.related_segment_ids
                       .split(',')
-                      .map((segment_id) => {
+                      .map((id) => {
                         const relatedSegment = segments.find(
-                          (s) => s.segment_id === segment_id
+                          (s) => s.id === id
                         );
                         return (
                           relatedSegment && (
                             <div
-                              key={segment_id}
+                              key={id}
                               className='inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-gradient-to-r from-indigo-50 to-purple-50 text-indigo-700 border border-indigo-100 shadow-sm group/tag hover:shadow-md transition-all duration-200'
-                              title={`# ${segment_id.slice(0, 5)}`}
+                              title={`# ${id.slice(0, 5)}`}
                             >
                               <Link className='w-3.5 h-3.5 mr-1.5 text-indigo-500 flex-shrink-0' />
                               <span className='font-semibold truncate max-w-40'>
-                                {relatedSegment.segment_type}
+                                {relatedSegment.type}
                               </span>
                               <button
                                 onClick={() =>
-                                  handleRemoveRelatedSegment(index, segment_id)
+                                  handleRemoveRelatedSegment(index, id)
                                 }
                                 className='ml-1.5 p-0.5 rounded-full hover:bg-indigo-100 opacity-0 group-hover/tag:opacity-100 transition-opacity flex-shrink-0'
                               >
@@ -481,18 +481,17 @@ export function SegmentsEditor({
                             return segments
                               .filter(
                                 (s) =>
-                                  s.segment_id !== segment.segment_id &&
-                                  !relatedIds.has(s.segment_id)
+                                  s.id !== segment.id && !relatedIds.has(s.id)
                               )
                               .map((s) => (
                                 <div
-                                  key={s.segment_id}
+                                  key={s.id}
                                   className='px-4 py-2 text-xs text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 cursor-pointer'
                                   onClick={() =>
-                                    handleAddRelatedSegment(index, s.segment_id)
+                                    handleAddRelatedSegment(index, s.id)
                                   }
                                 >
-                                  {`${s.segment_type} (# ${s.segment_id.slice(0, 5)})`}
+                                  {`${s.type} (# ${s.id.slice(0, 5)})`}
                                 </div>
                               ));
                           })()}
@@ -551,7 +550,7 @@ export function SegmentsEditor({
             parseTime(segments[timePickerIndex].start_time).minutes
           }
           initialDuration={Number(segments[timePickerIndex].duration)}
-          segmentType={segments[timePickerIndex].segment_type}
+          segmentType={segments[timePickerIndex].type}
           currentSegmentIndex={timePickerIndex}
           segments={segments}
           onSave={(hour, minute, duration) =>

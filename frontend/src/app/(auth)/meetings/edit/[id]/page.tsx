@@ -22,14 +22,14 @@ import {
 function convertSegmentsToBaseSegments(segments: SegmentIF[]): BaseSegment[] {
   return segments.map((segment) => {
     const params: SegmentParams = {
-      segment_id: segment.segment_id,
+      id: segment.id,
       start_time: segment.start_time,
       duration: segment.duration,
       related_segment_ids: segment.related_segment_ids,
     };
 
     // Try to find a matching segment type class
-    const segmentType = segment.segment_type;
+    const segmentType = segment.type;
 
     // Check if it's a prepared speech (which might have a number)
     if (
@@ -64,7 +64,7 @@ function convertSegmentsToBaseSegments(segments: SegmentIF[]): BaseSegment[] {
     } else {
       // Use a custom segment if no matching type found
       const customSegment = new CustomSegment(params);
-      customSegment.segment_type = segmentType;
+      customSegment.type = segmentType;
 
       // Copy over any existing values
       if (segment.role_taker) customSegment.role_taker = segment.role_taker;

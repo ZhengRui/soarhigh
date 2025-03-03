@@ -16,8 +16,8 @@ const transformSegmentsWithUUID = (segments: BaseSegment[]): BaseSegment[] => {
   // First pass: generate new IDs
   segments.forEach((segment) => {
     const newId = uuidv4();
-    idMap.set(segment.segment_id, newId);
-    segment.segment_id = newId;
+    idMap.set(segment.id, newId);
+    segment.id = newId;
   });
 
   // Second pass: update related_segment_ids
@@ -91,7 +91,7 @@ export function MeetingFromTemplate() {
         <div className='mt-6 grid gap-4'>
           {MEETING_TEMPLATES.map((template) => (
             <button
-              key={template.meeting.meeting_type}
+              key={template.meeting.type}
               onClick={() => handleTemplateSelect(template)}
               className='w-full text-left p-4 rounded-lg border border-gray-200 hover:border-blue-300 bg-white hover:bg-blue-50 transition-all duration-200 group'
             >

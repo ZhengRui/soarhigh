@@ -321,7 +321,7 @@ export function TimePickerModal({
                   return (
                     <button
                       type='button'
-                      key={segment.segment_id}
+                      key={segment.id}
                       onClick={() => handleSegmentClick(index)}
                       disabled={index < currentSegmentIndex}
                       className={`w-full text-left p-2 rounded-md transition-all duration-200 ${
@@ -349,9 +349,7 @@ export function TimePickerModal({
                             isSelected ? 'text-blue-500' : 'text-gray-400'
                           }`}
                         />
-                        <span className='text-sm truncate'>
-                          {segment.segment_type}
-                        </span>
+                        <span className='text-sm truncate'>{segment.type}</span>
                       </div>
                     </button>
                   );

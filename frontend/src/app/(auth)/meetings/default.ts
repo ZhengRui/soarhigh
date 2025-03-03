@@ -1,4 +1,4 @@
-import { SegmentIF, MeetingIF } from '@/interfaces';
+import { SegmentIF, MeetingIF, AttendeeIF } from '@/interfaces';
 import { getNextWednesday } from '@/utils/utils';
 
 type EditableConfig = {
@@ -14,20 +14,20 @@ interface EditableSegmentIF extends SegmentIF {
 }
 
 export interface SegmentParams {
-  segment_id: string;
-  segment_type?: string;
+  id: string;
+  type?: string;
   start_time: string;
   duration: string;
   related_segment_ids?: string;
 }
 
 export class BaseSegment implements EditableSegmentIF {
-  segment_id: string = '';
-  segment_type: string = '';
+  id: string = '';
+  type: string = '';
   start_time: string = '';
   duration: string = '';
   end_time: string = '';
-  role_taker: string = '';
+  role_taker: AttendeeIF | undefined = undefined;
   title: string = '';
   content: string = '';
   related_segment_ids: string = '';
@@ -43,12 +43,8 @@ export class BaseSegment implements EditableSegmentIF {
     placeholder: '',
   };
 
-  constructor(params: {
-    segment_id: string;
-    start_time: string;
-    duration: string;
-  }) {
-    this.segment_id = params.segment_id;
+  constructor(params: { id: string; start_time: string; duration: string }) {
+    this.id = params.id;
     this.start_time = params.start_time;
     this.duration = params.duration;
   }
@@ -56,13 +52,13 @@ export class BaseSegment implements EditableSegmentIF {
 
 export class CustomSegment extends BaseSegment {
   constructor({
-    segment_id,
-    segment_type = 'Custom segment',
+    id,
+    type = 'Custom segment',
     start_time,
     duration,
   }: SegmentParams) {
-    super({ segment_id, start_time, duration });
-    this.segment_type = segment_type;
+    super({ id, start_time, duration });
+    this.type = type;
   }
 
   title_config = { editable: true, placeholder: 'Enter title (optional)' };
@@ -71,36 +67,36 @@ export class CustomSegment extends BaseSegment {
 }
 
 export class WarmUpSegment extends BaseSegment {
-  segment_type = 'Members and Guests Registration, Warm up';
+  type = 'Members and Guests Registration, Warm up';
   role_taker_config = { editable: false, placeholder: 'All attendees' };
 }
 
 export class SAASegment extends BaseSegment {
-  segment_type = 'Meeting Rules Introduction (SAA)';
+  type = 'Meeting Rules Introduction (SAA)';
   role_taker_config = { editable: true, placeholder: 'Assign SAA' };
 }
 
 export class OpeningRemarksSegment extends BaseSegment {
-  segment_type = 'Opening Remarks (President)';
+  type = 'Opening Remarks (President)';
 }
 
 export class TOMIntroSegment extends BaseSegment {
-  segment_type = 'TOM (Toastmaster of Meeting) Introduction';
+  type = 'TOM (Toastmaster of Meeting) Introduction';
   role_taker_config = { editable: true, placeholder: 'Assign TOM' };
 }
 
 export class TimerIntroSegment extends BaseSegment {
-  segment_type = 'Timer';
+  type = 'Timer';
   role_taker_config = { editable: true, placeholder: 'Assign timer' };
 }
 
 export class HarkMasterIntroSegment extends BaseSegment {
-  segment_type = 'Hark Master';
+  type = 'Hark Master';
   role_taker_config = { editable: true, placeholder: 'Assign hark master' };
 }
 
 export class GuestsIntroSegment extends BaseSegment {
-  segment_type = 'Guests Self Introduction (30s per guest)';
+  type = 'Guests Self Introduction (30s per guest)';
   role_taker_config = {
     editable: true,
     placeholder: 'Assign guest introduction host',
@@ -108,24 +104,24 @@ export class GuestsIntroSegment extends BaseSegment {
 }
 
 export class TTMOpeningSegment extends BaseSegment {
-  segment_type = 'TTM (Table Topic Master) Opening';
+  type = 'TTM (Table Topic Master) Opening';
   role_taker_config = { editable: true, placeholder: 'Assign TTM' };
 }
 
 export class TableTopicSessionSegment extends BaseSegment {
-  segment_type = 'Table Topic Session';
+  type = 'Table Topic Session';
   content_config = { editable: true, placeholder: 'Enter WOT (Word of Today)' };
   role_taker_config = { editable: false, placeholder: '' };
 }
 
 export class PreparedSpeechSegment extends BaseSegment {
-  segment_type: string;
+  type: string;
   role_taker_config = { editable: true, placeholder: 'Assign Speaker' };
   title_config = { editable: true, placeholder: 'Enter title (optional)' };
 
   constructor(params: SegmentParams, speechNumber?: number) {
     super(params);
-    this.segment_type =
+    this.type =
       speechNumber !== undefined
         ? `Prepared Speech ${speechNumber}`
         : 'Prepared Speech';
@@ -133,17 +129,17 @@ export class PreparedSpeechSegment extends BaseSegment {
 }
 
 export class TeaBreakSegment extends BaseSegment {
-  segment_type = 'Tea Break & Group Photos';
+  type = 'Tea Break & Group Photos';
   role_taker_config = { editable: false, placeholder: '' };
 }
 
 export class TableTopicEvalSegment extends BaseSegment {
-  segment_type = 'Table Topic Evaluation';
+  type = 'Table Topic Evaluation';
   role_taker_config = { editable: true, placeholder: 'Assign evaluator' };
 }
 
 export class PreparedSpeechEvalSegment extends BaseSegment {
-  segment_type: string;
+  type: string;
   role_taker_config = { editable: true, placeholder: 'Assign evaluator' };
   related_segment_ids_config = {
     editable: true,
@@ -151,16 +147,11 @@ export class PreparedSpeechEvalSegment extends BaseSegment {
   };
 
   constructor(
-    {
-      segment_id,
-      start_time,
-      duration,
-      related_segment_ids = '',
-    }: SegmentParams,
+    { id, start_time, duration, related_segment_ids = '' }: SegmentParams,
     speechNumber?: number
   ) {
-    super({ segment_id, start_time, duration });
-    this.segment_type =
+    super({ id, start_time, duration });
+    this.type =
       speechNumber !== undefined
         ? `Prepared Speech ${speechNumber} Evaluation`
         : 'Prepared Speech Evaluation';
@@ -169,12 +160,12 @@ export class PreparedSpeechEvalSegment extends BaseSegment {
 }
 
 export class TimerReportSegment extends BaseSegment {
-  segment_type = "Timer's Report";
+  type = "Timer's Report";
   role_taker_config = { editable: false, placeholder: '' };
 }
 
 export class GeneralEvalSegment extends BaseSegment {
-  segment_type = 'General Evaluation';
+  type = 'General Evaluation';
   role_taker_config = { editable: true, placeholder: 'Assign evaluator' };
   related_segment_ids_config = {
     editable: true,
@@ -183,75 +174,75 @@ export class GeneralEvalSegment extends BaseSegment {
 }
 
 export class VotingSegment extends BaseSegment {
-  segment_type = 'Voting Section (TOM)';
+  type = 'Voting Section (TOM)';
   role_taker_config = { editable: false, placeholder: '' };
 }
 
 export class AwardsSegment extends BaseSegment {
-  segment_type = 'Awards (President)';
+  type = 'Awards (President)';
   role_taker_config = { editable: false, placeholder: '' };
 }
 
 export class ClosingRemarksSegment extends BaseSegment {
-  segment_type = 'Closing Remarks (President)';
+  type = 'Closing Remarks (President)';
   role_taker_config = { editable: false, placeholder: '' };
 }
 
 export const DEFAULT_SEGMENTS_REGULAR_MEETING: BaseSegment[] = [
-  new WarmUpSegment({ segment_id: '1', start_time: '19:15', duration: '15' }),
-  new SAASegment({ segment_id: '2', start_time: '19:30', duration: '3' }),
+  new WarmUpSegment({ id: '1', start_time: '19:15', duration: '15' }),
+  new SAASegment({ id: '2', start_time: '19:30', duration: '3' }),
   new OpeningRemarksSegment({
-    segment_id: '3',
+    id: '3',
     start_time: '19:33',
     duration: '2',
   }),
-  new TOMIntroSegment({ segment_id: '4', start_time: '19:35', duration: '2' }),
+  new TOMIntroSegment({ id: '4', start_time: '19:35', duration: '2' }),
   new TimerIntroSegment({
-    segment_id: '5',
+    id: '5',
     start_time: '19:37',
     duration: '3',
   }),
   new HarkMasterIntroSegment({
-    segment_id: '6',
+    id: '6',
     start_time: '19:40',
     duration: '3',
   }),
   new GuestsIntroSegment({
-    segment_id: '7',
+    id: '7',
     start_time: '19:43',
     duration: '8',
   }),
   new TTMOpeningSegment({
-    segment_id: '8',
+    id: '8',
     start_time: '19:52',
     duration: '4',
   }),
   new TableTopicSessionSegment({
-    segment_id: '9',
+    id: '9',
     start_time: '19:56',
     duration: '16',
   }),
   new PreparedSpeechSegment(
-    { segment_id: '10', start_time: '20:13', duration: '7' },
+    { id: '10', start_time: '20:13', duration: '7' },
     1
   ),
   new PreparedSpeechSegment(
-    { segment_id: '11', start_time: '20:21', duration: '7' },
+    { id: '11', start_time: '20:21', duration: '7' },
     2
   ),
   new TeaBreakSegment({
-    segment_id: '12',
+    id: '12',
     start_time: '20:29',
     duration: '12',
   }),
   new TableTopicEvalSegment({
-    segment_id: '13',
+    id: '13',
     start_time: '20:42',
     duration: '7',
   }),
   new PreparedSpeechEvalSegment(
     {
-      segment_id: '14',
+      id: '14',
       start_time: '20:50',
       duration: '3',
       related_segment_ids: '10',
@@ -260,7 +251,7 @@ export const DEFAULT_SEGMENTS_REGULAR_MEETING: BaseSegment[] = [
   ),
   new PreparedSpeechEvalSegment(
     {
-      segment_id: '15',
+      id: '15',
       start_time: '20:54',
       duration: '3',
       related_segment_ids: '11',
@@ -268,19 +259,19 @@ export const DEFAULT_SEGMENTS_REGULAR_MEETING: BaseSegment[] = [
     2
   ),
   new TimerReportSegment({
-    segment_id: '16',
+    id: '16',
     start_time: '20:58',
     duration: '2',
   }),
   new GeneralEvalSegment({
-    segment_id: '17',
+    id: '17',
     start_time: '21:01',
     duration: '4',
   }),
-  new VotingSegment({ segment_id: '18', start_time: '21:06', duration: '2' }),
-  new AwardsSegment({ segment_id: '19', start_time: '21:09', duration: '3' }),
+  new VotingSegment({ id: '18', start_time: '21:06', duration: '2' }),
+  new AwardsSegment({ id: '19', start_time: '21:09', duration: '3' }),
   new ClosingRemarksSegment({
-    segment_id: '20',
+    id: '20',
     start_time: '21:13',
     duration: '2',
   }),
@@ -289,9 +280,9 @@ export const DEFAULT_SEGMENTS_REGULAR_MEETING: BaseSegment[] = [
 export const DEFAULT_REGULAR_MEETING: Omit<MeetingIF, 'segments'> & {
   segments: BaseSegment[];
 } = {
-  meeting_type: 'Regular',
+  type: 'Regular',
   theme: '',
-  meeting_manager: '',
+  manager: undefined,
   date: getNextWednesday().date,
   start_time: '19:15',
   end_time: '21:30',
@@ -304,9 +295,9 @@ export const DEFAULT_REGULAR_MEETING: Omit<MeetingIF, 'segments'> & {
 export const DEFAULT_WORKSHOP_MEETING: Omit<MeetingIF, 'segments'> & {
   segments: BaseSegment[];
 } = {
-  meeting_type: 'Workshop',
+  type: 'Workshop',
   theme: '',
-  meeting_manager: '',
+  manager: undefined,
   date: getNextWednesday().date,
   start_time: '19:15',
   end_time: '21:30',
@@ -319,9 +310,9 @@ export const DEFAULT_WORKSHOP_MEETING: Omit<MeetingIF, 'segments'> & {
 export const DEFAULT_CUSTOM_MEETING: Omit<MeetingIF, 'segments'> & {
   segments: BaseSegment[];
 } = {
-  meeting_type: 'Custom',
+  type: 'Custom',
   theme: '',
-  meeting_manager: '',
+  manager: undefined,
   date: getNextWednesday().date,
   start_time: '19:15',
   end_time: '21:30',
@@ -330,8 +321,8 @@ export const DEFAULT_CUSTOM_MEETING: Omit<MeetingIF, 'segments'> & {
   introduction: '',
   segments: [
     new CustomSegment({
-      segment_id: '1',
-      segment_type: 'New segment',
+      id: '1',
+      type: 'New segment',
       start_time: '19:15',
       duration: '15',
     }),
@@ -339,30 +330,28 @@ export const DEFAULT_CUSTOM_MEETING: Omit<MeetingIF, 'segments'> & {
 };
 
 // Create a dummy params object for temporary instances
-const dummyParams = { segment_id: '', start_time: '', duration: '' };
+const dummyParams = { id: '', start_time: '', duration: '' };
 
 export const SEGMENT_TYPE_MAP = {
-  [new WarmUpSegment(dummyParams).segment_type]: WarmUpSegment,
-  [new SAASegment(dummyParams).segment_type]: SAASegment,
-  [new OpeningRemarksSegment(dummyParams).segment_type]: OpeningRemarksSegment,
-  [new TOMIntroSegment(dummyParams).segment_type]: TOMIntroSegment,
-  [new TimerIntroSegment(dummyParams).segment_type]: TimerIntroSegment,
-  [new HarkMasterIntroSegment(dummyParams).segment_type]:
-    HarkMasterIntroSegment,
-  [new GuestsIntroSegment(dummyParams).segment_type]: GuestsIntroSegment,
-  [new TTMOpeningSegment(dummyParams).segment_type]: TTMOpeningSegment,
-  [new TableTopicSessionSegment(dummyParams).segment_type]:
-    TableTopicSessionSegment,
+  [new WarmUpSegment(dummyParams).type]: WarmUpSegment,
+  [new SAASegment(dummyParams).type]: SAASegment,
+  [new OpeningRemarksSegment(dummyParams).type]: OpeningRemarksSegment,
+  [new TOMIntroSegment(dummyParams).type]: TOMIntroSegment,
+  [new TimerIntroSegment(dummyParams).type]: TimerIntroSegment,
+  [new HarkMasterIntroSegment(dummyParams).type]: HarkMasterIntroSegment,
+  [new GuestsIntroSegment(dummyParams).type]: GuestsIntroSegment,
+  [new TTMOpeningSegment(dummyParams).type]: TTMOpeningSegment,
+  [new TableTopicSessionSegment(dummyParams).type]: TableTopicSessionSegment,
   'Prepared Speech': PreparedSpeechSegment, // Special case since it includes a number
-  [new TeaBreakSegment(dummyParams).segment_type]: TeaBreakSegment,
-  [new TableTopicEvalSegment(dummyParams).segment_type]: TableTopicEvalSegment,
+  [new TeaBreakSegment(dummyParams).type]: TeaBreakSegment,
+  [new TableTopicEvalSegment(dummyParams).type]: TableTopicEvalSegment,
   'Prepared Speech Evaluation': PreparedSpeechEvalSegment, // Special case since it includes a number
-  [new TimerReportSegment(dummyParams).segment_type]: TimerReportSegment,
-  [new GeneralEvalSegment(dummyParams).segment_type]: GeneralEvalSegment,
-  [new VotingSegment(dummyParams).segment_type]: VotingSegment,
-  [new AwardsSegment(dummyParams).segment_type]: AwardsSegment,
-  [new ClosingRemarksSegment(dummyParams).segment_type]: ClosingRemarksSegment,
-  [new CustomSegment(dummyParams).segment_type]: CustomSegment,
+  [new TimerReportSegment(dummyParams).type]: TimerReportSegment,
+  [new GeneralEvalSegment(dummyParams).type]: GeneralEvalSegment,
+  [new VotingSegment(dummyParams).type]: VotingSegment,
+  [new AwardsSegment(dummyParams).type]: AwardsSegment,
+  [new ClosingRemarksSegment(dummyParams).type]: ClosingRemarksSegment,
+  [new CustomSegment(dummyParams).type]: CustomSegment,
 } as const;
 
 export type SegmentType = keyof typeof SEGMENT_TYPE_MAP;

@@ -34,9 +34,9 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   // Destructure the meeting object
   const {
     id,
-    meeting_type,
+    type,
     theme,
-    meeting_manager,
+    manager,
     date,
     start_time,
     end_time,
@@ -100,7 +100,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
           <div>
             <div className='flex items-center gap-2'>
               <span className='px-4 py-1 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-full text-sm font-medium'>
-                {meeting_type}
+                {type}
               </span>
 
               {isAuthenticated && id && (
@@ -142,7 +142,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
 
             <h2 className='text-2xl font-bold mt-3 text-gray-800'>{theme}</h2>
             <p className='text-gray-500 mt-1 text-sm'>
-              Managed by {meeting_manager}
+              Managed by {manager?.name}
             </p>
           </div>
 
@@ -200,7 +200,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
           <div className='space-y-6 sm:space-y-4'>
             {segments.map((segment) => (
               <div
-                key={segment.segment_id}
+                key={segment.id}
                 className='flex flex-col sm:flex-row gap-1 sm:gap-4 relative mb-4'
               >
                 <div className='w-full sm:pt-1 sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between'>
@@ -216,10 +216,10 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
                 <div className='flex-grow'>
                   <div className='flex flex-col'>
                     <h4 className='font-medium text-gray-800'>
-                      {segment.segment_type}
+                      {segment.type}
                     </h4>
                     <p className='text-sm text-gray-500'>
-                      {segment.role_taker}
+                      {segment.role_taker?.name}
                       {segment.title && ` - ${segment.title}`}
                     </p>
                   </div>
