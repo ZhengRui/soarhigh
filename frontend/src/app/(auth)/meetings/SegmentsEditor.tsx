@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { RoleTakerInput } from './RoleTakerInput';
 import {
-  Users,
+  // Users,
   X,
   Plus,
   ChevronDown,
@@ -15,13 +16,14 @@ import {
   SEGMENT_TYPE_MAP,
 } from './default';
 import { TimePickerModal } from './TimePickerModal';
+import { AttendeeIF } from '@/interfaces';
 
 interface SegmentsEditorProps {
   segments: BaseSegment[];
   onSegmentChange: (
     index: number,
     field: keyof BaseSegment,
-    value: string
+    value: string | AttendeeIF | undefined
   ) => void;
   onSegmentDelete?: (index: number) => void;
   onSegmentAdd?: (index: number) => void;
@@ -163,8 +165,8 @@ export function SegmentsEditor({
 
   const inputClasses =
     'block w-full px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
-  const inputWithIconClasses =
-    'block w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
+  // const inputWithIconClasses =
+  //   'block w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
   const hoveredClasses =
     'group-hover:-translate-y-1 transition-all duration-300 ease-out';
   const deletingClassesFunction = (index: number) => {
@@ -348,7 +350,7 @@ export function SegmentsEditor({
                   )}
                 </div>
 
-                {segment.role_taker_config.editable && (
+                {/* {segment.role_taker_config.editable && (
                   <div
                     className={`relative
                     ${hoveredClasses}
@@ -365,6 +367,18 @@ export function SegmentsEditor({
                     />
                     <Users className='absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400' />
                   </div>
+                )} */}
+
+                {segment.role_taker_config.editable && (
+                  <RoleTakerInput
+                    value={segment.role_taker}
+                    onChange={(attendee) => {
+                      console.log(attendee);
+                      onSegmentChange(index, 'role_taker', attendee);
+                    }}
+                    placeholder={segment.role_taker_config.placeholder}
+                    className={`${hoveredClasses} ${deletingClassesFunction(index)}`}
+                  />
                 )}
 
                 {segment.title_config.editable && (

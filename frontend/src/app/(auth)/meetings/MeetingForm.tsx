@@ -102,13 +102,13 @@ export function MeetingForm({
   const handleSegmentChange = (
     index: number,
     field: keyof BaseSegment,
-    value: string
+    value: string | AttendeeIF | undefined
   ) => {
     setFormData((prev) => {
       const newSegments = [...prev.segments];
 
       if (field === 'type') {
-        if (value in SEGMENT_TYPE_MAP) {
+        if (typeof value === 'string' && value in SEGMENT_TYPE_MAP) {
           // Create new segment of the selected type
           const oldSegment = newSegments[index];
           const params = {
@@ -125,12 +125,15 @@ export function MeetingForm({
             ) => BaseSegment)(params);
           }
         } else {
-          newSegments[index] = { ...newSegments[index], [field]: value };
+          newSegments[index] = {
+            ...newSegments[index],
+            [field]: value as string,
+          };
         }
       } else {
         // Handle other field changes while preserving the class instance
         const segment = newSegments[index];
-        (segment[field] as string) = value;
+        (segment[field] as any) = value;
       }
 
       return { ...prev, segments: newSegments };
