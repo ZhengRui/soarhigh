@@ -184,15 +184,13 @@ export function MeetingAwardsForm({ meetingId }: MeetingAwardsFormProps) {
           <div key={index} className='relative group'>
             {/* Award container with remove button */}
             <div className='border rounded-md p-4 relative'>
-              {index >= AWARD_CATEGORIES.length && (
-                <button
-                  type='button'
-                  onClick={() => handleRemoveAward(index)}
-                  className='absolute top-2 right-2 text-gray-400 hover:text-red-500'
-                >
-                  <X className='w-4 h-4' />
-                </button>
-              )}
+              <button
+                type='button'
+                onClick={() => handleRemoveAward(index)}
+                className='absolute top-2 right-2 text-gray-400 hover:text-red-500'
+              >
+                <X className='w-4 h-4' />
+              </button>
 
               {/* Award Category Selection - Similar to SegmentsEditor */}
               <div className='mb-4'>
