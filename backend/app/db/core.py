@@ -389,6 +389,9 @@ def update_meeting(meeting_id: str, meeting_data: Dict, user_id: str) -> Optiona
 
     diff = {}
     for key, value in existing_meeting.items():
+        if key == "awards":
+            continue
+
         if key == "manager":
             existing_manager = value or {}
             existing_member_id = existing_manager.get("member_id") or ""

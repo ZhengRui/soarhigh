@@ -192,6 +192,43 @@ USING (
     )
 );
 
+-- Awards table policies
+CREATE POLICY "Members can view awards"
+ON awards FOR SELECT
+TO authenticated
+USING (true);
+
+CREATE POLICY "Members can create awards"
+ON awards FOR INSERT
+TO authenticated
+WITH CHECK (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+CREATE POLICY "Members can update awards"
+ON awards FOR UPDATE
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+CREATE POLICY "Members can delete awards"
+ON awards FOR DELETE
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+
 -- =============================================
 -- FUNCTIONS & TRIGGERS
 -- =============================================
