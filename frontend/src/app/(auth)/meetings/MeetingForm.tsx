@@ -92,7 +92,8 @@ export function MeetingForm({
 
   const queryClient = useQueryClient();
 
-  const canDeleteMeeting = isAdmin || user?.uid === formData.manager?.member_id;
+  const canDeleteMeeting =
+    isAdmin || user?.uid === initFormData.manager?.member_id;
 
   const handleInputChange = (
     field: keyof MeetingTemplateType,
