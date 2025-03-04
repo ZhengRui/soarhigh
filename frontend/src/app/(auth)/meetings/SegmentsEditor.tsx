@@ -335,7 +335,7 @@ export function SegmentsEditor({
                       ${hoveredClasses}
                       ${deletingClassesFunction(index)}`}
                     >
-                      <div className='py-1 max-h-80 overflow-auto'>
+                      <div className='py-1 max-h-60 overflow-auto'>
                         {Object.keys(SEGMENT_TYPE_MAP).map((type) => (
                           <div
                             key={type}

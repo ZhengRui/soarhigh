@@ -8,6 +8,7 @@ import {
   X,
   PencilLine,
   ChevronDown,
+  Loader2,
 } from 'lucide-react';
 import { AttendeeIF, AwardIF } from '@/interfaces';
 import { toast } from 'react-hot-toast';
@@ -203,7 +204,7 @@ export function MeetingAwardsForm({ meetingId }: MeetingAwardsFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className='py-6 px-8 pb-24'>
+    <form onSubmit={handleSubmit} className='py-6 px-8 pb-14'>
       <div className='border-b pb-4 mb-6'>
         <h2 className='text-xl font-semibold text-gray-800 flex items-center'>
           <Award className='w-5 h-5 mr-2 text-indigo-500' />
@@ -287,7 +288,7 @@ export function MeetingAwardsForm({ meetingId }: MeetingAwardsFormProps) {
                     ref={typeDropdownRef}
                     className='absolute left-0 top-full mt-1 w-full bg-gray-50 rounded-md shadow-lg border border-gray-200 z-30'
                   >
-                    <div className='py-1 max-h-80 overflow-auto'>
+                    <div className='py-1 max-h-50 overflow-auto'>
                       {AWARD_CATEGORIES.map((category) => (
                         <div
                           key={category}
@@ -330,44 +331,18 @@ export function MeetingAwardsForm({ meetingId }: MeetingAwardsFormProps) {
       </div>
 
       {/* Submit Button */}
-      <div className='mt-8 pt-6 border-t'>
+      <div className='mt-14 pt-6 border-t'>
         <button
           type='submit'
           disabled={isSubmitting}
           className='w-full flex items-center justify-center gap-2 py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50'
         >
           {isSubmitting ? (
-            <>
-              <span className='animate-spin mr-2'>
-                <svg
-                  className='w-4 h-4'
-                  xmlns='http://www.w3.org/2000/svg'
-                  fill='none'
-                  viewBox='0 0 24 24'
-                >
-                  <circle
-                    className='opacity-25'
-                    cx='12'
-                    cy='12'
-                    r='10'
-                    stroke='currentColor'
-                    strokeWidth='4'
-                  ></circle>
-                  <path
-                    className='opacity-75'
-                    fill='currentColor'
-                    d='M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z'
-                  ></path>
-                </svg>
-              </span>
-              Saving...
-            </>
+            <Loader2 className='w-4 h-4 animate-spin' />
           ) : (
-            <>
-              <Save className='w-4 h-4 mr-2' />
-              Save Awards
-            </>
+            <Save className='w-4 h-4' />
           )}
+          {'Save Awards'}
         </button>
       </div>
     </form>

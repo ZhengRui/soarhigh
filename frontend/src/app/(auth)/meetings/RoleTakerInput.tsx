@@ -121,7 +121,7 @@ export const RoleTakerInput = ({
           ref={dropdownRef}
           className={`absolute left-0 top-full mt-1 w-full bg-gray-50 rounded-md shadow-lg border border-gray-200 z-30 ${className}`}
         >
-          <div className='py-1 max-h-80 overflow-auto'>
+          <div className='py-1 max-h-48 overflow-auto'>
             {members && members.length > 0 ? (
               members.map((member) => (
                 <div
