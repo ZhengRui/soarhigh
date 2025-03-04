@@ -9,9 +9,10 @@ import {
   PencilLine,
   ChevronDown,
 } from 'lucide-react';
-import { AttendeeIF } from '@/interfaces';
+import { AttendeeIF, AwardIF } from '@/interfaces';
 import { toast } from 'react-hot-toast';
 import { useSaveMeetingAwards } from '@/hooks/useSaveAwards';
+import { useMeeting } from '@/hooks/useMeeting';
 
 // Default award categories from the existing AwardForm
 const AWARD_CATEGORIES: AwardCategory[] = [
@@ -35,14 +36,42 @@ type MeetingAwardsFormProps = {
 };
 
 export function MeetingAwardsForm({ meetingId }: MeetingAwardsFormProps) {
-  // Initialize with default awards
-  const [awards, setAwards] = useState<MeetingAward[]>(
-    AWARD_CATEGORIES.map((category) => ({
-      category,
-      isCustom: false,
-      winner: undefined,
-    }))
-  );
+  const { data: meeting } = useMeeting(meetingId);
+
+  // Initialize with default awards or existing awards from the meeting
+  const [awards, setAwards] = useState<MeetingAward[]>([]);
+
+  // Set up initial awards either from existing meeting awards or defaults
+  useEffect(() => {
+    if (meeting) {
+      if (meeting.awards && meeting.awards.length > 0) {
+        // Use existing awards
+        setAwards(
+          meeting.awards.map((award: AwardIF) => ({
+            category: award.category,
+            isCustom: !AWARD_CATEGORIES.includes(
+              award.category as AwardCategory
+            ),
+            customTitle: !AWARD_CATEGORIES.includes(
+              award.category as AwardCategory
+            )
+              ? award.category
+              : undefined,
+            winner: { name: award.winner, member_id: '', id: '' },
+          }))
+        );
+      } else {
+        // Use default awards
+        setAwards(
+          AWARD_CATEGORIES.map((category) => ({
+            category,
+            isCustom: false,
+            winner: undefined,
+          }))
+        );
+      }
+    }
+  }, [meeting]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingTypeIndex, setEditingTypeIndex] = useState<number | null>(null);
