@@ -10,6 +10,7 @@ This Next.js application serves as the web platform for the "SoarHigh Toastmaste
 
 - **/** - Landing page with club introduction and information
 - **/signin** - Authentication page with sign-in form
+- **/meetings** - Public meeting listing page showing published meetings
 
 ### Protected Routes (under the (auth) group)
 
@@ -17,11 +18,10 @@ All routes in the (auth) group are protected by authentication middleware which 
 
 #### Meetings Management
 
-- **/meetings** - Displays a list of meetings
 - **/meetings/new** - Page for creating new meetings with two methods:
   - Template-based meeting creation
   - Image-based meeting creation (upload agenda image)
-- **/meetings/edit/[id]** - Page for editing existing meetings (planned)
+- **/meetings/edit/[id]** - Page for editing existing meetings
 
 #### Operations
 
@@ -50,6 +50,16 @@ All routes in the (auth) group are protected by authentication middleware which 
 - Dropdown menu for Operations (Growth, Awards) for authenticated users
 - Sign-out functionality
 
+### Public Meetings Page (/meetings)
+
+- Displays all meetings with different visibility rules:
+  - For members: Shows both published and draft meetings with status indicators
+  - For non-members: Shows only published meetings
+- "Create Meeting" button displayed only for authenticated users
+- Meeting cards show key meeting information including date, time, and theme
+- Status indicators for draft/published meetings (visible to members)
+- Link to edit draft meetings for authenticated users
+
 ### New Meeting Creation (/meetings/new)
 
 - Two-tab interface for different creation methods:
@@ -62,38 +72,42 @@ All routes in the (auth) group are protected by authentication middleware which 
 
   2. **Image-based creation**:
      - Allows uploading of agenda images
-     - Likely extracts meeting data from images
+     - Extracts meeting data from images using backend API
+
+### Meeting Edit Page (/meetings/edit/[id])
+
+- Loads existing meeting data from backend
+- Reuses the meeting form component with populated data
+- Save button to update changes
+- Publish button to change meeting status from draft to published
+- Full error handling and success notifications
 
 ### Meeting Form
 
-- Extensive form for meeting details including:
+- Comprehensive form for meeting details including:
   - Meeting type, theme, manager
   - Date, start/end times
   - Location
   - Segments editor for managing meeting agenda
-  - Currently implements meeting editing but lacks save/draft/publish functionality
+- Save functionality that preserves meeting as draft
+- Validation rules with appropriate UI feedback
 
-### Meetings List
+### Role Taker Input Component
 
-- Displays all meetings
-- For members: Shows both published and draft meetings with status indicators
-- For non-members: Shows only published meetings
-- Clicking on draft meetings takes members to the edit page
-
-### Meeting Edit Page (Planned)
-
-- Allows members to continue editing draft meetings
-- Provides options to save changes or publish the meeting
-- Reuses the MeetingForm component with additional status controls
+- Custom input component for selecting or creating role takers
+- Supports both members and guests as attendees
+- Auto-suggests existing club members
+- Allows creating guest attendees with custom names
+- Provides visual distinction between member and guest selections
 
 ## Data Model
 
 The application uses several key interfaces:
 
 - **UserIF** - User information (uid, username, full_name)
-- **SegmentIF** - Meeting segments/agenda items
-- **MeetingIF** - Complete meeting data structure
-  - Will include a `status` field ("draft" or "published")
+- **AttendeeIF** - Meeting participant information:
+- **SegmentIF** - Meeting segments/agenda items with role taker references to attendees
+- **MeetingIF** - Complete meeting data structure with status field ("draft" or "published")
 - **AwardIF** - Award categories and winners
 
 ## Technical Implementation
@@ -114,63 +128,47 @@ The application uses several key interfaces:
 - Meeting form with segment editing
 - Template transformation with UUID generation
 - Responsive UI
+- Meeting listing with status indicators
+- Meeting creation (saving as draft)
+- Meeting edit functionality
+- Status management (draft/published)
+- Role taker input component with member/guest handling
+- Time picker components for meeting segments
+- Segments editor with add/edit/delete operations
+- Success/error notifications for user actions
+- Attendee handling for role assignments
 
-### Planned Enhancements
+### Current Implementation Details
 
-- Meeting save and publish functionality
-- Draft status for meetings
-- Status indicators in meetings list
-- Edit page for continuing work on draft meetings
-- Form validation
-- Success/error notifications
-- Navigation after save operations
+The meeting management workflow is now fully implemented:
 
-## Save/Draft/Publish Implementation Plan
+1. **Meeting Creation**
 
-For the meeting creation and publishing functionality, we've established a simplified approach:
+   - Users can create meetings using templates or image upload
+   - All new meetings are saved as drafts by default
+   - Multiple validation options with appropriate feedback
 
-1. **Core Workflow**
+2. **Meeting Listing**
 
-   - All newly created meetings are saved as drafts by default
-   - Members can see draft meetings in the meetings list (with visual indicators)
-   - Non-members only see published meetings
-   - Members can edit draft meetings and publish them when ready
+   - Responsive meeting card design
+   - Different visibility based on authentication status
+   - Clear status indicators for draft meetings
 
-2. **Data Model Updates**
+3. **Meeting Editing**
 
-   - Add `status` field to MeetingIF interface (values: "draft", "published")
-   - Default value for new meetings: "draft"
+   - Full editing capabilities for existing meetings
+   - Status management (draft/published)
+   - Validation before publishing
 
-3. **Meetings List Page Updates**
+4. **Meeting Form Components**
 
-   - Show draft meetings only to members
-   - Add clear visual indicators for draft status
-   - Link draft meetings to the edit page
+   - Rich form controls with validation
+   - Segments editor for detailed agenda management
+   - Time management with visual pickers
 
-4. **Meeting Creation**
-
-   - Single "Create Meeting" button that saves the meeting as a draft
-   - Minimal validation for draft creation
-   - Redirect to meetings list after creation
-
-5. **Edit Route Implementation**
-
-   - Create a dedicated meetings/edit/[id] route
-   - Reuse the MeetingForm component with added status controls
-   - Include "Save Changes" button to update draft
-   - Add "Publish Meeting" button to change status to published
-
-6. **Validation Logic**
-
-   - Minimal validation when saving as draft (allow incomplete information)
-   - Comprehensive validation before publishing
-   - Visual feedback for validation errors
-
-7. **User Feedback**
-   - Toast notifications for successful operations
-   - Clear error messages
-   - Loading indicators during API operations
-
-This simplified approach creates a more intuitive workflow that aligns with common document editing patterns in modern web applications.
+5. **User Feedback**
+   - Loading states during API operations
+   - Success notifications after operations complete
+   - Error handling with appropriate messages
 
 The application follows a clean, modern UI design with gradient accents, responsive layouts, and thoughtful user interactions. The meeting creation workflow is particularly sophisticated, offering multiple creation methods and detailed customization options.
