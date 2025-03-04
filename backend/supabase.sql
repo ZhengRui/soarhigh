@@ -61,6 +61,16 @@ CREATE TABLE segments (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Awards table - stores awards given at meetings
+CREATE TABLE awards (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    meeting_id UUID REFERENCES meetings(id) NOT NULL,
+    category TEXT NOT NULL,
+    winner TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- =============================================
 -- INDEXES
 -- =============================================

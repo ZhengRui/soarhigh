@@ -48,12 +48,20 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   } = meeting;
 
   const mockAwards: AwardIF[] = [
-    { category: 'Best Prepared Speaker', winner: 'Frank Chen' },
-    { category: 'Best Host', winner: 'Jessica Wang' },
-    { category: 'Best Table Topic Speaker', winner: 'Emily Liu' },
-    { category: 'Best Facilitator', winner: 'Max Zhang' },
-    { category: 'Best Evaluator', winner: 'Amanda Wu' },
-    { category: 'Best Supporter', winner: 'Joyce Li' },
+    {
+      meeting_id: id!,
+      category: 'Best Prepared Speaker',
+      winner: 'Frank Chen',
+    },
+    { meeting_id: id!, category: 'Best Host', winner: 'Jessica Wang' },
+    {
+      meeting_id: id!,
+      category: 'Best Table Topic Speaker',
+      winner: 'Emily Liu',
+    },
+    { meeting_id: id!, category: 'Best Facilitator', winner: 'Max Zhang' },
+    { meeting_id: id!, category: 'Best Evaluator', winner: 'Amanda Wu' },
+    { meeting_id: id!, category: 'Best Supporter', winner: 'Joyce Li' },
   ];
 
   // Check if the meeting date has passed

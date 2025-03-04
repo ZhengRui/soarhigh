@@ -38,6 +38,7 @@ export interface MeetingIF {
 }
 
 export interface AwardIF {
+  meeting_id: string;
   category: string;
   winner: string;
 }

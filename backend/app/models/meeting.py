@@ -51,3 +51,14 @@ class Meeting(BaseModel):
     introduction: str = Field(description="The introduction of the meeting.")
     segments: List[Segment] = Field(description="A list of segments that the meeting is composed of.")
     status: str = Field(default="draft", description="The status of the meeting, either 'draft' or 'published'.")
+
+
+class Award(BaseModel):
+    """
+    Model representing an award given at a meeting.
+    """
+
+    id: Optional[str] = Field(default=None, description="The unique identifier of the award.")
+    meeting_id: str = Field(description="The ID of the meeting this award belongs to.")
+    category: str = Field(description="The category of the award, e.g., 'Best Prepared Speaker', 'Best Evaluator'.")
+    winner: str = Field(description="The name of the person who won the award.")
