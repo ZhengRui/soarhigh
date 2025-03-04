@@ -145,7 +145,7 @@ def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) ->
         status: Optional status filter ('draft' or 'published')
 
     Returns:
-        List of meeting dictionaries with their segments
+        List of meeting dictionaries with their segments and awards
     """
     query = supabase.table("meetings").select("*")
 
@@ -210,8 +210,20 @@ def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) ->
             segments_by_meeting[meeting_id] = []
         segments_by_meeting[meeting_id].append(segment)
 
-    # Assign segments to meetings with proper attendee names
+    # Batch fetch all awards for these meetings in a single query
+    all_awards_result = supabase.table("awards").select("*").in_("meeting_id", meeting_ids).execute()
+
+    # Group awards by meeting_id
+    awards_by_meeting: Dict[str, List[Dict]] = {}
+    for award in all_awards_result.data:
+        meeting_id = award["meeting_id"]
+        if meeting_id not in awards_by_meeting:
+            awards_by_meeting[meeting_id] = []
+        awards_by_meeting[meeting_id].append(award)
+
+    # Assign segments and awards to meetings
     for meeting in meetings:
+        # Process segments
         meeting_segments = segments_by_meeting.get(meeting["id"], [])
         processed_segments = []
 
@@ -242,6 +254,13 @@ def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) ->
 
         meeting["segments"] = processed_segments
 
+        # Process awards
+        meeting_awards = awards_by_meeting.get(meeting["id"], [])
+        if meeting_awards:
+            meeting["awards"] = meeting_awards
+        else:
+            meeting["awards"] = []
+
     return meetings
 
 
@@ -254,7 +273,7 @@ def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optiona
         user_id: Optional user ID. If None, only published meetings are returned.
 
     Returns:
-        Meeting dictionary with segments or None if not found
+        Meeting dictionary with segments and awards or None if not found
     """
     query = supabase.table("meetings").select("*").eq("id", meeting_id)
 
@@ -284,6 +303,10 @@ def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optiona
     # Fetch segments for this meeting
     segments_result = supabase.table("segments").select("*").eq("meeting_id", meeting_id).execute()
     segments_data = segments_result.data
+
+    # Fetch awards for this meeting
+    awards_result = supabase.table("awards").select("*").eq("meeting_id", meeting_id).execute()
+    meeting["awards"] = awards_result.data or []
 
     # If there are no segments, return early
     if not segments_data:
@@ -470,7 +493,7 @@ def update_meeting_status(meeting_id: str, status: str, user_id: str) -> Optiona
 
 def delete_meeting(meeting_id: str, user_id: str, user_token: str) -> bool:
     """
-    Delete a meeting and its associated segments.
+    Delete a meeting and its associated segments and awards.
 
     Args:
         meeting_id: ID of the meeting to delete
@@ -498,7 +521,10 @@ def delete_meeting(meeting_id: str, user_id: str, user_token: str) -> bool:
             return False
 
         # Now we can safely proceed with deletion knowing RLS will allow it
-        # Delete segments first (using a transaction would be better but not available in client)
+        # Delete awards first
+        user_client.table("awards").delete().eq("meeting_id", meeting_id).execute()
+
+        # Delete segments next
         user_client.table("segments").delete().eq("meeting_id", meeting_id).execute()
 
         # Delete the meeting
@@ -508,6 +534,66 @@ def delete_meeting(meeting_id: str, user_id: str, user_token: str) -> bool:
     except Exception as e:
         print(f"Error in delete_meeting: {e}")
         return False
+
+
+def get_awards_by_meeting(meeting_id: str) -> List[Dict]:
+    """
+    Get all awards for a specific meeting.
+
+    Args:
+        meeting_id: The ID of the meeting to get awards for.
+
+    Returns:
+        List[Dict]: A list of award dictionaries.
+    """
+    result = supabase.table("awards").select("*").eq("meeting_id", meeting_id).execute()
+
+    return result.data
+
+
+def save_meeting_awards(meeting_id: str, awards_data: List[Dict], user_id: str) -> List[Dict]:
+    """
+    Replace all awards for a meeting.
+
+    This function deletes all existing awards for the meeting and creates new ones
+    based on the provided data.
+
+    Args:
+        meeting_id: The ID of the meeting to save awards for.
+        awards_data: A list of award dictionaries to save.
+        user_id: The ID of the user performing the operation.
+
+    Returns:
+        List[Dict]: The newly created awards with IDs.
+
+    Raises:
+        ValueError: If the meeting is not found or the user doesn't have permission.
+    """
+    # Verify the meeting exists and the user has permission to modify it
+    meeting = get_meeting_by_id(meeting_id, user_id)
+    if not meeting:
+        raise ValueError(f"Meeting with ID {meeting_id} not found")
+
+    # Begin a transaction
+    # Step 1: Delete all existing awards for the meeting
+    supabase.table("awards").delete().eq("meeting_id", meeting_id).execute()
+
+    # Step 2: Create new awards if there are any
+    new_awards = []
+    if awards_data:
+        # Prepare award data for insertion
+        awards_to_insert = []
+        for award in awards_data:
+            awards_to_insert.append(
+                {"meeting_id": meeting_id, "category": award.get("category"), "winner": award.get("winner")}
+            )
+
+        # Insert new awards
+        if awards_to_insert:
+            result = supabase.table("awards").insert(awards_to_insert).execute()
+            new_awards = result.data
+
+    return new_awards
 
 
 def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:

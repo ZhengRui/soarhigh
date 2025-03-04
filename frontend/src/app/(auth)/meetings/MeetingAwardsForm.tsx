@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { AttendeeIF } from '@/interfaces';
 import { toast } from 'react-hot-toast';
+import { useSaveMeetingAwards } from '@/hooks/useSaveAwards';
 
 // Default award categories from the existing AwardForm
 const AWARD_CATEGORIES: AwardCategory[] = [
@@ -51,6 +52,8 @@ export function MeetingAwardsForm({ meetingId }: MeetingAwardsFormProps) {
 
   const typeDropdownRef = useRef<HTMLDivElement>(null);
   const categoryTypeRef = useRef<HTMLDivElement>(null);
+
+  const saveMeetingAwardsMutation = useSaveMeetingAwards();
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -138,27 +141,30 @@ export function MeetingAwardsForm({ meetingId }: MeetingAwardsFormProps) {
     setEditingTypeIndex(null);
   };
 
-  // Submit awards to Supabase (placeholder for now)
+  // Submit awards to API
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
 
     setIsSubmitting(true);
     try {
-      // Placeholder for future Supabase implementation
-      toast.success('Awards saved successfully');
-
-      // We'll implement the actual Supabase call later
-      console.log('Awards to save:', {
-        meetingId,
-        awards: awards.map((award) => ({
-          category: award.isCustom
+      // Format awards data for API
+      const formattedAwards = awards.map((award) => ({
+        meeting_id: meetingId,
+        category: award.isCustom
+          ? award.customTitle
             ? award.customTitle
-              ? award.customTitle
-              : 'Custom'
-            : award.category,
-          winner: award.winner?.name,
-        })),
+            : 'Custom'
+          : award.category,
+        winner: award.winner?.name || '',
+      }));
+
+      // Call the mutation to save awards
+      await saveMeetingAwardsMutation.mutateAsync({
+        meetingId,
+        awards: formattedAwards,
       });
+
+      toast.success('Awards saved successfully');
     } catch (error) {
       console.error('Error saving awards:', error);
       toast.error('Failed to save awards');

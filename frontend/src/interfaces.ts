@@ -35,6 +35,7 @@ export interface MeetingIF {
   introduction: string;
   segments: SegmentIF[];
   status?: 'draft' | 'published';
+  awards?: AwardIF[];
 }
 
 export interface AwardIF {

@@ -111,3 +111,24 @@ export const deleteMeeting = requestTemplate(
   null,
   true // Requires authentication
 );
+
+/**
+ * Saves awards for a meeting
+ * @param meetingId The ID of the meeting to save awards for
+ * @param awards The awards data to save
+ * @returns The saved awards
+ */
+export const saveMeetingAwards = requestTemplate(
+  (meetingId: string, awards: any[]) => ({
+    url: `${apiEndpoint}/meetings/${meetingId}/awards`,
+    method: 'POST',
+    headers: new Headers({
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    }),
+    body: JSON.stringify({ awards }),
+  }),
+  responseHandlerTemplate,
+  null,
+  true // Requires authentication
+);

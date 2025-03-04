@@ -7,12 +7,14 @@ from pydantic import BaseModel
 from ...db.core import (
     create_meeting,
     delete_meeting,
+    get_awards_by_meeting,
     get_meeting_by_id,
     get_meetings,
+    save_meeting_awards,
     update_meeting,
     update_meeting_status,
 )
-from ...models.meeting import Meeting
+from ...models.meeting import Award, Meeting
 from ...models.users import User
 from ...utils.meeting import parse_meeting_agenda_image
 from .auth import get_current_user, get_optional_user, verify_access_token
@@ -25,6 +27,10 @@ meeting_router = r = APIRouter()
 # Add this new model for status updates
 class MeetingStatusUpdate(BaseModel):
     status: str
+
+
+class AwardsList(BaseModel):
+    awards: List[Award]
 
 
 @r.post("/meeting/parse_agenda_image")
@@ -216,6 +222,64 @@ async def r_delete_meeting(
             raise HTTPException(status_code=404, detail="Meeting not found or you don't have permission to delete it")
 
         return {"success": True, "message": "Meeting deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.get("/meetings/{meeting_id}/awards", response_model=List[Award])
+async def r_get_meeting_awards(
+    meeting_id: str = Path(..., description="The ID of the meeting to get awards for"),
+    user: Optional[User] = Depends(get_optional_user),
+) -> List[Award]:
+    """
+    Get all awards for a specific meeting.
+
+    This endpoint returns all awards associated with a specific meeting.
+    Authentication is optional - public meetings are viewable by anyone.
+    """
+    try:
+        # First check if the meeting exists and is accessible
+        meeting = get_meeting_by_id(meeting_id, user.uid if user else None)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        # Get all awards for the meeting
+        awards = get_awards_by_meeting(meeting_id)
+        return [Award(**award) for award in awards]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.post("/meetings/{meeting_id}/awards", response_model=List[Award])
+async def r_save_meeting_awards(
+    awards_data: AwardsList,
+    meeting_id: str = Path(..., description="The ID of the meeting to save awards for"),
+    user: User = Depends(get_current_user),
+) -> List[Award]:
+    """
+    Replace all awards for a meeting.
+
+    This endpoint replaces all existing awards for a meeting with the provided ones.
+    It first deletes all existing awards and then creates new ones.
+    Only authenticated users can modify awards.
+    """
+    try:
+        # Process the awards data
+        awards = [award.dict(exclude={"id"}) for award in awards_data.awards]
+
+        # Save the awards
+        saved_awards = save_meeting_awards(meeting_id, awards, user.uid)
+
+        # Return the saved awards
+        return [Award(**award) for award in saved_awards]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
