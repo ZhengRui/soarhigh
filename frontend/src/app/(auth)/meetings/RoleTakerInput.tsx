@@ -8,6 +8,7 @@ interface RoleTakerInputProps {
   onChange: (value: AttendeeIF) => void;
   placeholder?: string;
   className?: string;
+  required?: boolean;
 }
 
 export const RoleTakerInput = ({
@@ -15,6 +16,7 @@ export const RoleTakerInput = ({
   onChange,
   placeholder = 'Select a role taker',
   className = '',
+  required = false,
 }: RoleTakerInputProps) => {
   const membersQuery = useMembers();
   const members = membersQuery.data || [];
@@ -84,6 +86,7 @@ export const RoleTakerInput = ({
           onChange={handleInputChange}
           placeholder={placeholder}
           className={inputWithIconClasses}
+          required={required}
         />
         <div
           className='absolute left-0 top-1/2 -translate-y-1/2 text-gray-400 cursor-pointer h-full pl-2.5 pr-2 flex items-center gap-.5 bg-gray-100 rounded-l-md scale-95'

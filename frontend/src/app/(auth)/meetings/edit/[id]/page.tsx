@@ -3,6 +3,7 @@
 import React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { MeetingForm } from '../../MeetingForm';
+import { MeetingAwardsForm } from '../../MeetingAwardsForm';
 import { useMeeting } from '@/hooks/useMeeting';
 import { Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -141,12 +142,17 @@ export default function EditMeetingPage() {
   return (
     <div className='min-h-screen bg-gray-50 py-12'>
       <div className='container max-w-4xl mx-auto px-4'>
-        <div className='bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden'>
+        <div className='bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6'>
           <MeetingForm
             initFormData={convertedMeeting}
             mode='edit'
             meetingId={meetingId}
           />
+        </div>
+
+        {/* Meeting Awards Section */}
+        <div className='bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden'>
+          <MeetingAwardsForm meetingId={meetingId} />
         </div>
       </div>
     </div>

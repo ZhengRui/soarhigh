@@ -19,6 +19,7 @@ import {
   Loader2,
   Trash2,
   FileText,
+  PenSquare,
 } from 'lucide-react';
 import { SegmentsEditor } from './SegmentsEditor';
 import { useRouter } from 'next/navigation';
@@ -327,7 +328,8 @@ export function MeetingForm({
     <form onSubmit={handleSubmit} className='px-6 pt-6 pb-60'>
       <div className='flex justify-between items-center'>
         <div>
-          <h2 className='text-2xl font-semibold text-gray-900'>
+          <h2 className='text-2xl font-semibold text-gray-900 flex items-center'>
+            <PenSquare className='w-5 h-5 mr-2 text-indigo-500' />
             {mode === 'create' ? 'Create Meeting' : 'Edit Meeting'}
           </h2>
           <p className='mt-1 text-sm text-gray-600'>
@@ -638,7 +640,7 @@ export function MeetingForm({
           <button
             type='submit'
             disabled={isSubmitting}
-            className='w-full flex items-center justify-center gap-2 py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed'
+            className='w-full flex items-center justify-center gap-2 py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed'
           >
             {isSubmitting ? (
               <Loader2 className='w-4 h-4 animate-spin' />
