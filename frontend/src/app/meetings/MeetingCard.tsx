@@ -12,7 +12,7 @@ import {
   EyeOff,
   Loader2,
 } from 'lucide-react';
-import { MeetingIF, AwardIF } from '@/interfaces';
+import { MeetingIF } from '@/interfaces';
 import Link from 'next/link';
 import { updateMeetingStatus } from '@/utils/meeting';
 import toast from 'react-hot-toast';
@@ -45,24 +45,8 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
     introduction,
     segments,
     status,
+    awards,
   } = meeting;
-
-  const mockAwards: AwardIF[] = [
-    {
-      meeting_id: id!,
-      category: 'Best Prepared Speaker',
-      winner: 'Frank Chen',
-    },
-    { meeting_id: id!, category: 'Best Host', winner: 'Jessica Wang' },
-    {
-      meeting_id: id!,
-      category: 'Best Table Topic Speaker',
-      winner: 'Emily Liu',
-    },
-    { meeting_id: id!, category: 'Best Facilitator', winner: 'Max Zhang' },
-    { meeting_id: id!, category: 'Best Evaluator', winner: 'Amanda Wu' },
-    { meeting_id: id!, category: 'Best Supporter', winner: 'Joyce Li' },
-  ];
 
   // Check if the meeting date has passed
   // const hasPassed = new Date(date) < new Date();
@@ -181,7 +165,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
           {introduction}
         </p>
 
-        {hasPassed && (
+        {hasPassed && awards && awards.length > 0 && (
           <div className='mt-6 pt-6 border-t border-dashed border-gray-300'>
             <div className='flex items-center gap-2 mb-3'>
               <Trophy className='w-4 h-4 text-indigo-600' />
@@ -190,7 +174,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
               </h3>
             </div>
             <div className='grid grid-cols-2 md:grid-cols-3 gap-4'>
-              {mockAwards.map((award, index) => (
+              {awards.map((award, index: number) => (
                 <div key={index} className='text-sm'>
                   <p className='text-gray-500 font-medium'>{award.category}</p>
                   <p className='text-indigo-600'>{award.winner}</p>
