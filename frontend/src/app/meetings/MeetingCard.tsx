@@ -35,6 +35,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   const {
     id,
     type,
+    no,
     theme,
     manager,
     date,
@@ -101,6 +102,10 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
             <div className='flex items-center gap-2'>
               <span className='px-4 py-1 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-full text-sm font-medium'>
                 {type}
+              </span>
+
+              <span className='text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1.5 rounded-full'>
+                #{no}
               </span>
 
               {isAuthenticated && id && (

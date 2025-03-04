@@ -281,6 +281,7 @@ export const DEFAULT_REGULAR_MEETING: Omit<MeetingIF, 'segments'> & {
   segments: BaseSegment[];
 } = {
   type: 'Regular',
+  no: undefined,
   theme: '',
   manager: undefined,
   date: getNextWednesday().date,
@@ -296,6 +297,7 @@ export const DEFAULT_WORKSHOP_MEETING: Omit<MeetingIF, 'segments'> & {
   segments: BaseSegment[];
 } = {
   type: 'Workshop',
+  no: undefined,
   theme: '',
   manager: undefined,
   date: getNextWednesday().date,
@@ -311,6 +313,7 @@ export const DEFAULT_CUSTOM_MEETING: Omit<MeetingIF, 'segments'> & {
   segments: BaseSegment[];
 } = {
   type: 'Custom',
+  no: undefined,
   theme: '',
   manager: undefined,
   date: getNextWednesday().date,

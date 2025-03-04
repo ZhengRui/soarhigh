@@ -18,6 +18,7 @@ import {
   PlusCircle,
   Loader2,
   Trash2,
+  FileText,
 } from 'lucide-react';
 import { SegmentsEditor } from './SegmentsEditor';
 import { useRouter } from 'next/navigation';
@@ -96,7 +97,15 @@ export function MeetingForm({
     field: keyof MeetingTemplateType,
     value: string | AttendeeIF | undefined
   ) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
+    // Special handling for the 'no' field to ensure it's stored as a number
+    if (field === 'no' && typeof value === 'string') {
+      // Remove non-digit characters and convert to number
+      const numericValue =
+        value === '' ? undefined : parseInt(value.replace(/\D/g, ''), 10);
+      setFormData((prev) => ({ ...prev, [field]: numericValue }));
+    } else {
+      setFormData((prev) => ({ ...prev, [field]: value }));
+    }
   };
 
   const handleSegmentChange = (
@@ -383,26 +392,60 @@ export function MeetingForm({
         {/* Basic Information */}
         <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
           {/* Meeting Type */}
-          <div>
-            <label
-              htmlFor='type'
-              className='block text-sm font-medium text-gray-700 mb-1'
-            >
-              Meeting Type
-            </label>
-            <div className='relative'>
-              <select
-                id='type'
-                value={formData.type}
-                onChange={(e) => handleInputChange('type', e.target.value)}
-                className={inputClasses}
+          <div className='grid grid-cols-1 sm:grid-cols-2 gap-6'>
+            <div>
+              <label
+                htmlFor='type'
+                className='block text-sm font-medium text-gray-700 mb-1'
               >
-                {MEETING_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
+                Meeting Type
+              </label>
+              <div className='relative'>
+                <select
+                  id='type'
+                  value={formData.type}
+                  onChange={(e) => handleInputChange('type', e.target.value)}
+                  className={inputClasses}
+                >
+                  {MEETING_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label
+                htmlFor='no'
+                className='block text-sm font-medium text-gray-700 mb-1'
+              >
+                Meeting No.
+              </label>
+              <input
+                type='number'
+                id='no'
+                value={formData.no || ''}
+                onChange={(e) => handleInputChange('no', e.target.value)}
+                placeholder='Enter meeting number'
+                className={inputClasses}
+                min='1'
+                step='1'
+                onKeyDown={(e) => {
+                  // Prevent entering non-numeric characters
+                  if (
+                    !/[0-9]|\b/.test(e.key) &&
+                    e.key !== 'Backspace' &&
+                    e.key !== 'Delete' &&
+                    e.key !== 'ArrowLeft' &&
+                    e.key !== 'ArrowRight' &&
+                    e.key !== 'Tab'
+                  ) {
+                    e.preventDefault();
+                  }
+                }}
+                required
+              />
             </div>
           </div>
 
@@ -548,6 +591,28 @@ export function MeetingForm({
                 required
               />
               <MapPin className='absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400' />
+            </div>
+          </div>
+
+          {/* Meeting Introduction */}
+          <div className='md:col-span-2'>
+            <label
+              htmlFor='introduction'
+              className='block text-sm font-medium text-gray-700 mb-1'
+            >
+              Introduction
+            </label>
+            <div className='relative'>
+              <textarea
+                id='introduction'
+                value={formData.introduction}
+                onChange={(e) =>
+                  handleInputChange('introduction', e.target.value)
+                }
+                placeholder='Enter meeting introduction'
+                className='block w-full pl-10 pr-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200 min-h-[100px] resize-y'
+              />
+              <FileText className='absolute left-2.5 top-3 w-4 h-4 text-gray-400' />
             </div>
           </div>
         </div>

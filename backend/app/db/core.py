@@ -102,6 +102,7 @@ def create_meeting(meeting_data: Dict) -> Dict:
         .insert(
             {
                 "type": meeting_data.get("type"),
+                "no": meeting_data.get("no"),
                 "theme": meeting_data.get("theme"),
                 "manager_id": attendee_id,
                 "date": meeting_data.get("date"),

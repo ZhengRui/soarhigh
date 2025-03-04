@@ -25,6 +25,7 @@ export interface AttendeeIF {
 export interface MeetingIF {
   id?: string;
   type: string;
+  no?: number;
   theme: string;
   manager?: AttendeeIF;
   date: string;
