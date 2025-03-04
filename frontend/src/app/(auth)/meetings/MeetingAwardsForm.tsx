@@ -309,6 +309,7 @@ export function MeetingAwardsForm({ meetingId }: MeetingAwardsFormProps) {
                   onChange={(value) => handleWinnerChange(index, value)}
                   placeholder='Select or enter winner name'
                   required={true}
+                  disableMemberLookup={true}
                 />
               </div>
             </div>

@@ -9,6 +9,7 @@ interface RoleTakerInputProps {
   placeholder?: string;
   className?: string;
   required?: boolean;
+  disableMemberLookup?: boolean;
 }
 
 export const RoleTakerInput = ({
@@ -17,6 +18,7 @@ export const RoleTakerInput = ({
   placeholder = 'Select a role taker',
   className = '',
   required = false,
+  disableMemberLookup = false,
 }: RoleTakerInputProps) => {
   const membersQuery = useMembers();
   const members = membersQuery.data || [];
@@ -101,7 +103,8 @@ export const RoleTakerInput = ({
           />
         </div>
 
-        {roleTaker?.name &&
+        {!disableMemberLookup &&
+          roleTaker?.name &&
           (roleTaker?.member_id ? (
             <span className='absolute right-2 top-1/2 -translate-y-1/2 bg-indigo-50 rounded-xl px-4 py-1 text-xs text-indigo-600'>
               Member
