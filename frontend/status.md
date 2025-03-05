@@ -100,15 +100,24 @@ All routes in the (auth) group are protected by authentication middleware which 
 - Allows creating guest attendees with custom names
 - Provides visual distinction between member and guest selections
 
+### Meeting Awards Form Component
+
+- Component for managing meeting awards
+- Add/remove functionality for awards
+- Category selection with standard options and custom input
+- Winner selection with member auto-suggestion
+- Validation with appropriate UI feedback
+- Save functionality to submit all awards at once
+
 ## Data Model
 
 The application uses several key interfaces:
 
 - **UserIF** - User information (uid, username, full_name)
-- **AttendeeIF** - Meeting participant information:
+- **AttendeeIF** - Meeting participant information
 - **SegmentIF** - Meeting segments/agenda items with role taker references to attendees
 - **MeetingIF** - Complete meeting data structure with status field ("draft" or "published")
-- **AwardIF** - Award categories and winners
+- **AwardIF** - Award structure with meeting_id, category, and winner fields
 
 ## Technical Implementation
 
@@ -137,6 +146,7 @@ The application uses several key interfaces:
 - Segments editor with add/edit/delete operations
 - Success/error notifications for user actions
 - Attendee handling for role assignments
+- Meeting awards management
 
 ### Current Implementation Details
 
@@ -167,8 +177,16 @@ The meeting management workflow is now fully implemented:
    - Time management with visual pickers
 
 5. **User Feedback**
+
    - Loading states during API operations
    - Success notifications after operations complete
    - Error handling with appropriate messages
+
+6. **Awards Management**
+   - UI for adding and managing meeting awards
+   - Support for both standard and custom award categories
+   - Winner selection with member auto-suggestion
+   - Validation before submitting awards
+   - Success/error notifications for award operations
 
 The application follows a clean, modern UI design with gradient accents, responsive layouts, and thoughtful user interactions. The meeting creation workflow is particularly sophisticated, offering multiple creation methods and detailed customization options.

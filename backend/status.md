@@ -26,6 +26,10 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 - **/meetings/{id}/status** - PUT: Update meeting status (draft/published)
 - **/meetings/{id}** - DELETE: Delete a meeting
 
+### Awards Management
+- **/meetings/{id}/awards** - GET: Retrieve awards for a specific meeting
+- **/meetings/{id}/awards** - POST: Save awards for a specific meeting
+
 ## Data Models
 
 ### User Model
@@ -58,6 +62,12 @@ Detailed model for meeting agenda items with:
 - Title and content
 - Related segment IDs (as comma-separated string)
 
+### Award Model
+Model for meeting awards and recognitions:
+- `meeting_id`: Reference to the associated meeting
+- `category`: Award category name
+- `winner`: Name of the award recipient
+
 ## Database Integration
 
 - Uses Supabase client with service role key
@@ -71,6 +81,9 @@ Detailed model for meeting agenda items with:
 - Functions for working with attendees and segments:
   - `resolve_attendee_id()`: Resolves member ID or custom name to an attendee ID
   - Functions to handle creating and retrieving attendee records
+- Functions for awards management:
+  - `get_awards_by_meeting()`: Retrieves awards for a specific meeting
+  - `save_meeting_awards()`: Saves awards for a meeting
 
 ## Authentication System
 
@@ -85,7 +98,7 @@ Detailed model for meeting agenda items with:
 - Basic FastAPI application setup with CORS support
 - Supabase integration for database operations
 - JWT-based authentication
-- Meeting, User, and Attendee data models
+- Meeting, User, Attendee, and Award data models
 - Meeting agenda image parsing using OpenAI
 - Complete meeting CRUD functionality:
   - Creating meetings (as drafts by default)
@@ -101,6 +114,10 @@ Detailed model for meeting agenda items with:
 - Attendee management:
   - Support for both members and guests as attendees
   - Automatic resolution of attendee references
+- Awards management:
+  - Retrieving awards associated with meetings
+  - Saving and updating meeting awards
+  - Support for various award categories
 
 ### Current Implementation Details
 
