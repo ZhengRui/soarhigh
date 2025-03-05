@@ -96,7 +96,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
                 {type}
               </span>
 
-              <span className='text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1.5 rounded-full'>
+              <span className='text-xs font-medium text-fuchsia-500 hover:text-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100 hover:shadow-md px-2 py-1.5 rounded-full transition'>
                 #{no}
               </span>
 
@@ -105,10 +105,10 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
                   <button
                     onClick={handlePublishToggle}
                     disabled={isToggling}
-                    className={`rounded-full p-1.5 transition-colors bg-gray-100 text-gray-400 ${
+                    className={`rounded-full p-1.5 transition hover:shadow-md ${
                       status === 'published'
-                        ? 'group-hover:bg-emerald-50 group-hover:text-emerald-500'
-                        : 'group-hover:bg-red-50 group-hover:text-red-500'
+                        ? 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100 hover:text-emerald-600'
+                        : 'bg-red-50 text-red-500 hover:bg-red-100 hover:text-red-600'
                     }`}
                     title={
                       status === 'published'
@@ -127,11 +127,11 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
 
                   <Link
                     href={`/meetings/edit/${id}`}
-                    className='rounded-full p-1.5 bg-gray-100 group-hover:bg-indigo-50 transition-colors'
+                    className='rounded-full p-1.5 bg-indigo-50 hover:bg-indigo-100 transition hover:shadow-md'
                     onClick={(e) => e.stopPropagation()}
                     title='Edit meeting'
                   >
-                    <PencilLine className='w-4 h-4 text-gray-400 group-hover:text-indigo-500 transition-colors' />
+                    <PencilLine className='w-4 h-4 text-indigo-500 hover:text-indigo-600' />
                   </Link>
                 </>
               )}
