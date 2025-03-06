@@ -1,5 +1,9 @@
 import { MeetingIF } from '../interfaces';
-import { requestTemplate, responseHandlerTemplate } from './requestTemplate';
+import {
+  requestTemplate,
+  responseHandlerTemplate,
+  formConstructor,
+} from './requestTemplate';
 
 const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT;
 
@@ -128,6 +132,25 @@ export const saveMeetingAwards = requestTemplate(
     }),
     body: JSON.stringify({ awards }),
   }),
+  responseHandlerTemplate,
+  null,
+  true // Requires authentication
+);
+
+/**
+ * Parses a meeting from an uploaded agenda image
+ * @param imageFile The image file to be processed
+ * @returns The parsed meeting data
+ */
+export const parseMeetingFromImage = requestTemplate(
+  (imageFile: File) => {
+    const formData = formConstructor({ image: imageFile });
+    return {
+      url: `${apiEndpoint}/meeting/parse_agenda_image`,
+      method: 'POST',
+      body: formData,
+    };
+  },
   responseHandlerTemplate,
   null,
   true // Requires authentication

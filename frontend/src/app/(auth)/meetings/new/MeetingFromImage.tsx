@@ -1,9 +1,17 @@
 import React, { useState } from 'react';
-import { Upload } from 'lucide-react';
+import { Upload, Loader2 } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { MeetingForm } from '../MeetingForm';
+import { parseMeetingFromImage } from '../../../../utils/meeting';
+import { MeetingIF } from '../../../../interfaces';
+import { convertSegmentsToBaseSegments } from '../../../../utils/segments';
+import { convertHumanReadableDateToISO } from '../../../../utils/utils';
 
 export const MeetingFromImage = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [parsedMeeting, setParsedMeeting] = useState<MeetingIF | null>(null);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -22,6 +30,8 @@ export const MeetingFromImage = () => {
     const file = e.dataTransfer.files[0];
     if (file && file.type.startsWith('image/')) {
       setSelectedFile(file);
+    } else {
+      toast.error('Please upload an image file');
     }
   };
 
@@ -32,14 +42,55 @@ export const MeetingFromImage = () => {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (selectedFile) {
-      // TODO: Handle image upload and processing
-      console.log('Processing image:', selectedFile);
+    if (!selectedFile) return;
+
+    setIsProcessing(true);
+    try {
+      const parsedData = await parseMeetingFromImage(selectedFile);
+
+      // Convert date from human-readable format to ISO format if needed
+      if (parsedData.date) {
+        parsedData.date = convertHumanReadableDateToISO(parsedData.date);
+      }
+
+      setParsedMeeting(parsedData);
+      toast.success('Image processed successfully');
+    } catch (error) {
+      console.error('Error processing image:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to process image'
+      );
+    } finally {
+      setIsProcessing(false);
     }
   };
 
+  // If we have a parsed meeting, render the MeetingForm with the data
+  if (parsedMeeting) {
+    // Convert SegmentIF[] to BaseSegment[] for the MeetingForm
+    const formData = {
+      ...parsedMeeting,
+      segments: convertSegmentsToBaseSegments(parsedMeeting.segments || []),
+    };
+
+    return (
+      <div className='mt-4'>
+        <div className='bg-blue-50 p-4 mb-6 rounded-md'>
+          <h3 className='text-sm font-medium text-blue-800'>
+            Meeting parsed from image
+          </h3>
+          <p className='text-xs text-blue-600 mt-1'>
+            You can edit the meeting details below before saving
+          </p>
+        </div>
+        <MeetingForm initFormData={formData} mode='create' />
+      </div>
+    );
+  }
+
+  // Otherwise, render the image upload form
   return (
     <form onSubmit={handleSubmit} className='p-6'>
       <div>
@@ -88,9 +139,17 @@ export const MeetingFromImage = () => {
         <div className='mt-6'>
           <button
             type='submit'
-            className='w-full flex justify-center py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500'
+            disabled={isProcessing}
+            className='w-full flex justify-center items-center gap-2 py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-70'
           >
-            Process Image
+            {isProcessing ? (
+              <>
+                <Loader2 className='w-4 h-4 animate-spin' />
+                Processing...
+              </>
+            ) : (
+              'Process Image'
+            )}
           </button>
         </div>
       )}

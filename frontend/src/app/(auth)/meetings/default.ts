@@ -95,6 +95,11 @@ export class HarkMasterIntroSegment extends BaseSegment {
   role_taker_config = { editable: true, placeholder: 'Assign hark master' };
 }
 
+export class GrammarianIntroSegment extends BaseSegment {
+  type = 'Grammarian';
+  role_taker_config = { editable: true, placeholder: 'Assign grammarian' };
+}
+
 export class GuestsIntroSegment extends BaseSegment {
   type = 'Guests Self Introduction (30s per guest)';
   role_taker_config = {
@@ -170,6 +175,24 @@ export class GeneralEvalSegment extends BaseSegment {
   related_segment_ids_config = {
     editable: true,
     placeholder: 'Add related segments',
+  };
+}
+
+export class HarkMasterPopQuizSegment extends BaseSegment {
+  type = 'Hark Master Pop Quiz Time';
+  role_taker_config = { editable: false, placeholder: '' };
+}
+
+export class GrammarianReportSegment extends BaseSegment {
+  type = "Grammarian's Report";
+  role_taker_config = { editable: false, placeholder: '' };
+}
+
+export class MomentOfTruthSegment extends BaseSegment {
+  type = 'Moment of Truth';
+  role_taker_config = {
+    editable: true,
+    placeholder: 'Assign moment of truth host',
   };
 }
 
@@ -263,16 +286,27 @@ export const DEFAULT_SEGMENTS_REGULAR_MEETING: BaseSegment[] = [
     start_time: '20:58',
     duration: '2',
   }),
-  new GeneralEvalSegment({
+  new GrammarianReportSegment({
     id: '17',
-    start_time: '21:01',
-    duration: '4',
+    start_time: '21:00',
+    duration: '3',
   }),
-  new VotingSegment({ id: '18', start_time: '21:06', duration: '2' }),
-  new AwardsSegment({ id: '19', start_time: '21:09', duration: '3' }),
+  new HarkMasterPopQuizSegment({
+    id: '18',
+    start_time: '21:03',
+    duration: '5',
+  }),
+  new GeneralEvalSegment({
+    id: '19',
+    start_time: '21:08',
+    duration: '8',
+  }),
+  new VotingSegment({ id: '20', start_time: '21:16', duration: '2' }),
+  new MomentOfTruthSegment({ id: '21', start_time: '21:18', duration: '7' }),
+  new AwardsSegment({ id: '22', start_time: '21:25', duration: '3' }),
   new ClosingRemarksSegment({
-    id: '20',
-    start_time: '21:13',
+    id: '23',
+    start_time: '21:28',
     duration: '2',
   }),
 ];
@@ -342,6 +376,7 @@ export const SEGMENT_TYPE_MAP = {
   [new TOMIntroSegment(dummyParams).type]: TOMIntroSegment,
   [new TimerIntroSegment(dummyParams).type]: TimerIntroSegment,
   [new HarkMasterIntroSegment(dummyParams).type]: HarkMasterIntroSegment,
+  [new GrammarianIntroSegment(dummyParams).type]: GrammarianIntroSegment,
   [new GuestsIntroSegment(dummyParams).type]: GuestsIntroSegment,
   [new TTMOpeningSegment(dummyParams).type]: TTMOpeningSegment,
   [new TableTopicSessionSegment(dummyParams).type]: TableTopicSessionSegment,
@@ -350,9 +385,12 @@ export const SEGMENT_TYPE_MAP = {
   [new TableTopicEvalSegment(dummyParams).type]: TableTopicEvalSegment,
   'Prepared Speech Evaluation': PreparedSpeechEvalSegment, // Special case since it includes a number
   [new TimerReportSegment(dummyParams).type]: TimerReportSegment,
+  [new GrammarianReportSegment(dummyParams).type]: GrammarianReportSegment,
+  [new HarkMasterPopQuizSegment(dummyParams).type]: HarkMasterPopQuizSegment,
   [new GeneralEvalSegment(dummyParams).type]: GeneralEvalSegment,
   [new VotingSegment(dummyParams).type]: VotingSegment,
   [new AwardsSegment(dummyParams).type]: AwardsSegment,
+  [new MomentOfTruthSegment(dummyParams).type]: MomentOfTruthSegment,
   [new ClosingRemarksSegment(dummyParams).type]: ClosingRemarksSegment,
   [new CustomSegment(dummyParams).type]: CustomSegment,
 } as const;

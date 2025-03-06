@@ -7,82 +7,14 @@ import { MeetingAwardsForm } from '../../MeetingAwardsForm';
 import { useMeeting } from '@/hooks/useMeeting';
 import { Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { SegmentIF } from '@/interfaces';
-import {
-  BaseSegment,
-  CustomSegment,
-  SEGMENT_TYPE_MAP,
-  SegmentParams,
-} from '../../default';
-
-/**
- * Converts a SegmentIF array to BaseSegment array
- * This is necessary because MeetingForm expects BaseSegment objects
- * with config properties that the API doesn't include
- */
-function convertSegmentsToBaseSegments(segments: SegmentIF[]): BaseSegment[] {
-  return segments.map((segment) => {
-    const params: SegmentParams = {
-      id: segment.id,
-      start_time: segment.start_time,
-      duration: segment.duration,
-      related_segment_ids: segment.related_segment_ids,
-    };
-
-    // Try to find a matching segment type class
-    const segmentType = segment.type;
-
-    // Check if it's a prepared speech (which might have a number)
-    if (
-      segmentType.startsWith('Prepared Speech') &&
-      !segmentType.includes('Evaluation')
-    ) {
-      return new SEGMENT_TYPE_MAP['Prepared Speech'](params);
-    }
-
-    // Check if it's a prepared speech evaluation
-    if (
-      segmentType.startsWith('Prepared Speech') &&
-      segmentType.includes('Evaluation')
-    ) {
-      return new SEGMENT_TYPE_MAP['Prepared Speech Evaluation'](params);
-    }
-
-    // For other segment types, look up in the map
-    const SegmentClass =
-      SEGMENT_TYPE_MAP[segmentType as keyof typeof SEGMENT_TYPE_MAP];
-
-    // If we found a matching class, use it, otherwise create a custom segment
-    if (SegmentClass) {
-      const baseSegment = new SegmentClass(params);
-
-      // Copy over any existing values
-      if (segment.role_taker) baseSegment.role_taker = segment.role_taker;
-      if (segment.title) baseSegment.title = segment.title;
-      if (segment.content) baseSegment.content = segment.content;
-
-      return baseSegment;
-    } else {
-      // Use a custom segment if no matching type found
-      const customSegment = new CustomSegment(params);
-      customSegment.type = segmentType;
-
-      // Copy over any existing values
-      if (segment.role_taker) customSegment.role_taker = segment.role_taker;
-      if (segment.title) customSegment.title = segment.title;
-      if (segment.content) customSegment.content = segment.content;
-
-      return customSegment;
-    }
-  });
-}
+import { convertSegmentsToBaseSegments } from '@/utils/segments';
 
 export default function EditMeetingPage() {
   const params = useParams();
   const router = useRouter();
-  const meetingId = params.id as string;
+  const meetingId = Array.isArray(params.id) ? params.id[0] : params.id || '';
 
-  // Fetch the meeting data
+  // Fetch the meeting data only if we have a valid meetingId
   const { data: meeting, isLoading, isError, error } = useMeeting(meetingId);
 
   // Handle loading state
