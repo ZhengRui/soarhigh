@@ -12,9 +12,10 @@ evaluations, etc.
 
 # Schemas
 Meeting:
-- meeting_type (e.g., Regular, Workshop, Custom): The type of meeting
+- no (e.g., 389): The meeting number
+- type (e.g., Regular, Workshop, Custom): The type of meeting
 - theme: The theme for the meeting.
-- meeting_manager: The person organizing/managing the meeting.
+- manager: The person organizing/managing the meeting.
 - date: The date of the meeting.
 - start_time: The start time of the meeting.
 - end_time: The end time of the meeting.
@@ -22,9 +23,9 @@ Meeting:
 - segments: A list of Segments that the meeting is composed of.
 
 Each Segment:
-- segment_id: A unique identifier for each segment of the meeting.
+- id: A unique identifier for each segment of the meeting.
 - role_taker: The attendee/attendees who is/are performing the segment.
-- segment_type (e.g., timer introduction, prepared speech 1, table topic evaluation etc): The type of segment.
+- type (e.g., timer introduction, prepared speech 1, table topic evaluation etc): The type of segment.
 - start_time: The start time of the segment.
 - end_time: The end time of the segment.
 - title (optional): The title of the speech or workshop, applicable if the segment is a prepared speech or workshop.
