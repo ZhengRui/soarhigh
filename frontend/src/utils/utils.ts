@@ -81,12 +81,10 @@ export const convertHumanReadableDateToISO = (dateString: string): string => {
       return dateString; // Return original if any part couldn't be parsed
     }
 
-    // Create a date object and format it as ISO
-    const date = new Date(year, monthNum, day);
-
-    // Format as YYYY-MM-DD (ISO format)
-    const isoDate = date.toISOString().split('T')[0];
-    return isoDate;
+    // Fix for timezone issues: Use UTC methods to avoid date shifting
+    // Format as YYYY-MM-DD (ISO format) using string manipulation to avoid timezone issues
+    const month = monthNum + 1; // Convert 0-based month to 1-based
+    return `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
   } catch (error) {
     console.error('Error parsing date:', error);
     return dateString; // Return original if any error occurs

@@ -182,7 +182,9 @@ def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) ->
     meeting_ids = [meeting["id"] for meeting in meetings]
 
     # Batch fetch all segments for these meetings in a single query
-    all_segments_result = supabase.table("segments").select("*").in_("meeting_id", meeting_ids).execute()
+    all_segments_result = (
+        supabase.table("segments").select("*").in_("meeting_id", meeting_ids).order("start_time", desc=False).execute()
+    )
 
     # Collect all unique attendee IDs from segments using a set comprehension
     attendee_ids = set(segment["attendee_id"] for segment in all_segments_result.data if segment["attendee_id"])
@@ -301,7 +303,9 @@ def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optiona
         }
 
     # Fetch segments for this meeting
-    segments_result = supabase.table("segments").select("*").eq("meeting_id", meeting_id).execute()
+    segments_result = (
+        supabase.table("segments").select("*").eq("meeting_id", meeting_id).order("start_time", desc=False).execute()
+    )
     segments_data = segments_result.data
 
     # Fetch awards for this meeting

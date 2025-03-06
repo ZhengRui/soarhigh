@@ -241,6 +241,21 @@ export function MeetingForm({
     setIsSubmitting(true);
 
     try {
+      // Validate that all segments have start_time and duration
+      const invalidSegments = formData.segments.filter(
+        (segment) =>
+          !segment.start_time ||
+          segment.start_time.trim() === '' ||
+          !segment.duration ||
+          segment.duration.trim() === ''
+      );
+
+      if (invalidSegments.length > 0) {
+        toast.error(`${invalidSegments[0].type} has no start time or duration`);
+        setIsSubmitting(false);
+        return;
+      }
+
       // Transform segments to remove UI-specific fields before sending to API
       const meetingData = {
         ...formData,

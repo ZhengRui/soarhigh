@@ -135,7 +135,7 @@ export class PreparedSpeechSegment extends BaseSegment {
 
 export class TeaBreakSegment extends BaseSegment {
   type = 'Tea Break & Group Photos';
-  role_taker_config = { editable: false, placeholder: '' };
+  role_taker_config = { editable: true, placeholder: '' };
 }
 
 export class TableTopicEvalSegment extends BaseSegment {
@@ -166,7 +166,7 @@ export class PreparedSpeechEvalSegment extends BaseSegment {
 
 export class TimerReportSegment extends BaseSegment {
   type = "Timer's Report";
-  role_taker_config = { editable: false, placeholder: '' };
+  role_taker_config = { editable: true, placeholder: '' };
 }
 
 export class GeneralEvalSegment extends BaseSegment {
@@ -180,12 +180,12 @@ export class GeneralEvalSegment extends BaseSegment {
 
 export class HarkMasterPopQuizSegment extends BaseSegment {
   type = 'Hark Master Pop Quiz Time';
-  role_taker_config = { editable: false, placeholder: '' };
+  role_taker_config = { editable: true, placeholder: '' };
 }
 
 export class GrammarianReportSegment extends BaseSegment {
   type = "Grammarian's Report";
-  role_taker_config = { editable: false, placeholder: '' };
+  role_taker_config = { editable: true, placeholder: '' };
 }
 
 export class MomentOfTruthSegment extends BaseSegment {
@@ -198,17 +198,17 @@ export class MomentOfTruthSegment extends BaseSegment {
 
 export class VotingSegment extends BaseSegment {
   type = 'Voting Section (TOM)';
-  role_taker_config = { editable: false, placeholder: '' };
+  role_taker_config = { editable: true, placeholder: '' };
 }
 
 export class AwardsSegment extends BaseSegment {
   type = 'Awards (President)';
-  role_taker_config = { editable: false, placeholder: '' };
+  role_taker_config = { editable: true, placeholder: '' };
 }
 
 export class ClosingRemarksSegment extends BaseSegment {
   type = 'Closing Remarks (President)';
-  role_taker_config = { editable: false, placeholder: '' };
+  role_taker_config = { editable: true, placeholder: '' };
 }
 
 export const DEFAULT_SEGMENTS_REGULAR_MEETING: BaseSegment[] = [
