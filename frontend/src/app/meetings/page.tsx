@@ -1,12 +1,13 @@
 'use client';
 
 import { MeetingCard } from './MeetingCard';
-import { Plus, Loader2 } from 'lucide-react';
+import { Plus, Loader2, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
-import { useMeetings } from '@/hooks/useMeetings';
 import { useState } from 'react';
 import { Pagination } from '@/components/Pagination';
+import { useMeetings } from '@/hooks/useMeetings';
+import { usePrefetchMeetings } from '@/hooks/usePrefetchMeetings';
 
 export default function MeetingsPage() {
   const { isPending: isAuthPending, data: user } = useAuth();
@@ -15,8 +16,12 @@ export default function MeetingsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
 
-  // Use the updated hook with pagination parameters
-  const { isPending: isMeetingPending, data: paginatedMeetings } = useMeetings({
+  // Use the meetings hook with pagination parameters
+  const {
+    isPending: isMeetingPending,
+    data: paginatedMeetings,
+    isRefreshingInBackground,
+  } = useMeetings({
     page: currentPage,
     pageSize: pageSize,
   });
@@ -24,6 +29,9 @@ export default function MeetingsPage() {
   // Extract meetings and pagination info
   const meetings = paginatedMeetings?.items || [];
   const totalPages = paginatedMeetings?.pages || 0;
+
+  // Prefetch adjacent pages for smoother pagination
+  usePrefetchMeetings(currentPage, totalPages, pageSize);
 
   const handlePageChange = (page: number) => {
     setCurrentPage(page);
@@ -56,16 +64,26 @@ export default function MeetingsPage() {
         </div>
 
         {/* Loading state */}
-        {isMeetingPending && (
+        {isMeetingPending && !paginatedMeetings && (
           <div className='flex flex-col min-h-[70vh] items-center justify-center py-12'>
             <Loader2 className='w-8 h-8 text-blue-500 animate-spin mb-4' />
           </div>
         )}
 
         {/* Meetings list */}
-        {!isMeetingPending && paginatedMeetings && (
+        {(paginatedMeetings || (!isMeetingPending && paginatedMeetings)) && (
           <>
             <div className='space-y-6'>
+              {/* Background refresh indicator */}
+              {isRefreshingInBackground && false && (
+                <div className='flex items-center justify-center bg-blue-50 py-2 px-4 rounded-md mb-4'>
+                  <RefreshCw className='w-4 h-4 text-blue-500 animate-spin mr-2' />
+                  <span className='text-sm text-blue-600'>
+                    Refreshing data...
+                  </span>
+                </div>
+              )}
+
               {meetings.length > 0 ? (
                 meetings.map((meeting) => (
                   <MeetingCard

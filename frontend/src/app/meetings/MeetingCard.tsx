@@ -17,6 +17,8 @@ import Link from 'next/link';
 import { updateMeetingStatus } from '@/utils/meeting';
 import toast from 'react-hot-toast';
 import { useQueryClient } from '@tanstack/react-query';
+import { useAtom } from 'jotai';
+import { meetingsAtom, MeetingsState } from '@/atoms';
 
 type MeetingCardProps = {
   meeting: MeetingIF;
@@ -30,6 +32,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
   const queryClient = useQueryClient();
+  const [meetingsState, setMeetingsState] = useAtom(meetingsAtom);
 
   // Destructure the meeting object
   const {
@@ -57,13 +60,36 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
     if (!id || !isAuthenticated || isToggling) return;
 
     setIsToggling(true);
-    try {
-      const newStatus = status === 'published' ? 'draft' : 'published';
-      await updateMeetingStatus(id, newStatus);
+    const newStatus = status === 'published' ? 'draft' : 'published';
 
-      // Immediately update the local meeting state with the new status
-      // This ensures the eye icon updates immediately without waiting for the query refetch
-      meeting.status = newStatus;
+    try {
+      // Optimistically update the meeting in the Jotai store
+      Object.entries(meetingsState.pages).forEach(([pageKey, pageData]) => {
+        if (pageData && pageData.items) {
+          const itemIndex = pageData.items.findIndex((item) => item.id === id);
+          if (itemIndex >= 0) {
+            const updatedItems = [...pageData.items];
+            updatedItems[itemIndex] = {
+              ...updatedItems[itemIndex],
+              status: newStatus,
+            };
+
+            setMeetingsState((prev: MeetingsState) => ({
+              ...prev,
+              pages: {
+                ...prev.pages,
+                [pageKey]: {
+                  ...pageData,
+                  items: updatedItems,
+                },
+              },
+            }));
+          }
+        }
+      });
+
+      // Make the actual API call
+      await updateMeetingStatus(id, newStatus);
 
       // Invalidate queries to refresh data
       queryClient.invalidateQueries({ queryKey: ['meetings'] });
@@ -78,6 +104,31 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
       toast.error(
         err instanceof Error ? err.message : 'Failed to update meeting status'
       );
+
+      // Revert the optimistic update on error (only in Jotai store)
+      Object.entries(meetingsState.pages).forEach(([pageKey, pageData]) => {
+        if (pageData && pageData.items) {
+          const itemIndex = pageData.items.findIndex((item) => item.id === id);
+          if (itemIndex >= 0) {
+            const updatedItems = [...pageData.items];
+            updatedItems[itemIndex] = {
+              ...updatedItems[itemIndex],
+              status: status,
+            };
+
+            setMeetingsState((prev: MeetingsState) => ({
+              ...prev,
+              pages: {
+                ...prev.pages,
+                [pageKey]: {
+                  ...pageData,
+                  items: updatedItems,
+                },
+              },
+            }));
+          }
+        }
+      });
     } finally {
       setIsToggling(false);
     }
