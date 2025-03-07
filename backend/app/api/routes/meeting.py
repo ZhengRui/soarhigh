@@ -14,7 +14,7 @@ from ...db.core import (
     update_meeting,
     update_meeting_status,
 )
-from ...models.meeting import Award, Meeting
+from ...models.meeting import Award, Meeting, PaginatedMeetings
 from ...models.users import User
 from ...utils.meeting import parse_meeting_agenda_image
 from .auth import get_current_user, get_optional_user, verify_access_token
@@ -74,34 +74,25 @@ async def r_create_meeting(meeting_data: Meeting, user: User = Depends(get_curre
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
 
 
-@r.get("/meetings", response_model=List[Meeting])
+@r.get("/meetings", response_model=PaginatedMeetings)
 async def r_list_meetings(
     user: Optional[User] = Depends(get_optional_user),
     status: Optional[str] = Query(None, description="Filter by status (draft or published)"),
-) -> List[Meeting]:
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(10, ge=1, le=50, description="Items per page"),
+) -> PaginatedMeetings:
     """
-    Get a list of meetings.
+    List meetings with pagination.
 
-    For authenticated users, returns all meetings (both draft and published).
-    For unauthenticated users, returns only published meetings.
-    Optional status parameter can filter results by status.
+    This endpoint returns all published meetings for anonymous users,
+    and both draft and published meetings for authenticated users.
+    Results can be filtered by status and are paginated.
     """
     try:
-        # Get user ID (None for unauthenticated users)
-        user_id = user.uid if user else None
-
-        # Get meetings from database
-        meetings_db = get_meetings(user_id, status)
-
-        # Convert database results to response models
-        meetings_response = []
-
-        for meeting in meetings_db:
-            meetings_response.append(Meeting(**meeting))
-
-        return meetings_response
+        meetings_db = get_meetings(user_id=user.uid if user else None, status=status, page=page, page_size=page_size)
+        return PaginatedMeetings(**meetings_db)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @r.get("/meetings/{meeting_id}", response_model=Meeting)

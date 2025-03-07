@@ -29,14 +29,28 @@ export const createMeeting = requestTemplate(
 
 /**
  * Fetches all meetings
- * @returns List of all meetings the user has access to
- * (all published meetings for everyone, draft meetings only for members)
+ * @param options Pagination and filter options
+ * @returns Paginated list of meetings the user has access to
  */
 export const getMeetings = requestTemplate(
-  () => ({
-    url: `${apiEndpoint}/meetings`,
-    method: 'GET',
-  }),
+  (options: { page?: number; page_size?: number; status?: string } = {}) => {
+    // Apply default values
+    const page = options.page || 1;
+    const page_size = options.page_size || 10;
+
+    // Construct URL with query parameters
+    let url = `${apiEndpoint}/meetings?page=${page}&page_size=${page_size}`;
+
+    // Add status parameter if provided
+    if (options.status) {
+      url += `&status=${options.status}`;
+    }
+
+    return {
+      url,
+      method: 'GET',
+    };
+  },
   responseHandlerTemplate,
   null,
   true, // Requires authentication

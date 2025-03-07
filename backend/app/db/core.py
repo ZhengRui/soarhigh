@@ -1,5 +1,5 @@
 import uuid
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .supabase import create_user_client, supabase
 
@@ -136,33 +136,60 @@ def create_meeting(meeting_data: Dict) -> Dict:
     return meeting
 
 
-def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) -> List[Dict]:
+def get_meetings(
+    user_id: Optional[str] = None, status: Optional[str] = None, page: int = 1, page_size: int = 10
+) -> Dict[str, Any]:
     """
-    Get meetings from the database with optional filtering.
+    Get meetings with optional filtering by user_id and status with pagination support.
 
     Args:
-        user_id: Optional user ID. If None, only published meetings are returned.
-        status: Optional status filter ('draft' or 'published')
+        user_id: Optional ID of user to filter meetings by
+        status: Optional status to filter meetings by (draft or published)
+        page: Page number (1-indexed)
+        page_size: Number of items per page
 
     Returns:
-        List of meeting dictionaries with their segments and awards
+        Dictionary containing paginated meetings data and pagination metadata
     """
+    # Calculate offset for pagination
+    offset = (page - 1) * page_size
+
+    # Base query with select first, then filters
     query = supabase.table("meetings").select("*")
 
-    # If no user is provided (public access), only show published meetings
+    # Apply filters after select
     if user_id is None:
         query = query.eq("status", "published")
-    # If status filter is provided, apply it
     elif status is not None:
         query = query.eq("status", status)
 
-    # Execute query
-    result = query.order("date", desc=True).execute()
+    # Get total count first for pagination metadata
+    # Create a separate count query
+    count_query = supabase.table("meetings").select("id", count="exact")  # type: ignore
+
+    # Apply the same filters to the count query
+    if user_id is None:
+        count_query = count_query.eq("status", "published")
+    elif status is not None:
+        count_query = count_query.eq("status", status)
+
+    count_result = count_query.execute()
+    total_count = count_result.count or 0
+
+    # Now get paginated data
+    result = query.order("date", desc=True).range(offset, offset + page_size - 1).execute()
     meetings = result.data
 
     if not meetings:
-        return []
+        return {
+            "items": [],
+            "total": total_count,
+            "page": page,
+            "page_size": page_size,
+            "pages": (total_count + page_size - 1) // page_size if total_count > 0 else 1,
+        }
 
+    # Process the meetings data as in the original function
     manager_ids = [meeting["manager_id"] for meeting in meetings]
     result = supabase.table("attendees").select("*").in_("id", manager_ids).execute()
     manager_map = {manager["id"]: manager for manager in result.data}
@@ -263,7 +290,14 @@ def get_meetings(user_id: Optional[str] = None, status: Optional[str] = None) ->
         else:
             meeting["awards"] = []
 
-    return meetings
+    # Return paginated meetings with metadata
+    return {
+        "items": meetings,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "pages": (total_count + page_size - 1) // page_size if total_count > 0 else 1,
+    }
 
 
 def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optional[Dict]:

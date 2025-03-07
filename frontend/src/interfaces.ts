@@ -43,3 +43,13 @@ export interface AwardIF {
   category: string;
   winner: string;
 }
+
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+}
+
+export type PaginatedMeetings = PaginatedResponse<MeetingIF>;

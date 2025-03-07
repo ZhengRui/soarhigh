@@ -1,6 +1,7 @@
-from typing import List, Optional
+from typing import Generic, List, Optional, TypeVar
 
 from pydantic import BaseModel, Field
+from pydantic.generics import GenericModel
 
 
 class Attendee(BaseModel):
@@ -105,3 +106,18 @@ class MeetingParsedFromImage(BaseModel):
     end_time: str = Field(description="The end time of the meeting.")
     location: str = Field(description="The location where the meeting is held.")
     segments: List[SegmentParsedFromImage] = Field(description="A list of segments that the meeting is composed of.")
+
+
+T = TypeVar("T")
+
+
+class PaginatedResponse(GenericModel, Generic[T]):
+    items: List[T]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+
+
+class PaginatedMeetings(PaginatedResponse[Meeting]):
+    pass
