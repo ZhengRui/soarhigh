@@ -112,6 +112,7 @@ const Header = () => {
     localStorage.removeItem('token');
     queryClient.invalidateQueries({ queryKey: ['whoami'] });
     queryClient.invalidateQueries({ queryKey: ['isAdmin'] });
+    queryClient.invalidateQueries({ queryKey: ['meetings'] });
   };
 
   return (

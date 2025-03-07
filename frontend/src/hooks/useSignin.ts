@@ -18,6 +18,7 @@ export const useSigninMutation = () => {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['whoami'] });
       await queryClient.invalidateQueries({ queryKey: ['isAdmin'] });
+      await queryClient.invalidateQueries({ queryKey: ['meetings'] });
       router.push('/');
     },
     onError: (err) => {

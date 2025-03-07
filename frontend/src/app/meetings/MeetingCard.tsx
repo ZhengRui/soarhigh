@@ -16,9 +16,7 @@ import { MeetingIF } from '@/interfaces';
 import Link from 'next/link';
 import { updateMeetingStatus } from '@/utils/meeting';
 import toast from 'react-hot-toast';
-import { useQueryClient } from '@tanstack/react-query';
-import { useAtom } from 'jotai';
-import { meetingsAtom, MeetingsState } from '@/atoms';
+import { useQueryClient, useMutation } from '@tanstack/react-query';
 
 type MeetingCardProps = {
   meeting: MeetingIF;
@@ -30,9 +28,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   isAuthenticated,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [isToggling, setIsToggling] = useState(false);
   const queryClient = useQueryClient();
-  const [meetingsState, setMeetingsState] = useAtom(meetingsAtom);
 
   // Destructure the meeting object
   const {
@@ -55,83 +51,35 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   // const hasPassed = new Date(date) < new Date();
   const hasPassed = true;
 
-  const handlePublishToggle = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!id || !isAuthenticated || isToggling) return;
-
-    setIsToggling(true);
-    const newStatus = status === 'published' ? 'draft' : 'published';
-
-    try {
-      // Optimistically update the meeting in the Jotai store
-      Object.entries(meetingsState.pages).forEach(([pageKey, pageData]) => {
-        if (pageData && pageData.items) {
-          const itemIndex = pageData.items.findIndex((item) => item.id === id);
-          if (itemIndex >= 0) {
-            const updatedItems = [...pageData.items];
-            updatedItems[itemIndex] = {
-              ...updatedItems[itemIndex],
-              status: newStatus,
-            };
-
-            setMeetingsState((prev: MeetingsState) => ({
-              ...prev,
-              pages: {
-                ...prev.pages,
-                [pageKey]: {
-                  ...pageData,
-                  items: updatedItems,
-                },
-              },
-            }));
-          }
-        }
-      });
-
-      // Make the actual API call
-      await updateMeetingStatus(id, newStatus);
-
+  // Use mutation for toggling status
+  const statusMutation = useMutation({
+    mutationFn: (newStatus: string) => updateMeetingStatus(id, newStatus),
+    onSuccess: () => {
       // Invalidate queries to refresh data
       queryClient.invalidateQueries({ queryKey: ['meetings'] });
 
+      const newStatus = status === 'published' ? 'draft' : 'published';
+      meeting.status = newStatus;
       toast.success(
         newStatus === 'published'
           ? 'Meeting published successfully!'
           : 'Meeting unpublished successfully!'
       );
-    } catch (err) {
+    },
+    onError: (err) => {
       console.error('Error toggling meeting status:', err);
       toast.error(
         err instanceof Error ? err.message : 'Failed to update meeting status'
       );
+    },
+  });
 
-      // Revert the optimistic update on error (only in Jotai store)
-      Object.entries(meetingsState.pages).forEach(([pageKey, pageData]) => {
-        if (pageData && pageData.items) {
-          const itemIndex = pageData.items.findIndex((item) => item.id === id);
-          if (itemIndex >= 0) {
-            const updatedItems = [...pageData.items];
-            updatedItems[itemIndex] = {
-              ...updatedItems[itemIndex],
-              status: status,
-            };
+  const handlePublishToggle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!id || !isAuthenticated || statusMutation.isPending) return;
 
-            setMeetingsState((prev: MeetingsState) => ({
-              ...prev,
-              pages: {
-                ...prev.pages,
-                [pageKey]: {
-                  ...pageData,
-                  items: updatedItems,
-                },
-              },
-            }));
-          }
-        }
-      });
-    } finally {
-      setIsToggling(false);
-    }
+    const newStatus = status === 'published' ? 'draft' : 'published';
+    statusMutation.mutate(newStatus);
   };
 
   return (
@@ -155,7 +103,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
                 <>
                   <button
                     onClick={handlePublishToggle}
-                    disabled={isToggling}
+                    disabled={statusMutation.isPending}
                     className={`rounded-full p-1.5 transition hover:shadow-md ${
                       status === 'published'
                         ? 'bg-emerald-50 text-emerald-500 hover:bg-emerald-100 hover:text-emerald-600'
@@ -167,7 +115,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
                         : 'Publish meeting'
                     }
                   >
-                    {isToggling ? (
+                    {statusMutation.isPending ? (
                       <Loader2 className='w-4 h-4 animate-spin' />
                     ) : status === 'published' ? (
                       <Eye className='w-4 h-4' />

@@ -75,7 +75,7 @@ export default function MeetingsPage() {
           <>
             <div className='space-y-6'>
               {/* Background refresh indicator */}
-              {isRefreshingInBackground && false && (
+              {isRefreshingInBackground && (
                 <div className='flex items-center justify-center bg-blue-50 py-2 px-4 rounded-md mb-4'>
                   <RefreshCw className='w-4 h-4 text-blue-500 animate-spin mr-2' />
                   <span className='text-sm text-blue-600'>
