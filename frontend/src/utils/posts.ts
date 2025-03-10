@@ -2,36 +2,22 @@ import { requestTemplate, responseHandlerTemplate } from './requestTemplate';
 
 const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT;
 
-export interface Post {
-  id: string;
-  title: string;
-  slug: string;
-  content: string;
-  is_public: boolean;
-  author_id: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface PostAuthor {
-  uid: string;
-  username: string;
-  full_name: string;
-}
-
-export interface PostWithAuthor extends Post {
-  author: PostAuthor;
-}
-
 // Get all posts (public ones for anon, all for authenticated)
 export const getPosts = requestTemplate(
-  () => ({
-    url: `${apiEndpoint}/posts`,
-    method: 'GET',
-  }),
+  (options: { page?: number; page_size?: number } = {}) => {
+    const page = options.page || 1;
+    const page_size = options.page_size || 10;
+
+    const url = `${apiEndpoint}/posts?page=${page}&page_size=${page_size}`;
+
+    return {
+      url,
+      method: 'GET',
+    };
+  },
   responseHandlerTemplate,
   null,
-  false,
+  true,
   true // soft auth
 );
 
@@ -43,15 +29,24 @@ export const getPost = requestTemplate(
   }),
   responseHandlerTemplate,
   null,
-  false,
+  true,
   true // soft auth
 );
 
 // Create post (requires auth)
 export const createPost = requestTemplate(
-  (data: { title: string; content: string; is_public: boolean }) => ({
+  (data: {
+    title: string;
+    slug: string;
+    content: string;
+    is_public: boolean;
+  }) => ({
     url: `${apiEndpoint}/posts`,
     method: 'POST',
+    headers: new Headers({
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    }),
     body: JSON.stringify(data),
   }),
   responseHandlerTemplate,
@@ -61,12 +56,18 @@ export const createPost = requestTemplate(
 
 // Update post (requires auth)
 export const updatePost = requestTemplate(
-  (
-    slug: string,
-    data: { title?: string; content?: string; is_public?: boolean }
-  ) => ({
-    url: `${apiEndpoint}/posts/${slug}`,
+  (data: {
+    title?: string;
+    slug: string;
+    content?: string;
+    is_public?: boolean;
+  }) => ({
+    url: `${apiEndpoint}/posts/${data.slug}`,
     method: 'PATCH',
+    headers: new Headers({
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    }),
     body: JSON.stringify(data),
   }),
   responseHandlerTemplate,

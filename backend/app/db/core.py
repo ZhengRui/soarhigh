@@ -716,3 +716,258 @@ def prepare_segment_data(segment: Dict, meeting_id: str, ignore_id: bool = True)
         prepared_segment["id"] = segment["id"]
 
     return prepared_segment
+
+
+def get_posts(user_id: Optional[str] = None, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+    """
+    Get a paginated list of posts.
+    - If user_id is provided, returns all posts
+    - If user_id is None, returns only public posts
+
+    Args:
+        user_id: The ID of the authenticated user (None for anonymous users)
+        page: The page number to retrieve
+        page_size: The number of items per page
+
+    Returns:
+        A dictionary with pagination info and a list of posts with author details
+    """
+    # Calculate pagination values
+    offset = (page - 1) * page_size
+
+    # First, get the total count
+    count_query = supabase.table("posts").select("id", count="exact")  # type: ignore
+
+    # For anonymous users, only return public posts
+    if user_id is None:
+        count_query = count_query.eq("is_public", True)
+
+    count_response = count_query.execute()
+    total = count_response.count or 0
+
+    # Calculate pagination
+    pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+    # Now get the actual data with pagination
+    data_query = supabase.table("posts").select("*")
+
+    # Apply filters
+    if user_id is None:
+        data_query = data_query.eq("is_public", True)
+
+    # Apply sorting and pagination
+    data_query = data_query.order("created_at", desc=True).range(offset, offset + page_size - 1)
+
+    # Execute the query
+    data_response = data_query.execute()
+    posts = data_response.data if hasattr(data_response, "data") else []
+
+    # Fetch authors for these posts
+    if posts:
+        author_ids = [post["author_id"] for post in posts]
+        authors_query = supabase.table("members").select("id, full_name").in_("id", author_ids)
+        authors_response = authors_query.execute()
+        authors = (
+            {author["id"]: {"member_id": author["id"], "name": author["full_name"]} for author in authors_response.data}
+            if authors_response.data
+            else {}
+        )
+
+        # Add author information to each post
+        for post in posts:
+            author_id = post["author_id"]
+            post["author"] = authors.get(author_id, {"member_id": author_id, "name": ""})
+
+    return {
+        "items": posts,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+    }
+
+
+def get_post_by_slug(slug: str, user_id: Optional[str] = None) -> Optional[Dict]:
+    """
+    Get a post by its slug.
+    - If user_id is provided, can access any post
+    - If user_id is None, can only access public posts
+
+    Args:
+        slug: The slug of the post to retrieve
+        user_id: The ID of the authenticated user (None for anonymous users)
+
+    Returns:
+        The post data with author information, or None if not found/accessible
+    """
+    # Build the query
+    query = supabase.table("posts").select("*").eq("slug", slug)
+
+    # For anonymous users, only allow access to public posts
+    if user_id is None:
+        query = query.eq("is_public", True)
+
+    # Execute the query
+    response = query.execute()
+
+    if not response.data:
+        return None
+
+    post = response.data[0]
+
+    # Fetch author information
+    author_id = post["author_id"]
+    author_query = supabase.table("members").select("id, full_name").eq("id", author_id)
+    author_response = author_query.execute()
+
+    if author_response.data:
+        author = author_response.data[0]
+        post["author"] = {"member_id": author["id"], "name": author["full_name"]}
+    else:
+        post["author"] = {"member_id": author_id, "name": ""}
+
+    return post
+
+
+def create_post(post_data: Dict, user_id: str) -> Dict:
+    """
+    Create a new post.
+
+    Args:
+        post_data: The post data to insert
+        user_id: The ID of the authenticated user creating the post
+
+    Returns:
+        The created post data with author information
+    """
+    # Prepare post data for database
+    db_post_data = post_data.copy()
+
+    # Add required fields
+    db_post_data["author_id"] = user_id
+
+    # Remove nested author if present
+    if "author" in db_post_data:
+        del db_post_data["author"]
+
+    # Insert the post
+    insert_response = supabase.table("posts").insert(db_post_data).execute()
+
+    if not insert_response.data:
+        return {}
+
+    # Get the created post
+    post = insert_response.data[0]
+
+    # Fetch author information
+    author_query = supabase.table("members").select("id, full_name").eq("id", user_id)
+    author_response = author_query.execute()
+
+    if author_response.data:
+        author = author_response.data[0]
+        post["author"] = {"member_id": author["id"], "name": author["full_name"]}
+    else:
+        post["author"] = {"member_id": user_id, "name": ""}
+
+    return post
+
+
+def update_post(slug: str, post_data: Dict, user_id: str) -> Optional[Dict]:
+    """
+    Update an existing post.
+
+    Args:
+        slug: The slug of the post to update
+        post_data: The updated post data
+        user_id: The ID of the authenticated user updating the post
+
+    Returns:
+        The updated post data with author information, or None if not found/accessible
+    """
+    # First, check if post exists and get its ID
+    find_query = supabase.table("posts").select("id, author_id").eq("slug", slug)
+    existing_post = find_query.execute().data
+
+    if not existing_post:
+        return None
+
+    post_id = existing_post[0]["id"]
+
+    # Ensure user is the author. Currently disabled to allow editing by any member.
+    # if existing_post[0]["author_id"] != user_id:
+    #     return None
+
+    # Prepare update data
+    update_data = post_data.copy()
+
+    # Remove fields that shouldn't be updated
+    if "id" in update_data:
+        del update_data["id"]
+    if "author_id" in update_data:
+        del update_data["author_id"]
+    if "author" in update_data:
+        del update_data["author"]
+    if "created_at" in update_data:
+        del update_data["created_at"]
+
+    # Set updated_at to now
+    update_data["updated_at"] = "now()"
+
+    # Update the post
+    update_response = supabase.table("posts").update(update_data).eq("id", post_id).execute()
+
+    if not update_response.data:
+        return None
+
+    # Get the updated post
+    post = update_response.data[0]
+
+    # Fetch author information
+    author_query = supabase.table("members").select("id, full_name").eq("id", user_id)
+    author_response = author_query.execute()
+
+    if author_response.data:
+        author = author_response.data[0]
+        post["author"] = {"member_id": author["id"], "name": author["full_name"]}
+    else:
+        post["author"] = {"member_id": user_id, "name": ""}
+
+    return post
+
+
+def delete_post(slug: str, user_id: str) -> bool:
+    """
+    Delete a post.
+
+    Args:
+        slug: The slug of the post to delete
+        user_id: The ID of the authenticated user deleting the post
+
+    Returns:
+        True if the post was deleted, False otherwise
+    """
+    # First, check if post exists and belongs to the user
+    find_query = supabase.table("posts").select("id, author_id").eq("slug", slug)
+    existing_post = find_query.execute().data
+
+    if not existing_post:
+        return False
+
+    post_id = existing_post[0]["id"]
+
+    # Check if user is the author
+    is_author = existing_post[0]["author_id"] == user_id
+
+    # Check if user is an admin
+    admin_check = supabase.table("members").select("is_admin").eq("id", user_id).execute()
+    is_admin = admin_check.data and admin_check.data[0].get("is_admin", False)
+
+    # Ensure user is the author or admin
+    if not (is_author or is_admin):
+        return False
+
+    # Delete the post
+    delete_query = supabase.table("posts").delete().eq("id", post_id)
+    response = delete_query.execute()
+
+    return len(response.data) > 0

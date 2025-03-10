@@ -71,12 +71,27 @@ CREATE TABLE awards (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Posts table - stores posts
+CREATE TABLE posts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
+    content TEXT NOT NULL,
+    is_public BOOLEAN DEFAULT false,
+    author_id UUID REFERENCES members(id) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- =============================================
 -- INDEXES
 -- =============================================
 
 -- Ensures meeting numbers are unique within each type
 CREATE UNIQUE INDEX unique_type_no_not_null ON meetings(type, no) WHERE no IS NOT NULL;
+
+-- Ensures post slugs are unique
+CREATE UNIQUE INDEX unique_slug ON posts(slug);
 
 -- =============================================
 -- ROW LEVEL SECURITY POLICIES
@@ -87,6 +102,7 @@ ALTER TABLE members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE attendees ENABLE ROW LEVEL SECURITY;
 ALTER TABLE meetings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE segments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
 
 -- Members table policies
 CREATE POLICY "Members can read own data"
@@ -227,6 +243,32 @@ USING (
         WHERE meetings.id = meeting_id
     )
 );
+
+-- Posts table policies
+CREATE POLICY "Members can view posts"
+ON posts FOR SELECT
+TO authenticated
+USING (true);
+
+CREATE POLICY "Non-members can only view public posts"
+ON posts FOR SELECT
+TO anon
+USING (is_public = true);
+
+CREATE POLICY "Members can create posts"
+ON posts FOR INSERT
+TO authenticated
+WITH CHECK (true);
+
+CREATE POLICY "Members can update posts"
+ON posts FOR UPDATE
+TO authenticated
+USING (true);
+
+CREATE POLICY "Members or admin can delete posts"
+ON posts FOR DELETE
+TO authenticated
+USING (author_id = auth.uid() OR is_admin(auth.uid()));
 
 
 -- =============================================

@@ -7,7 +7,7 @@ import { ArrowLeft, PlusCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { MarkdownEditor } from '@/components/posts/MarkdownEditor';
 import { createPost } from '@/utils/posts';
-
+import slugify from 'slugify';
 export default function NewPostPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -44,6 +44,7 @@ export default function NewPostPage() {
 
     createPostMutation.mutate({
       title: title.trim(),
+      slug: slugify(title.trim(), { lower: true }),
       content,
       is_public: isPublic,
     });
@@ -98,7 +99,7 @@ export default function NewPostPage() {
               </div>
             </div>
 
-            <div className='px-6 ext-right'>
+            <div className='px-6 text-right'>
               <div className='py-6 border-t border-gray-200'>
                 <button
                   type='submit'

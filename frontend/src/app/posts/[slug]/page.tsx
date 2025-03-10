@@ -1,14 +1,13 @@
 'use client';
 
 import React, { useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Edit, Globe, Lock, Calendar, User } from 'lucide-react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { MarkdownRenderer } from '@/components/posts/MarkdownRenderer';
-import { getPost } from '@/utils/posts';
 import { useAuth } from '@/hooks/useAuth';
+import { usePost } from '@/hooks/usePost';
 
 export default function PostPage() {
   const params = useParams();
@@ -16,15 +15,7 @@ export default function PostPage() {
   const slug = params?.slug as string;
   const { data: user } = useAuth();
 
-  const {
-    data: post,
-    isLoading,
-    error,
-  } = useQuery({
-    queryKey: ['post', slug],
-    queryFn: () => getPost(slug),
-    retry: false,
-  });
+  const { data: post, isLoading, error } = usePost(slug);
 
   // Handle errors
   useEffect(() => {
@@ -81,31 +72,26 @@ export default function PostPage() {
                 <h1 className='text-3xl font-bold text-gray-900'>
                   {post.title}
                 </h1>
-
-                <div className='flex items-center'>
-                  {post.is_public ? (
-                    <span className='bg-green-100 text-green-800 inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium'>
-                      <Globe className='w-3 h-3 mr-1' />
-                      Public
-                    </span>
-                  ) : (
-                    <span className='bg-blue-100 text-blue-800 inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium'>
-                      <Lock className='w-3 h-3 mr-1' />
-                      Private
-                    </span>
-                  )}
-                </div>
               </div>
 
-              <div className='flex items-center text-sm text-gray-500 mb-8'>
-                <div className='flex items-center mr-4'>
+              <div className='flex flex-col xs:flex-row gap-2 xs:gap-4 items-start xs:items-center text-sm text-gray-500 mb-8'>
+                <div className='flex items-center'>
                   <Calendar className='w-4 h-4 mr-1' />
                   <span>{formatDate(post.created_at)}</span>
                 </div>
+
                 <div className='flex items-center'>
                   <User className='w-4 h-4 mr-1' />
-                  <span>Author Name</span>{' '}
-                  {/* This would need to be fetched from user data */}
+                  <span>{post.author.name}</span>
+                </div>
+
+                <div className='flex items-center'>
+                  {post.is_public ? (
+                    <Globe className='w-4 h-4 mr-1' />
+                  ) : (
+                    <Lock className='w-4 h-4 mr-1' />
+                  )}
+                  <span>{post.is_public ? 'Public' : 'Private'}</span>
                 </div>
               </div>
 
@@ -113,14 +99,14 @@ export default function PostPage() {
                 <MarkdownRenderer content={post.content} />
               </div>
 
-              {user && user.uid === post.author_id && (
+              {user && (
                 <div className='mt-8 pt-6 border-t border-gray-200'>
                   <Link
                     href={`/posts/edit/${post.slug}`}
-                    className='inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500'
+                    className='inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm rounded-md hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-sm hover:shadow-md'
                   >
-                    <Edit className='w-4 h-4 mr-2 text-gray-500' />
-                    Edit Post
+                    <Edit className='w-4 h-4' />
+                    <span className='font-medium'>Edit Post</span>
                   </Link>
                 </div>
               )}

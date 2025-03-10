@@ -44,6 +44,20 @@ export interface AwardIF {
   winner: string;
 }
 
+export interface PostIF {
+  id: string;
+  title: string;
+  slug: string;
+  content: string;
+  is_public: boolean;
+  author: {
+    member_id: string;
+    name: string;
+  };
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;
@@ -53,3 +67,4 @@ export interface PaginatedResponse<T> {
 }
 
 export type PaginatedMeetings = PaginatedResponse<MeetingIF>;
+export type PaginatedPosts = PaginatedResponse<PostIF>;

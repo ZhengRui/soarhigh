@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { Check, Eye, Pencil, Lock, Globe } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -38,6 +38,13 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
 }) => {
   const [value, setValue] = useState(initialValue);
   const [previewMode, setPreviewMode] = useState<'edit' | 'preview'>('edit');
+
+  // Add effect to update value when initialValue changes
+  useEffect(() => {
+    if (initialValue) {
+      setValue(initialValue);
+    }
+  }, [initialValue]);
 
   const handleChange = (value?: string) => {
     if (value !== undefined) {
@@ -94,7 +101,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
             className={`px-2 py-1 xs:px-3 xs:py-1.5 rounded-l-md text-xs xs:text-sm font-medium flex items-center gap-1.5 transition-colors border ${
               isPublic
                 ? 'bg-green-50 text-green-700 border-green-200'
-                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 border-r border-r-red-200'
             }`}
           >
             <Globe className='w-3.5 h-3.5' />
@@ -106,7 +113,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
             onClick={() => onVisibilityChange(false)}
             className={`px-2 py-1 xs:px-3 xs:py-1.5 rounded-r-md text-xs xs:text-sm font-medium flex items-center gap-1.5 transition-colors border-t border-b border-r ${
               !isPublic
-                ? 'bg-blue-50 text-blue-700 border-blue-200'
+                ? 'bg-red-50 text-red-700 border-red-200'
                 : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
             }`}
           >
