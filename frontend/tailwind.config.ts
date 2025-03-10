@@ -1,5 +1,6 @@
 import type { Config } from 'tailwindcss';
 import defaultTheme from 'tailwindcss/defaultTheme';
+import typography from '@tailwindcss/typography';
 
 export default {
   content: [
@@ -20,7 +21,29 @@ export default {
         xs: '480px',
         ...defaultTheme.screens,
       },
+      typography: {
+        DEFAULT: {
+          css: {
+            maxWidth: 'none',
+            color: 'var(--tw-prose-body)',
+            a: {
+              color: 'var(--tw-prose-links)',
+              textDecoration: 'underline',
+              fontWeight: '500',
+            },
+            h1: {
+              marginTop: '1.5em',
+            },
+            h2: {
+              marginTop: '1.5em',
+            },
+            h3: {
+              marginTop: '1.5em',
+            },
+          },
+        },
+      },
     },
   },
-  plugins: [],
+  plugins: [typography],
 } satisfies Config;

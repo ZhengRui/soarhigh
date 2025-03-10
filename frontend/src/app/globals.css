@@ -18,3 +18,145 @@
   -ms-overflow-style: none;  /* IE and Edge */
   scrollbar-width: none;  /* Firefox */
 }
+
+/* Import required styles for Markdown editor */
+@import '@uiw/react-md-editor/markdown-editor.css';
+@import '@uiw/react-markdown-preview/markdown.css';
+
+/* Add additional styles for Markdown lists */
+.markdown-body ul {
+  list-style-type: disc !important;
+  padding-left: 2em !important;
+}
+
+.markdown-body ol {
+  list-style-type: decimal !important;
+  padding-left: 2em !important;
+}
+
+.markdown-body li {
+  display: list-item !important;
+  color: #555 !important; /* Darker text for list items */
+}
+
+/* Make bullet points and numbers darker and more visible */
+.markdown-body ul li::marker,
+.markdown-body ol li::marker {
+  color: #555 !important; /* Darker color for bullets and numbers */
+  font-weight: bold !important;
+}
+
+/* Fix for nested lists */
+.markdown-body ul ul,
+.markdown-body ul ol,
+.markdown-body ol ul,
+.markdown-body ol ol {
+  margin-bottom: 0 !important;
+  margin-top: 0 !important;
+}
+
+/* Custom styles for the Markdown editor and preview */
+.wmde-markdown,
+.wmde-markdown-var,
+.w-md-editor-preview {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji" !important;
+}
+
+/* Apply same list styling to the editor preview */
+.w-md-editor-preview ul {
+  list-style-type: disc !important;
+  padding-left: 2em !important;
+}
+
+.w-md-editor-preview ol {
+  list-style-type: decimal !important;
+  padding-left: 2em !important;
+}
+
+.w-md-editor-preview li {
+  display: list-item !important;
+  color: #555 !important;
+}
+
+.w-md-editor-preview ul li::marker,
+.w-md-editor-preview ol li::marker {
+  color: #555 !important;
+  font-weight: bold !important;
+}
+
+/* Custom styles for code blocks */
+.markdown-body code,
+.w-md-editor-preview code {
+  color: #24292e !important; /* Dark color for all code text */
+  background-color: #f6f8fa !important; /* Lighter background */
+  padding: 0.2em 0.4em !important;
+  border-radius: 3px !important;
+  font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace !important;
+}
+
+/* Standalone code blocks */
+.markdown-body pre,
+.w-md-editor-preview pre {
+  background-color: #f6f8fa !important;
+  border-radius: 6px !important;
+  padding: 16px !important;
+  border: 1px solid #e1e4e8 !important;
+  overflow: auto !important;
+}
+
+/* Code within preformatted blocks */
+.markdown-body pre code,
+.w-md-editor-preview pre code {
+  padding: 0 !important; /* Reset padding for code within pre blocks */
+  background-color: transparent !important; /* Reset background for code within pre */
+  color: #24292e !important; /* Dark color for code to ensure visibility */
+}
+
+/* Ensure all spans in code blocks are visible */
+.markdown-body pre code span,
+.w-md-editor-preview pre code span {
+  color: #24292e !important; /* Default dark color for any spans */
+}
+
+/* Syntax highlighting for common elements */
+.markdown-body .token.keyword,
+.w-md-editor-preview .token.keyword,
+.markdown-body .token.function,
+.w-md-editor-preview .token.function,
+.markdown-body span[class*="keyword"],
+.w-md-editor-preview span[class*="keyword"] {
+  color: #d73a49 !important; /* Red for keywords */
+  font-weight: bold !important;
+}
+
+.markdown-body .token.string,
+.w-md-editor-preview .token.string,
+.markdown-body span[class*="string"],
+.w-md-editor-preview span[class*="string"] {
+  /* color: #032f62 !important; Blue for strings */
+  color: #059669 !important; /* Blue for strings */
+}
+
+/* Style for operators and special characters */
+.markdown-body .token.operator,
+.w-md-editor-preview .token.operator,
+.markdown-body .token.punctuation,
+.w-md-editor-preview .token.punctuation {
+  color: #005cc5 !important; /* Blue for operators/punctuation */
+}
+
+/* Function names */
+.markdown-body .token.function,
+.w-md-editor-preview .token.function {
+  color: #6f42c1 !important; /* Purple for functions */
+}
+
+/* Variable highlighting - default style for most text in code */
+.markdown-body .token.variable,
+.w-md-editor-preview .token.variable,
+.markdown-body .token.parameter,
+.w-md-editor-preview .token.parameter {
+  color: #24292e !important; /* Dark color for variables */
+}
+
+/* Remove the unsupported contains selectors */
