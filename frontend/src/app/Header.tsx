@@ -80,7 +80,7 @@ const MobileMenu = ({
                   <div className='text-sm font-medium text-gray-500'>
                     Operations
                   </div>
-                  <NavLink href='/growth'>Growth</NavLink>
+                  <NavLink href='/posts'>Posts</NavLink>
                   <NavLink href='/awards'>Awards</NavLink>
                 </div>
                 <button
@@ -113,6 +113,7 @@ const Header = () => {
     queryClient.invalidateQueries({ queryKey: ['whoami'] });
     queryClient.invalidateQueries({ queryKey: ['isAdmin'] });
     queryClient.invalidateQueries({ queryKey: ['meetings'] });
+    queryClient.invalidateQueries({ queryKey: ['posts'] });
   };
 
   return (
@@ -144,7 +145,7 @@ const Header = () => {
                     />
                   </div>
                   <div className='absolute top-full right-0 mt-1 w-48 bg-white rounded-xl shadow-lg px-4 py-2 flex flex-col space-y-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200'>
-                    <NavLink href='/growth'>Growth</NavLink>
+                    <NavLink href='/posts'>Posts</NavLink>
                     <NavLink href='/awards'>Awards</NavLink>
                   </div>
                 </div>
