@@ -30,6 +30,10 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 - **/meetings/{id}/awards** - GET: Retrieve awards for a specific meeting
 - **/meetings/{id}/awards** - POST: Save awards for a specific meeting
 
+### Blog Post Management
+- **/posts** - GET: List posts with pagination, POST: Create a new post
+- **/posts/{slug}** - GET: Retrieve a post by slug, PATCH: Update an existing post, DELETE: Delete a post
+
 ## Data Models
 
 ### User Model
@@ -68,6 +72,17 @@ Model for meeting awards and recognitions:
 - `category`: Award category name
 - `winner`: Name of the award recipient
 
+### Post Model
+Model for blog posts:
+- `id`: Post identifier
+- `title`: Post title
+- `slug`: URL-friendly identifier
+- `content`: Markdown content of the post
+- `is_public`: Boolean indicating if post is publicly viewable
+- `created_at`: Timestamp of post creation
+- `updated_at`: Timestamp of last update
+- `author`: Information about the post author (name and member_id)
+
 ## Database Integration
 
 - Uses Supabase client with service role key
@@ -84,6 +99,12 @@ Model for meeting awards and recognitions:
 - Functions for awards management:
   - `get_awards_by_meeting()`: Retrieves awards for a specific meeting
   - `save_meeting_awards()`: Saves awards for a meeting
+- Functions for blog post management:
+  - `get_posts()`: Retrieves posts with pagination and filtering
+  - `get_post_by_slug()`: Retrieves a specific post by slug
+  - `create_post()`: Creates a new blog post
+  - `update_post()`: Updates post details
+  - `delete_post()`: Deletes a post
 
 ## Authentication System
 
@@ -98,7 +119,7 @@ Model for meeting awards and recognitions:
 - Basic FastAPI application setup with CORS support
 - Supabase integration for database operations
 - JWT-based authentication
-- Meeting, User, Attendee, and Award data models
+- Meeting, User, Attendee, Award, and Post data models
 - Meeting agenda image parsing using OpenAI
 - Complete meeting CRUD functionality:
   - Creating meetings (as drafts by default)
@@ -118,6 +139,13 @@ Model for meeting awards and recognitions:
   - Retrieving awards associated with meetings
   - Saving and updating meeting awards
   - Support for various award categories
+- Blog post management:
+  - Creating new posts (members only)
+  - Listing posts with pagination
+  - Retrieving individual posts by slug
+  - Updating existing posts (members only)
+  - Deleting posts (members only)
+  - Access control for posts (public/private visibility)
 
 ### Current Implementation Details
 
@@ -145,5 +173,12 @@ The backend now fully supports the meeting management workflow:
    - Members can delete meetings they manage
    - Administrators have broader deletion rights
    - Row-level security enforced at the database level
+
+6. **Blog Post Management**:
+   - Members can create, edit, and delete blog posts
+   - Posts can be set as public or private
+   - Public posts are visible to all users, private posts only to members
+   - Paginated listing with proper access control
+   - Full CRUD operations with appropriate validation
 
 All these features are now fully integrated with the Supabase database, with proper error handling and status codes for API responses.

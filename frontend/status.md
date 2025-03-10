@@ -2,7 +2,7 @@
 
 ## Application Overview
 
-This Next.js application serves as the web platform for the "SoarHigh Toastmasters Club," providing functionality for meeting management, growth tracking, and awards recognition. The application has both public-facing components and authenticated sections.
+This Next.js application serves as the web platform for the "SoarHigh Toastmasters Club," providing functionality for meeting management, growth tracking, awards recognition, and posts. The application has both public-facing components and authenticated sections.
 
 ## Application Structure
 
@@ -11,6 +11,8 @@ This Next.js application serves as the web platform for the "SoarHigh Toastmaste
 - **/** - Landing page with club introduction and information
 - **/signin** - Authentication page with sign-in form
 - **/meetings** - Public meeting listing page showing published meetings
+- **/posts** - Public posts listing page showing published content
+- **/posts/[slug]** - Public post detail page for viewing specific content
 
 ### Protected Routes (under the (auth) group)
 
@@ -22,6 +24,11 @@ All routes in the (auth) group are protected by authentication middleware which 
   - Template-based meeting creation
   - Image-based meeting creation (upload agenda image)
 - **/meetings/edit/[id]** - Page for editing existing meetings
+
+#### Post Management
+
+- **/posts/new** - Page for creating new posts
+- **/posts/edit/[slug]** - Page for editing existing posts
 
 #### Operations
 
@@ -46,7 +53,7 @@ All routes in the (auth) group are protected by authentication middleware which 
 - Present across all pages
 - Responsive design with mobile menu
 - Dynamically changes based on authentication status
-- Main navigation links: Introduction, Meetings
+- Main navigation links: Introduction, Meetings, Posts
 - Dropdown menu for Operations (Growth, Awards) for authenticated users
 - Sign-out functionality
 
@@ -81,6 +88,20 @@ All routes in the (auth) group are protected by authentication middleware which 
 - Save button to update changes
 - Publish button to change meeting status from draft to published
 - Full error handling and success notifications
+
+### Posts Listing Page (/posts)
+
+- Displays posts with visibility based on user authentication
+- "Create Post" button for authenticated users
+- Post cards with title, author, date, and excerpt
+- Visibility indicators for authenticated users
+- Edit links for authenticated users
+
+### Post Detail Page (/posts/[slug])
+
+- Displays full post content with title and author information
+- Edit button for authenticated users
+- Access control based on post visibility
 
 ### Meeting Form
 
@@ -118,6 +139,7 @@ The application uses several key interfaces:
 - **SegmentIF** - Meeting segments/agenda items with role taker references to attendees
 - **MeetingIF** - Complete meeting data structure with status field ("draft" or "published")
 - **AwardIF** - Award structure with meeting_id, category, and winner fields
+- **PostIF** - Post structure with title, slug, content, visibility, and author information
 
 ## Technical Implementation
 
@@ -147,6 +169,7 @@ The application uses several key interfaces:
 - Success/error notifications for user actions
 - Attendee handling for role assignments
 - Meeting awards management
+- Post management with create, read, update, and delete capabilities
 
 ### Current Implementation Details
 
@@ -183,10 +206,18 @@ The meeting management workflow is now fully implemented:
    - Error handling with appropriate messages
 
 6. **Awards Management**
+
    - UI for adding and managing meeting awards
    - Support for both standard and custom award categories
    - Winner selection with member auto-suggestion
    - Validation before submitting awards
    - Success/error notifications for award operations
+
+7. **Post Management**
+
+   - Posts are markdown based
+   - Complete CRUD operations for posts
+   - Visibility controls (public/private)
+   - Access control based on visibility and user authentication
 
 The application follows a clean, modern UI design with gradient accents, responsive layouts, and thoughtful user interactions. The meeting creation workflow is particularly sophisticated, offering multiple creation methods and detailed customization options.
