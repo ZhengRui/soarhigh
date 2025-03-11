@@ -341,7 +341,7 @@ export function MeetingForm({
     'block w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200';
 
   return (
-    <form onSubmit={handleSubmit} className='px-6 pt-6 pb-14'>
+    <form onSubmit={handleSubmit} className='px-8 pt-6 pb-14'>
       <div className='flex justify-between items-center'>
         <div>
           <h2 className='text-2xl font-semibold text-gray-900 flex items-center'>

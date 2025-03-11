@@ -83,6 +83,26 @@ CREATE TABLE posts (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Votes table - stores votes
+CREATE TABLE votes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    meeting_id UUID REFERENCES meetings(id) NOT NULL,
+    category TEXT NOT NULL,
+    candidate TEXT NOT NULL,
+    count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Votes status table - stores status of votes
+CREATE TABLE votes_status (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    meeting_id UUID REFERENCES meetings(id) NOT NULL,
+    open BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- =============================================
 -- INDEXES
 -- =============================================
@@ -92,6 +112,12 @@ CREATE UNIQUE INDEX unique_type_no_not_null ON meetings(type, no) WHERE no IS NO
 
 -- Ensures post slugs are unique
 CREATE UNIQUE INDEX unique_slug ON posts(slug);
+
+-- Ensures meeting_id, category, and candidate are unique
+CREATE UNIQUE INDEX unique_meeting_category_candidate ON votes(meeting_id, category, candidate);
+
+-- Ensures meeting_id is unique
+CREATE UNIQUE INDEX unique_meeting_id ON votes_status(meeting_id);
 
 -- =============================================
 -- ROW LEVEL SECURITY POLICIES
@@ -103,6 +129,8 @@ ALTER TABLE attendees ENABLE ROW LEVEL SECURITY;
 ALTER TABLE meetings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE segments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE votes_status ENABLE ROW LEVEL SECURITY;
 
 -- Members table policies
 CREATE POLICY "Members can read own data"
@@ -270,6 +298,87 @@ ON posts FOR DELETE
 TO authenticated
 USING (author_id = auth.uid() OR is_admin(auth.uid()));
 
+-- Votes table policies
+CREATE POLICY "Members can view votes"
+ON votes FOR SELECT
+TO authenticated
+USING (true);
+
+CREATE POLICY "Members can create votes"
+ON votes FOR INSERT
+TO authenticated
+WITH CHECK (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+CREATE POLICY "Non-members can update votes"
+ON votes FOR UPDATE
+TO anon
+USING (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+CREATE POLICY "Members can update votes"
+ON votes FOR UPDATE
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+CREATE POLICY "Members can delete votes"
+ON votes FOR DELETE
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+-- Votes status table policies
+CREATE POLICY "Members can view votes status"
+ON votes_status FOR SELECT
+TO authenticated
+USING (true);
+
+CREATE POLICY "Members can create votes status"
+ON votes_status FOR INSERT
+TO authenticated
+WITH CHECK (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+CREATE POLICY "Members can update votes status"
+ON votes_status FOR UPDATE
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+CREATE POLICY "Members can delete votes status"
+ON votes_status FOR DELETE
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
 
 -- =============================================
 -- FUNCTIONS & TRIGGERS

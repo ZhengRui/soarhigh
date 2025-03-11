@@ -41,6 +41,28 @@ class Award(BaseModel):
     winner: str = Field(description="The name of the person who won the award.")
 
 
+class Vote(BaseModel):
+    """
+    Model representing a vote.
+    """
+
+    id: Optional[str] = Field(default=None, description="The unique identifier of the vote.")
+    meeting_id: str = Field(description="The ID of the meeting this vote belongs to.")
+    category: str = Field(description="The category of the vote, e.g., 'Best Prepared Speaker', 'Best Evaluator'.")
+    candidate: str = Field(description="The name of the person who is being voted for.")
+    count: Optional[int] = Field(default=0, description="The number of votes for the candidate.")
+
+
+class VotesStatus(BaseModel):
+    """
+    Model representing the status of votes.
+    """
+
+    id: Optional[str] = Field(default=None, description="The unique identifier of the votes status.")
+    meeting_id: str = Field(description="The ID of the meeting this votes status belongs to.")
+    open: bool = Field(description="Whether the votes are open or not.")
+
+
 class Meeting(BaseModel):
     """
     Single model for all meeting operations (create, update, response).

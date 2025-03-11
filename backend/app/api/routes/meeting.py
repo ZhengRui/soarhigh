@@ -1,20 +1,25 @@
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from ...db.core import (
+    cast_votes,
     create_meeting,
     delete_meeting,
     get_awards_by_meeting,
     get_meeting_by_id,
     get_meetings,
+    get_votes_by_meeting,
+    get_votes_status,
     save_meeting_awards,
+    save_vote_form,
     update_meeting,
     update_meeting_status,
+    update_votes_status,
 )
-from ...models.meeting import Award, Meeting, PaginatedMeetings
+from ...models.meeting import Award, Meeting, PaginatedMeetings, Vote, VotesStatus
 from ...models.users import User
 from ...utils.meeting import parse_meeting_agenda_image
 from .auth import get_current_user, get_optional_user, verify_access_token
@@ -31,6 +36,24 @@ class MeetingStatusUpdate(BaseModel):
 
 class AwardsList(BaseModel):
     awards: List[Award]
+
+
+class CategoryCandidatesList(BaseModel):
+    category: str
+    candidates: List[str]
+
+
+class VoteForm(BaseModel):
+    votes: List[CategoryCandidatesList]
+
+
+class VoteCastRecord(BaseModel):
+    category: str
+    candidate: str
+
+
+class VoteCast(BaseModel):
+    votes: List[VoteCastRecord]
 
 
 @r.post("/meeting/parse_agenda_image")
@@ -273,5 +296,143 @@ async def r_save_meeting_awards(
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.get("/meetings/{meeting_id}/votes", response_model=Union[List[Vote], List[CategoryCandidatesList]])
+async def r_get_meeting_votes(
+    meeting_id: str = Path(..., description="The ID of the meeting to get votes for"),
+    as_form: bool = Query(False, description="Return votes in form format (categories and candidates)"),
+    user: Optional[User] = Depends(get_optional_user),
+):
+    """
+    Get all votes for a meeting.
+
+    This endpoint retrieves all votes for a specific meeting.
+    Anyone can access this endpoint, but the response format differs based on authentication:
+    - Authenticated users: Full vote data or form-structured data based on as_form parameter
+    - Non-authenticated users: Only category and candidate information (no counts)
+    """
+    try:
+        votes = get_votes_by_meeting(meeting_id)
+
+        # If as_form=True OR user is not authenticated, return form-structured data
+        if as_form or not user:
+            # Group votes by category and extract candidates
+            categories_dict: Dict[str, List[str]] = {}
+            for vote in votes:
+                if vote["category"] not in categories_dict:
+                    categories_dict[vote["category"]] = []
+                if vote["candidate"] not in categories_dict[vote["category"]]:
+                    categories_dict[vote["category"]].append(vote["candidate"])
+
+            # Convert to CategoryCandidatesList format
+            result = [
+                CategoryCandidatesList(category=category, candidates=candidates)
+                for category, candidates in categories_dict.items()
+            ]
+            return result
+        else:
+            # Return full vote data for authenticated users when as_form=False
+            return [Vote(**vote) for vote in votes]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.get("/meetings/{meeting_id}/votes/status", response_model=VotesStatus)
+async def r_get_votes_status(
+    meeting_id: str = Path(..., description="The ID of the meeting to get votes status for"),
+) -> VotesStatus:
+    """
+    Get the voting status for a meeting.
+
+    This endpoint retrieves the voting status for a specific meeting.
+    Anyone can access this endpoint.
+    """
+    try:
+        status = get_votes_status(meeting_id)
+        if not status:
+            # Return a default status object if none exists
+            return VotesStatus(id=None, meeting_id=meeting_id, open=False)
+        return VotesStatus(**status)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.put("/meetings/{meeting_id}/votes/status", response_model=VotesStatus)
+async def r_update_votes_status(
+    status_update: Dict[str, bool],
+    meeting_id: str = Path(..., description="The ID of the meeting to update votes status for"),
+    user: User = Depends(get_current_user),
+) -> VotesStatus:
+    """
+    Update the voting status for a meeting.
+
+    This endpoint updates the voting status for a specific meeting.
+    Only authenticated users can update voting status.
+    Request body: {"open": true/false}
+    """
+    try:
+        if "open" not in status_update:
+            raise ValueError("Request must include 'open' field")
+
+        status = update_votes_status(meeting_id, status_update["open"], user.uid)
+        if not status:
+            raise HTTPException(status_code=404, detail="Meeting not found or not accessible")
+        return VotesStatus(**status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.post("/meetings/{meeting_id}/votes/form", response_model=List[Vote])
+async def r_save_vote_form(
+    vote_form: VoteForm,
+    meeting_id: str = Path(..., description="The ID of the meeting to save vote form for"),
+    user: User = Depends(get_current_user),
+) -> List[Vote]:
+    """
+    Save the vote form configuration for a meeting.
+
+    This endpoint saves the vote form configuration for a specific meeting.
+    Only authenticated users can save vote forms.
+    """
+    try:
+        # Convert the Pydantic model to a list of dictionaries
+        votes_list = [
+            {"category": category.category, "candidates": category.candidates} for category in vote_form.votes
+        ]
+
+        votes = save_vote_form(meeting_id, votes_list, user.uid)
+        return [Vote(**vote) for vote in votes]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.post("/meetings/{meeting_id}/vote", response_model=List[Vote])
+async def r_cast_vote(
+    vote_data: VoteCast,
+    meeting_id: str = Path(..., description="The ID of the meeting to cast votes for"),
+) -> List[Vote]:
+    """
+    Cast multiple votes for candidates across different categories.
+
+    This endpoint casts votes for specific candidates in various categories.
+    Anyone can cast votes, but voting must be open.
+    """
+    try:
+        # Convert the Pydantic model to a list of dictionaries
+        votes_list = [{"category": v.category, "candidate": v.candidate} for v in vote_data.votes]
+
+        results = cast_votes(meeting_id, votes_list)
+        if not results:
+            raise HTTPException(status_code=400, detail="Voting is closed or none of the vote records exist")
+        return [Vote(**vote) for vote in results]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")

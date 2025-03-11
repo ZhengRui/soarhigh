@@ -58,6 +58,30 @@ export interface PostIF {
   updated_at?: string;
 }
 
+export interface CategoryCandidatesIF {
+  category: string;
+  candidates: string[];
+}
+
+export interface VoteRecordIF {
+  category: string;
+  candidate: string;
+}
+
+export interface VoteIF {
+  id?: string;
+  meeting_id: string;
+  category: string;
+  candidate: string;
+  count: number;
+}
+
+export interface VoteStatusIF {
+  id?: string;
+  meeting_id: string;
+  open: boolean;
+}
+
 export interface PaginatedResponse<T> {
   items: T[];
   total: number;

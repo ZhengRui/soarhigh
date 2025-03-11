@@ -29,6 +29,12 @@ export const RoleTakerInput = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const iconRef = useRef<HTMLDivElement>(null);
 
+  // Update internal state when value prop changes
+  useEffect(() => {
+    setInputValue(value?.name || '');
+    setRoleTaker(value);
+  }, [value]);
+
   // Handle clicking outside the dropdown
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {

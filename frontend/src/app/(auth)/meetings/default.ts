@@ -367,7 +367,7 @@ export const DEFAULT_CUSTOM_MEETING: Omit<MeetingIF, 'segments'> & {
 };
 
 // Create a dummy params object for temporary instances
-const dummyParams = { id: '', start_time: '', duration: '' };
+export const dummyParams = { id: '', start_time: '', duration: '' };
 
 export const SEGMENT_TYPE_MAP = {
   [new WarmUpSegment(dummyParams).type]: WarmUpSegment,

@@ -1,9 +1,10 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { MeetingForm } from '../../MeetingForm';
 import { MeetingAwardsForm } from '../../MeetingAwardsForm';
+import { VoteForm } from '../../VoteForm';
 import { useMeeting } from '@/hooks/useMeeting';
 import { Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -13,6 +14,10 @@ export default function EditMeetingPage() {
   const params = useParams();
   const router = useRouter();
   const meetingId = Array.isArray(params.id) ? params.id[0] : params.id || '';
+
+  const [activeTab, setActiveTab] = useState<'info' | 'vote' | 'awards'>(
+    'info'
+  );
 
   // Fetch the meeting data only if we have a valid meetingId
   const { data: meeting, isLoading, isError, error } = useMeeting(meetingId);
@@ -71,20 +76,53 @@ export default function EditMeetingPage() {
     segments: convertSegmentsToBaseSegments(meeting.segments),
   };
 
+  const tabClass = (tab: 'info' | 'vote' | 'awards') =>
+    `min-w-32 px-4 py-2 text-sm font-medium rounded-t-lg mr-0.5 border-t border-r border-l border-gray-200 ${
+      activeTab === tab
+        ? 'bg-white text-indigo-600'
+        : 'bg-gray-200 text-gray-600 hover:bg-gray-300 hover:text-gray-700 border-transparent'
+    }`;
+
   return (
     <div className='min-h-screen bg-gray-50 py-12'>
       <div className='container max-w-4xl mx-auto px-4'>
-        <div className='bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-6'>
-          <MeetingForm
-            initFormData={convertedMeeting}
-            mode='edit'
-            meetingId={meetingId}
-          />
+        <div className='flex mb-0'>
+          <button
+            className={tabClass('info')}
+            onClick={() => setActiveTab('info')}
+          >
+            Meeting
+          </button>
+          <button
+            className={tabClass('vote')}
+            onClick={() => setActiveTab('vote')}
+          >
+            Votes
+          </button>
+          <button
+            className={tabClass('awards')}
+            onClick={() => setActiveTab('awards')}
+          >
+            Awards
+          </button>
         </div>
 
-        {/* Meeting Awards Section */}
-        <div className='bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden'>
-          <MeetingAwardsForm meetingId={meetingId} />
+        <div className='bg-white rounded-xl rounded-tl-none shadow-sm border border-gray-200 overflow-hidden mb-6'>
+          <div style={{ display: activeTab === 'info' ? 'block' : 'none' }}>
+            <MeetingForm
+              initFormData={convertedMeeting}
+              mode='edit'
+              meetingId={meetingId}
+            />
+          </div>
+
+          <div style={{ display: activeTab === 'vote' ? 'block' : 'none' }}>
+            <VoteForm meetingId={meetingId} />
+          </div>
+
+          <div style={{ display: activeTab === 'awards' ? 'block' : 'none' }}>
+            <MeetingAwardsForm meetingId={meetingId} />
+          </div>
         </div>
       </div>
     </div>

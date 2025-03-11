@@ -23,6 +23,7 @@ const AWARD_CATEGORIES: AwardCategory[] = [
   'Best Facilitator',
   'Best Evaluator',
   'Best Supporter',
+  'Best Meeting Manager',
 ];
 
 interface MeetingAward {
@@ -206,11 +207,11 @@ export function MeetingAwardsForm({ meetingId }: MeetingAwardsFormProps) {
   return (
     <form onSubmit={handleSubmit} className='py-6 px-8 pb-14'>
       <div className='border-b pb-4 mb-6'>
-        <h2 className='text-xl font-semibold text-gray-800 flex items-center'>
+        <h2 className='text-2xl font-semibold text-gray-800 flex items-center'>
           <Award className='w-5 h-5 mr-2 text-indigo-500' />
           Meeting Awards
         </h2>
-        <p className='text-sm text-gray-500 mt-1'>
+        <p className='text-sm text-gray-600 mt-1'>
           Recognize outstanding performances from this meeting
         </p>
       </div>

@@ -969,3 +969,217 @@ def delete_post(slug: str, user_id: str) -> bool:
     response = delete_query.execute()
 
     return len(response.data) > 0
+
+
+def get_votes_status(meeting_id: str) -> Optional[Dict]:
+    """
+    Get the voting status for a meeting.
+
+    Args:
+        meeting_id: The ID of the meeting
+
+    Returns:
+        Vote status object or None if not found
+    """
+    response = supabase.table("votes_status").select("*").eq("meeting_id", meeting_id).execute()
+
+    if not response.data:
+        return None
+
+    return response.data[0]
+
+
+def get_votes_by_meeting(meeting_id: str) -> List[Dict]:
+    """
+    Get all votes for a meeting.
+
+    Args:
+        meeting_id: The ID of the meeting
+
+    Returns:
+        List of vote objects
+    """
+    response = supabase.table("votes").select("*").eq("meeting_id", meeting_id).execute()
+
+    return response.data
+
+
+def update_votes_status(meeting_id: str, is_open: bool, user_id: str) -> Optional[Dict]:
+    """
+    Update the voting status for a meeting (open or close).
+
+    Args:
+        meeting_id: The ID of the meeting
+        is_open: True to open voting, False to close
+        user_id: The ID of the user making the change
+
+    Returns:
+        Updated vote status or None if meeting not found/accessible
+    """
+    # Check if the meeting exists and user can manage it
+    meeting = get_meeting_by_id(meeting_id)
+    if not meeting:
+        return None
+
+    # Currently, any member can update voting status
+    # TODO: Add permission check if needed
+
+    # Check if status record exists
+    existing_status = get_votes_status(meeting_id)
+
+    if existing_status:
+        # Update existing status
+        update_data = {"open": is_open}
+
+        response = supabase.table("votes_status").update(update_data).eq("id", existing_status["id"]).execute()
+        return response.data[0] if response.data else None
+    else:
+        # Create new status
+        new_status = {
+            "meeting_id": meeting_id,
+            "open": is_open,
+        }
+
+        response = supabase.table("votes_status").insert(new_status).execute()
+        return response.data[0] if response.data else None
+
+
+def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List[Dict]:
+    """
+    Save the vote form configuration for a meeting. This function creates or updates
+    vote records for each category and candidate.
+
+    Args:
+        meeting_id: The ID of the meeting
+        vote_form: List of objects with category and candidates fields
+        user_id: The ID of the user saving the form
+
+    Returns:
+        List of created/updated vote objects
+    """
+    # Check if the meeting exists
+    meeting = get_meeting_by_id(meeting_id)
+    if not meeting:
+        raise ValueError("Meeting not found")
+
+    # Currently, any member can update the vote form
+    # TODO: Add permission check if needed
+
+    # Get existing votes to avoid duplicates
+    existing_votes = get_votes_by_meeting(meeting_id)
+    existing_map = {f"{v['category']}|{v['candidate']}": v for v in existing_votes}
+
+    # Prepare records to insert and update
+    records_to_insert = []
+    records_to_update = []
+    processed_keys = set()
+
+    # Process each category and candidate
+    for category_item in vote_form:
+        if "category" not in category_item or "candidates" not in category_item:
+            continue
+
+        category = category_item["category"]
+        candidates = category_item["candidates"]
+
+        if not category or not isinstance(candidates, list):
+            continue
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+
+            key = f"{category}|{candidate}"
+            processed_keys.add(key)
+
+            if key in existing_map:
+                # Record exists, mark for update
+                existing_vote = existing_map[key]
+                records_to_update.append(existing_vote["id"])
+            else:
+                # New record
+                records_to_insert.append(
+                    {"meeting_id": meeting_id, "category": category, "candidate": candidate, "count": 0}
+                )
+
+    # Process the database operations
+    results = []
+
+    # Insert new records in batch
+    if records_to_insert:
+        insert_response = supabase.table("votes").insert(records_to_insert).execute()
+        results.extend(insert_response.data)
+
+    # Update existing records in batch
+    if records_to_update:
+        update_response = supabase.table("votes").update({}).in_("id", records_to_update).execute()
+
+        if update_response.data:
+            results.extend(update_response.data)
+
+    # Delete votes that are no longer in the form - in batch if possible
+    if processed_keys and existing_votes:
+        to_delete_ids = []
+        for existing_vote in existing_votes:
+            key = f"{existing_vote['category']}|{existing_vote['candidate']}"
+            if key not in processed_keys:
+                to_delete_ids.append(existing_vote["id"])
+
+        if to_delete_ids:
+            supabase.table("votes").delete().in_("id", to_delete_ids).execute()
+
+    return results
+
+
+def cast_votes(meeting_id: str, votes: List[Dict[str, str]]) -> List[Dict]:
+    """
+    Cast multiple votes at once by incrementing the count for specified candidates in categories.
+
+    Args:
+        meeting_id: The ID of the meeting
+        votes: List of dicts with 'category' and 'candidate' keys
+
+    Returns:
+        List of updated vote objects
+    """
+    # Check if voting is open
+    status = get_votes_status(meeting_id)
+    if not status or not status["open"]:
+        return []
+
+    # Validate and process each vote
+    results = []
+    vote_ids_to_increment = []
+
+    # First, get all existing votes for this meeting - more efficient than individual lookups
+    all_votes = get_votes_by_meeting(meeting_id)
+    vote_map = {f"{v['category']}|{v['candidate']}": v for v in all_votes}
+
+    # Identify valid votes to increment
+    for vote in votes:
+        if "category" not in vote or "candidate" not in vote:
+            continue
+
+        key = f"{vote['category']}|{vote['candidate']}"
+        if key in vote_map:
+            vote_ids_to_increment.append(vote_map[key]["id"])
+
+    # Batch increment all votes in a single operation
+    if vote_ids_to_increment:
+        # Unfortunately, we can't do a true batch increment with Supabase REST API
+        # We'll do individual increments efficiently
+        for vote_id in vote_ids_to_increment:
+            # Get current count
+            count_query = supabase.table("votes").select("count").eq("id", vote_id).execute()
+            if not count_query.data:
+                continue
+
+            current_count = count_query.data[0]["count"]
+
+            # Increment count
+            update_response = supabase.table("votes").update({"count": current_count + 1}).eq("id", vote_id).execute()
+
+            if update_response.data:
+                results.extend(update_response.data)
+
+    return results
