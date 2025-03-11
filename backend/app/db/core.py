@@ -872,26 +872,24 @@ def create_post(post_data: Dict, user_id: str) -> Dict:
     return post
 
 
-def update_post(slug: str, post_data: Dict, user_id: str) -> Optional[Dict]:
+def update_post(post_data: Dict, user_id: str) -> Optional[Dict]:
     """
     Update an existing post.
 
     Args:
-        slug: The slug of the post to update
         post_data: The updated post data
         user_id: The ID of the authenticated user updating the post
 
     Returns:
         The updated post data with author information, or None if not found/accessible
     """
+    post_id = post_data["id"]
     # First, check if post exists and get its ID
-    find_query = supabase.table("posts").select("id, author_id").eq("slug", slug)
+    find_query = supabase.table("posts").select("id, author_id").eq("id", post_id)
     existing_post = find_query.execute().data
 
     if not existing_post:
         return None
-
-    post_id = existing_post[0]["id"]
 
     # Ensure user is the author. Currently disabled to allow editing by any member.
     # if existing_post[0]["author_id"] != user_id:

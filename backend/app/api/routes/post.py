@@ -88,7 +88,7 @@ async def r_update_post(
     post_dict = post_data.dict(exclude_unset=True, exclude={"author"})
 
     # Update the post
-    result = update_post(slug=slug, post_data=post_dict, user_id=user.uid)
+    result = update_post(post_data=post_dict, user_id=user.uid)
 
     if not result:
         raise HTTPException(status_code=404, detail="Post not found or you don't have permission to update it")

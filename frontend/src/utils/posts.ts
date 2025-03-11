@@ -57,6 +57,7 @@ export const createPost = requestTemplate(
 // Update post (requires auth)
 export const updatePost = requestTemplate(
   (data: {
+    id?: string;
     title?: string;
     slug: string;
     content?: string;

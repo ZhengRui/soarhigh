@@ -12,6 +12,7 @@ import { usePost } from '@/hooks/usePost';
 import { useIsAdmin } from '@/hooks/useIsAdmin';
 
 import Link from 'next/link';
+import slugify from 'slugify';
 
 export default function EditPostPage() {
   const params = useParams();
@@ -54,9 +55,23 @@ export default function EditPostPage() {
 
   const updatePostMutation = useMutation({
     mutationFn: updatePost,
-    onSuccess: () => {
+    onSuccess: (updatedPost) => {
+      // Remove the query for the old slug from cache completely
+      queryClient.removeQueries({ queryKey: ['post', slug] });
+
+      // Invalidate the posts list
       queryClient.invalidateQueries({ queryKey: ['posts'] });
-      queryClient.invalidateQueries({ queryKey: ['post', slug] });
+
+      // Update URL path to reflect the new slug without full page refresh
+      const newSlug = updatedPost.slug;
+      if (newSlug && newSlug !== slug) {
+        // Set the data for the new slug directly in the cache
+        queryClient.setQueryData(['post', newSlug], updatedPost);
+
+        // Update the URL to the new slug
+        router.replace(`/posts/edit/${newSlug}`);
+      }
+
       toast.success('Post updated successfully!');
     },
     onError: (error) => {
@@ -94,8 +109,9 @@ export default function EditPostPage() {
     }
 
     updatePostMutation.mutate({
+      id: post?.id,
       title: title.trim(),
-      slug,
+      slug: slugify(title.trim(), { lower: true }),
       content,
       is_public: isPublic,
     });
