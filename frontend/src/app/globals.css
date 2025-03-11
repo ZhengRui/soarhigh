@@ -94,6 +94,15 @@
   font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace !important;
 }
 
+/* Fix for inline code - hide the backticks */
+.markdown-body code::before,
+.markdown-body code::after,
+.w-md-editor-preview code::before,
+.w-md-editor-preview code::after {
+  content: "" !important;
+  display: none !important;
+}
+
 /* Standalone code blocks */
 .markdown-body pre,
 .w-md-editor-preview pre {
