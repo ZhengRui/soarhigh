@@ -74,13 +74,14 @@ const MobileMenu = ({
           <div className='max-w-7xl mx-auto py-2 px-4 sm:px-6 lg:px-8 flex flex-col space-y-2'>
             <NavLink href='/'>Introduction</NavLink>
             <NavLink href='/meetings'>Meetings</NavLink>
+            <NavLink href='/posts'>Posts</NavLink>
             {user ? (
               <>
                 <div className='pl-4 space-y-2'>
                   <div className='text-sm font-medium text-gray-500'>
                     Operations
                   </div>
-                  <NavLink href='/posts'>Posts</NavLink>
+                  {/* <NavLink href='/posts'>Posts</NavLink> */}
                   <NavLink href='/awards'>Awards</NavLink>
                 </div>
                 <button
@@ -134,6 +135,7 @@ const Header = () => {
           <div className='hidden md:flex items-center space-x-2 lg:space-x-6'>
             <NavLink href='/'>Introduction</NavLink>
             <NavLink href='/meetings'>Meetings</NavLink>
+            <NavLink href='/posts'>Posts</NavLink>
             {user ? (
               <>
                 <div className='relative group'>
@@ -145,7 +147,7 @@ const Header = () => {
                     />
                   </div>
                   <div className='absolute top-full right-0 mt-1 w-48 bg-white rounded-xl shadow-lg px-4 py-2 flex flex-col space-y-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200'>
-                    <NavLink href='/posts'>Posts</NavLink>
+                    {/* <NavLink href='/posts'>Posts</NavLink> */}
                     <NavLink href='/awards'>Awards</NavLink>
                   </div>
                 </div>
