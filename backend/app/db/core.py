@@ -1067,7 +1067,7 @@ def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List
 
     # Get existing votes to avoid duplicates
     existing_votes = get_votes_by_meeting(meeting_id)
-    existing_map = {f"{v['category']}|{v['candidate']}": v for v in existing_votes}
+    existing_map = {f"{v['category']}|{v['name']}": v for v in existing_votes}
 
     # Prepare records to insert and update
     records_to_insert = []
@@ -1099,7 +1099,13 @@ def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List
             else:
                 # New record
                 records_to_insert.append(
-                    {"meeting_id": meeting_id, "category": category, "candidate": candidate, "count": 0}
+                    {
+                        "meeting_id": meeting_id,
+                        "category": category,
+                        "name": candidate["name"],
+                        "segment": candidate["segment"],
+                        "count": 0,
+                    }
                 )
 
     # Process the database operations
@@ -1121,7 +1127,7 @@ def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List
     if processed_keys and existing_votes:
         to_delete_ids = []
         for existing_vote in existing_votes:
-            key = f"{existing_vote['category']}|{existing_vote['candidate']}"
+            key = f"{existing_vote['category']}|{existing_vote['name']}"
             if key not in processed_keys:
                 to_delete_ids.append(existing_vote["id"])
 
@@ -1137,7 +1143,7 @@ def cast_votes(meeting_id: str, votes: List[Dict[str, str]]) -> List[Dict]:
 
     Args:
         meeting_id: The ID of the meeting
-        votes: List of dicts with 'category' and 'candidate' keys
+        votes: List of dicts with 'category' and 'name' keys
 
     Returns:
         List of updated vote objects
@@ -1153,14 +1159,14 @@ def cast_votes(meeting_id: str, votes: List[Dict[str, str]]) -> List[Dict]:
 
     # First, get all existing votes for this meeting - more efficient than individual lookups
     all_votes = get_votes_by_meeting(meeting_id)
-    vote_map = {f"{v['category']}|{v['candidate']}": v for v in all_votes}
+    vote_map = {f"{v['category']}|{v['name']}": v for v in all_votes}
 
     # Identify valid votes to increment
     for vote in votes:
-        if "category" not in vote or "candidate" not in vote:
+        if "category" not in vote or "name" not in vote:
             continue
 
-        key = f"{vote['category']}|{vote['candidate']}"
+        key = f"{vote['category']}|{vote['name']}"
         if key in vote_map:
             vote_ids_to_increment.append(vote_map[key]["id"])
 

@@ -160,7 +160,7 @@ export function VoteForm({ meetingId }: VoteFormProps) {
 
   const handleAddCandidate = (categoryIndex: number) => {
     const updatedVoteForm = [...voteForm];
-    updatedVoteForm[categoryIndex].candidates.push('');
+    updatedVoteForm[categoryIndex].candidates.push({ name: '', segment: '' });
     setVoteForm(updatedVoteForm);
   };
 
@@ -170,7 +170,12 @@ export function VoteForm({ meetingId }: VoteFormProps) {
     value: AttendeeIF
   ) => {
     const updatedVoteForm = [...voteForm];
-    updatedVoteForm[categoryIndex].candidates[candidateIndex] = value.name;
+    updatedVoteForm[categoryIndex].candidates[candidateIndex] = {
+      name: value.name,
+      segment:
+        updatedVoteForm[categoryIndex].candidates[candidateIndex]?.segment ||
+        '',
+    };
     setVoteForm(updatedVoteForm);
   };
 
@@ -389,7 +394,11 @@ export function VoteForm({ meetingId }: VoteFormProps) {
                       >
                         <div className='flex-1'>
                           <RoleTakerInput
-                            value={{ name: candidate, member_id: '', id: '' }}
+                            value={{
+                              name: candidate.name,
+                              member_id: '',
+                              id: '',
+                            }}
                             onChange={(value) =>
                               handleCandidateChange(
                                 categoryIndex,
@@ -401,6 +410,9 @@ export function VoteForm({ meetingId }: VoteFormProps) {
                             disableMemberLookup={true}
                           />
                         </div>
+
+                        {/* Segment Type */}
+
                         <button
                           type='button'
                           onClick={() =>

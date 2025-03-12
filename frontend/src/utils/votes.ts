@@ -67,7 +67,7 @@ export const saveVoteForm = requestTemplate(
       'Content-Type': 'application/json',
       Accept: 'application/json',
     }),
-    body: JSON.stringify({ categories }),
+    body: JSON.stringify({ votes: categories }),
   }),
   responseHandlerTemplate,
   null,
@@ -136,14 +136,14 @@ export const extractCandidatesFromMeeting = (
   ];
 
   // Helper function to add a candidate to a category
-  const addCandidate = (categoryName: string, candidateName: string) => {
+  const addCandidate = (
+    categoryName: string,
+    name: string,
+    segment?: string
+  ) => {
     const category = voteForm.find((cat) => cat.category === categoryName);
-    if (
-      category &&
-      candidateName &&
-      !category.candidates.includes(candidateName)
-    ) {
-      category.candidates.push(candidateName);
+    if (category && name && !category.candidates.some((c) => c.name === name)) {
+      category.candidates.push({ name, segment });
     }
   };
 
@@ -158,7 +158,7 @@ export const extractCandidatesFromMeeting = (
       roleTaker.name &&
       (!roleTaker.member_id || roleTaker.member_id.trim() === '')
     ) {
-      addCandidate('Best Supporter', roleTaker.name);
+      addCandidate('Best Supporter', roleTaker.name, segment.type);
     }
 
     // Determine category based on segment type
@@ -195,13 +195,17 @@ export const extractCandidatesFromMeeting = (
 
     // Add candidate to the appropriate category
     if (category && roleTaker.name) {
-      addCandidate(category, roleTaker.name);
+      addCandidate(category, roleTaker.name, segment.type);
     }
   });
 
   // Add meeting manager to Best Meeting Manager category if exists
   if (meeting.manager && meeting.manager.name) {
-    addCandidate('Best Meeting Manager', meeting.manager.name);
+    addCandidate(
+      'Best Meeting Manager',
+      meeting.manager.name,
+      'Meeting Manager'
+    );
   }
 
   return voteForm;

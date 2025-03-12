@@ -49,7 +49,8 @@ class Vote(BaseModel):
     id: Optional[str] = Field(default=None, description="The unique identifier of the vote.")
     meeting_id: str = Field(description="The ID of the meeting this vote belongs to.")
     category: str = Field(description="The category of the vote, e.g., 'Best Prepared Speaker', 'Best Evaluator'.")
-    candidate: str = Field(description="The name of the person who is being voted for.")
+    name: str = Field(description="The name of the person who is being voted for.")
+    segment: Optional[str] = Field(default=None, description="The segment type that the vote is for.")
     count: Optional[int] = Field(default=0, description="The number of votes for the candidate.")
 
 

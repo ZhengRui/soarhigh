@@ -88,7 +88,8 @@ CREATE TABLE votes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     meeting_id UUID REFERENCES meetings(id) NOT NULL,
     category TEXT NOT NULL,
-    candidate TEXT NOT NULL,
+    name TEXT NOT NULL,
+    segment TEXT,
     count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -113,8 +114,8 @@ CREATE UNIQUE INDEX unique_type_no_not_null ON meetings(type, no) WHERE no IS NO
 -- Ensures post slugs are unique
 CREATE UNIQUE INDEX unique_slug ON posts(slug);
 
--- Ensures meeting_id, category, and candidate are unique
-CREATE UNIQUE INDEX unique_meeting_category_candidate ON votes(meeting_id, category, candidate);
+-- Ensures meeting_id, category, and name are unique
+CREATE UNIQUE INDEX unique_meeting_category_name ON votes(meeting_id, category, name);
 
 -- Ensures meeting_id is unique
 CREATE UNIQUE INDEX unique_meeting_id ON votes_status(meeting_id);

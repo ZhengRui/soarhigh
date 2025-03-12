@@ -58,21 +58,27 @@ export interface PostIF {
   updated_at?: string;
 }
 
+export interface CandidateIF {
+  name: string;
+  segment?: string;
+}
+
 export interface CategoryCandidatesIF {
   category: string;
-  candidates: string[];
+  candidates: CandidateIF[];
 }
 
 export interface VoteRecordIF {
   category: string;
-  candidate: string;
+  name: string;
 }
 
 export interface VoteIF {
   id?: string;
   meeting_id: string;
   category: string;
-  candidate: string;
+  name: string;
+  segment?: string;
   count: number;
 }
 

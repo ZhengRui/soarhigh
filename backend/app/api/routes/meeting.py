@@ -38,9 +38,14 @@ class AwardsList(BaseModel):
     awards: List[Award]
 
 
+class Candidate(BaseModel):
+    name: str
+    segment: str
+
+
 class CategoryCandidatesList(BaseModel):
     category: str
-    candidates: List[str]
+    candidates: List[Candidate]
 
 
 class VoteForm(BaseModel):
@@ -49,7 +54,7 @@ class VoteForm(BaseModel):
 
 class VoteCastRecord(BaseModel):
     category: str
-    candidate: str
+    name: str
 
 
 class VoteCast(BaseModel):
@@ -320,12 +325,12 @@ async def r_get_meeting_votes(
         # If as_form=True OR user is not authenticated, return form-structured data
         if as_form or not user:
             # Group votes by category and extract candidates
-            categories_dict: Dict[str, List[str]] = {}
+            categories_dict: Dict[str, List[Candidate]] = {}
             for vote in votes:
                 if vote["category"] not in categories_dict:
                     categories_dict[vote["category"]] = []
-                if vote["candidate"] not in categories_dict[vote["category"]]:
-                    categories_dict[vote["category"]].append(vote["candidate"])
+                if vote["name"] not in categories_dict[vote["category"]]:
+                    categories_dict[vote["category"]].append(vote["name"])
 
             # Convert to CategoryCandidatesList format
             result = [
@@ -426,7 +431,7 @@ async def r_cast_vote(
     """
     try:
         # Convert the Pydantic model to a list of dictionaries
-        votes_list = [{"category": v.category, "candidate": v.candidate} for v in vote_data.votes]
+        votes_list = [{"category": v.category, "name": v.name} for v in vote_data.votes]
 
         results = cast_votes(meeting_id, votes_list)
         if not results:
