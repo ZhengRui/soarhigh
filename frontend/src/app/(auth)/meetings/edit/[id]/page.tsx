@@ -77,7 +77,7 @@ export default function EditMeetingPage() {
   };
 
   const tabClass = (tab: 'info' | 'vote' | 'awards') =>
-    `min-w-32 px-4 py-2 text-sm font-medium rounded-t-lg mr-0.5 border-t border-r border-l border-gray-200 ${
+    `flex-1 px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-t-lg border-t border-r border-l border-gray-200 text-center ${
       activeTab === tab
         ? 'bg-white text-indigo-600'
         : 'bg-gray-200 text-gray-600 hover:bg-gray-300 hover:text-gray-700 border-transparent'
@@ -86,7 +86,7 @@ export default function EditMeetingPage() {
   return (
     <div className='min-h-screen bg-gray-50 py-12'>
       <div className='container max-w-4xl mx-auto px-4'>
-        <div className='flex mb-0'>
+        <div className='flex w-full mb-0 gap-[1px]'>
           <button
             className={tabClass('info')}
             onClick={() => setActiveTab('info')}
@@ -107,7 +107,7 @@ export default function EditMeetingPage() {
           </button>
         </div>
 
-        <div className='bg-white rounded-xl rounded-tl-none shadow-sm border border-gray-200 overflow-hidden mb-6'>
+        <div className='bg-white rounded-xl rounded-t-none shadow-sm border border-gray-200 overflow-hidden mb-6'>
           <div style={{ display: activeTab === 'info' ? 'block' : 'none' }}>
             <MeetingForm
               initFormData={convertedMeeting}
