@@ -8,6 +8,7 @@ import { useSubmitVote } from '@/hooks/votes/useSubmitVote';
 import { CategoryCandidatesIF, VoteRecordIF } from '@/interfaces';
 import { Loader2, Vote as VoteIcon, AlertCircle } from 'lucide-react';
 import { VoteCard } from './VoteCard';
+import { CelebrationModal } from './CelebrationModal';
 import toast from 'react-hot-toast';
 
 export function VotingPage() {
@@ -15,6 +16,9 @@ export function VotingPage() {
   const [selectedVotes, setSelectedVotes] = useState<Record<string, string>>(
     {}
   );
+
+  // State for showing celebration modal
+  const [showCelebration, setShowCelebration] = useState(false);
 
   // Fetch the latest meeting
   const { data: latestMeeting, isLoading: isLoadingMeeting } =
@@ -89,10 +93,11 @@ export function VotingPage() {
         votes: voteRecords,
       });
 
-      // Show success message
+      // Show success message and celebration modal
       toast.success('Your votes have been submitted!');
+      setShowCelebration(true);
 
-      // Reset form
+      // Don't reset votes so users can see what they voted for
       // setSelectedVotes({});
     } catch (error) {
       console.error('Error submitting votes:', error);
@@ -151,6 +156,11 @@ export function VotingPage() {
 
   return (
     <div className='max-w-3xl mx-auto px-4 py-8 md:py-12'>
+      {/* Celebration Modal */}
+      {showCelebration && (
+        <CelebrationModal onClose={() => setShowCelebration(false)} />
+      )}
+
       <div className='mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
         <div>
           <h1 className='text-2xl md:text-3xl font-bold text-gray-800 flex items-center gap-2'>

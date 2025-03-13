@@ -169,3 +169,13 @@
 }
 
 /* Remove the unsupported contains selectors */
+
+/* Add animation for typewriter cursor */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.animate-blink {
+  animation: blink 1s step-end infinite;
+}
