@@ -41,6 +41,7 @@ class AwardsList(BaseModel):
 class Candidate(BaseModel):
     name: str
     segment: str
+    count: Optional[int] = 0
 
 
 class CategoryCandidatesList(BaseModel):
@@ -330,7 +331,13 @@ async def r_get_meeting_votes(
                 if vote["category"] not in categories_dict:
                     categories_dict[vote["category"]] = []
                 if vote["name"] not in categories_dict[vote["category"]]:
-                    categories_dict[vote["category"]].append(vote["name"])
+                    categories_dict[vote["category"]].append(
+                        Candidate(
+                            name=vote["name"],
+                            segment=vote["segment"],
+                            count=vote["count"],
+                        )
+                    )
 
             # Convert to CategoryCandidatesList format
             result = [
@@ -377,10 +384,17 @@ async def r_update_votes_status(
     This endpoint updates the voting status for a specific meeting.
     Only authenticated users can update voting status.
     Request body: {"open": true/false}
+    When opening voting, the meeting must have vote options defined.
     """
     try:
         if "open" not in status_update:
             raise ValueError("Request must include 'open' field")
+
+        # If trying to open voting, check if meeting has vote form data
+        if status_update["open"]:
+            votes = get_votes_by_meeting(meeting_id)
+            if not votes:
+                raise ValueError("Cannot open voting: No vote options defined. Please set up the vote form first.")
 
         status = update_votes_status(meeting_id, status_update["open"], user.uid)
         if not status:
@@ -392,12 +406,12 @@ async def r_update_votes_status(
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
 
 
-@r.post("/meetings/{meeting_id}/votes/form", response_model=List[Vote])
+@r.post("/meetings/{meeting_id}/votes/form", response_model=List[CategoryCandidatesList])
 async def r_save_vote_form(
     vote_form: VoteForm,
     meeting_id: str = Path(..., description="The ID of the meeting to save vote form for"),
     user: User = Depends(get_current_user),
-) -> List[Vote]:
+) -> List[CategoryCandidatesList]:
     """
     Save the vote form configuration for a meeting.
 
@@ -407,11 +421,12 @@ async def r_save_vote_form(
     try:
         # Convert the Pydantic model to a list of dictionaries
         votes_list = [
-            {"category": category.category, "candidates": category.candidates} for category in vote_form.votes
+            {"category": category["category"], "candidates": category["candidates"]}
+            for category in vote_form.dict()["votes"]
         ]
 
         votes = save_vote_form(meeting_id, votes_list, user.uid)
-        return [Vote(**vote) for vote in votes]
+        return [CategoryCandidatesList(**vote) for vote in votes]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

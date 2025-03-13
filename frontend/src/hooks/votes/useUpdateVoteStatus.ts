@@ -4,7 +4,7 @@ import { updateVoteStatus } from '@/utils/votes';
 
 interface UpdateVoteStatusParams {
   meetingId: string;
-  isOpen: boolean;
+  open: boolean;
 }
 
 /**
@@ -15,15 +15,15 @@ export function useUpdateVoteStatus() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ meetingId, isOpen }: UpdateVoteStatusParams) =>
-      updateVoteStatus(meetingId, isOpen),
+    mutationFn: ({ meetingId, open }: UpdateVoteStatusParams) =>
+      updateVoteStatus(meetingId, open),
     onSuccess: (data, { meetingId }) => {
       queryClient.invalidateQueries({ queryKey: ['voteStatus', meetingId] });
       toast.success(data.open ? 'Voting is now open' : 'Voting is now closed');
     },
     onError: (error) => {
       console.error('Error updating vote status:', error);
-      toast.error('Failed to update voting status');
+      toast.error(`Failed to update voting status`);
     },
   });
 }

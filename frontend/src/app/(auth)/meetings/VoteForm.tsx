@@ -22,26 +22,32 @@ const Switch = ({
   checked,
   onCheckedChange,
   disabled,
+  isLoading,
 }: {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
+  isLoading?: boolean;
 }) => {
   return (
     <button
       type='button'
-      onClick={() => !disabled && onCheckedChange(!checked)}
-      disabled={disabled}
+      onClick={() => !disabled && !isLoading && onCheckedChange(!checked)}
+      disabled={disabled || isLoading}
       className={`relative inline-flex h-6 w-11 items-center rounded-full ${
         checked ? 'bg-indigo-600' : 'bg-gray-200'
-      } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+      } ${disabled || isLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
     >
       <span className='sr-only'>Toggle voting status</span>
       <span
         className={`${
           checked ? 'translate-x-6' : 'translate-x-1'
-        } inline-block h-4 w-4 transform rounded-full bg-white transition`}
-      />
+        } inline-flex items-center justify-center h-4 w-4 transform rounded-full bg-white transition`}
+      >
+        {isLoading && (
+          <Loader2 className='w-3 h-3 text-indigo-500 animate-spin' />
+        )}
+      </span>
     </button>
   );
 };
@@ -177,7 +183,11 @@ export function VoteForm({ meetingId }: VoteFormProps) {
 
   const handleAddCandidate = (categoryIndex: number) => {
     const updatedVoteForm = [...voteForm];
-    updatedVoteForm[categoryIndex].candidates.push({ name: '', segment: '' });
+    updatedVoteForm[categoryIndex].candidates.push({
+      name: '',
+      segment: '',
+      count: 0,
+    });
     setVoteForm(updatedVoteForm);
   };
 
@@ -192,6 +202,8 @@ export function VoteForm({ meetingId }: VoteFormProps) {
       segment:
         updatedVoteForm[categoryIndex].candidates[candidateIndex]?.segment ||
         '',
+      count:
+        updatedVoteForm[categoryIndex].candidates[candidateIndex]?.count || 0,
     };
     setVoteForm(updatedVoteForm);
   };
@@ -219,15 +231,15 @@ export function VoteForm({ meetingId }: VoteFormProps) {
 
     try {
       // First, save the form to ensure all candidates are properly recorded
-      await saveVoteFormAsync({
-        meetingId,
-        voteForm,
-      });
+      // await saveVoteFormAsync({
+      //   meetingId,
+      //   voteForm,
+      // });
 
       // Then toggle the voting status
       await updateVoteStatusAsync({
         meetingId,
-        isOpen: !voteStatus.open,
+        open: !voteStatus.open,
       });
     } catch (error) {
       console.error('Error toggling voting status:', error);
@@ -238,9 +250,15 @@ export function VoteForm({ meetingId }: VoteFormProps) {
     if (e) e.preventDefault();
 
     try {
+      // strip of empty candidates
+      const updatedVoteForm = voteForm.map((category) => ({
+        ...category,
+        candidates: category.candidates.filter((candidate) => candidate.name),
+      }));
+
       await saveVoteFormAsync({
         meetingId,
-        voteForm,
+        voteForm: updatedVoteForm,
       });
     } catch (error) {
       console.error('Error saving vote form:', error);
@@ -317,6 +335,7 @@ export function VoteForm({ meetingId }: VoteFormProps) {
             checked={voteStatus?.open || false}
             onCheckedChange={handleToggleVoting}
             disabled={isSubmitting}
+            isLoading={isUpdatingStatus}
           />
         </div>
       </div>
@@ -329,9 +348,6 @@ export function VoteForm({ meetingId }: VoteFormProps) {
         <ul className='list-disc pl-5 space-y-1'>
           <li>Define voting categories and candidates below.</li>
           <li>Toggle the switch above to open/close voting.</li>
-          {voteStatus?.open && (
-            <li>Share the voting link with meeting attendees.</li>
-          )}
         </ul>
       </div>
 
@@ -434,7 +450,7 @@ export function VoteForm({ meetingId }: VoteFormProps) {
                         className='flex items-start sm:items-center justify-between gap-2 bg-gray-50 rounded-md py-1 px-2 relative'
                       >
                         <div className='grid grid-cols-1 sm:grid-cols-3 gap-2 w-full'>
-                          <div>
+                          <div className='relative'>
                             <RoleTakerInput
                               value={{
                                 name: candidate.name,
@@ -451,6 +467,9 @@ export function VoteForm({ meetingId }: VoteFormProps) {
                               placeholder='Enter candidate name'
                               disableMemberLookup={true}
                             />
+                            <span className='absolute top-1/2 transform -translate-y-1/2 right-0 -translate-x-3 text-xs font-medium text-gray-400 bg-gray-100 rounded-md inline-flex items-center justify-center h-6 p-1.5'>
+                              {candidate.count}
+                            </span>
                           </div>
 
                           {/* Segment Type Selector */}
@@ -607,8 +626,10 @@ export function VoteForm({ meetingId }: VoteFormProps) {
       <div className='mt-14 pt-6 border-t'>
         <button
           type='submit'
-          disabled={isSubmitting}
-          className='w-full flex items-center justify-center gap-2 py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50'
+          disabled={voteStatus?.open || isSubmitting}
+          className={`w-full flex items-center justify-center gap-2 py-2 px-4 border border-transparent rounded-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 ${
+            voteStatus?.open ? 'cursor-not-allowed' : ''
+          }`}
         >
           {isSubmitting ? (
             <Loader2 className='w-4 h-4 animate-spin' />

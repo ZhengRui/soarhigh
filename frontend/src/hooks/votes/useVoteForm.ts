@@ -10,7 +10,7 @@ import { getVotes } from '@/utils/votes';
 export function useVoteForm(meetingId: string) {
   return useQuery<CategoryCandidatesIF[]>({
     queryKey: ['voteForm', meetingId],
-    queryFn: () => getVotes(meetingId, true),
+    queryFn: () => getVotes(meetingId, true, true),
     enabled: !!meetingId,
     refetchOnWindowFocus: false,
   });

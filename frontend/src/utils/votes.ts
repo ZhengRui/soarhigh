@@ -24,7 +24,7 @@ const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT;
  * @param asForm Whether to return form-structured data (categories and candidates) instead of full vote data
  * @returns An array of votes or form-structured data depending on asForm parameter
  */
-export const getVotes = requestTemplate(
+const getVotesCore = requestTemplate(
   (meetingId: string, asForm: boolean = false) => ({
     url: `${apiEndpoint}/meetings/${meetingId}/votes${asForm ? '?as_form=true' : ''}`,
     method: 'GET',
@@ -35,6 +35,50 @@ export const getVotes = requestTemplate(
   true,
   true // soft auth - backend allows public access
 );
+
+export const getVotes = async (
+  meetingId: string,
+  asForm: boolean = false,
+  addMissingCategories: boolean = false
+) => {
+  const result = await getVotesCore(meetingId, asForm);
+  if (asForm && result.length > 0) {
+    // make sure the seven core categories are present
+    const defaultCategories = [
+      'Best Prepared Speaker',
+      'Best Host',
+      'Best Table Topic Speaker',
+      'Best Facilitator',
+      'Best Evaluator',
+      'Best Supporter',
+      'Best Meeting Manager',
+    ];
+
+    // add any missing categories
+    if (addMissingCategories) {
+      const missingCategories = defaultCategories.filter(
+        (category) =>
+          !result.some((r: CategoryCandidatesIF) => r.category === category)
+      );
+      result.push(
+        ...missingCategories.map((category) => ({ category, candidates: [] }))
+      );
+    }
+
+    // sort the result by category using the order of defaultCategories
+    // if the category is not in defaultCategories, move it to the end
+    result.sort((a: CategoryCandidatesIF, b: CategoryCandidatesIF) => {
+      const aIndex = defaultCategories.indexOf(a.category);
+      const bIndex = defaultCategories.indexOf(b.category);
+
+      if (aIndex === -1 && bIndex === -1) return 0;
+      if (aIndex === -1) return 1;
+      if (bIndex === -1) return -1;
+      return aIndex - bIndex;
+    });
+  }
+  return result;
+};
 
 /**
  * Get vote status for a meeting
@@ -81,14 +125,14 @@ export const saveVoteForm = requestTemplate(
  * @returns Success message
  */
 export const updateVoteStatus = requestTemplate(
-  (meetingId: string, isOpen: boolean) => ({
+  (meetingId: string, open: boolean) => ({
     url: `${apiEndpoint}/meetings/${meetingId}/votes/status`,
     method: 'PUT',
     headers: new Headers({
       'Content-Type': 'application/json',
       Accept: 'application/json',
     }),
-    body: JSON.stringify({ is_open: isOpen }),
+    body: JSON.stringify({ open }),
   }),
   responseHandlerTemplate,
   null,
@@ -143,7 +187,7 @@ export const extractCandidatesFromMeeting = (
   ) => {
     const category = voteForm.find((cat) => cat.category === categoryName);
     if (category && name && !category.candidates.some((c) => c.name === name)) {
-      category.candidates.push({ name, segment });
+      category.candidates.push({ name, segment, count: 0 });
     }
   };
 

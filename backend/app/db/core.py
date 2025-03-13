@@ -1017,7 +1017,7 @@ def update_votes_status(meeting_id: str, is_open: bool, user_id: str) -> Optiona
         Updated vote status or None if meeting not found/accessible
     """
     # Check if the meeting exists and user can manage it
-    meeting = get_meeting_by_id(meeting_id)
+    meeting = get_meeting_by_id(meeting_id, user_id)
     if not meeting:
         return None
 
@@ -1058,7 +1058,7 @@ def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List
         List of created/updated vote objects
     """
     # Check if the meeting exists
-    meeting = get_meeting_by_id(meeting_id)
+    meeting = get_meeting_by_id(meeting_id, user_id)
     if not meeting:
         raise ValueError("Meeting not found")
 
@@ -1071,7 +1071,7 @@ def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List
 
     # Prepare records to insert and update
     records_to_insert = []
-    records_to_update = []
+    records_to_keep = []
     processed_keys = set()
 
     # Process each category and candidate
@@ -1089,13 +1089,11 @@ def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List
             if not candidate:
                 continue
 
-            key = f"{category}|{candidate}"
+            key = f"{category}|{candidate['name']}"
             processed_keys.add(key)
 
             if key in existing_map:
-                # Record exists, mark for update
-                existing_vote = existing_map[key]
-                records_to_update.append(existing_vote["id"])
+                records_to_keep.append(key)
             else:
                 # New record
                 records_to_insert.append(
@@ -1108,33 +1106,23 @@ def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List
                     }
                 )
 
-    # Process the database operations
-    results = []
-
-    # Insert new records in batch
-    if records_to_insert:
-        insert_response = supabase.table("votes").insert(records_to_insert).execute()
-        results.extend(insert_response.data)
-
-    # Update existing records in batch
-    if records_to_update:
-        update_response = supabase.table("votes").update({}).in_("id", records_to_update).execute()
-
-        if update_response.data:
-            results.extend(update_response.data)
-
     # Delete votes that are no longer in the form - in batch if possible
+    to_delete_ids = []
     if processed_keys and existing_votes:
-        to_delete_ids = []
         for existing_vote in existing_votes:
             key = f"{existing_vote['category']}|{existing_vote['name']}"
             if key not in processed_keys:
                 to_delete_ids.append(existing_vote["id"])
 
-        if to_delete_ids:
-            supabase.table("votes").delete().in_("id", to_delete_ids).execute()
+    # Process the database operations
+    # Insert new records in batch
+    if records_to_insert:
+        supabase.table("votes").insert(records_to_insert).execute()
 
-    return results
+    if to_delete_ids:
+        supabase.table("votes").delete().in_("id", to_delete_ids).execute()
+
+    return vote_form
 
 
 def cast_votes(meeting_id: str, votes: List[Dict[str, str]]) -> List[Dict]:

@@ -61,6 +61,7 @@ export interface PostIF {
 export interface CandidateIF {
   name: string;
   segment?: string;
+  count?: number;
 }
 
 export interface CategoryCandidatesIF {
