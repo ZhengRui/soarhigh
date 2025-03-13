@@ -565,6 +565,12 @@ def delete_meeting(meeting_id: str, user_id: str, user_token: str) -> bool:
         # Delete awards first
         user_client.table("awards").delete().eq("meeting_id", meeting_id).execute()
 
+        # Delete votes next
+        user_client.table("votes").delete().eq("meeting_id", meeting_id).execute()
+
+        # Delete votes_status next
+        user_client.table("votes_status").delete().eq("meeting_id", meeting_id).execute()
+
         # Delete segments next
         user_client.table("segments").delete().eq("meeting_id", meeting_id).execute()
 
