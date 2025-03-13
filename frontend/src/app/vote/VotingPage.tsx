@@ -30,6 +30,19 @@ export function VotingPage() {
     latestMeeting?.id || ''
   );
 
+  // Calculate whether voting is allowed based on meeting time and status
+  const canVote = React.useMemo(() => {
+    if (!voteStatus?.open || !latestMeeting) return false;
+
+    // Check if the current time is before the meeting end time
+    const now = new Date();
+    const meetingEndDateTime = new Date(
+      `${latestMeeting.date}T${latestMeeting.end_time}`
+    );
+
+    return now < meetingEndDateTime && voteStatus.open;
+  }, [voteStatus, latestMeeting]);
+
   // Mutation for submitting votes
   const { mutateAsync: submitVote, isPending: isSubmitting } = useSubmitVote();
 
@@ -50,8 +63,8 @@ export function VotingPage() {
       return;
     }
 
-    if (!voteStatus?.open) {
-      toast.error('Voting is currently closed');
+    if (!canVote) {
+      toast.error('Voting is currently not available');
       return;
     }
 
@@ -155,11 +168,13 @@ export function VotingPage() {
         </div>
       </div>
 
-      {!voteStatus?.open && (
-        <div className='mb-6 p-4 bg-red-50 border border-red-100 rounded-md'>
-          <p className='text-sm text-red-600'>
-            Voting is currently closed. You can review the categories, but votes
-            cannot be submitted.
+      {!canVote && (
+        <div className='mb-6 p-4 bg-orange-50 border border-orange-100 rounded-md'>
+          <p className='text-sm text-orange-600'>
+            {!voteStatus?.open
+              ? 'Voting is currently closed. '
+              : 'Voting is no longer available as the meeting has ended. '}
+            You can review the categories, but votes cannot be submitted.
           </p>
         </div>
       )}
@@ -174,7 +189,7 @@ export function VotingPage() {
               onSelectCandidate={(candidateName: string) =>
                 handleSelectCandidate(category.category, candidateName)
               }
-              disabled={!voteStatus?.open}
+              disabled={!canVote}
             />
           ))}
         </div>
@@ -182,7 +197,7 @@ export function VotingPage() {
         <div className='mt-12'>
           <button
             type='submit'
-            disabled={isSubmitting || !voteStatus?.open}
+            disabled={isSubmitting || !canVote}
             className='w-full flex items-center justify-center gap-2 py-3 px-4 bg-indigo-600 text-white rounded-md font-medium hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors'
           >
             {isSubmitting ? (
@@ -190,7 +205,7 @@ export function VotingPage() {
             ) : (
               <VoteIcon className='w-5 h-5' />
             )}
-            {voteStatus?.open ? 'Submit Votes' : 'Voting is Closed'}
+            {canVote ? 'Submit Votes' : 'Voting is Not Available'}
           </button>
         </div>
       </form>

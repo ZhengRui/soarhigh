@@ -99,6 +99,26 @@ export function VoteForm({ meetingId }: VoteFormProps) {
     candidateIndex: number;
   } | null>(null);
 
+  // Calculate highest vote counts for each category
+  const highestVoteCounts = React.useMemo(() => {
+    if (!voteForm) return {};
+
+    const result: Record<string, number> = {};
+
+    voteForm.forEach((category) => {
+      if (category.candidates.length === 0) return;
+
+      const maxCount = Math.max(
+        ...category.candidates.map((c) => c.count || 0)
+      );
+      if (maxCount > 0) {
+        result[category.category] = maxCount;
+      }
+    });
+
+    return result;
+  }, [voteForm]);
+
   // Refs for handling outside clicks
   const categoryDropdownRef = useRef<HTMLDivElement>(null);
   const categoryNameRef = useRef<HTMLDivElement>(null);
@@ -461,155 +481,178 @@ export function VoteForm({ meetingId }: VoteFormProps) {
               <div className='mt-3'>
                 <div className='space-y-2'>
                   {categoryItem.candidates.map(
-                    (candidate, candidateIndex: number) => (
-                      <div
-                        key={candidateIndex}
-                        className='flex items-start sm:items-center justify-between gap-2 bg-gray-50 rounded-md py-1 px-2 relative'
-                      >
-                        <div className='grid grid-cols-1 sm:grid-cols-3 gap-2 w-full'>
-                          <div className='relative'>
-                            <RoleTakerInput
-                              value={{
-                                name: candidate.name,
-                                member_id: '',
-                                id: '',
-                              }}
-                              onChange={(value) =>
-                                handleCandidateChange(
-                                  categoryIndex,
-                                  candidateIndex,
-                                  value
-                                )
-                              }
-                              placeholder='Enter candidate name'
-                              disableMemberLookup={true}
-                            />
-                            <span className='absolute top-1/2 transform -translate-y-1/2 right-0 -translate-x-3 text-xs font-medium text-gray-400 bg-gray-100 rounded-md inline-flex items-center justify-center h-6 p-1.5'>
-                              {candidate.count}
-                            </span>
-                          </div>
+                    (candidate, candidateIndex: number) => {
+                      // Check if this candidate has the highest vote count
+                      const isHighestVote =
+                        highestVoteCounts[categoryItem.category] > 0 &&
+                        candidate.count ===
+                          highestVoteCounts[categoryItem.category];
 
-                          {/* Segment Type Selector */}
-                          <div className='relative sm:col-span-2 flex items-center'>
-                            <div className='select-none w-full'>
-                              <div className='flex items-center gap-2 w-full'>
-                                {editingSegmentTypeIndices?.categoryIndex ===
-                                  categoryIndex &&
-                                editingSegmentTypeIndices?.candidateIndex ===
-                                  candidateIndex ? (
-                                  <input
-                                    type='text'
-                                    value={candidate.segment || ''}
-                                    onChange={(e) =>
-                                      handleCustomSegmentTypeChange(
-                                        categoryIndex,
-                                        candidateIndex,
-                                        e.target.value
-                                      )
-                                    }
-                                    onBlur={handleSegmentTypeInputBlur}
-                                    className='text-xs font-medium w-full px-2 py-2 border rounded bg-white border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200'
-                                    autoFocus
-                                    onClick={(e) => e.stopPropagation()}
-                                    placeholder='Enter segment type'
-                                  />
-                                ) : (
-                                  <div className='flex items-center gap-1 w-full'>
-                                    <div
-                                      ref={
-                                        openSegmentTypeIndex?.categoryIndex ===
-                                          categoryIndex &&
-                                        openSegmentTypeIndex?.candidateIndex ===
-                                          candidateIndex
-                                          ? segmentTypeRef
-                                          : null
+                      return (
+                        <div
+                          key={candidateIndex}
+                          className={`flex items-start sm:items-center justify-between gap-2 rounded-md py-1 px-2 relative ${
+                            isHighestVote ? 'bg-indigo-200' : 'bg-gray-200'
+                          }`}
+                        >
+                          <div className='grid grid-cols-1 sm:grid-cols-3 gap-2 w-full'>
+                            <div className='relative'>
+                              <RoleTakerInput
+                                value={{
+                                  name: candidate.name,
+                                  member_id: '',
+                                  id: '',
+                                }}
+                                onChange={(value) =>
+                                  handleCandidateChange(
+                                    categoryIndex,
+                                    candidateIndex,
+                                    value
+                                  )
+                                }
+                                placeholder='Enter candidate name'
+                                disableMemberLookup={true}
+                              />
+                              <span
+                                className={`absolute top-1/2 transform -translate-y-1/2 right-0 -translate-x-3 text-xs font-medium rounded-md inline-flex items-center justify-center h-6 p-1.5 ${
+                                  isHighestVote
+                                    ? 'text-indigo-600 bg-indigo-200'
+                                    : 'text-gray-400 bg-gray-100'
+                                }`}
+                              >
+                                {candidate.count}
+                              </span>
+                            </div>
+
+                            {/* Segment Type Selector */}
+                            <div className='relative sm:col-span-2 flex items-center'>
+                              <div className='select-none w-full'>
+                                <div className='flex items-center gap-2 w-full'>
+                                  {editingSegmentTypeIndices?.categoryIndex ===
+                                    categoryIndex &&
+                                  editingSegmentTypeIndices?.candidateIndex ===
+                                    candidateIndex ? (
+                                    <input
+                                      type='text'
+                                      value={candidate.segment || ''}
+                                      onChange={(e) =>
+                                        handleCustomSegmentTypeChange(
+                                          categoryIndex,
+                                          candidateIndex,
+                                          e.target.value
+                                        )
                                       }
-                                      className='flex items-center gap-1 cursor-pointer w-full sm:w-auto'
-                                      onClick={() => {
-                                        setOpenSegmentTypeIndex(
-                                          openSegmentTypeIndex?.categoryIndex ===
-                                            categoryIndex &&
-                                            openSegmentTypeIndex?.candidateIndex ===
-                                              candidateIndex
-                                            ? null
-                                            : { categoryIndex, candidateIndex }
-                                        );
-                                      }}
-                                    >
-                                      <span className='text-xs font-medium text-gray-600 border border-transparent py-2 sm:py-1.5 px-2 rounded bg-gray-100 truncate w-full text-wrap'>
-                                        {candidate.segment || 'Select segment'}
-                                      </span>
-                                      <ChevronDown
-                                        className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${
+                                      onBlur={handleSegmentTypeInputBlur}
+                                      className='text-xs font-medium w-full px-2 py-2 border rounded bg-white border-gray-300 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200'
+                                      autoFocus
+                                      onClick={(e) => e.stopPropagation()}
+                                      placeholder='Enter segment type'
+                                    />
+                                  ) : (
+                                    <div className='flex items-center gap-1 w-full'>
+                                      <div
+                                        ref={
                                           openSegmentTypeIndex?.categoryIndex ===
                                             categoryIndex &&
                                           openSegmentTypeIndex?.candidateIndex ===
                                             candidateIndex
-                                            ? 'transform rotate-180'
-                                            : ''
-                                        }`}
-                                      />
+                                            ? segmentTypeRef
+                                            : null
+                                        }
+                                        className='flex items-center gap-1 cursor-pointer w-full sm:w-auto'
+                                        onClick={() => {
+                                          setOpenSegmentTypeIndex(
+                                            openSegmentTypeIndex?.categoryIndex ===
+                                              categoryIndex &&
+                                              openSegmentTypeIndex?.candidateIndex ===
+                                                candidateIndex
+                                              ? null
+                                              : {
+                                                  categoryIndex,
+                                                  candidateIndex,
+                                                }
+                                          );
+                                        }}
+                                      >
+                                        <span className='text-xs font-medium text-gray-600 border border-transparent py-2 sm:py-1.5 px-2 rounded bg-gray-100 truncate w-full text-wrap'>
+                                          {candidate.segment ||
+                                            'Select segment'}
+                                        </span>
+                                        <ChevronDown
+                                          className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${
+                                            openSegmentTypeIndex?.categoryIndex ===
+                                              categoryIndex &&
+                                            openSegmentTypeIndex?.candidateIndex ===
+                                              candidateIndex
+                                              ? 'transform rotate-180'
+                                              : ''
+                                          }`}
+                                        />
+                                      </div>
+                                      <button
+                                        onClick={(e) =>
+                                          handleSegmentTypeEditClick(
+                                            categoryIndex,
+                                            candidateIndex,
+                                            e
+                                          )
+                                        }
+                                        className='text-gray-400 hover:text-gray-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 duration-300'
+                                        title='Edit segment type'
+                                      >
+                                        <PencilLine className='w-3 h-3' />
+                                      </button>
                                     </div>
-                                    <button
-                                      onClick={(e) =>
-                                        handleSegmentTypeEditClick(
-                                          categoryIndex,
-                                          candidateIndex,
-                                          e
-                                        )
-                                      }
-                                      className='text-gray-400 hover:text-gray-500 transition-colors cursor-pointer opacity-0 group-hover:opacity-100 duration-300'
-                                      title='Edit segment type'
+                                  )}
+                                </div>
+                                {openSegmentTypeIndex?.categoryIndex ===
+                                  categoryIndex &&
+                                  openSegmentTypeIndex?.candidateIndex ===
+                                    candidateIndex && (
+                                    <div
+                                      ref={segmentTypeDropdownRef}
+                                      className='absolute left-0 top-full mt-1 w-full bg-gray-50 rounded-md shadow-lg border border-gray-200 z-30'
                                     >
-                                      <PencilLine className='w-3 h-3' />
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                              {openSegmentTypeIndex?.categoryIndex ===
-                                categoryIndex &&
-                                openSegmentTypeIndex?.candidateIndex ===
-                                  candidateIndex && (
-                                  <div
-                                    ref={segmentTypeDropdownRef}
-                                    className='absolute left-0 top-full mt-1 w-full bg-gray-50 rounded-md shadow-lg border border-gray-200 z-30'
-                                  >
-                                    <div className='py-1 max-h-40 overflow-auto'>
-                                      {Object.keys(SEGMENT_TYPE_MAP).map(
-                                        (type) => (
-                                          <div
-                                            key={type}
-                                            className='px-3 py-1.5 text-xs text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 cursor-pointer truncate'
-                                            onClick={() =>
-                                              handleSegmentTypeChange(
-                                                categoryIndex,
-                                                candidateIndex,
-                                                type
-                                              )
-                                            }
-                                          >
-                                            {type}
-                                          </div>
-                                        )
-                                      )}
+                                      <div className='py-1 max-h-40 overflow-auto'>
+                                        {Object.keys(SEGMENT_TYPE_MAP).map(
+                                          (type) => (
+                                            <div
+                                              key={type}
+                                              className='px-3 py-1.5 text-xs text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 cursor-pointer truncate'
+                                              onClick={() =>
+                                                handleSegmentTypeChange(
+                                                  categoryIndex,
+                                                  candidateIndex,
+                                                  type
+                                                )
+                                              }
+                                            >
+                                              {type}
+                                            </div>
+                                          )
+                                        )}
+                                      </div>
                                     </div>
-                                  </div>
-                                )}
+                                  )}
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        <button
-                          type='button'
-                          onClick={() =>
-                            handleRemoveCandidate(categoryIndex, candidateIndex)
-                          }
-                          className='text-gray-400 hover:text-red-500 focus:outline-none'
-                        >
-                          <X className='w-4 h-4' />
-                        </button>
-                      </div>
-                    )
+                          <button
+                            type='button'
+                            onClick={() =>
+                              handleRemoveCandidate(
+                                categoryIndex,
+                                candidateIndex
+                              )
+                            }
+                            className='text-gray-400 hover:text-red-500 focus:outline-none'
+                          >
+                            <X className='w-4 h-4' />
+                          </button>
+                        </div>
+                      );
+                    }
                   )}
 
                   <button
