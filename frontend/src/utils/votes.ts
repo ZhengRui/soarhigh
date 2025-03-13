@@ -21,12 +21,11 @@ const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT;
 /**
  * Get votes for a meeting
  * @param meetingId The ID of the meeting
- * @param asForm Whether to return form-structured data (categories and candidates) instead of full vote data
- * @returns An array of votes or form-structured data depending on asForm parameter
+ * @returns Vote form data
  */
 const getVotesCore = requestTemplate(
-  (meetingId: string, asForm: boolean = false) => ({
-    url: `${apiEndpoint}/meetings/${meetingId}/votes${asForm ? '?as_form=true' : ''}`,
+  (meetingId: string) => ({
+    url: `${apiEndpoint}/meetings/${meetingId}/votes`,
     method: 'GET',
     headers: new Headers({ Accept: 'application/json' }),
   }),
@@ -38,11 +37,10 @@ const getVotesCore = requestTemplate(
 
 export const getVotes = async (
   meetingId: string,
-  asForm: boolean = false,
   addMissingCategories: boolean = false
 ) => {
-  const result = await getVotesCore(meetingId, asForm);
-  if (asForm && result.length > 0) {
+  const result = await getVotesCore(meetingId);
+  if (result.length > 0) {
     // make sure the seven core categories are present
     const defaultCategories = [
       'Best Prepared Speaker',

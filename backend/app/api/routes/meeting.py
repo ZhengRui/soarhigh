@@ -309,7 +309,6 @@ async def r_save_meeting_awards(
 @r.get("/meetings/{meeting_id}/votes", response_model=Union[List[Vote], List[CategoryCandidatesList]])
 async def r_get_meeting_votes(
     meeting_id: str = Path(..., description="The ID of the meeting to get votes for"),
-    as_form: bool = Query(False, description="Return votes in form format (categories and candidates)"),
     user: Optional[User] = Depends(get_optional_user),
 ):
     """
@@ -323,31 +322,26 @@ async def r_get_meeting_votes(
     try:
         votes = get_votes_by_meeting(meeting_id)
 
-        # If as_form=True OR user is not authenticated, return form-structured data
-        if as_form or not user:
-            # Group votes by category and extract candidates
-            categories_dict: Dict[str, List[Candidate]] = {}
-            for vote in votes:
-                if vote["category"] not in categories_dict:
-                    categories_dict[vote["category"]] = []
-                if vote["name"] not in categories_dict[vote["category"]]:
-                    categories_dict[vote["category"]].append(
-                        Candidate(
-                            name=vote["name"],
-                            segment=vote["segment"],
-                            count=vote["count"],
-                        )
+        # Group votes by category and extract candidates
+        categories_dict: Dict[str, List[Candidate]] = {}
+        for vote in votes:
+            if vote["category"] not in categories_dict:
+                categories_dict[vote["category"]] = []
+            if vote["name"] not in categories_dict[vote["category"]]:
+                categories_dict[vote["category"]].append(
+                    Candidate(
+                        name=vote["name"],
+                        segment=vote["segment"],
+                        count=vote["count"] if user else 0,
                     )
+                )
 
-            # Convert to CategoryCandidatesList format
-            result = [
-                CategoryCandidatesList(category=category, candidates=candidates)
-                for category, candidates in categories_dict.items()
-            ]
-            return result
-        else:
-            # Return full vote data for authenticated users when as_form=False
-            return [Vote(**vote) for vote in votes]
+        # Convert to CategoryCandidatesList format
+        result = [
+            CategoryCandidatesList(category=category, candidates=candidates)
+            for category, candidates in categories_dict.items()
+        ]
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
 
