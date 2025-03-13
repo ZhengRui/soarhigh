@@ -33,13 +33,13 @@ export const createMeeting = requestTemplate(
  * @returns Paginated list of meetings the user has access to
  */
 export const getMeetings = requestTemplate(
-  (options: { page?: number; page_size?: number; status?: string } = {}) => {
+  (options: { page?: number; pageSize?: number; status?: string } = {}) => {
     // Apply default values
     const page = options.page || 1;
-    const page_size = options.page_size || 10;
+    const pageSize = options.pageSize || 10;
 
     // Construct URL with query parameters
-    let url = `${apiEndpoint}/meetings?page=${page}&page_size=${page_size}`;
+    let url = `${apiEndpoint}/meetings?page=${page}&page_size=${pageSize}`;
 
     // Add status parameter if provided
     if (options.status) {

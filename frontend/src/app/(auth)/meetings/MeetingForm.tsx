@@ -268,10 +268,11 @@ export function MeetingForm({
         // Create new meeting
         await createMeeting(meetingData);
 
+        await queryClient.invalidateQueries({ queryKey: ['meetings'] });
         await queryClient.invalidateQueries({
           queryKey: ['meeting', meetingId],
         });
-        await queryClient.invalidateQueries({ queryKey: ['meetings'] });
+        await queryClient.invalidateQueries({ queryKey: ['latestMeeting'] });
 
         toast.success('Meeting created successfully!');
 
@@ -287,6 +288,7 @@ export function MeetingForm({
         await queryClient.invalidateQueries({
           queryKey: ['meeting', meetingId],
         });
+        await queryClient.invalidateQueries({ queryKey: ['latestMeeting'] });
 
         toast.success('Meeting updated successfully!');
       }
@@ -313,6 +315,7 @@ export function MeetingForm({
 
       // Invalidate the meetings query to refresh the list
       await queryClient.invalidateQueries({ queryKey: ['meetings'] });
+      await queryClient.invalidateQueries({ queryKey: ['latestMeeting'] });
 
       toast.success('Meeting deleted successfully!');
 

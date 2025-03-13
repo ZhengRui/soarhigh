@@ -1071,7 +1071,7 @@ def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List
 
     # Prepare records to insert and update
     records_to_insert = []
-    records_to_keep = []
+    records_to_update = []
     processed_keys = set()
 
     # Process each category and candidate
@@ -1090,10 +1090,21 @@ def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List
                 continue
 
             key = f"{category}|{candidate['name']}"
+
+            if key in processed_keys:
+                raise ValueError(
+                    f"Duplicate candidate '{candidate['name']}' in category '{category}'. "
+                    f"Each candidate name must be unique within a category."
+                )
+
             processed_keys.add(key)
 
             if key in existing_map:
-                records_to_keep.append(key)
+                if candidate["segment"] != existing_map[key]["segment"]:
+                    # Include all fields from existing record, then update segment
+                    update_record = existing_map[key].copy()
+                    update_record["segment"] = candidate["segment"]
+                    records_to_update.append(update_record)
             else:
                 # New record
                 records_to_insert.append(
@@ -1115,10 +1126,15 @@ def save_vote_form(meeting_id: str, vote_form: List[Dict], user_id: str) -> List
                 to_delete_ids.append(existing_vote["id"])
 
     # Process the database operations
+    # Update existing records in batch
+    if records_to_update:
+        supabase.table("votes").upsert(records_to_update).execute()
+
     # Insert new records in batch
     if records_to_insert:
         supabase.table("votes").insert(records_to_insert).execute()
 
+    # Delete votes that are no longer in the form - in batch if possible
     if to_delete_ids:
         supabase.table("votes").delete().in_("id", to_delete_ids).execute()
 

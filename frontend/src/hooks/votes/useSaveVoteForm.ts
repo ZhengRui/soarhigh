@@ -20,7 +20,6 @@ export function useSaveVoteForm() {
       saveVoteForm(meetingId, voteForm),
     onSuccess: (_, { meetingId }) => {
       // Invalidate relevant queries
-      queryClient.invalidateQueries({ queryKey: ['votes', meetingId] });
       queryClient.invalidateQueries({ queryKey: ['voteForm', meetingId] });
       toast.success('Vote form saved successfully');
     },

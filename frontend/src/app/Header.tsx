@@ -114,6 +114,7 @@ const Header = () => {
     queryClient.invalidateQueries({ queryKey: ['whoami'] });
     queryClient.invalidateQueries({ queryKey: ['isAdmin'] });
     queryClient.invalidateQueries({ queryKey: ['meetings'] });
+    queryClient.invalidateQueries({ queryKey: ['latestMeeting'] });
     queryClient.invalidateQueries({ queryKey: ['posts'] });
   };
 

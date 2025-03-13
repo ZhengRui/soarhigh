@@ -16,6 +16,7 @@ import { useDefaultVoteForm } from '@/hooks/votes/useDefaultVoteForm';
 import { CategoryCandidatesIF, AttendeeIF } from '@/interfaces';
 import { RoleTakerInput } from './RoleTakerInput';
 import { SEGMENT_TYPE_MAP } from './default';
+import toast from 'react-hot-toast';
 
 // Component for Switch since we don't have the ui library
 const Switch = ({
@@ -255,6 +256,22 @@ export function VoteForm({ meetingId }: VoteFormProps) {
         ...category,
         candidates: category.candidates.filter((candidate) => candidate.name),
       }));
+
+      // check for duplicates
+      const duplicateCandidates = updatedVoteForm.some((category) =>
+        category.candidates.some((candidate, index) =>
+          category.candidates
+            .slice(0, index)
+            .some((c) => c.name === candidate.name)
+        )
+      );
+
+      if (duplicateCandidates) {
+        toast.error(
+          'Duplicate candidates found. Please ensure each candidate name is unique within a category.'
+        );
+        return;
+      }
 
       await saveVoteFormAsync({
         meetingId,
