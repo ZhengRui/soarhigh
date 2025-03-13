@@ -7,6 +7,7 @@ import {
   Loader2,
   Vote as VoteIcon,
   ChevronDown,
+  RefreshCw,
 } from 'lucide-react';
 import { useVoteForm } from '@/hooks/votes/useVoteForm';
 import { useVoteStatus } from '@/hooks/votes/useVoteStatus';
@@ -69,8 +70,11 @@ type VoteFormProps = {
 
 export function VoteForm({ meetingId }: VoteFormProps) {
   // Use the vote-related hooks
-  const { data: voteFormData, isLoading: isLoadingVoteForm } =
-    useVoteForm(meetingId);
+  const {
+    data: voteFormData,
+    isLoading: isLoadingVoteForm,
+    refetch: refetchVoteForm,
+  } = useVoteForm(meetingId);
   const { data: voteStatus, isLoading: isLoadingVoteStatus } =
     useVoteStatus(meetingId);
   const { defaultVoteForm, isLoading: isLoadingDefaultForm } =
@@ -98,6 +102,9 @@ export function VoteForm({ meetingId }: VoteFormProps) {
     categoryIndex: number;
     candidateIndex: number;
   } | null>(null);
+
+  // Add state for tracking refresh operation
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Calculate highest vote counts for each category
   const highestVoteCounts = React.useMemo(() => {
@@ -341,6 +348,50 @@ export function VoteForm({ meetingId }: VoteFormProps) {
       segment: value,
     };
     setVoteForm(updatedVoteForm);
+  };
+
+  // Function to handle refresh of vote data
+  const handleRefreshVotes = async () => {
+    setIsRefreshing(true);
+    try {
+      const result = await refetchVoteForm();
+      if (result.data) {
+        // Create a mapping of category+name to new data
+        const newDataMap: Record<string, any> = {};
+        result.data.forEach((category) => {
+          category.candidates.forEach((candidate) => {
+            const key = `${category.category}|${candidate.name}`;
+            newDataMap[key] = candidate;
+          });
+        });
+
+        // Update current voteForm with new counts but preserve order
+        const updatedVoteForm = voteForm.map((category) => ({
+          ...category,
+          candidates: category.candidates.map((candidate) => {
+            const key = `${category.category}|${candidate.name}`;
+            const newCandidate = newDataMap[key];
+
+            // If found, update the count while preserving other properties
+            if (newCandidate) {
+              return {
+                ...candidate,
+                count: newCandidate.count,
+              };
+            }
+            return candidate;
+          }),
+        }));
+
+        setVoteForm(updatedVoteForm);
+        toast.success('Vote counts updated');
+      }
+    } catch (error) {
+      toast.error('Failed to refresh vote data');
+      console.error('Error refreshing vote data:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const isLoading =
@@ -699,6 +750,25 @@ export function VoteForm({ meetingId }: VoteFormProps) {
           {'Save Voting Setup'}
         </button>
       </div>
+
+      {/* Floating refresh button - only visible when voting is open */}
+      {voteStatus?.open && (
+        <div className='fixed left-6 bottom-6 z-50'>
+          <button
+            type='button'
+            onClick={handleRefreshVotes}
+            disabled={isRefreshing}
+            className='flex items-center justify-center h-12 w-12 rounded-full bg-indigo-600 text-white shadow-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors'
+            title='Refresh vote data'
+          >
+            {isRefreshing ? (
+              <Loader2 className='h-5 w-5 animate-spin' />
+            ) : (
+              <RefreshCw className='h-5 w-5' />
+            )}
+          </button>
+        </div>
+      )}
     </form>
   );
 }

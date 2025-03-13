@@ -997,9 +997,11 @@ def get_votes_by_meeting(meeting_id: str) -> List[Dict]:
         meeting_id: The ID of the meeting
 
     Returns:
-        List of vote objects
+        List of vote objects sorted by creation time
     """
-    response = supabase.table("votes").select("*").eq("meeting_id", meeting_id).execute()
+    response = (
+        supabase.table("votes").select("*").eq("meeting_id", meeting_id).order("created_at", desc=False).execute()
+    )
 
     return response.data
 

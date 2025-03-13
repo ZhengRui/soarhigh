@@ -444,7 +444,7 @@ async def r_cast_vote(
 
         results = cast_votes(meeting_id, votes_list)
         if not results:
-            raise HTTPException(status_code=400, detail="Voting is closed or none of the vote records exist")
+            raise ValueError("Voting is closed or none of the vote records exist")
         return [Vote(**vote) for vote in results]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
