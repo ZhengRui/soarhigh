@@ -436,7 +436,7 @@ async def r_cast_vote(
     Cast multiple votes for candidates across different categories.
 
     This endpoint casts votes for specific candidates in various categories.
-    Anyone can cast votes, but voting must be open.
+    Anyone can cast votes, but voting must be open and the meeting must not have ended.
     """
     try:
         # Convert the Pydantic model to a list of dictionaries

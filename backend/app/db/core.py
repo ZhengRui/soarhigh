@@ -1152,44 +1152,64 @@ def cast_votes(meeting_id: str, votes: List[Dict[str, str]]) -> List[Dict]:
     Returns:
         List of updated vote objects
     """
+    # First, check if the meeting has ended (current time is after end_time)
+    meeting_data = supabase.table("meetings").select("end_time, date").eq("id", meeting_id).execute()
+
+    if meeting_data.data:
+        from datetime import datetime
+
+        meeting = meeting_data.data[0]
+        meeting_date = meeting.get("date")
+        meeting_end_time = meeting.get("end_time")
+
+        if meeting_date and meeting_end_time:
+            # Create meeting end datetime
+            meeting_datetime_str = f"{meeting_date} {meeting_end_time}"
+            try:
+                meeting_end = datetime.strptime(meeting_datetime_str, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # Try alternative format if the first one fails
+                meeting_end = datetime.strptime(meeting_datetime_str, "%Y-%m-%d %H:%M")
+
+            # Get current time
+            current_time = datetime.now()
+
+            # If current time is after meeting end time, treat as closed
+            if current_time > meeting_end:
+                return []
+
     # Check if voting is open
     status = get_votes_status(meeting_id)
     if not status or not status["open"]:
         return []
 
     # Validate and process each vote
-    results = []
-    vote_ids_to_increment = []
+    if not votes:
+        return []
 
-    # First, get all existing votes for this meeting - more efficient than individual lookups
+    # First, get all existing votes for this meeting to validate vote existence
     all_votes = get_votes_by_meeting(meeting_id)
     vote_map = {f"{v['category']}|{v['name']}": v for v in all_votes}
 
-    # Identify valid votes to increment
+    # Prepare valid votes for batch processing
+    valid_votes = []
     for vote in votes:
         if "category" not in vote or "name" not in vote:
             continue
 
         key = f"{vote['category']}|{vote['name']}"
         if key in vote_map:
-            vote_ids_to_increment.append(vote_map[key]["id"])
+            valid_votes.append({"category": vote["category"], "name": vote["name"]})
 
-    # Batch increment all votes in a single operation
-    if vote_ids_to_increment:
-        # Unfortunately, we can't do a true batch increment with Supabase REST API
-        # We'll do individual increments efficiently
-        for vote_id in vote_ids_to_increment:
-            # Get current count
-            count_query = supabase.table("votes").select("count").eq("id", vote_id).execute()
-            if not count_query.data:
-                continue
+    # If no valid votes, return early
+    if not valid_votes:
+        return []
 
-            current_count = count_query.data[0]["count"]
+    # Use the PostgreSQL function for atomic increments
+    # This handles concurrent voting safely at the database level
+    result = supabase.rpc("increment_votes", {"meeting_id_param": meeting_id, "vote_data": valid_votes}).execute()
 
-            # Increment count
-            update_response = supabase.table("votes").update({"count": current_count + 1}).eq("id", vote_id).execute()
+    if result.data:
+        return result.data
 
-            if update_response.data:
-                results.extend(update_response.data)
-
-    return results
+    return []

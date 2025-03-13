@@ -439,6 +439,37 @@ CREATE OR REPLACE TRIGGER on_auth_user_created
   FOR EACH ROW
   EXECUTE FUNCTION handle_new_member();
 
+-- Function to atomically increment votes
+CREATE OR REPLACE FUNCTION increment_votes(
+    meeting_id_param UUID,
+    vote_data JSONB
+)
+RETURNS SETOF votes AS $$
+DECLARE
+    vote_record JSONB;
+    updated_vote votes;
+BEGIN
+    -- Loop through each vote in the vote_data array
+    FOR vote_record IN SELECT jsonb_array_elements(vote_data)
+    LOOP
+        -- Atomically increment the count for the matching vote
+        UPDATE votes
+        SET count = count + 1
+        WHERE meeting_id = meeting_id_param
+          AND category = vote_record->>'category'
+          AND name = vote_record->>'name'
+        RETURNING * INTO updated_vote;
+
+        -- Return the updated vote
+        IF updated_vote IS NOT NULL THEN
+            RETURN NEXT updated_vote;
+        END IF;
+    END LOOP;
+
+    RETURN;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- =============================================
 -- POTENTIAL FUTURE CHANGES
 -- =============================================
