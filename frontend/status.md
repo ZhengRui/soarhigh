@@ -2,7 +2,7 @@
 
 ## Application Overview
 
-This Next.js application serves as the web platform for the "SoarHigh Toastmasters Club," providing functionality for meeting management, growth tracking, awards recognition, and posts. The application has both public-facing components and authenticated sections.
+This Next.js application serves as the web platform for the "SoarHigh Toastmasters Club," providing functionality for meeting management, growth tracking, awards recognition, posts, and voting. The application has both public-facing components and authenticated sections.
 
 ## Application Structure
 
@@ -34,6 +34,7 @@ All routes in the (auth) group are protected by authentication middleware which 
 
 - **/growth** - Club growth metrics/management
 - **/awards** - Management of club awards/recognition
+- **/votes** - Management of meeting voting
 
 ## User Experience by Route
 
@@ -130,6 +131,15 @@ All routes in the (auth) group are protected by authentication middleware which 
 - Validation with appropriate UI feedback
 - Save functionality to submit all awards at once
 
+### Meeting Voting Component
+
+- Component for meeting voting functionality
+- Categorized voting options (Best Speaker, Best Table Topics, Best Evaluator, etc.)
+- Support for both members and guests to cast votes
+- Visual status indicator for open/closed voting
+- Vote count tracking
+- Admin controls to open/close voting for a meeting
+
 ## Data Model
 
 The application uses several key interfaces:
@@ -140,6 +150,8 @@ The application uses several key interfaces:
 - **MeetingIF** - Complete meeting data structure with status field ("draft" or "published")
 - **AwardIF** - Award structure with meeting_id, category, and winner fields
 - **PostIF** - Post structure with title, slug, content, visibility, and author information
+- **VoteIF** - Vote structure with meeting_id, category, name, segment (optional), and count fields
+- **VoteStatusIF** - Vote status structure with meeting_id and open (boolean) fields
 
 ## Technical Implementation
 
@@ -170,6 +182,9 @@ The application uses several key interfaces:
 - Attendee handling for role assignments
 - Meeting awards management
 - Post management with create, read, update, and delete capabilities
+- Meeting voting system with category-based voting
+- Vote status management (open/close voting)
+- Voting permissions for members and non-members
 
 ### Current Implementation Details
 
@@ -219,5 +234,14 @@ The meeting management workflow is now fully implemented:
    - Complete CRUD operations for posts
    - Visibility controls (public/private)
    - Access control based on visibility and user authentication
+
+8. **Voting System**
+
+   - Category-based voting for meetings (Best Speaker, Best Table Topics, etc.)
+   - Voting status management (open/close)
+   - Vote counting with atomic operations
+   - Different permissions for members and non-members
+   - Admin controls for managing voting
+   - Real-time vote count updates
 
 The application follows a clean, modern UI design with gradient accents, responsive layouts, and thoughtful user interactions. The meeting creation workflow is particularly sophisticated, offering multiple creation methods and detailed customization options.
