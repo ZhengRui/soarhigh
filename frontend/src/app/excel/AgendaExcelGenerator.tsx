@@ -6,11 +6,24 @@ import { saveAs } from 'file-saver';
 import AgendaExcelPreviewer from './AgendaExcelPreviewer';
 
 // Define a new section data type with array-based rows
+type CellData =
+  | string
+  | number
+  | {
+      text: string | number;
+      style?: {
+        alignment?: {
+          horizontal?: 'left' | 'center' | 'right';
+          vertical?: 'top' | 'middle' | 'bottom';
+        };
+      };
+    };
+
 type ArraySectionData = {
   title: string;
   headers: string[];
   columnWidths?: number[];
-  rows: Array<(string | number)[]>;
+  rows: Array<CellData[]>;
 };
 
 const AgendaExcelGenerator: React.FC = () => {
@@ -137,7 +150,9 @@ const AgendaExcelGenerator: React.FC = () => {
     // Add data rows
     data.rows.forEach((rowData) => {
       // Filter out '>' in the row data (used for merging)
-      const dataRow = worksheet.addRow(rowData);
+      const dataRow = worksheet.addRow(
+        rowData.map((cell) => (typeof cell === 'object' ? cell.text : cell))
+      );
 
       // Apply styling
       const rowStyle = getRowStyle();
@@ -170,6 +185,14 @@ const AgendaExcelGenerator: React.FC = () => {
           // Activity columns - left align
           cell.alignment = { vertical: 'middle', horizontal: 'left' };
         }
+
+        // Apply cell-specific styles
+        const cellData = rowData[colNumber - 1];
+        if (typeof cellData === 'object' && cellData.style) {
+          if (cellData.style.alignment) {
+            cell.alignment = { ...cell.alignment, ...cellData.style.alignment };
+          }
+        }
       });
 
       // Handle cell merging in rows
@@ -177,18 +200,21 @@ const AgendaExcelGenerator: React.FC = () => {
       let rowMergeCount = 0;
 
       rowData.forEach((cell, index) => {
-        if (cell !== '>' && rowMergeStart === -1) {
+        const cellValue = typeof cell === 'object' ? cell.text : cell;
+        if (cellValue !== '>' && rowMergeStart === -1) {
           // Start of a potential merge
           rowMergeStart = index;
           rowMergeCount = 1;
-        } else if (cell === '>' && rowMergeStart !== -1) {
+        } else if (cellValue === '>' && rowMergeStart !== -1) {
           // Continue merge
           rowMergeCount++;
         }
 
         // End of row or next non-merge cell
         if (
-          (cell !== '>' && rowMergeStart !== -1 && rowMergeStart !== index) ||
+          (cellValue !== '>' &&
+            rowMergeStart !== -1 &&
+            rowMergeStart !== index) ||
           (index === rowData.length - 1 && rowMergeCount > 1)
         ) {
           // If we collected multiple cells, perform merge
@@ -201,7 +227,7 @@ const AgendaExcelGenerator: React.FC = () => {
             );
           }
           // Reset for next merge
-          if (cell !== '>') {
+          if (cellValue !== '>') {
             rowMergeStart = index;
             rowMergeCount = 1;
           } else {
@@ -237,7 +263,17 @@ const AgendaExcelGenerator: React.FC = () => {
       columnWidths: [18, 24, 24, 24, 8, 24], // Custom column widths for this section
       rows: [
         ['19:52', 'TTM (Table Topic Master) Opening', '>', '>', 4, 'Rui'],
-        ['19:56', 'Aging', 'WOT(Word of Today):', 'Immortal', 16, 'All'],
+        [
+          '19:56',
+          'Aging',
+          {
+            text: 'WOT(Word of Today):',
+            style: { alignment: { horizontal: 'right' } },
+          },
+          'Immortal',
+          16,
+          'All',
+        ],
       ],
     };
 
