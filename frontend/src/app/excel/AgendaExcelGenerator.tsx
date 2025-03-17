@@ -15,15 +15,24 @@ type CellData =
         alignment?: {
           horizontal?: 'left' | 'center' | 'right';
           vertical?: 'top' | 'middle' | 'bottom';
+          wrapText?: boolean;
         };
       };
     };
+
+// Define vertical merge instructions
+type VerticalMerge = {
+  col: number; // 1-indexed column number
+  startRow: number; // 1-indexed start row (relative to section)
+  endRow: number; // 1-indexed end row (relative to section)
+};
 
 type ArraySectionData = {
   title: string;
   headers: string[];
   columnWidths?: number[];
   rows: Array<CellData[]>;
+  verticalMerges?: VerticalMerge[]; // New property for vertical merges
 };
 
 const AgendaExcelGenerator: React.FC = () => {
@@ -86,6 +95,9 @@ const AgendaExcelGenerator: React.FC = () => {
         worksheet.getColumn(index + 1).width = width;
       });
     }
+
+    // Keep track of the initial startRow to calculate relative row positions
+    const initialStartRow = startRow;
 
     // Add section title row if showTitle is true
     if (showTitle) {
@@ -190,7 +202,12 @@ const AgendaExcelGenerator: React.FC = () => {
         const cellData = rowData[colNumber - 1];
         if (typeof cellData === 'object' && cellData.style) {
           if (cellData.style.alignment) {
-            cell.alignment = { ...cell.alignment, ...cellData.style.alignment };
+            cell.alignment = {
+              ...cell.alignment,
+              ...cellData.style.alignment,
+              // Handle wrapText separately to ensure it's properly applied
+              wrapText: cellData.style.alignment.wrapText || false,
+            };
           }
         }
       });
@@ -239,6 +256,19 @@ const AgendaExcelGenerator: React.FC = () => {
 
       startRow++;
     });
+
+    // Process vertical merges if provided
+    if (data.verticalMerges && data.verticalMerges.length > 0) {
+      data.verticalMerges.forEach((merge) => {
+        // Calculate absolute row positions
+        const headerOffset = showTitle ? 2 : 1; // Adjust based on whether title is shown
+        const absStartRow = initialStartRow + headerOffset + merge.startRow - 1;
+        const absEndRow = initialStartRow + headerOffset + merge.endRow - 1;
+
+        // Perform the vertical merge
+        worksheet.mergeCells(absStartRow, merge.col, absEndRow, merge.col);
+      });
+    }
 
     return startRow;
   };
@@ -373,45 +403,146 @@ const AgendaExcelGenerator: React.FC = () => {
   };
 
   // Function to create Prepared Speech Section
-  // const createPreparedSpeechSection = (
-  //   worksheet: ExcelJS.Worksheet,
-  //   startRow: number,
-  //   showTitle: boolean = true,
-  //   fontStyle?: { name?: string; size?: number }
-  // ): number => {
-  //   const preparedSpeechData: ArraySectionData = {
-  //     title: 'Prepared Speech Session',
-  //     headers: ['Time', 'Title', '>', '>', 'Duration', 'Role Taker'],
-  //     columnWidths: [18, 24, 24, 24, 8, 24],
-  //     rows: [
-  //       [
-  //         '20:13',
-  //         'Engaging humor 3.1:',
-  //         'Captivate your audience',
-  //         'with humor',
-  //         7,
-  //         'Frank',
-  //       ],
-  //       ['Prepared Speech 2', 'Title', '', '', '', ''],
-  //       [
-  //         '20:21',
-  //         'Dynamic leadership 3.1:',
-  //         'Effective body language',
-  //         'Do you fear aging?',
-  //         7,
-  //         'Libra',
-  //       ],
-  //     ],
-  //   };
+  const createPreparedSpeechSection = (
+    worksheet: ExcelJS.Worksheet,
+    startRow: number,
+    showTitle: boolean = true,
+    fontStyle?: { name?: string; size?: number }
+  ): number => {
+    const preparedSpeechData: ArraySectionData = {
+      title: 'Prepared Speech Session',
+      headers: [
+        'Time',
+        'Prepared Speech Session',
+        '>',
+        '>',
+        'Duration',
+        'Role Taker',
+      ],
+      columnWidths: [18, 24, 24, 24, 8, 24],
+      rows: [
+        // Speech 1 - Row 1
+        [
+          '20:13',
+          'Prepared Speech 1',
+          { text: 'Title', style: { alignment: { horizontal: 'center' } } },
+          '>',
+          7,
+          'Frank',
+        ],
+        // Speech 1 - Row 2
+        [
+          '', // Time will be merged vertically
+          {
+            text: 'Engaging humor 3.1:\nEngaging your audience with humor',
+            style: { alignment: { vertical: 'middle', wrapText: true } },
+          },
+          {
+            text: 'Failures are learned experiences',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '>',
+          '', // Duration will be merged vertically
+          '', // Role Taker will be merged vertically
+        ],
+        // Speech 2 - Row 1
+        [
+          '20:21',
+          'Prepared Speech 2',
+          { text: 'Title', style: { alignment: { horizontal: 'center' } } },
+          '>',
+          7,
+          'Libra',
+        ],
+        // Speech 2 - Row 2
+        [
+          '', // Time will be merged vertically
+          {
+            text: 'Dynamic leadership 3.1:\nEffective body language',
+            style: { alignment: { vertical: 'middle', wrapText: true } },
+          },
+          {
+            text: 'Do you fear aging?',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '>',
+          '', // Duration will be merged vertically
+          '', // Role Taker will be merged vertically
+        ],
+      ],
+      // Define vertical merges for Time, Duration and Role Taker columns
+      verticalMerges: [
+        // Speech 1 merges
+        { col: 1, startRow: 1, endRow: 2 }, // Time column
+        { col: 5, startRow: 1, endRow: 2 }, // Duration column
+        { col: 6, startRow: 1, endRow: 2 }, // Role Taker column
+        // Speech 2 merges
+        { col: 1, startRow: 3, endRow: 4 }, // Time column
+        { col: 5, startRow: 3, endRow: 4 }, // Duration column
+        { col: 6, startRow: 3, endRow: 4 }, // Role Taker column
+      ],
+    };
 
-  //   return createArraySection(
-  //     worksheet,
-  //     preparedSpeechData,
-  //     startRow,
-  //     showTitle,
-  //     fontStyle
-  //   );
-  // };
+    return createArraySection(
+      worksheet,
+      preparedSpeechData,
+      startRow,
+      showTitle,
+      fontStyle
+    );
+  };
+
+  // Function to create Tea Break row
+  const createTeaBreak = (
+    worksheet: ExcelJS.Worksheet,
+    startRow: number,
+    fontStyle?: { name?: string; size?: number }
+  ): number => {
+    // Add the tea break row directly without using createArraySection
+    const dataRow = worksheet.addRow([
+      '20:29',
+      'Tea Break & Group Photos',
+      '',
+      '',
+      12,
+      'All',
+    ]);
+
+    // Apply styling
+    const rowStyle = getRowStyle();
+    if (fontStyle) {
+      if (fontStyle.name)
+        rowStyle.font = {
+          ...(rowStyle.font as ExcelJS.Font),
+          name: fontStyle.name,
+        };
+      if (fontStyle.size)
+        rowStyle.font = {
+          ...(rowStyle.font as ExcelJS.Font),
+          size: fontStyle.size,
+        };
+    }
+
+    // Apply styling to each cell
+    dataRow.eachCell((cell, colNumber) => {
+      cell.border = rowStyle.border as ExcelJS.Borders;
+      cell.font = rowStyle.font as ExcelJS.Font;
+
+      // Center align for Time, Duration, Role Taker columns
+      if (colNumber === 1 || colNumber === 5 || colNumber === 6) {
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      } else {
+        // Left align for activity columns
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      }
+    });
+
+    // Merge the activity cells (columns 2-4)
+    worksheet.mergeCells(startRow, 2, startRow, 4);
+
+    // Return the next row
+    return startRow + 1;
+  };
 
   // Function to create Facilitators' Report Section using array-based data
   const createFacilitatorsReport = (
@@ -480,39 +611,29 @@ const AgendaExcelGenerator: React.FC = () => {
       size: 9,
     });
 
-    // Add spacing row
-    // worksheet.addRow([]);
-    // currentRow++;
-
     // Add Table Topic Section - Don't show title and set Arial font size 9
     currentRow = createTableTopicSection(worksheet, currentRow, false, {
       name: 'Arial',
       size: 9,
     });
 
-    // Add spacing row
-    // worksheet.addRow([]);
-    // currentRow++;
-
     // Add Prepared Speech Section - Don't show title and set Arial font size 9
-    // currentRow = createPreparedSpeechSection(worksheet, currentRow, false, {
-    //   name: 'Arial',
-    //   size: 9,
-    // });
+    currentRow = createPreparedSpeechSection(worksheet, currentRow, false, {
+      name: 'Arial',
+      size: 9,
+    });
 
-    // Add spacing row
-    // worksheet.addRow([]);
-    // currentRow++;
+    // Add Tea Break row
+    currentRow = createTeaBreak(worksheet, currentRow, {
+      name: 'Arial',
+      size: 9,
+    });
 
     // Add Evaluation Section - Don't show title and set Arial font size 9
     currentRow = createEvaluation(worksheet, currentRow, false, {
       name: 'Arial',
       size: 9,
     });
-
-    // Add spacing row
-    // worksheet.addRow([]);
-    // currentRow++;
 
     // Add Facilitators' Report Section - Don't show title and set Arial font size 9
     createFacilitatorsReport(worksheet, currentRow, false, {
