@@ -5,19 +5,12 @@ import * as ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import AgendaExcelPreviewer from './AgendaExcelPreviewer';
 
-// Define types for consistent data structure
-type ActivityRow = {
-  time: string;
-  activity: string;
-  duration: number | string;
-  roleTaker: string;
-};
-
-type SectionData = {
+// Define a new section data type with array-based rows
+type ArraySectionData = {
   title: string;
   headers: string[];
-  rows: ActivityRow[];
-  columnWidths?: number[]; // Add column widths configuration
+  columnWidths?: number[];
+  rows: Array<(string | number)[]>;
 };
 
 const AgendaExcelGenerator: React.FC = () => {
@@ -66,87 +59,33 @@ const AgendaExcelGenerator: React.FC = () => {
     },
   });
 
-  // Generic function to create a standard 4-column section
-  const createStandardSection = (
+  // Function to create a section using array-based row data
+  const createArraySection = (
     worksheet: ExcelJS.Worksheet,
-    data: SectionData,
+    data: ArraySectionData,
     startRow: number,
-    showTitle: boolean = true, // Add parameter to control title visibility
-    fontStyle?: { name?: string; size?: number } // Optional font style parameter
+    showTitle: boolean = true,
+    fontStyle?: { name?: string; size?: number }
   ): number => {
     // Apply column widths if provided
     if (data.columnWidths && data.columnWidths.length > 0) {
-      // Get current columns
-      const currentColumns = worksheet.columns || [];
-
-      // Apply new widths to columns
       data.columnWidths.forEach((width, index) => {
-        // Get column index (0-based)
-        const colIndex = index;
-
-        // Check if column exists
-        if (colIndex < currentColumns.length) {
-          // Update existing column
-          worksheet.getColumn(colIndex + 1).width = width;
-        } else {
-          // Should not happen normally, but handle edge case
-          const newColumn: Partial<ExcelJS.Column> = { width };
-          worksheet.columns = [...(worksheet.columns || []), newColumn];
-        }
+        worksheet.getColumn(index + 1).width = width;
       });
     }
 
     // Add section title row if showTitle is true
     if (showTitle) {
       const titleRow = worksheet.addRow([data.title]);
-      titleRow.height = 20;
-      worksheet.mergeCells(`A${startRow}:D${startRow}`);
-
-      const titleCell = titleRow.getCell(1);
-      const headerStyle = getHeaderStyle();
-
-      // Apply custom font style if provided
-      if (fontStyle) {
-        if (fontStyle.name)
-          headerStyle.font = {
-            ...(headerStyle.font as ExcelJS.Font),
-            name: fontStyle.name,
-          };
-        if (fontStyle.size)
-          headerStyle.font = {
-            ...(headerStyle.font as ExcelJS.Font),
-            size: fontStyle.size,
-          };
-      }
-
-      titleCell.fill = headerStyle.fill as ExcelJS.Fill;
-      titleCell.font = headerStyle.font as ExcelJS.Font;
-      titleCell.border = headerStyle.border as ExcelJS.Borders;
-      titleCell.alignment = headerStyle.alignment as ExcelJS.Alignment;
-
+      titleRow.font = { bold: true, size: 11 };
       startRow++;
     }
 
-    // Add header row
+    // Process headers with support for merged cells
     const headerRow = worksheet.addRow(data.headers);
-    headerRow.height = 20;
 
+    // Apply header styling
     const headerStyle = getHeaderStyle();
-
-    // Apply custom font style if provided
-    if (fontStyle) {
-      if (fontStyle.name)
-        headerStyle.font = {
-          ...(headerStyle.font as ExcelJS.Font),
-          name: fontStyle.name,
-        };
-      if (fontStyle.size)
-        headerStyle.font = {
-          ...(headerStyle.font as ExcelJS.Font),
-          size: fontStyle.size,
-        };
-    }
-
     headerRow.eachCell((cell) => {
       cell.fill = headerStyle.fill as ExcelJS.Fill;
       cell.font = headerStyle.font as ExcelJS.Font;
@@ -154,20 +93,54 @@ const AgendaExcelGenerator: React.FC = () => {
       cell.alignment = headerStyle.alignment as ExcelJS.Alignment;
     });
 
+    // Handle merged cells in headers (marked with '>')
+    let mergeStart = -1;
+    let mergeCount = 0;
+
+    data.headers.forEach((cell, index) => {
+      if (cell !== '>' && mergeStart === -1) {
+        // Start of a potential merge
+        mergeStart = index;
+        mergeCount = 1;
+      } else if (cell === '>' && mergeStart !== -1) {
+        // Continue merge
+        mergeCount++;
+      }
+
+      // End of headers or next non-merge cell
+      if (
+        (cell !== '>' && mergeStart !== -1 && mergeStart !== index) ||
+        (index === data.headers.length - 1 && mergeCount > 1)
+      ) {
+        // If we collected multiple cells, perform merge
+        if (mergeCount > 1) {
+          worksheet.mergeCells(
+            startRow,
+            mergeStart + 1,
+            startRow,
+            mergeStart + mergeCount
+          );
+        }
+        // Reset for next merge
+        if (cell !== '>') {
+          mergeStart = index;
+          mergeCount = 1;
+        } else {
+          mergeStart = -1;
+          mergeCount = 0;
+        }
+      }
+    });
+
     startRow++;
 
     // Add data rows
     data.rows.forEach((rowData) => {
-      const dataRow = worksheet.addRow([
-        rowData.time,
-        rowData.activity,
-        rowData.duration,
-        rowData.roleTaker,
-      ]);
+      // Filter out '>' in the row data (used for merging)
+      const dataRow = worksheet.addRow(rowData);
 
+      // Apply styling
       const rowStyle = getRowStyle();
-
-      // Apply custom font style if provided
       if (fontStyle) {
         if (fontStyle.name)
           rowStyle.font = {
@@ -185,19 +158,56 @@ const AgendaExcelGenerator: React.FC = () => {
         cell.border = rowStyle.border as ExcelJS.Borders;
         cell.font = rowStyle.font as ExcelJS.Font;
 
-        // Apply specific alignment based on column
-        if (colNumber === 1) {
-          // Time column
+        // Special handling for different columns
+        if (
+          colNumber === 1 ||
+          colNumber === dataRow.cellCount - 1 ||
+          colNumber === dataRow.cellCount
+        ) {
+          // Time, Duration, Role Taker columns - center align
           cell.alignment = { vertical: 'middle', horizontal: 'center' };
-        } else if (colNumber === 2) {
-          // Activity column
+        } else {
+          // Activity columns - left align
           cell.alignment = { vertical: 'middle', horizontal: 'left' };
-        } else if (colNumber === 3) {
-          // Duration column
-          cell.alignment = { vertical: 'middle', horizontal: 'center' };
-        } else if (colNumber === 4) {
-          // Role Taker column
-          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        }
+      });
+
+      // Handle cell merging in rows
+      let rowMergeStart = -1;
+      let rowMergeCount = 0;
+
+      rowData.forEach((cell, index) => {
+        if (cell !== '>' && rowMergeStart === -1) {
+          // Start of a potential merge
+          rowMergeStart = index;
+          rowMergeCount = 1;
+        } else if (cell === '>' && rowMergeStart !== -1) {
+          // Continue merge
+          rowMergeCount++;
+        }
+
+        // End of row or next non-merge cell
+        if (
+          (cell !== '>' && rowMergeStart !== -1 && rowMergeStart !== index) ||
+          (index === rowData.length - 1 && rowMergeCount > 1)
+        ) {
+          // If we collected multiple cells, perform merge
+          if (rowMergeCount > 1) {
+            worksheet.mergeCells(
+              startRow,
+              rowMergeStart + 1,
+              startRow,
+              rowMergeStart + rowMergeCount
+            );
+          }
+          // Reset for next merge
+          if (cell !== '>') {
+            rowMergeStart = index;
+            rowMergeCount = 1;
+          } else {
+            rowMergeStart = -1;
+            rowMergeCount = 0;
+          }
         }
       });
 
@@ -207,6 +217,39 @@ const AgendaExcelGenerator: React.FC = () => {
     return startRow;
   };
 
+  // Function to create Table Topic Section
+  const createTableTopicSection = (
+    worksheet: ExcelJS.Worksheet,
+    startRow: number,
+    showTitle: boolean = true,
+    fontStyle?: { name?: string; size?: number }
+  ): number => {
+    const tableTopicData: ArraySectionData = {
+      title: 'Table Topic Session',
+      headers: [
+        'Time',
+        'Table Topic Session',
+        '>',
+        '>',
+        'Duration',
+        'Role Taker',
+      ],
+      columnWidths: [18, 24, 24, 24, 8, 24], // Custom column widths for this section
+      rows: [
+        ['19:52', 'TTM (Table Topic Master) Opening', '>', '>', 4, 'Rui'],
+        ['19:56', 'Aging', 'WOT(Word of Today):', 'Immortal', 16, 'All'],
+      ],
+    };
+
+    return createArraySection(
+      worksheet,
+      tableTopicData,
+      startRow,
+      showTitle,
+      fontStyle
+    );
+  };
+
   // Function to create Opening and Intro Section
   const createOpeningAndIntro = (
     worksheet: ExcelJS.Worksheet,
@@ -214,52 +257,43 @@ const AgendaExcelGenerator: React.FC = () => {
     showTitle: boolean = true,
     fontStyle?: { name?: string; size?: number }
   ): number => {
-    const openingData: SectionData = {
+    const openingData: ArraySectionData = {
       title: 'Opening and Intro Session',
-      headers: ['Time', 'Activities', 'Duration', 'Role Taker'],
-      columnWidths: [18, 72, 8, 24], // Custom column widths for this section
+      headers: ['Time', 'Activities', '>', '>', 'Duration', 'Role Taker'],
+      columnWidths: [18, 24, 24, 24, 8, 24], // Custom column widths for this section
       rows: [
-        {
-          time: '19:15',
-          activity: 'Members and Guests Registration, Warm up',
-          duration: 15,
-          roleTaker: 'All',
-        },
-        {
-          time: '19:30',
-          activity: 'Meeting Rules Introduction (SAA)',
-          duration: 3,
-          roleTaker: 'Joyce',
-        },
-        {
-          time: '19:33',
-          activity: 'Opening Remarks (President)',
-          duration: 2,
-          roleTaker: 'Frank',
-        },
-        {
-          time: '19:35',
-          activity: 'TOM (Toastmaster of Meeting) Introduction',
-          duration: 2,
-          roleTaker: 'Rui',
-        },
-        { time: '19:37', activity: 'Timer', duration: 3, roleTaker: 'Max' },
-        {
-          time: '19:40',
-          activity: 'Hark Master',
-          duration: 3,
-          roleTaker: 'Mia',
-        },
-        {
-          time: '19:43',
-          activity: 'Guests Self Introduction (30s per guest)',
-          duration: 8,
-          roleTaker: 'Joseph',
-        },
+        [
+          '19:15',
+          'Members and Guests Registration, Warm up',
+          '>',
+          '>',
+          15,
+          'All',
+        ],
+        ['19:30', 'Meeting Rules Introduction (SAA)', '>', '>', 3, 'Joyce'],
+        ['19:33', 'Opening Remarks (President)', '>', '>', 2, 'Frank'],
+        [
+          '19:35',
+          'TOM (Toastmaster of Meeting) Introduction',
+          '>',
+          '>',
+          2,
+          'Rui',
+        ],
+        ['19:37', 'Timer', '>', '>', 3, 'Max'],
+        ['19:40', 'Hark Master', '>', '>', 3, 'Mia'],
+        [
+          '19:43',
+          'Guests Self Introduction (30s per guest)',
+          '>',
+          '>',
+          8,
+          'Joseph',
+        ],
       ],
     };
 
-    return createStandardSection(
+    return createArraySection(
       worksheet,
       openingData,
       startRow,
@@ -275,33 +309,25 @@ const AgendaExcelGenerator: React.FC = () => {
     showTitle: boolean = true,
     fontStyle?: { name?: string; size?: number }
   ): number => {
-    const evaluationData: SectionData = {
+    const evaluationData: ArraySectionData = {
       title: 'Evaluation Session',
-      headers: ['Time', 'Evaluation Session', 'Duration', 'Role Taker'],
-      columnWidths: [18, 72, 8, 24], // Custom column widths for this section
+      headers: [
+        'Time',
+        'Evaluation Session',
+        '>',
+        '>',
+        'Duration',
+        'Role Taker',
+      ],
+      columnWidths: [18, 24, 24, 24, 8, 24], // Custom column widths for this section
       rows: [
-        {
-          time: '20:42',
-          activity: 'Table Topic Evaluation',
-          duration: 7,
-          roleTaker: 'Emily',
-        },
-        {
-          time: '20:50',
-          activity: 'Prepared Speech 1 Evaluation',
-          duration: 3,
-          roleTaker: 'Phyllis',
-        },
-        {
-          time: '20:54',
-          activity: 'Prepared Speech 2 Evaluation',
-          duration: 3,
-          roleTaker: 'Amanda',
-        },
+        ['20:42', 'Table Topic Evaluation', '>', '>', 7, 'Emily'],
+        ['20:50', 'Prepared Speech 1 Evaluation', '>', '>', 3, 'Phyllis'],
+        ['20:54', 'Prepared Speech 2 Evaluation', '>', '>', 4, 'Amanda'],
       ],
     };
 
-    return createStandardSection(
+    return createArraySection(
       worksheet,
       evaluationData,
       startRow,
@@ -310,64 +336,77 @@ const AgendaExcelGenerator: React.FC = () => {
     );
   };
 
-  // Function to create Facilitators' Report Section
+  // Function to create Prepared Speech Section
+  // const createPreparedSpeechSection = (
+  //   worksheet: ExcelJS.Worksheet,
+  //   startRow: number,
+  //   showTitle: boolean = true,
+  //   fontStyle?: { name?: string; size?: number }
+  // ): number => {
+  //   const preparedSpeechData: ArraySectionData = {
+  //     title: 'Prepared Speech Session',
+  //     headers: ['Time', 'Title', '>', '>', 'Duration', 'Role Taker'],
+  //     columnWidths: [18, 24, 24, 24, 8, 24],
+  //     rows: [
+  //       [
+  //         '20:13',
+  //         'Engaging humor 3.1:',
+  //         'Captivate your audience',
+  //         'with humor',
+  //         7,
+  //         'Frank',
+  //       ],
+  //       ['Prepared Speech 2', 'Title', '', '', '', ''],
+  //       [
+  //         '20:21',
+  //         'Dynamic leadership 3.1:',
+  //         'Effective body language',
+  //         'Do you fear aging?',
+  //         7,
+  //         'Libra',
+  //       ],
+  //     ],
+  //   };
+
+  //   return createArraySection(
+  //     worksheet,
+  //     preparedSpeechData,
+  //     startRow,
+  //     showTitle,
+  //     fontStyle
+  //   );
+  // };
+
+  // Function to create Facilitators' Report Section using array-based data
   const createFacilitatorsReport = (
     worksheet: ExcelJS.Worksheet,
     startRow: number,
     showTitle: boolean = true,
     fontStyle?: { name?: string; size?: number }
   ): number => {
-    const facilitatorsData: SectionData = {
+    const facilitatorsData: ArraySectionData = {
       title: "Facilitators' Report",
-      headers: ['Time', "Facilitators' Report", 'Duration', 'Role Taker'],
-      columnWidths: [18, 72, 8, 24], // Custom column widths for this section
+      headers: [
+        'Time',
+        "Facilitators' Report",
+        '>',
+        '>',
+        'Duration',
+        'Role Taker',
+      ],
+      columnWidths: [18, 24, 24, 24, 8, 24], // Custom column widths for this section
       rows: [
-        {
-          time: '20:58',
-          activity: "Timer's Report",
-          duration: 2,
-          roleTaker: 'Max',
-        },
-        {
-          time: '21:01',
-          activity: 'Hark Master Pop Quiz Time',
-          duration: 5,
-          roleTaker: 'Mia',
-        },
-        {
-          time: '21:07',
-          activity: 'General Evaluation',
-          duration: 8,
-          roleTaker: 'Karman',
-        },
-        {
-          time: '21:16',
-          activity: 'Voting Section (TOM)',
-          duration: 2,
-          roleTaker: 'Rui',
-        },
-        {
-          time: '21:19',
-          activity: 'Moment of Truth',
-          duration: 7,
-          roleTaker: 'Leta',
-        },
-        {
-          time: '21:27',
-          activity: 'Awards(President)',
-          duration: 3,
-          roleTaker: 'Frank',
-        },
-        {
-          time: '21:30',
-          activity: 'Closing Remarks(President)',
-          duration: 1,
-          roleTaker: 'Frank',
-        },
+        ['20:58', "Timer's Report", '>', '>', 2, 'Max'],
+        ['21:01', 'Hark Master Pop Quiz Time', '>', '>', 5, 'Mia'],
+        ['21:07', 'General Evaluation', '>', '>', 8, 'Karman'],
+        ['21:16', 'Voting Section (TOM)', '>', '>', 2, 'Rui'],
+        ['21:19', 'Moment of Truth', '>', '>', 7, 'Leta'],
+        ['21:27', 'Awards(President)', '>', '>', 3, 'Frank'],
+        ['21:30', 'Closing Remarks(President)', '>', '>', 1, 'Frank'],
       ],
     };
 
-    return createStandardSection(
+    return createArraySection(
       worksheet,
       facilitatorsData,
       startRow,
@@ -384,10 +423,12 @@ const AgendaExcelGenerator: React.FC = () => {
 
     // Set default column widths
     worksheet.columns = [
-      { width: 10 }, // A - Time column
-      { width: 40 }, // B - Activities/content column
-      { width: 15 }, // C - Duration column
-      { width: 15 }, // D - Role Taker column
+      { width: 18 },
+      { width: 24 },
+      { width: 24 },
+      { width: 24 },
+      { width: 8 },
+      { width: 24 },
     ];
 
     // Start adding sections - we're starting with row 1
@@ -402,6 +443,26 @@ const AgendaExcelGenerator: React.FC = () => {
       name: 'Arial',
       size: 9,
     });
+
+    // Add spacing row
+    // worksheet.addRow([]);
+    // currentRow++;
+
+    // Add Table Topic Section - Don't show title and set Arial font size 9
+    currentRow = createTableTopicSection(worksheet, currentRow, false, {
+      name: 'Arial',
+      size: 9,
+    });
+
+    // Add spacing row
+    // worksheet.addRow([]);
+    // currentRow++;
+
+    // Add Prepared Speech Section - Don't show title and set Arial font size 9
+    // currentRow = createPreparedSpeechSection(worksheet, currentRow, false, {
+    //   name: 'Arial',
+    //   size: 9,
+    // });
 
     // Add spacing row
     // worksheet.addRow([]);
