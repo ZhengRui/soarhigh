@@ -104,7 +104,7 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
         }
       });
 
-      console.log(data);
+      // console.log(data);
       setPreviewData(data);
     } catch (error) {
       console.error('Error generating preview:', error);
@@ -144,8 +144,8 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
   return (
     <div className='w-full mt-6'>
       <h2 className='text-xl font-semibold mb-4'>Agenda Preview</h2>
-      <div className='border border-gray-300 border-opacity-40 rounded overflow-auto'>
-        <table className='w-full border-collapse table-auto'>
+      <div className='border border-gray-300 border-opacity-0 rounded overflow-auto'>
+        <table className='border-collapse table-fixed w-[840px]'>
           <tbody>
             {previewData.map((row, rowIndex) => (
               <tr key={`row-${rowIndex}`}>
@@ -168,12 +168,12 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
                         | 'right',
                       width:
                         cellIndex === 0
-                          ? '72px' // Time column
+                          ? '120px' // Time column
                           : cellIndex === 1
-                            ? '288px' // Activities column
+                            ? '500px' // Activities column
                             : cellIndex === 2
-                              ? '32px' // Duration column
-                              : '96px', // Role Taker column
+                              ? '60px' // Duration column
+                              : '160px', // Role Taker column
                       padding: cell.style.padding,
                       height: '12px', // Standard Excel row height
                       whiteSpace: 'pre-wrap', // Preserve whitespace and wrap text
