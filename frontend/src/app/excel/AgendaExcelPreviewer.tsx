@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import * as ExcelJS from 'exceljs';
 import { createWorkbook } from './workbookUtils';
+import Image from 'next/image';
 
 type PreviewerProps = {
   autoPreview?: boolean;
@@ -294,7 +295,29 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
   return (
     <div className='flex flex-col items-center p-6 bg-white rounded-lg shadow-md max-w-4xl mx-auto my-8'>
       <h2 className='text-xl font-semibold mb-4'>Agenda Preview</h2>
-      <div className='w-full border border-gray-300 border-opacity-30 pt-2 rounded-t-md overflow-auto'>
+      <div className='w-full border border-gray-300 border-opacity-30 pt-2 rounded-t-md overflow-auto relative'>
+        {/* Images with absolute positioning */}
+        <Image
+          src='/images/toastmasters.png'
+          alt='Toastmasters Logo'
+          width={96}
+          height={96}
+          style={{ position: 'absolute', left: '10px', top: '16px' }}
+        />
+        <Image
+          src='/images/soarhighQR.png'
+          alt='Soarhigh QR Code'
+          width={80}
+          height={80}
+          style={{ position: 'absolute', left: '140px', top: '16px' }}
+        />
+        <Image
+          src='/images/vpmQR.png'
+          alt='VPM QR Code'
+          width={72}
+          height={72}
+          style={{ position: 'absolute', left: '770px', top: '30px' }}
+        />
         <table className='border-collapse table-fixed w-full'>
           <colgroup>
             {columnWidths.map((width, index) => (
