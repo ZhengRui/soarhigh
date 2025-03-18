@@ -52,6 +52,29 @@ const AgendaExcelGenerator: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isReady, setIsReady] = useState(false);
 
+  // Function to fetch an image and convert it to base64
+  const getImageAsBase64 = async (url: string): Promise<string> => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64data = reader.result as string;
+          // Extract the base64 part without the data URL prefix
+          const base64Content = base64data.split(',')[1];
+          resolve(base64Content);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch (error) {
+      console.error('Error loading image:', error);
+      throw error;
+    }
+  };
+
   // Common styling functions
   const getHeaderStyle = (): Partial<ExcelJS.Style> => ({
     fill: {
@@ -770,13 +793,17 @@ const AgendaExcelGenerator: React.FC = () => {
       ],
     };
 
-    return createArraySection(
+    startRow = createArraySection(
       worksheet,
       timeRulesData,
       startRow,
       showTitle,
       fontStyle
     );
+
+    worksheet.getRow(startRow - 1).height = 32;
+
+    return startRow;
   };
 
   // Function to create Team/Officer Section
@@ -1263,6 +1290,46 @@ const AgendaExcelGenerator: React.FC = () => {
     createTeam(worksheet, currentRow, false, {
       name: 'Arial',
       size: 9,
+    });
+
+    // Load the image from public directory
+    const tmImage = await getImageAsBase64('/images/toastmasters.png');
+
+    const tmImageId = workbook.addImage({
+      base64: tmImage,
+      extension: 'png',
+    });
+
+    const shImage = await getImageAsBase64('/images/soarhighQR.png');
+
+    const shImageId = workbook.addImage({
+      base64: shImage,
+      extension: 'png',
+    });
+
+    const vpmImage = await getImageAsBase64('/images/Untitled.png');
+
+    const vpmImageId = workbook.addImage({
+      base64: vpmImage,
+      extension: 'png',
+    });
+
+    worksheet.addImage(tmImageId, {
+      tl: { col: 0.2, row: 0.5 },
+      ext: { width: 100, height: 100 },
+      editAs: 'absolute',
+    });
+
+    worksheet.addImage(shImageId, {
+      tl: { col: 1.2, row: 0.8 },
+      ext: { width: 90, height: 90 },
+      editAs: 'absolute',
+    });
+
+    worksheet.addImage(vpmImageId, {
+      tl: { col: 5, row: 1 },
+      ext: { width: 120, height: 80 },
+      editAs: 'absolute',
     });
 
     return { workbook, worksheet };
