@@ -2,17 +2,13 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import * as ExcelJS from 'exceljs';
+import { createWorkbook } from './workbookUtils';
 
 type PreviewerProps = {
-  createWorkbook: () => Promise<{
-    workbook: ExcelJS.Workbook;
-    worksheet: ExcelJS.Worksheet;
-  }>;
   autoPreview?: boolean;
 };
 
 const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
-  createWorkbook,
   autoPreview = true,
 }) => {
   const [isGenerating, setIsGenerating] = useState(false);
@@ -261,7 +257,7 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
     } finally {
       setIsGenerating(false);
     }
-  }, [createWorkbook, extractExcelColor, getBorderStyle]);
+  }, [extractExcelColor, getBorderStyle]);
 
   // Generate preview on mount if autoPreview is true
   useEffect(() => {
@@ -272,13 +268,17 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
 
   // Render loading state
   if (isGenerating) {
-    return <div className='w-full text-center py-4'>Generating preview...</div>;
+    return (
+      <div className='flex flex-col items-center p-6 bg-white rounded-lg shadow-md max-w-4xl mx-auto my-8'>
+        Generating preview...
+      </div>
+    );
   }
 
   // Render empty state
   if (previewData.length === 0) {
     return (
-      <div className='w-full flex flex-col items-center gap-4 py-4'>
+      <div className='flex flex-col items-center p-6 bg-white rounded-lg shadow-md max-w-4xl mx-auto my-8'>
         <p>No preview available</p>
         <button
           onClick={generatePreview}
@@ -292,9 +292,9 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
 
   // Render the preview
   return (
-    <div className='w-full mt-6'>
+    <div className='flex flex-col items-center p-6 bg-white rounded-lg shadow-md max-w-4xl mx-auto my-8'>
       <h2 className='text-xl font-semibold mb-4'>Agenda Preview</h2>
-      <div className='border border-gray-300 border-opacity-30 pt-2 rounded-t-md overflow-auto'>
+      <div className='w-full border border-gray-300 border-opacity-30 pt-2 rounded-t-md overflow-auto'>
         <table className='border-collapse table-fixed w-full'>
           <colgroup>
             {columnWidths.map((width, index) => (
