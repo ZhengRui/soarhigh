@@ -30,10 +30,19 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
   }, []);
 
   // Function to get border style
-  const getBorderStyle = useCallback((border?: ExcelJS.BorderStyle): string => {
-    if (!border) return '';
-    return border === 'thin' ? '1px solid #000000' : '2px solid #000000';
-  }, []);
+  const getBorderStyle = useCallback(
+    (border?: Partial<ExcelJS.Border>): string => {
+      if (!border) return '';
+
+      const width = border.style === 'thin' ? '1px' : '2px';
+      const color = border.color?.argb
+        ? extractExcelColor(border.color.argb)
+        : '#000000';
+
+      return `${width} solid ${color}`;
+    },
+    [extractExcelColor]
+  );
 
   // Function to generate preview
   const generatePreview = useCallback(async () => {
@@ -205,10 +214,10 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
                 color: textColor,
                 bold: cell.font?.bold || false,
                 fontSize: cell.font?.size || 11,
-                borderTop: getBorderStyle(cell.border?.top?.style),
-                borderBottom: getBorderStyle(cell.border?.bottom?.style),
-                borderLeft: getBorderStyle(cell.border?.left?.style),
-                borderRight: getBorderStyle(cell.border?.right?.style),
+                borderTop: getBorderStyle(cell.border?.top),
+                borderBottom: getBorderStyle(cell.border?.bottom),
+                borderLeft: getBorderStyle(cell.border?.left),
+                borderRight: getBorderStyle(cell.border?.right),
                 textAlign: cell.alignment?.horizontal || 'left',
                 verticalAlign: cell.alignment?.vertical || 'middle',
                 padding: '2px 6px',
