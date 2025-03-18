@@ -544,13 +544,20 @@ const AgendaExcelGenerator: React.FC = () => {
       ],
     };
 
-    return createArraySection(
+    startRow = createArraySection(
       worksheet,
       preparedSpeechData,
       startRow,
       showTitle,
       fontStyle
     );
+
+    const nSpeeches = preparedSpeechData.rows.length / 2;
+    for (let i = 0; i < nSpeeches; i++) {
+      worksheet.getRow(startRow - 2 * i - 1).height = 48;
+    }
+
+    return startRow;
   };
 
   // Function to create Tea Break row
@@ -1028,6 +1035,170 @@ const AgendaExcelGenerator: React.FC = () => {
     return startRow;
   };
 
+  // Function to create table header section
+  const createTableHeader = (
+    worksheet: ExcelJS.Worksheet,
+    startRow: number,
+    showTitle: boolean = true,
+    fontStyle?: { name?: string; size?: number }
+  ): number => {
+    const tableHeaderData: ArraySectionData = {
+      title: 'Agenda Table Header',
+      headers: [],
+      columnWidths: defaultColumnWidths,
+      rows: [
+        [
+          '',
+          {
+            text: 'SOARHIGH TOASTMASTERS CLUB',
+            style: {
+              alignment: { horizontal: 'center' },
+              font: { size: 14, color: { argb: 'FFFFFFFF' } },
+            },
+          },
+          '>',
+          '>',
+          '>',
+          {
+            text: 'Contact VPM to join us! 👇',
+            style: {
+              font: { color: { argb: 'FFFFFFFF' } },
+            },
+          },
+        ],
+        [
+          '',
+          '',
+          {
+            text: '387th Meeting',
+            style: {
+              font: { size: 12, color: { argb: 'FFFFFFFF' } },
+            },
+          },
+          {
+            text: 'Aging',
+            style: {
+              font: { size: 12, color: { argb: 'FFFFFFFF' } },
+            },
+          },
+          '',
+          '',
+        ],
+        [
+          '',
+          '',
+          {
+            text: 'Nov.6, 2024(Wed)',
+            style: {
+              font: { color: { argb: 'FFFFFFFF' } },
+            },
+          },
+          {
+            text: 'Time: 19:15-21:30',
+            style: {
+              font: { color: { argb: 'FFFFFFFF' } },
+            },
+          },
+          '',
+          '',
+        ],
+        [
+          '',
+          '',
+          {
+            text: "Venue: JOININ HUB, 6th Xin'an Rd,Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+            style: {
+              font: { color: { argb: 'FFFFFFFF' } },
+            },
+          },
+          '>',
+          '>',
+          '>',
+        ],
+        [
+          '',
+          {
+            text: '👆 WeChat Subscription',
+            style: {
+              font: { color: { argb: 'FFFFFFFF' } },
+            },
+          },
+          {
+            text: 'Club#4234120 | Area A4 | Division A | District 118',
+            style: {
+              font: { color: { argb: 'FFFFFFFF' } },
+            },
+          },
+          '>',
+          {
+            text: 'Meeting Manager: Rui Zheng',
+            style: {
+              alignment: { horizontal: 'left' },
+              font: { color: { argb: 'FFFFFFFF' } },
+            },
+          },
+          '>',
+        ],
+        [
+          {
+            text: 'Toastmasters International Mission: We empower individuals to become more effective communicators and leaders.',
+            style: {
+              alignment: { horizontal: 'left' },
+              font: { size: 10 },
+            },
+          },
+          '>',
+          '>',
+          '>',
+          '>',
+          '>',
+        ],
+        [
+          {
+            text: 'Toastmasters International Values: Respect, Integrity, Service and Excellence',
+            style: {
+              alignment: { horizontal: 'left' },
+              font: { size: 10 },
+            },
+          },
+          '>',
+          '>',
+          '>',
+          '>',
+          '>',
+        ],
+      ],
+    };
+
+    startRow = createArraySection(
+      worksheet,
+      tableHeaderData,
+      startRow,
+      showTitle,
+      fontStyle
+    );
+
+    worksheet.getRows(startRow - 7, startRow - 3)?.forEach((row) => {
+      row.height = 20;
+
+      row.eachCell((cell) => {
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FF5e3637' } },
+          bottom: { style: 'thin', color: { argb: 'FF5e3637' } },
+          left: { style: 'thin', color: { argb: 'FF5e3637' } },
+          right: { style: 'thin', color: { argb: 'FF5e3637' } },
+        };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FF5e3637' },
+        };
+      });
+    });
+
+    return startRow;
+  };
+
   // Create workbook function that will call the section creation functions
   const createWorkbook = async () => {
     // Create a new workbook and worksheet
@@ -1040,9 +1211,11 @@ const AgendaExcelGenerator: React.FC = () => {
     // Start adding sections - we're starting with row 1
     let currentRow = 1;
 
-    // Add a spacing row for demonstration - this would be replaced with header later
-    worksheet.addRow(['SOARHIGH TOASTMASTERS CLUB']);
-    currentRow++; // Adding some space
+    // Add Table Header Section
+    currentRow = createTableHeader(worksheet, currentRow, false, {
+      name: 'Arial',
+      size: 9,
+    });
 
     // Add Opening and Intro Section - Don't show title and set Arial font size 9
     currentRow = createOpeningAndIntro(worksheet, currentRow, false, {

@@ -285,8 +285,13 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
   return (
     <div className='w-full mt-6'>
       <h2 className='text-xl font-semibold mb-4'>Agenda Preview</h2>
-      <div className='border border-gray-300 border-opacity-30 rounded-t-md overflow-auto'>
+      <div className='border border-gray-300 border-opacity-30 pt-2 rounded-t-md overflow-auto'>
         <table className='border-collapse table-fixed w-full'>
+          <colgroup>
+            {columnWidths.map((width, index) => (
+              <col key={`col-${index}`} style={{ width: `${width * 7}px` }} />
+            ))}
+          </colgroup>
           <tbody>
             {previewData.map((row, rowIndex) => (
               <tr
@@ -313,7 +318,7 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
                           | 'left'
                           | 'center'
                           | 'right',
-                        width: `${columnWidths[cellIndex] * 7}px`, // Scale column width based on Excel width
+                        // width: `${columnWidths[cellIndex] * 7}px`, // Scale column width based on Excel width
                         padding: cell.style.padding,
                         height: '12px', // Standard Excel row height
                         whiteSpace: 'pre-wrap', // Preserve whitespace and wrap text
