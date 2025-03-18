@@ -17,6 +17,17 @@ type CellData =
           vertical?: 'top' | 'middle' | 'bottom';
           wrapText?: boolean;
         };
+        fill?: {
+          type: 'pattern';
+          pattern: 'solid';
+          fgColor: { argb: string }; // ARGB format like 'FFFF0000' for red
+        };
+        font?: {
+          bold?: boolean;
+          italic?: boolean;
+          color?: { argb: string };
+          size?: number;
+        };
       };
     };
 
@@ -34,6 +45,8 @@ type ArraySectionData = {
   rows: Array<CellData[]>;
   verticalMerges?: VerticalMerge[]; // New property for vertical merges
 };
+
+const defaultColumnWidths = [18, 21, 21, 30, 8, 24];
 
 const AgendaExcelGenerator: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
@@ -81,6 +94,30 @@ const AgendaExcelGenerator: React.FC = () => {
     },
   });
 
+  const getTitleStyle = (): Partial<ExcelJS.Style> => ({
+    font: {
+      bold: true,
+      name: 'Arial',
+      size: 9,
+      color: { argb: 'FFFFFFFF' }, // White text
+    },
+    fill: {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF343e4e' }, // Dark blue background
+    },
+    alignment: {
+      vertical: 'middle',
+      horizontal: 'center',
+    },
+    border: {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' },
+    },
+  });
+
   // Function to create a section using array-based row data
   const createArraySection = (
     worksheet: ExcelJS.Worksheet,
@@ -98,66 +135,76 @@ const AgendaExcelGenerator: React.FC = () => {
 
     // Keep track of the initial startRow to calculate relative row positions
     const initialStartRow = startRow;
+    const nColumn = data.rows[0].length;
 
     // Add section title row if showTitle is true
     if (showTitle) {
+      const titleStyle = getTitleStyle();
       const titleRow = worksheet.addRow([data.title]);
-      titleRow.font = { bold: true, size: 11 };
+      titleRow.eachCell((cell) => {
+        cell.font = titleStyle.font as ExcelJS.Font;
+        cell.alignment = titleStyle.alignment as ExcelJS.Alignment;
+        cell.fill = titleStyle.fill as ExcelJS.Fill;
+        cell.border = titleStyle.border as ExcelJS.Borders;
+      });
+      worksheet.mergeCells(startRow, 1, startRow, nColumn);
       startRow++;
     }
 
-    // Process headers with support for merged cells
-    const headerRow = worksheet.addRow(data.headers);
+    if (data.headers.length > 0) {
+      // Process headers with support for merged cells
+      const headerRow = worksheet.addRow(data.headers);
 
-    // Apply header styling
-    const headerStyle = getHeaderStyle();
-    headerRow.eachCell((cell) => {
-      cell.fill = headerStyle.fill as ExcelJS.Fill;
-      cell.font = headerStyle.font as ExcelJS.Font;
-      cell.border = headerStyle.border as ExcelJS.Borders;
-      cell.alignment = headerStyle.alignment as ExcelJS.Alignment;
-    });
+      // Apply header styling
+      const headerStyle = getHeaderStyle();
+      headerRow.eachCell((cell) => {
+        cell.fill = headerStyle.fill as ExcelJS.Fill;
+        cell.font = headerStyle.font as ExcelJS.Font;
+        cell.border = headerStyle.border as ExcelJS.Borders;
+        cell.alignment = headerStyle.alignment as ExcelJS.Alignment;
+      });
 
-    // Handle merged cells in headers (marked with '>')
-    let mergeStart = -1;
-    let mergeCount = 0;
+      // Handle merged cells in headers (marked with '>')
+      let mergeStart = -1;
+      let mergeCount = 0;
 
-    data.headers.forEach((cell, index) => {
-      if (cell !== '>' && mergeStart === -1) {
-        // Start of a potential merge
-        mergeStart = index;
-        mergeCount = 1;
-      } else if (cell === '>' && mergeStart !== -1) {
-        // Continue merge
-        mergeCount++;
-      }
-
-      // End of headers or next non-merge cell
-      if (
-        (cell !== '>' && mergeStart !== -1 && mergeStart !== index) ||
-        (index === data.headers.length - 1 && mergeCount > 1)
-      ) {
-        // If we collected multiple cells, perform merge
-        if (mergeCount > 1) {
-          worksheet.mergeCells(
-            startRow,
-            mergeStart + 1,
-            startRow,
-            mergeStart + mergeCount
-          );
-        }
-        // Reset for next merge
-        if (cell !== '>') {
+      data.headers.forEach((cell, index) => {
+        if (cell !== '>' && mergeStart === -1) {
+          // Start of a potential merge
           mergeStart = index;
           mergeCount = 1;
-        } else {
-          mergeStart = -1;
-          mergeCount = 0;
+        } else if (cell === '>' && mergeStart !== -1) {
+          // Continue merge
+          mergeCount++;
         }
-      }
-    });
 
-    startRow++;
+        // End of headers or next non-merge cell
+        if (
+          (cell !== '>' && mergeStart !== -1 && mergeStart !== index) ||
+          (index === data.headers.length - 1 && mergeCount > 1)
+        ) {
+          // If we collected multiple cells, perform merge
+          if (mergeCount > 1) {
+            worksheet.mergeCells(
+              startRow,
+              mergeStart + 1,
+              startRow,
+              mergeStart + mergeCount
+            );
+          }
+          // Reset for next merge
+          if (cell !== '>') {
+            mergeStart = index;
+            mergeCount = 1;
+          } else {
+            mergeStart = -1;
+            mergeCount = 0;
+          }
+        }
+      });
+
+      startRow++;
+    }
 
     // Add data rows
     data.rows.forEach((rowData) => {
@@ -201,6 +248,7 @@ const AgendaExcelGenerator: React.FC = () => {
         // Apply cell-specific styles
         const cellData = rowData[colNumber - 1];
         if (typeof cellData === 'object' && cellData.style) {
+          // Apply alignment if specified
           if (cellData.style.alignment) {
             cell.alignment = {
               ...cell.alignment,
@@ -208,6 +256,19 @@ const AgendaExcelGenerator: React.FC = () => {
               // Handle wrapText separately to ensure it's properly applied
               wrapText: cellData.style.alignment.wrapText || false,
             };
+          }
+
+          // Apply fill/background color if specified
+          if (cellData.style.fill) {
+            cell.fill = cellData.style.fill as ExcelJS.Fill;
+          }
+
+          // Apply font styling if specified
+          if (cellData.style.font) {
+            cell.font = {
+              ...cell.font,
+              ...cellData.style.font,
+            } as ExcelJS.Font;
           }
         }
       });
@@ -290,7 +351,7 @@ const AgendaExcelGenerator: React.FC = () => {
         'Duration',
         'Role Taker',
       ],
-      columnWidths: [18, 24, 24, 24, 8, 24], // Custom column widths for this section
+      columnWidths: defaultColumnWidths, // Custom column widths for this section
       rows: [
         ['19:52', 'TTM (Table Topic Master) Opening', '>', '>', 4, 'Rui'],
         [
@@ -326,7 +387,7 @@ const AgendaExcelGenerator: React.FC = () => {
     const openingData: ArraySectionData = {
       title: 'Opening and Intro Session',
       headers: ['Time', 'Activities', '>', '>', 'Duration', 'Role Taker'],
-      columnWidths: [18, 24, 24, 24, 8, 24], // Custom column widths for this section
+      columnWidths: defaultColumnWidths, // Custom column widths for this section
       rows: [
         [
           '19:15',
@@ -385,7 +446,7 @@ const AgendaExcelGenerator: React.FC = () => {
         'Duration',
         'Role Taker',
       ],
-      columnWidths: [18, 24, 24, 24, 8, 24], // Custom column widths for this section
+      columnWidths: defaultColumnWidths, // Custom column widths for this section
       rows: [
         ['20:42', 'Table Topic Evaluation', '>', '>', 7, 'Emily'],
         ['20:50', 'Prepared Speech 1 Evaluation', '>', '>', 3, 'Phyllis'],
@@ -419,7 +480,7 @@ const AgendaExcelGenerator: React.FC = () => {
         'Duration',
         'Role Taker',
       ],
-      columnWidths: [18, 24, 24, 24, 8, 24],
+      columnWidths: defaultColumnWidths,
       rows: [
         // Speech 1 - Row 1
         [
@@ -561,7 +622,7 @@ const AgendaExcelGenerator: React.FC = () => {
         'Duration',
         'Role Taker',
       ],
-      columnWidths: [18, 24, 24, 24, 8, 24], // Custom column widths for this section
+      columnWidths: defaultColumnWidths, // Custom column widths for this section
       rows: [
         ['20:58', "Timer's Report", '>', '>', 2, 'Max'],
         ['21:01', 'Hark Master Pop Quiz Time', '>', '>', 5, 'Mia'],
@@ -582,6 +643,135 @@ const AgendaExcelGenerator: React.FC = () => {
     );
   };
 
+  // Function to create Time Rules Section
+  const createTimeRules = (
+    worksheet: ExcelJS.Worksheet,
+    startRow: number,
+    showTitle: boolean = true,
+    fontStyle?: { name?: string; size?: number }
+  ): number => {
+    const timeRulesData: ArraySectionData = {
+      title: 'Time Rules',
+      headers: [],
+      columnWidths: defaultColumnWidths, // Custom column widths for this section
+      rows: [
+        // Type row
+        [
+          'Type',
+          {
+            text: 'Speech <=3min\nTable Topics & Most Evaluations',
+            style: { alignment: { horizontal: 'center', wrapText: true } },
+          },
+          '>',
+          {
+            text: '3min < Speech <=10min\nMost prepared speeches & GE',
+            style: { alignment: { horizontal: 'center', wrapText: true } },
+          },
+          {
+            text: 'Speech >10min\nLong Speeches & Workshops',
+            style: { alignment: { horizontal: 'center', wrapText: true } },
+          },
+          '>',
+        ],
+
+        // Green Card row
+        [
+          {
+            text: 'Green Card',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF00B050' }, // Green color
+              },
+              font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
+              alignment: { horizontal: 'center' },
+            },
+          },
+          {
+            text: '1 minute left',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '>',
+          {
+            text: '1 minute left',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          {
+            text: '5 minutes left',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '>',
+        ],
+        // Yellow Card row
+        [
+          {
+            text: 'Yellow Card',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFFFC000' }, // Yellow color
+              },
+              font: { color: { argb: 'FF000000' }, bold: true }, // Black text
+              alignment: { horizontal: 'center' },
+            },
+          },
+          {
+            text: '30 seconds left',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '>',
+          {
+            text: '30 seconds left',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          {
+            text: '2 minutes left',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '>',
+        ],
+        // Red Card row (with explanation)
+        [
+          {
+            text: 'Red Card',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFFF0000' }, // Red color
+              },
+              font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
+              alignment: { horizontal: 'center' },
+            },
+          },
+          {
+            text: "Red card means time's up, but you still have extra 30s to conclude/close your speech, \nafter 30s, we will ring the bell, which means the speaker must stop and give back the stage.",
+            style: {
+              alignment: {
+                horizontal: 'left',
+                wrapText: true,
+              },
+            },
+          },
+          '>',
+          '>',
+          '>',
+          '>',
+        ],
+      ],
+    };
+
+    return createArraySection(
+      worksheet,
+      timeRulesData,
+      startRow,
+      showTitle,
+      fontStyle
+    );
+  };
+
   // Create workbook function that will call the section creation functions
   const createWorkbook = async () => {
     // Create a new workbook and worksheet
@@ -589,14 +779,7 @@ const AgendaExcelGenerator: React.FC = () => {
     const worksheet = workbook.addWorksheet('Meeting Agenda');
 
     // Set default column widths
-    worksheet.columns = [
-      { width: 18 },
-      { width: 24 },
-      { width: 24 },
-      { width: 24 },
-      { width: 8 },
-      { width: 24 },
-    ];
+    worksheet.columns = defaultColumnWidths.map((width) => ({ width }));
 
     // Start adding sections - we're starting with row 1
     let currentRow = 1;
@@ -636,7 +819,13 @@ const AgendaExcelGenerator: React.FC = () => {
     });
 
     // Add Facilitators' Report Section - Don't show title and set Arial font size 9
-    createFacilitatorsReport(worksheet, currentRow, false, {
+    currentRow = createFacilitatorsReport(worksheet, currentRow, false, {
+      name: 'Arial',
+      size: 9,
+    });
+
+    // Add Time Rules Section
+    createTimeRules(worksheet, currentRow, true, {
       name: 'Arial',
       size: 9,
     });
