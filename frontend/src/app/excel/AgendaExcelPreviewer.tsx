@@ -210,6 +210,7 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
                 borderLeft: getBorderStyle(cell.border?.left?.style),
                 borderRight: getBorderStyle(cell.border?.right?.style),
                 textAlign: cell.alignment?.horizontal || 'left',
+                verticalAlign: cell.alignment?.vertical || 'middle',
                 padding: '2px 6px',
                 isMerged: primarySpan.rowSpan > 1 || primarySpan.colSpan > 1,
                 rowSpan: primarySpan.rowSpan,
@@ -316,7 +317,7 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
                         padding: cell.style.padding,
                         height: '12px', // Standard Excel row height
                         whiteSpace: 'pre-wrap', // Preserve whitespace and wrap text
-                        verticalAlign: 'middle', // Center vertically
+                        verticalAlign: cell.style.verticalAlign || 'middle', // Center vertically
                       }}
                     >
                       {typeof cell.value === 'string'

@@ -46,7 +46,7 @@ type ArraySectionData = {
   verticalMerges?: VerticalMerge[]; // New property for vertical merges
 };
 
-const defaultColumnWidths = [18, 21, 21, 30, 8, 24];
+const defaultColumnWidths = [18, 21, 24, 30, 8, 24];
 
 const AgendaExcelGenerator: React.FC = () => {
   const [isGenerating, setIsGenerating] = useState(false);
@@ -772,6 +772,262 @@ const AgendaExcelGenerator: React.FC = () => {
     );
   };
 
+  // Function to create Team/Officer Section
+  const createTeam = (
+    worksheet: ExcelJS.Worksheet,
+    startRow: number,
+    showTitle: boolean = true,
+    fontStyle?: { name?: string; size?: number }
+  ): number => {
+    const teamData: ArraySectionData = {
+      title: 'Soarhigh Team',
+      headers: [
+        'Soarhigh Officer',
+        '>',
+        'Toastmaster Pathways',
+        'Meeting Rules',
+        'Features of Soarhigh',
+        '>',
+      ],
+      columnWidths: defaultColumnWidths,
+      rows: [
+        [
+          {
+            text: 'President',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF343e4e' },
+              },
+              font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
+            },
+          },
+          { text: 'Libra Lee', style: { alignment: { horizontal: 'center' } } },
+          {
+            text: 'DL-Dynamic leadership\nMS-Motivational Strategies\nPl-Persuasive Influence\nPM-Presentation Mastery\nVC-Visionary Communication\nEH-Engaging Humor\n\nDL-动态领导力\nMS-激励策略\nPl-有说服力的影响\nPM-精通演讲\nVC-愿景沟通\nEH-善用幽默',
+            style: {
+              alignment: {
+                vertical: 'top',
+                horizontal: 'left',
+                wrapText: true,
+              },
+              font: {
+                size: 8,
+              },
+            },
+          },
+          {
+            text: '1. Please keep in mind the 4 taboos: \nSEX\nRELIGION\nPOLITICS\nCOMMERCIALS\n\n2. Please silence your phone during the meeting.\n\n3. Please shake hands with the host when going up and down the stage.',
+            style: {
+              alignment: {
+                vertical: 'top',
+                horizontal: 'left',
+                wrapText: true,
+              },
+              font: {
+                size: 8,
+              },
+            },
+          },
+          {
+            text: "Soarhigh Toastmasters Club is the one and only 100% English Club in Bao'an. We are a family to love, to care, to laugh, and to inspire. \n\n搜嗨头马国际演讲俱乐部，深圳宝安区唯一的100%英文俱乐部，主打松弛感第一，包容度第一，以自己的节奏，享受每一步的成长。\n\nOur slogan: Soarhigh, so high, takes me fly!",
+            style: {
+              alignment: {
+                vertical: 'top',
+                horizontal: 'left',
+                wrapText: true,
+              },
+              font: {
+                size: 8,
+              },
+            },
+          },
+          '',
+        ],
+        [
+          {
+            text: 'VPE (Vice President Education)',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF343e4e' },
+              },
+              font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
+              alignment: {
+                wrapText: true,
+              },
+            },
+          },
+          { text: 'Rui Zheng', style: { alignment: { horizontal: 'center' } } },
+          '',
+          '',
+          '',
+          '',
+        ],
+        [
+          {
+            text: 'VPM (Vice President Membership)',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF343e4e' },
+              },
+              font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
+              alignment: {
+                wrapText: true,
+              },
+            },
+          },
+          {
+            text: 'Joseph Zhang',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '',
+          '',
+          '',
+          '',
+        ],
+        [
+          {
+            text: 'VPPR (Vice President Public Relations)',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF343e4e' },
+              },
+              font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
+              alignment: {
+                wrapText: true,
+              },
+            },
+          },
+          {
+            text: 'Owen Liang',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '',
+          '',
+          '',
+          '',
+        ],
+        [
+          {
+            text: 'Secretary',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF343e4e' },
+              },
+              font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
+              alignment: {
+                wrapText: true,
+              },
+            },
+          },
+          {
+            text: 'Jessical Peng',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '',
+          '',
+          '',
+          '',
+        ],
+        [
+          {
+            text: 'Treasurer',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF343e4e' },
+              },
+              font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
+              alignment: {
+                wrapText: true,
+              },
+            },
+          },
+          { text: 'Max Long', style: { alignment: { horizontal: 'center' } } },
+          '',
+          '',
+          '',
+          '',
+        ],
+        [
+          {
+            text: 'SAA (Sergeant At Arms)',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF343e4e' },
+              },
+              font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
+              alignment: {
+                wrapText: true,
+              },
+            },
+          },
+          {
+            text: 'Joyce Feng',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '',
+          '',
+          '',
+          '',
+        ],
+        [
+          {
+            text: 'IPP (Immediate Past President)',
+            style: {
+              fill: {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FF343e4e' },
+              },
+              font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
+              alignment: {
+                wrapText: true,
+              },
+            },
+          },
+          {
+            text: 'Jessical Peng',
+            style: { alignment: { horizontal: 'center' } },
+          },
+          '',
+          '',
+          '',
+          '',
+        ],
+      ],
+
+      verticalMerges: [
+        { col: 3, startRow: 1, endRow: 8 },
+        { col: 4, startRow: 1, endRow: 8 },
+      ],
+    };
+
+    startRow = createArraySection(
+      worksheet,
+      teamData,
+      startRow,
+      showTitle,
+      fontStyle
+    );
+
+    worksheet.mergeCells(startRow - 8, 5, startRow - 1, 6);
+
+    return startRow;
+  };
+
   // Create workbook function that will call the section creation functions
   const createWorkbook = async () => {
     // Create a new workbook and worksheet
@@ -825,7 +1081,13 @@ const AgendaExcelGenerator: React.FC = () => {
     });
 
     // Add Time Rules Section
-    createTimeRules(worksheet, currentRow, true, {
+    currentRow = createTimeRules(worksheet, currentRow, true, {
+      name: 'Arial',
+      size: 9,
+    });
+
+    // Add Team/Officer Section after Time Rules
+    createTeam(worksheet, currentRow, false, {
       name: 'Arial',
       size: 9,
     });
