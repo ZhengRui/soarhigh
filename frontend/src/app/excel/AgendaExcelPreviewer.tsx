@@ -291,37 +291,45 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
     );
   }
 
+  const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0);
+
   // Render the preview
   return (
     <div className='flex flex-col items-center p-6 bg-white rounded-lg shadow-md max-w-4xl mx-auto my-8'>
       <h2 className='text-xl font-semibold mb-4'>Agenda Preview</h2>
-      <div className='w-full border border-gray-300 border-opacity-30 pt-2 rounded-t-md overflow-auto relative'>
-        {/* Images with absolute positioning */}
-        <Image
-          src='/images/toastmasters.png'
-          alt='Toastmasters Logo'
-          width={96}
-          height={96}
-          style={{ position: 'absolute', left: '10px', top: '16px' }}
-        />
-        <Image
-          src='/images/soarhighQR.png'
-          alt='Soarhigh QR Code'
-          width={80}
-          height={80}
-          style={{ position: 'absolute', left: '140px', top: '16px' }}
-        />
-        <Image
-          src='/images/vpmQR.png'
-          alt='VPM QR Code'
-          width={72}
-          height={72}
-          style={{ position: 'absolute', left: '770px', top: '30px' }}
-        />
+      <div className='w-full border border-gray-300 border-opacity-30 rounded-t-md overflow-auto relative'>
+        {/* Images with responsive containers */}
+        <div className='absolute left-2.5 top-2.5 w-20 aspect-square'>
+          <Image
+            src='/images/toastmasters.png'
+            alt='Toastmasters Logo'
+            fill
+            className='object-fill'
+          />
+        </div>
+        <div className='absolute left-28 lg:left-36 top-2.5 w-[72px] aspect-square'>
+          <Image
+            src='/images/soarhighQR.png'
+            alt='Soarhigh QR Code'
+            fill
+            className='object-fill'
+          />
+        </div>
+        <div className='absolute right-8 top-8 lg:top-6 w-16 aspect-square'>
+          <Image
+            src='/images/vpmQR.png'
+            alt='VPM QR Code'
+            fill
+            className='object-fill'
+          />
+        </div>
         <table className='border-collapse table-fixed w-full'>
           <colgroup>
             {columnWidths.map((width, index) => (
-              <col key={`col-${index}`} style={{ width: `${width * 7}px` }} />
+              <col
+                key={`col-${index}`}
+                style={{ width: `${(width / tableWidth) * 100}%` }}
+              />
             ))}
           </colgroup>
           <tbody>
