@@ -15,6 +15,7 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [previewData, setPreviewData] = useState<any[][]>([]);
   const [columnWidths, setColumnWidths] = useState<number[]>([]);
+  const [fontSizeScale, setFontSizeScale] = useState(1);
 
   // Helper function to properly extract Excel color to CSS
   const extractExcelColor = useCallback((argbColor?: string): string => {
@@ -40,6 +41,35 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
     },
     [extractExcelColor]
   );
+
+  // Function to convert Excel font size to responsive rem units
+  const getResponsiveFontSize = useCallback(
+    (excelFontSize: number = 11): string => {
+      // Base conversion: Excel size to rem (11px in Excel ≈ 0.688rem in browser)
+      const baseRemSize = excelFontSize / 16;
+      // Apply scaling factor for different device sizes
+      return `${baseRemSize * fontSizeScale}rem`;
+    },
+    [fontSizeScale]
+  );
+
+  // Adjust scale factor based on screen size
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 768) {
+        setFontSizeScale(0.92); // Mid scale for tablets
+      } else {
+        setFontSizeScale(1); // Normal scale for desktop
+      }
+    };
+
+    // Set initial value
+    handleResize();
+
+    // Add resize listener
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Function to generate preview
   const generatePreview = useCallback(async () => {
@@ -172,7 +202,8 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
       worksheet.columns.forEach((column) => {
         widths.push(column.width!);
       });
-      setColumnWidths(widths);
+      // setColumnWidths(widths);
+      setColumnWidths([18, 21, 24, 28, 12, 22]);
 
       worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
         if (rowNumber <= maxRow) {
@@ -297,93 +328,95 @@ const AgendaExcelPreviewer: React.FC<PreviewerProps> = ({
   return (
     <div className='flex flex-col items-center p-6 bg-white rounded-lg shadow-md max-w-4xl mx-auto my-8'>
       <h2 className='text-xl font-semibold mb-4'>Agenda Preview</h2>
-      <div className='w-full border border-gray-300 border-opacity-30 rounded-t-md overflow-auto relative'>
-        {/* Images with responsive containers */}
-        <div className='absolute left-2.5 top-2.5 w-20 aspect-square'>
-          <Image
-            src='/images/toastmasters.png'
-            alt='Toastmasters Logo'
-            fill
-            className='object-fill'
-          />
+      <div className='w-full border border-gray-300 border-opacity-30 rounded-t-md overflow-auto'>
+        <div className='min-w-[600px] relative'>
+          {/* Images with responsive containers */}
+          <div className='absolute left-2.5 top-2.5 w-[72px] md:w-20 aspect-square'>
+            <Image
+              src='/images/toastmasters.png'
+              alt='Toastmasters Logo'
+              fill
+              className='object-fill'
+            />
+          </div>
+          <div className='absolute left-[88px] md:left-28 lg:left-36 top-[18px] md:top-2.5 w-16 md:w-[72px] aspect-square'>
+            <Image
+              src='/images/soarhighQR.png'
+              alt='Soarhigh QR Code'
+              fill
+              className='object-fill'
+            />
+          </div>
+          <div className='absolute right-4 md:right-8 top-9 md:top-[30px] lg:top-6 w-14 md:w-16 aspect-square'>
+            <Image
+              src='/images/vpmQR.png'
+              alt='VPM QR Code'
+              fill
+              className='object-fill'
+            />
+          </div>
+          <table className='border-collapse table-fixed w-full'>
+            <colgroup>
+              {columnWidths.map((width, index) => (
+                <col
+                  key={`col-${index}`}
+                  style={{ width: `${(width / tableWidth) * 100}%` }}
+                />
+              ))}
+            </colgroup>
+            <tbody>
+              {previewData.map((row, rowIndex) => (
+                <tr
+                  key={`row-${rowIndex}`}
+                  // className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
+                >
+                  {row.map((cell, cellIndex) => {
+                    return (
+                      <td
+                        key={`cell-${rowIndex}-${cellIndex}`}
+                        className='p-2'
+                        rowSpan={cell.style.rowSpan}
+                        colSpan={cell.style.colSpan}
+                        style={{
+                          backgroundColor: cell.style.backgroundColor,
+                          color: cell.style.color,
+                          fontWeight: cell.style.bold ? 'bold' : 'normal',
+                          fontSize: getResponsiveFontSize(cell.style.fontSize),
+                          borderTop: cell.style.borderTop,
+                          borderBottom: cell.style.borderBottom,
+                          borderLeft: cell.style.borderLeft,
+                          borderRight: cell.style.borderRight,
+                          textAlign: cell.style.textAlign as
+                            | 'left'
+                            | 'center'
+                            | 'right',
+                          // width: `${columnWidths[cellIndex] * 7}px`, // Scale column width based on Excel width
+                          padding: cell.style.padding,
+                          height: '12px', // Standard Excel row height
+                          whiteSpace: 'pre-wrap', // Preserve whitespace and wrap text
+                          verticalAlign: cell.style.verticalAlign || 'middle', // Center vertically
+                        }}
+                      >
+                        {typeof cell.value === 'string'
+                          ? cell.value
+                              .split('\n')
+                              .map((line: string, i: number) => (
+                                <React.Fragment key={i}>
+                                  {line}
+                                  {i < cell.value.split('\n').length - 1 && (
+                                    <br />
+                                  )}
+                                </React.Fragment>
+                              ))
+                          : cell.value}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <div className='absolute left-28 lg:left-36 top-2.5 w-[72px] aspect-square'>
-          <Image
-            src='/images/soarhighQR.png'
-            alt='Soarhigh QR Code'
-            fill
-            className='object-fill'
-          />
-        </div>
-        <div className='absolute right-8 top-8 lg:top-6 w-16 aspect-square'>
-          <Image
-            src='/images/vpmQR.png'
-            alt='VPM QR Code'
-            fill
-            className='object-fill'
-          />
-        </div>
-        <table className='border-collapse table-fixed w-full'>
-          <colgroup>
-            {columnWidths.map((width, index) => (
-              <col
-                key={`col-${index}`}
-                style={{ width: `${(width / tableWidth) * 100}%` }}
-              />
-            ))}
-          </colgroup>
-          <tbody>
-            {previewData.map((row, rowIndex) => (
-              <tr
-                key={`row-${rowIndex}`}
-                // className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
-              >
-                {row.map((cell, cellIndex) => {
-                  return (
-                    <td
-                      key={`cell-${rowIndex}-${cellIndex}`}
-                      className='p-2'
-                      rowSpan={cell.style.rowSpan}
-                      colSpan={cell.style.colSpan}
-                      style={{
-                        backgroundColor: cell.style.backgroundColor,
-                        color: cell.style.color,
-                        fontWeight: cell.style.bold ? 'bold' : 'normal',
-                        fontSize: `${cell.style.fontSize}px`,
-                        borderTop: cell.style.borderTop,
-                        borderBottom: cell.style.borderBottom,
-                        borderLeft: cell.style.borderLeft,
-                        borderRight: cell.style.borderRight,
-                        textAlign: cell.style.textAlign as
-                          | 'left'
-                          | 'center'
-                          | 'right',
-                        // width: `${columnWidths[cellIndex] * 7}px`, // Scale column width based on Excel width
-                        padding: cell.style.padding,
-                        height: '12px', // Standard Excel row height
-                        whiteSpace: 'pre-wrap', // Preserve whitespace and wrap text
-                        verticalAlign: cell.style.verticalAlign || 'middle', // Center vertically
-                      }}
-                    >
-                      {typeof cell.value === 'string'
-                        ? cell.value
-                            .split('\n')
-                            .map((line: string, i: number) => (
-                              <React.Fragment key={i}>
-                                {line}
-                                {i < cell.value.split('\n').length - 1 && (
-                                  <br />
-                                )}
-                              </React.Fragment>
-                            ))
-                        : cell.value}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
 
       <button
