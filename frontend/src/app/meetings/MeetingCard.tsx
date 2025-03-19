@@ -191,7 +191,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
       >
         <div className='p-6 border-t border-gray-300 bg-gradient-to-b from-white to-[#F9FAFB]'>
           <h3 className='text-lg font-semibold mb-4 text-gray-800'>
-            Meeting Schedule
+            Meeting Agenda
           </h3>
           <div className='space-y-6 sm:space-y-4'>
             {segments.map((segment) => (
@@ -215,8 +215,15 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
                       {segment.type}
                     </h4>
                     <p className='text-sm text-gray-500'>
-                      {segment.role_taker?.name}
-                      {segment.title && ` - ${segment.title}`}
+                      {segment.role_taker?.name ||
+                        (segment.type.toLowerCase() === 'table topic session' ||
+                        segment.type.toLowerCase().includes('tea break') ||
+                        segment.type.toLowerCase().includes('registration')
+                          ? 'All'
+                          : '')}
+                      {segment.type.toLowerCase() === 'table topic session'
+                        ? segment.content && ` - ${segment.content}`
+                        : segment.title && ` - ${segment.title}`}
                     </p>
                   </div>
                 </div>
