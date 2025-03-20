@@ -16,7 +16,7 @@ import { useUpdateVoteStatus } from '@/hooks/votes/useUpdateVoteStatus';
 import { useDefaultVoteForm } from '@/hooks/votes/useDefaultVoteForm';
 import { CategoryCandidatesIF, AttendeeIF } from '@/interfaces';
 import { RoleTakerInput } from './RoleTakerInput';
-import { SEGMENT_TYPE_MAP } from './default';
+import { SEGMENT_TYPE_MAP } from '@/utils/defaultSegments';
 import toast from 'react-hot-toast';
 
 // Component for Switch since we don't have the ui library

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Clock, ChevronRight } from 'lucide-react';
-import { BaseSegment } from './default';
+import { BaseSegment } from '@/utils/defaultSegments';
 
 interface TimePickerModalProps {
   isOpen: boolean;

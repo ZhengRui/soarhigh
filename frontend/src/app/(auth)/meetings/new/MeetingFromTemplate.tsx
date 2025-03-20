@@ -5,7 +5,7 @@ import {
   DEFAULT_WORKSHOP_MEETING,
   DEFAULT_CUSTOM_MEETING,
   BaseSegment,
-} from '../default';
+} from '@/utils/defaultSegments';
 import { v4 as uuidv4 } from 'uuid';
 import { MeetingForm } from '../MeetingForm';
 

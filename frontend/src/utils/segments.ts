@@ -1,5 +1,5 @@
 import { SegmentIF } from '../interfaces';
-import { BaseSegment, SEGMENT_TYPE_MAP } from '../app/(auth)/meetings/default';
+import { BaseSegment, SEGMENT_TYPE_MAP } from './defaultSegments';
 
 /**
  * Converts API segments to BaseSegment for use with MeetingForm

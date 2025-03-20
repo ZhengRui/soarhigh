@@ -14,7 +14,7 @@ import {
   BaseSegment,
   DEFAULT_SEGMENTS_REGULAR_MEETING,
   SEGMENT_TYPE_MAP,
-} from './default';
+} from '@/utils/defaultSegments';
 import { TimePickerModal } from './TimePickerModal';
 import { AttendeeIF } from '@/interfaces';
 

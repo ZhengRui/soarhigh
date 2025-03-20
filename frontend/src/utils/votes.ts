@@ -14,7 +14,7 @@ import {
   GrammarianIntroSegment,
   HarkMasterIntroSegment,
   dummyParams,
-} from '../app/(auth)/meetings/default';
+} from './defaultSegments';
 
 const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT;
 

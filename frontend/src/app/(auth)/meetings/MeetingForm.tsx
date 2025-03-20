@@ -5,7 +5,7 @@ import {
   CustomSegment,
   SEGMENT_TYPE_MAP,
   SegmentParams,
-} from './default';
+} from '@/utils/defaultSegments';
 import { useState } from 'react';
 import { timeStringToMinutes } from './SegmentsEditor';
 import { v4 as uuidv4 } from 'uuid';
@@ -642,7 +642,7 @@ export function MeetingForm({
         {formData.segments && formData.segments.length > 0 && (
           <div className='border-t pt-6 pb-16'>
             <h3 className='text-lg font-medium text-gray-900 mb-4'>
-              Meeting Schedule
+              Meeting Agenda
             </h3>
             <SegmentsEditor
               segments={formData.segments}
