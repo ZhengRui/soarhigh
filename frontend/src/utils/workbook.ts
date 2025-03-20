@@ -139,7 +139,8 @@ const createArraySection = (
   data: ArraySectionData,
   startRow: number,
   showTitle: boolean = true,
-  fontStyle?: { name?: string; size?: number }
+  fontStyle?: { name?: string; size?: number },
+  rowHeight?: number
 ): number => {
   // Apply column widths if provided
   if (data.columnWidths && data.columnWidths.length > 0) {
@@ -227,6 +228,10 @@ const createArraySection = (
     const dataRow = worksheet.addRow(
       rowData.map((cell) => (typeof cell === 'object' ? cell.text : cell))
     );
+
+    if (rowHeight) {
+      dataRow.height = rowHeight;
+    }
 
     // Apply styling
     const rowStyle = getRowStyle();
@@ -337,7 +342,9 @@ const createArraySection = (
   if (data.verticalMerges && data.verticalMerges.length > 0) {
     data.verticalMerges.forEach((merge) => {
       // Calculate absolute row positions
-      const headerOffset = showTitle ? 2 : 1; // Adjust based on whether title is shown
+      const headerOffset = showTitle
+        ? 1
+        : 0 + (data.headers.length > 0 ? 1 : 0);
       const absStartRow = initialStartRow + headerOffset + merge.startRow - 1;
       const absEndRow = initialStartRow + headerOffset + merge.endRow - 1;
 
@@ -393,29 +400,22 @@ interface HeaderDataIF {
   manager: AttendeeIF;
 }
 
-// Group meeting segments by table section
-const groupSegmentsBySection = (meeting: MeetingIF) => {
-  const groups = {
-    header: {
-      theme: meeting.theme,
-      number: meeting.no,
-      date: meeting.date,
-      startTime: meeting.start_time,
-      endTime: meeting.end_time,
-      location:
-        meeting.location ||
-        "Venue: JOININ HUB, 6th Xin'an Rd,Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
-      manager: meeting.manager,
-    } as HeaderDataIF,
-    openingAndIntro: [] as SegmentIF[],
-    tableTopics: [] as SegmentIF[],
-    preparedSpeeches: [] as SegmentIF[],
-    workshop: [] as SegmentIF[],
-    teaBreak: [] as SegmentIF[],
-    evaluation: [] as SegmentIF[],
-    facilitatorsReport: [] as SegmentIF[],
+const getHeaderData = (meeting: MeetingIF): HeaderDataIF => {
+  return {
+    theme: meeting.theme,
+    number: meeting.no || 0,
+    date: meeting.date,
+    startTime: meeting.start_time,
+    endTime: meeting.end_time,
+    location:
+      meeting.location ||
+      "Venue: JOININ HUB, 6th Xin'an Rd,Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+    manager: meeting.manager || { name: '', member_id: '' },
   };
+};
 
+// Group meeting segments by table section
+const getSegmentsWithSection = (meeting: MeetingIF) => {
   // Helper function to check if a segment type matches any keywords
   const matchesAny = (type: string, keywords: string[]): boolean => {
     return keywords.some((keyword) =>
@@ -436,8 +436,9 @@ const groupSegmentsBySection = (meeting: MeetingIF) => {
   };
 
   // Categorize each segment based on type
-  meeting.segments.forEach((segment) => {
+  const segmentsWithSectionName = meeting.segments.map((segment) => {
     const type = segment.type;
+    let sectionName = 'orphan';
 
     // Opening and Intro section
     if (
@@ -457,41 +458,42 @@ const groupSegmentsBySection = (meeting: MeetingIF) => {
       // segment start time is within 60 minutes of meeting start time
       getMinutesDifference(segment.start_time, meeting.start_time) < 60
     ) {
-      groups.openingAndIntro.push(segment);
+      sectionName = 'openingAndIntro';
     }
     // Table Topics section
     else if (
       matchesAny(type, ['Table Topic']) &&
       !matchesAny(type, ['Evaluation'])
     ) {
-      groups.tableTopics.push(segment);
+      sectionName = 'tableTopics';
     }
     // Prepared Speeches section
     else if (
       type.includes('Prepared Speech') &&
       !matchesAny(type, ['Evaluation'])
     ) {
-      groups.preparedSpeeches.push(segment);
+      sectionName = 'preparedSpeeches';
     }
     // Workshop section
     else if (type.includes('Workshop')) {
-      groups.workshop.push(segment);
+      sectionName = 'workshop';
     }
     // Tea Break section
     else if (type.includes('Tea Break')) {
-      groups.teaBreak.push(segment);
+      sectionName = 'teaBreak';
     }
     // Evaluation section
     else if (
       matchesAny(type, ['Table Topic', 'Prepared Speech']) &&
       matchesAny(type, ['Evaluation'])
     ) {
-      groups.evaluation.push(segment);
+      sectionName = 'evaluation';
     }
     // Facilitators' Report section
     else if (
       matchesAny(type, [
         'Report',
+        'Grammarian',
         'Pop Quiz',
         'General Evaluation',
         'Voting',
@@ -502,20 +504,17 @@ const groupSegmentsBySection = (meeting: MeetingIF) => {
       // segment start time is within 60 minutes of meeting end time
       getMinutesDifference(segment.start_time, meeting.end_time) < 45
     ) {
-      groups.facilitatorsReport.push(segment);
+      sectionName = 'facilitatorsReport';
     }
+
+    return { segment, sectionName };
   });
 
-  // Sort groups by start_time for consistent presentation
-  Object.keys(groups).forEach((key) => {
-    if (key !== 'header' && Array.isArray(groups[key as keyof typeof groups])) {
-      (groups[key as keyof typeof groups] as SegmentIF[]).sort((a, b) =>
-        a.start_time.localeCompare(b.start_time)
-      );
-    }
-  });
+  segmentsWithSectionName.sort((a, b) =>
+    a.segment.start_time.localeCompare(b.segment.start_time)
+  );
 
-  return groups;
+  return segmentsWithSectionName;
 };
 
 // Section data converters
@@ -530,7 +529,7 @@ const sectionConverters = {
         segment.type,
         '>',
         '>',
-        segment.duration,
+        Number(segment.duration),
         segment.role_taker?.name || '',
       ]),
     };
@@ -555,7 +554,7 @@ const sectionConverters = {
             segment.type,
             '>',
             '>',
-            segment.duration,
+            Number(segment.duration),
             segment.role_taker?.name || '',
           ];
         } else {
@@ -568,7 +567,7 @@ const sectionConverters = {
               style: { alignment: { horizontal: 'right' } },
             },
             segment.content?.split(' ').pop() || '',
-            segment.duration,
+            Number(segment.duration),
             segment.role_taker?.name || 'All',
           ];
         }
@@ -589,7 +588,7 @@ const sectionConverters = {
         `${segment.type} ${Math.ceil(rowIndex / 2)}`,
         { text: 'Title', style: { alignment: { horizontal: 'center' } } },
         '>',
-        segment.duration,
+        Number(segment.duration),
         segment.role_taker?.name || '',
       ]);
 
@@ -646,7 +645,7 @@ const sectionConverters = {
         },
         '>',
         '>',
-        segment.duration,
+        Number(segment.duration),
         segment.role_taker?.name || '',
       ]),
     };
@@ -670,7 +669,7 @@ const sectionConverters = {
           'Tea Break & Group Photos',
           '>',
           '>',
-          segment.duration,
+          Number(segment.duration),
           'All',
         ],
       ],
@@ -697,7 +696,7 @@ const sectionConverters = {
           : segment.type,
         '>',
         '>',
-        segment.duration,
+        Number(segment.duration),
         segment.role_taker?.name || '',
       ]),
     };
@@ -720,7 +719,26 @@ const sectionConverters = {
         segment.type,
         '>',
         '>',
-        segment.duration,
+        Number(segment.duration),
+        segment.role_taker?.name || '',
+      ]),
+    };
+  },
+
+  orphan: function (segments: SegmentIF[]): ArraySectionData {
+    return {
+      title: 'Orphan',
+      headers: [],
+      columnWidths: defaultColumnWidths,
+      rows: segments.map((segment) => [
+        segment.start_time,
+        {
+          text: segment.type,
+          style: { alignment: { horizontal: 'center' } },
+        },
+        '>',
+        '>',
+        Number(segment.duration),
         segment.role_taker?.name || '',
       ]),
     };
@@ -1018,10 +1036,11 @@ const createTimeRules = (
     timeRulesData,
     startRow,
     showTitle,
-    fontStyle
+    fontStyle,
+    13
   );
 
-  worksheet.getRow(startRow - 1).height = 32;
+  worksheet.getRow(startRow - 1).height = 28;
 
   return startRow;
 };
@@ -1277,13 +1296,20 @@ const createTeam = (
     fontStyle
   );
 
+  [1, 2, 5, 6, 7].forEach((row) => {
+    worksheet.getRow(startRow - row).height = 27;
+  });
+
   worksheet.mergeCells(startRow - 8, 5, startRow - 1, 6);
 
   return startRow;
 };
 
 // Main function to create a meeting workbook
-export const createMeetingWorkbook = async (meeting: MeetingIF) => {
+export const createMeetingWorkbook = async (
+  meeting: MeetingIF,
+  fontStyle = { name: 'Arial', size: 9 }
+) => {
   // Create workbook and worksheet
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('Meeting Agenda');
@@ -1292,130 +1318,70 @@ export const createMeetingWorkbook = async (meeting: MeetingIF) => {
   worksheet.columns = defaultColumnWidths.map((width) => ({ width }));
 
   // Group segments by section
-  const segmentGroups = groupSegmentsBySection(meeting);
+  const segmentsWithSectionName = getSegmentsWithSection(meeting);
 
   // Start adding sections - we're starting with row 1
   let currentRow = 1;
 
-  // Font style to use throughout
-  const fontStyle = { name: 'Arial', size: 9 };
-
-  // 1. Add Table Header with meeting metadata
+  // Add Table Header with meeting metadata
   currentRow = createTableHeader(
     worksheet,
     currentRow,
     false,
     fontStyle,
-    segmentGroups.header
+    getHeaderData(meeting)
   );
 
-  // 2. Add Opening and Intro Section
-  if (segmentGroups.openingAndIntro.length > 0) {
-    const openingSection = sectionConverters.openingAndIntro(
-      segmentGroups.openingAndIntro
-    );
-    currentRow = createArraySection(
-      worksheet,
-      openingSection,
-      currentRow,
-      false,
-      fontStyle
-    );
-  }
+  // Add segments grouped by section
+  let nSpeeches = 0;
+  let nSpeechEvaluations = 0;
+  let prevSectionName = '';
+  for (const segmentWithSectionName of segmentsWithSectionName) {
+    const sectionName = segmentWithSectionName.sectionName;
+    const segment = segmentWithSectionName.segment;
 
-  // 3. Add Table Topics Section
-  if (segmentGroups.tableTopics.length > 0) {
-    const tableTopicsSection = sectionConverters.tableTopics(
-      segmentGroups.tableTopics
-    );
-    currentRow = createArraySection(
-      worksheet,
-      tableTopicsSection,
-      currentRow,
-      false,
-      fontStyle
-    );
-  }
+    const sectionData = sectionConverters[
+      sectionName as keyof typeof sectionConverters
+    ]([segment]);
 
-  // 4. Add Prepared Speeches Section
-  if (segmentGroups.preparedSpeeches.length > 0) {
-    const speechesSection = sectionConverters.preparedSpeeches(
-      segmentGroups.preparedSpeeches
-    );
-    currentRow = createArraySection(
-      worksheet,
-      speechesSection,
-      currentRow,
-      false,
-      fontStyle
-    );
-
-    // Set row heights for prepared speeches (similar to what's done in the original code)
-    const nSpeeches = segmentGroups.preparedSpeeches.length;
-    for (let i = 0; i < nSpeeches; i++) {
-      worksheet.getRow(currentRow - 2 * i - 1).height = 48; // Set height for content rows
+    if (sectionName === 'preparedSpeeches') {
+      nSpeeches++;
+      sectionData.rows[0][1] = `Prepared Speech ${nSpeeches}`;
     }
-  }
 
-  // 5. Add Workshop Section
-  if (segmentGroups.workshop.length > 0) {
-    const workshopSection = sectionConverters.workshop(segmentGroups.workshop);
+    if (
+      sectionName === 'evaluation' &&
+      segment.type.includes('Prepared Speech')
+    ) {
+      nSpeechEvaluations++;
+      sectionData.rows[0][1] = `Prepared Speech ${nSpeechEvaluations} Evaluation`;
+    }
+
     currentRow = createArraySection(
       worksheet,
-      workshopSection,
+      sectionName !== prevSectionName
+        ? sectionData
+        : { ...sectionData, headers: [] },
       currentRow,
       false,
-      fontStyle
+      fontStyle,
+      13
     );
+
+    if (sectionName === 'preparedSpeeches') {
+      worksheet.getRow(currentRow - 1).height = 48;
+    }
+
+    prevSectionName = sectionName;
   }
 
-  // 6. Add Tea Break
-  if (segmentGroups.teaBreak.length > 0) {
-    const teaBreakSection = sectionConverters.teaBreak(segmentGroups.teaBreak);
-    currentRow = createArraySection(
-      worksheet,
-      teaBreakSection,
-      currentRow,
-      false,
-      fontStyle
-    );
-  }
-
-  // 7. Add Evaluation Section
-  if (segmentGroups.evaluation.length > 0) {
-    const evaluationSection = sectionConverters.evaluation(
-      segmentGroups.evaluation
-    );
-    currentRow = createArraySection(
-      worksheet,
-      evaluationSection,
-      currentRow,
-      false,
-      fontStyle
-    );
-  }
-
-  // 8. Add Facilitators' Report Section
-  if (segmentGroups.facilitatorsReport.length > 0) {
-    const facilitatorsSection = sectionConverters.facilitatorsReport(
-      segmentGroups.facilitatorsReport
-    );
-    currentRow = createArraySection(
-      worksheet,
-      facilitatorsSection,
-      currentRow,
-      false,
-      fontStyle
-    );
-  }
-
-  // 9. Add Time Rules Section (static content)
+  // Add Time Rules Section (static content)
   currentRow = createTimeRules(worksheet, currentRow, true, fontStyle);
 
-  // 10. Add Team/Officer Section (static content)
+  // Add Team/Officer Section (static content)
   createTeam(worksheet, currentRow, false, fontStyle);
 
-  // Add images
+  // Add header section images
   try {
     // Load the images from public directory
     const tmImage = await getImageAsBase64('/images/toastmasters.png');

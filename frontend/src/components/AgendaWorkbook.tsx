@@ -76,7 +76,10 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
   const handleDownload = async () => {
     setIsGenerating(true);
     try {
-      const { workbook } = await createMeetingWorkbook(meeting);
+      const { workbook } = await createMeetingWorkbook(meeting, {
+        name: 'Arial',
+        size: 8,
+      });
 
       // Generate Excel file as a buffer
       const buffer = await workbook.xlsx.writeBuffer();
