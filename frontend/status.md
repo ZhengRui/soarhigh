@@ -13,6 +13,7 @@ This Next.js application serves as the web platform for the "SoarHigh Toastmaste
 - **/meetings** - Public meeting listing page showing published meetings
 - **/posts** - Public posts listing page showing published content
 - **/posts/[slug]** - Public post detail page for viewing specific content
+- **/meetings/workbook/[id]** - Public meeting agenda workbook preview page
 
 ### Protected Routes (under the (auth) group)
 
@@ -24,6 +25,7 @@ All routes in the (auth) group are protected by authentication middleware which 
   - Template-based meeting creation
   - Image-based meeting creation (upload agenda image)
 - **/meetings/edit/[id]** - Page for editing existing meetings
+- **/meetings/workbook/[id]** - Page for viewing and downloading meeting agenda workbook (requires authentication for download)
 
 #### Post Management
 
@@ -140,6 +142,13 @@ All routes in the (auth) group are protected by authentication middleware which 
 - Vote count tracking
 - Admin controls to open/close voting for a meeting
 
+### Meeting Agenda Workbook Page (/meetings/workbook/[id])
+
+- Browser-based preview of the Excel-compatible agenda
+- Download button for authenticated users
+- Preview mode for draft meetings
+- Proper section formatting for all meeting components
+
 ## Data Model
 
 The application uses several key interfaces:
@@ -185,6 +194,8 @@ The application uses several key interfaces:
 - Meeting voting system with category-based voting
 - Vote status management (open/close voting)
 - Voting permissions for members and non-members
+- Meeting agenda workbook generation with Excel compatibility
+- Browser-based preview with responsive Excel-like styling
 
 ### Current Implementation Details
 
@@ -243,5 +254,15 @@ The meeting management workflow is now fully implemented:
    - Different permissions for members and non-members
    - Admin controls for managing voting
    - Real-time vote count updates
+
+9. **Meeting Agenda Workbook**
+
+   - Excel-compatible workbook generation with proper formatting
+   - Browser-based preview with responsive design
+   - Support for complex Excel features (merged cells, styling)
+   - Embedded images (club logos and QR codes)
+   - Preview mode for draft meetings
+   - Authentication-gated download functionality
+   - Proper section formatting for all meeting components
 
 The application follows a clean, modern UI design with gradient accents, responsive layouts, and thoughtful user interactions. The meeting creation workflow is particularly sophisticated, offering multiple creation methods and detailed customization options.
