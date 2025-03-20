@@ -123,6 +123,7 @@ export class PreparedSpeechSegment extends BaseSegment {
   type: string;
   role_taker_config = { editable: true, placeholder: 'Assign Speaker' };
   title_config = { editable: true, placeholder: 'Enter title (optional)' };
+  content_config = { editable: true, placeholder: 'Enter pathway (optional)' };
 
   constructor(params: SegmentParams, speechNumber?: number) {
     super(params);

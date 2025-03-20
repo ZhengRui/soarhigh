@@ -7,6 +7,7 @@ import { MeetingIF } from '@/interfaces';
 import { createMeetingWorkbook } from '@/utils/workbook';
 import Image from 'next/image';
 import { Download } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
 
 type AgendaWorkbookProps = {
   meeting: MeetingIF;
@@ -17,6 +18,7 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
   const [previewData, setPreviewData] = useState<any[][]>([]);
   const [columnWidths, setColumnWidths] = useState<number[]>([]);
   const [fontSizeScale, setFontSizeScale] = useState(1);
+  const { isPending: isAuthPending, data: user } = useAuth();
 
   // Helper function to properly extract Excel color to CSS
   const extractExcelColor = useCallback((argbColor?: string): string => {
@@ -342,18 +344,22 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
             Meeting Agenda Workbook
           </h1>
           <p className='text-gray-600 text-sm sm:text-base'>
-            Preview and download meeting agenda workbook
+            {user
+              ? 'Preview and download meeting agenda workbook'
+              : 'Preview meeting agenda workbook'}
           </p>
         </div>
 
-        <button
-          onClick={handleDownload}
-          className='self-start sm:self-center items-center inline-flex gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm rounded-md hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-sm hover:shadow-md'
-          disabled={isGenerating}
-        >
-          <Download className='w-4 h-4' />
-          <span className='font-medium'>Download Excel</span>
-        </button>
+        {!isAuthPending && user && (
+          <button
+            onClick={handleDownload}
+            className='self-start sm:self-center items-center inline-flex gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm rounded-md hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-sm hover:shadow-md'
+            disabled={isGenerating}
+          >
+            <Download className='w-4 h-4' />
+            <span className='font-medium'>Download Excel</span>
+          </button>
+        )}
       </div>
 
       <div className='w-full border border-gray-300 border-opacity-30 rounded-md overflow-auto'>

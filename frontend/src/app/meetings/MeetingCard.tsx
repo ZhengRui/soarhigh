@@ -11,6 +11,7 @@ import {
   Eye,
   EyeOff,
   Loader2,
+  Table2,
 } from 'lucide-react';
 import { MeetingIF } from '@/interfaces';
 import Link from 'next/link';
@@ -190,8 +191,18 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
         }`}
       >
         <div className='p-6 border-t border-gray-300 bg-gradient-to-b from-white to-[#F9FAFB]'>
-          <h3 className='text-lg font-semibold mb-4 text-gray-800'>
+          <h3 className='text-lg font-semibold mb-4 text-gray-800 flex items-center gap-3'>
             Meeting Agenda
+            <Link
+              href={`/meetings/workbook/${id}`}
+              className='text-xs font-medium text-fuchsia-500 hover:text-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'
+              onClick={(e) => e.stopPropagation()}
+              target='_blank'
+              rel='noopener noreferrer'
+            >
+              <Table2 className='w-3 h-3' />
+              <span>Table</span>
+            </Link>
           </h3>
           <div className='space-y-6 sm:space-y-4'>
             {segments.map((segment) => (

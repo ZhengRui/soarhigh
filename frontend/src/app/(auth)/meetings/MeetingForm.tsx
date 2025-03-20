@@ -20,6 +20,7 @@ import {
   Trash2,
   FileText,
   PenSquare,
+  Table2,
 } from 'lucide-react';
 import { SegmentsEditor } from './SegmentsEditor';
 import { useRouter } from 'next/navigation';
@@ -236,6 +237,34 @@ export function MeetingForm({
     });
   };
 
+  const handleWorkbookPreview = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const meetingData = {
+      ...formData,
+      segments: transformSegmentsForAPI(
+        formData.segments.filter(
+          (segment) =>
+            segment.start_time &&
+            segment.start_time.trim() !== '' &&
+            segment.duration &&
+            segment.duration.trim() !== ''
+        )
+      ),
+    };
+
+    try {
+      localStorage.setItem('tempMeetingData', JSON.stringify(meetingData));
+      window.open(
+        '/meetings/workbook/preview',
+        '_blank',
+        'noopener,noreferrer'
+      );
+    } catch (error) {
+      console.error('Error saving to localStorage:', error);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -350,6 +379,14 @@ export function MeetingForm({
           <h2 className='text-2xl font-semibold text-gray-900 flex items-center'>
             <PenSquare className='w-5 h-5 mr-2 text-indigo-500' />
             {mode === 'create' ? 'Create Meeting' : 'Edit Meeting'}
+            <button
+              type='button'
+              onClick={handleWorkbookPreview}
+              className='ml-4 text-xs font-medium text-fuchsia-500 hover:text-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'
+            >
+              <Table2 className='w-3 h-3' />
+              <span>Table</span>
+            </button>
           </h2>
           <p className='mt-1 text-sm text-gray-600'>
             {mode === 'create'
