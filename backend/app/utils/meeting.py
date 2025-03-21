@@ -8,11 +8,21 @@ from pydantic import ValidationError
 
 from ..config import OPENAI_API_KEY
 from ..db.core import get_members
-from ..models.meeting import Attendee, Meeting, MeetingParsedFromImage, Segment
-from .prompts import parse_meeting_agenda_image_system_prompt
+from ..models.meeting import (
+    Attendee,
+    Meeting,
+    MeetingParsedFromImage,
+    MeetingPlannedFromText,
+    Segment,
+)
+from .prompts import (
+    parse_meeting_agenda_image_system_prompt,
+    plan_meeting_from_text_developer_prompt,
+    plan_meeting_from_text_user_prompt,
+)
 
 
-def convert_parsed_meeting_to_meeting(parsed_meeting: MeetingParsedFromImage) -> Meeting:
+def convert_parsed_meeting_to_meeting(parsed_meeting: MeetingParsedFromImage | MeetingPlannedFromText) -> Meeting:
     """
     Convert a MeetingParsedFromImage object into a Meeting object.
     Maps names to member IDs using the members database.
@@ -158,3 +168,86 @@ def parse_meeting_agenda_image(image_bytes: bytes, content_type: str) -> Meeting
         raise ValueError(f"OpenAI API error after multiple retries: {last_exception!s}")
     else:
         raise ValueError("Failed to process meeting agenda image after multiple retries")
+
+
+def plan_meeting_from_text(text: str) -> Meeting:
+    """
+    Plan a meeting from text using OpenAI's Responses API.
+
+    Args:
+        text: The input text containing meeting details.
+
+    Returns:
+        Meeting: A structured Meeting object.
+    """
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    # Format the user prompt with the input text
+    formatted_user_prompt = plan_meeting_from_text_user_prompt.format(text=text)
+
+    json_schema = type_to_response_format_param(MeetingPlannedFromText)
+
+    # Retry configuration
+    max_retries = 1
+    retry_count = 0
+
+    # Retriable exceptions
+    retriable_exceptions = (APITimeoutError, RateLimitError, APIError)
+
+    last_exception = None
+
+    while retry_count < max_retries:
+        try:
+            # If this is a retry, add a message about the retry
+            if retry_count > 0:
+                print(f"Retry {retry_count}/{max_retries}")
+
+            # Create a response using the Responses API
+            response = client.responses.create(
+                model="o3-mini",
+                input=[
+                    {"role": "system", "content": plan_meeting_from_text_developer_prompt},
+                    {"role": "user", "content": formatted_user_prompt},
+                ],
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": json_schema["json_schema"]["name"],  # type: ignore
+                        "schema": json_schema["json_schema"]["schema"],  # type: ignore
+                    }
+                },
+                reasoning={"effort": "low"},
+                store=True,
+                timeout=60,
+            )
+            # Parse the JSON response into a MeetingPlannedFromText object
+            parsed_meeting = MeetingPlannedFromText.model_validate_json(response.output_text)
+
+            # Convert the parsed meeting to a Meeting object
+            meeting = convert_parsed_meeting_to_meeting(parsed_meeting)
+            return meeting
+
+        except retriable_exceptions as e:
+            # These are retriable errors
+            last_exception = e
+            retry_count += 1
+            print(f"API error occurred: {e!s}. Attempt {retry_count}/{max_retries}")
+            if retry_count >= max_retries:
+                # We've exhausted all retries
+                break
+        except ValidationError as e:
+            # Don't retry validation errors (likely a problem with the response format)
+            raise ValueError(f"Failed to parse OpenAI response into Meeting model: {e!s}")
+        except Exception as e:
+            # Don't retry unexpected errors
+            raise ValueError(f"Unexpected error during meeting planning: {e!s}")
+
+    # If we've exhausted all retries
+    if isinstance(last_exception, APITimeoutError):
+        raise ValueError("OpenAI API request timed out after multiple retries")
+    elif isinstance(last_exception, RateLimitError):
+        raise ValueError("OpenAI API rate limit exceeded after multiple retries")
+    elif isinstance(last_exception, APIError):
+        raise ValueError(f"OpenAI API error after multiple retries: {last_exception!s}")
+    else:
+        raise ValueError("Failed to plan meeting from text after multiple retries")

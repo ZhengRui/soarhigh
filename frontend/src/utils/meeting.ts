@@ -169,3 +169,18 @@ export const parseMeetingFromImage = requestTemplate(
   null,
   true // Requires authentication
 );
+
+export const planMeetingFromText = requestTemplate(
+  (text: string) => ({
+    url: `${apiEndpoint}/meeting/plan_from_text`,
+    method: 'POST',
+    headers: new Headers({
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    }),
+    body: JSON.stringify({ text }),
+  }),
+  responseHandlerTemplate,
+  null,
+  true // Requires authentication
+);

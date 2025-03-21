@@ -21,7 +21,7 @@ from ...db.core import (
 )
 from ...models.meeting import Award, Meeting, PaginatedMeetings, Vote, VotesStatus
 from ...models.users import User
-from ...utils.meeting import parse_meeting_agenda_image
+from ...utils.meeting import parse_meeting_agenda_image, plan_meeting_from_text
 from .auth import get_current_user, get_optional_user, verify_access_token
 
 http_scheme = HTTPBearer()
@@ -62,6 +62,11 @@ class VoteCast(BaseModel):
     votes: List[VoteCastRecord]
 
 
+# Add a new class to handle text in request body
+class MeetingPlanText(BaseModel):
+    text: str
+
+
 @r.post("/meeting/parse_agenda_image")
 async def r_parse_meeting_agenda_image(
     image: UploadFile = File(...), user: User = Depends(get_current_user)
@@ -78,6 +83,23 @@ async def r_parse_meeting_agenda_image(
         raise HTTPException(status_code=500, detail=str(e))
     except Exception:
         raise HTTPException(status_code=500, detail="An unexpected error occurred while processing the image")
+
+
+@r.post("/meeting/plan_from_text")
+async def r_plan_meeting_from_text(
+    text_data: MeetingPlanText,
+    user: User = Depends(get_current_user),
+) -> Meeting:
+    """
+    Plan a meeting from text.
+    """
+    try:
+        meeting = plan_meeting_from_text(text_data.text)
+        return meeting
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
 
 
 @r.post("/meetings", response_model=Meeting)
