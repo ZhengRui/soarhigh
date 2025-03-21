@@ -202,7 +202,7 @@ def get_meetings(
             meeting["manager"] = {
                 "id": manager_id,
                 "name": manager["name"],
-                "member_id": manager["member_id"],
+                "member_id": manager["member_id"] or "",
             }
 
     # Get all meeting IDs
@@ -333,7 +333,7 @@ def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optiona
         meeting["manager"] = {
             "id": manager_id,
             "name": manager["name"],
-            "member_id": manager["member_id"],
+            "member_id": manager["member_id"] or "",
         }
 
     # Fetch segments for this meeting

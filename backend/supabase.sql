@@ -439,6 +439,39 @@ CREATE OR REPLACE TRIGGER on_auth_user_created
   FOR EACH ROW
   EXECUTE FUNCTION handle_new_member();
 
+-- Function to handle member deletion when auth user is deleted
+CREATE OR REPLACE FUNCTION handle_deleted_member()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Start with a transaction to ensure all operations succeed or fail together
+
+  -- 1. Find all posts by this member and reassign them to an admin user
+  -- (alternatively, you could delete the posts instead)
+  UPDATE posts
+  SET author_id = (
+    SELECT id FROM members WHERE is_admin = true LIMIT 1
+  )
+  WHERE author_id = old.id;
+
+  -- 2. Remove the member_id reference from attendees
+  UPDATE attendees
+  SET member_id = NULL
+  WHERE member_id = old.id;
+
+  -- 3. Delete the member record itself
+  DELETE FROM members
+  WHERE id = old.id;
+
+  RETURN old;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Trigger to handle cleanup when auth user is deleted
+CREATE OR REPLACE TRIGGER on_auth_user_deleted
+  BEFORE DELETE ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION handle_deleted_member();
+
 -- Function to atomically increment votes
 CREATE OR REPLACE FUNCTION increment_votes(
     meeting_id_param UUID,
