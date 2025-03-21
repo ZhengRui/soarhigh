@@ -29,6 +29,7 @@
     "react-canvas-confetti": "^2.0.7",
     "react-dom": "^19.0.0",
     "react-hot-toast": "^2.5.1",
+    "react-simple-code-editor": "^0.14.1",
     "slugify": "^1.6.6",
     "uuid": "^11.0.5"
   },

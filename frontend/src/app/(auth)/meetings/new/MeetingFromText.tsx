@@ -4,12 +4,43 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Brain, PlusCircle, Table2, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { planMeetingFromText } from '@/utils/meeting';
+import Editor from 'react-simple-code-editor';
+import { highlight, languages } from 'prismjs';
+import 'prismjs/components/prism-json';
+import 'prismjs/themes/prism.css';
+
+// Custom styles for the editor
+const editorStyles = {
+  fontFamily: 'monospace',
+  fontSize: '12px',
+  // backgroundColor: 'rgb(229, 231, 235)', // bg-gray-200
+  // color: 'rgb(55, 65, 81)', // text-gray-700
+  // height: '100%',
+  // width: '100%',
+  // minHeight: '480px',
+  // overflow: 'auto',
+};
+
+const CustomStyles = () => (
+  <style jsx global>{`
+    .editor-container textarea {
+      outline: none !important;
+      // height: 100% !important;
+      // min-height: 480px !important;
+      // position: absolute !important;
+      // top: 0;
+      // left: 0;
+      // right: 0;
+      // bottom: 0;
+    }
+  `}</style>
+);
 
 export const MeetingFromText = () => {
   const [inputText, setInputText] = useState('');
   const [outputJson, setOutputJson] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const outputRef = useRef<HTMLTextAreaElement>(null);
+  const outputRef = useRef<HTMLDivElement>(null);
   const inputHandleRef = useRef<HTMLDivElement>(null);
   const outputHandleRef = useRef<HTMLDivElement>(null);
 
@@ -82,18 +113,18 @@ export const MeetingFromText = () => {
   useEffect(() => {
     // Handle output textarea resizing
     if (outputRef.current && outputHandleRef.current) {
-      const textarea = outputRef.current;
+      const container = outputRef.current;
       const handle = outputHandleRef.current;
 
       const handleMouseDown = (e: MouseEvent) => {
         e.preventDefault();
         const startY = e.clientY;
-        const startHeight = textarea.offsetHeight;
+        const startHeight = container.offsetHeight;
 
         function onMouseMove(e: MouseEvent) {
           const newHeight = startHeight + (e.clientY - startY);
           if (newHeight > 100) {
-            textarea.style.height = `${newHeight}px`;
+            container.style.height = `${newHeight}px`;
           }
         }
 
@@ -109,12 +140,12 @@ export const MeetingFromText = () => {
       const handleTouchStart = (e: TouchEvent) => {
         e.preventDefault();
         const startY = e.touches[0].clientY;
-        const startHeight = textarea.offsetHeight;
+        const startHeight = container.offsetHeight;
 
         function onTouchMove(e: TouchEvent) {
           const newHeight = startHeight + (e.touches[0].clientY - startY);
           if (newHeight > 100) {
-            textarea.style.height = `${newHeight}px`;
+            container.style.height = `${newHeight}px`;
           }
         }
 
@@ -174,6 +205,7 @@ export const MeetingFromText = () => {
 
   return (
     <div className='p-6'>
+      <CustomStyles />
       <div className='mb-6'>
         <h2 className='text-2xl font-semibold text-gray-900'>
           Create from Text
@@ -183,44 +215,46 @@ export const MeetingFromText = () => {
         </p>
       </div>
 
-      <div className='grid grid-cols-1 md:grid-cols-10 gap-2'>
+      <div className='grid grid-cols-1 md:grid-cols-10 gap-8 md:gap-2'>
         {/* Input Text Area */}
         <div className='flex flex-col md:col-span-4'>
-          <div className='flex justify-start items-center gap-2 mb-1.5'>
-            <label
-              htmlFor='inputText'
-              className='block text-sm font-normal text-gray-500'
-            >
-              Input text
-            </label>
-            <button
-              onClick={handleThinking}
-              disabled={isThinking}
-              className='text-xs font-medium text-orange-500 hover:text-orange-600 bg-orange-50 hover:bg-orange-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'
-            >
-              {isThinking ? (
-                <Loader2 className='w-3 h-3 animate-spin' />
-              ) : (
-                <Brain className='w-3 h-3' />
-              )}
-              <span>Generate</span>
-            </button>
-          </div>
-          <div className='relative w-full group'>
-            <textarea
-              ref={inputRef}
-              id='inputText'
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              placeholder='Paste registration message here...'
-              className='min-h-[320px] md:min-h-[480px] p-3 pb-6 font-mono border border-gray-300 rounded-md shadow-sm focus:outline-none focus:border-blue-500 bg-white text-xs text-gray-900 w-full transition-colors duration-100'
-              style={{ resize: 'none' }}
-            />
-            <div
-              ref={inputHandleRef}
-              className='absolute bottom-0 left-0 right-0 h-6 flex items-center justify-center cursor-ns-resize'
-            >
-              <div className='w-20 h-2 bg-gray-300 group-hover:bg-gray-400 rounded-full transition-colors duration-200'></div>
+          <div className='flex flex-col bg-gray-700 rounded-2xl shadow-md focus-within:ring-1 focus-within:ring-blue-500 transition-colors duration-100 overflow-clip'>
+            <div className='flex justify-between md:justify-start items-center gap-2 py-2 px-3'>
+              <label
+                htmlFor='inputText'
+                className='block text-sm font-medium text-gray-100'
+              >
+                Input text
+              </label>
+              <button
+                onClick={handleThinking}
+                disabled={isThinking}
+                className='text-xs font-medium text-orange-500 hover:text-orange-600 bg-orange-50 hover:bg-orange-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'
+              >
+                {isThinking ? (
+                  <Loader2 className='w-3 h-3 animate-spin' />
+                ) : (
+                  <Brain className='w-3 h-3' />
+                )}
+                <span>Generate</span>
+              </button>
+            </div>
+            <div className='relative w-full group rounded-t-xl flex overflow-clip'>
+              <textarea
+                ref={inputRef}
+                id='inputText'
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder='Paste registration message here...'
+                className='h-[320px] md:h-[480px] p-5 font-mono bg-gray-50 text-xs text-gray-700 w-full focus:outline-none'
+                style={{ resize: 'none' }}
+              />
+              <div
+                ref={inputHandleRef}
+                className='absolute bottom-0 left-0 right-0 h-6 flex items-center justify-center cursor-ns-resize'
+              >
+                <div className='w-20 h-2 bg-gray-300 group-hover:bg-gray-400 rounded-full transition-colors duration-200'></div>
+              </div>
             </div>
           </div>
         </div>
@@ -228,7 +262,7 @@ export const MeetingFromText = () => {
         {/* Output JSON Area */}
         <div className='flex flex-col md:col-span-6'>
           <div className='flex flex-col bg-gray-700 rounded-2xl shadow-md focus-within:ring-1 focus-within:ring-blue-500 transition-colors duration-100 overflow-clip'>
-            <div className='flex justify-start items-center gap-4 py-2 px-3'>
+            <div className='flex justify-between md:justify-start items-center gap-4 py-2 px-3'>
               <label
                 htmlFor='outputJson'
                 className='block text-sm font-medium text-gray-100'
@@ -246,21 +280,27 @@ export const MeetingFromText = () => {
                 </button>
               </div>
             </div>
-            <div className='relative w-full group bg-gray-200 rounded-t-xl overflow-clip'>
-              <textarea
+            <div className='relative w-full group rounded-t-xl overflow-clip'>
+              <div
                 ref={outputRef}
-                id='outputJson'
-                value={outputJson}
-                onChange={(e) => setOutputJson(e.target.value)}
-                placeholder='Meeting data will appear here...'
-                className='min-h-[320px] md:min-h-[480px] py-5 px-3 font-mono  bg-gray-200 text-xs text-gray-700 w-full focus:outline-none'
-                style={{ resize: 'none' }}
-              />
+                className='h-[320px] md:h-[480px] font-mono bg-gray-50 text-xs text-gray-700 w-full overflow-auto'
+              >
+                <Editor
+                  value={outputJson}
+                  onValueChange={(code) => setOutputJson(code)}
+                  highlight={(code) => highlight(code, languages.json, 'json')}
+                  padding={20}
+                  style={editorStyles}
+                  textareaId='outputJson'
+                  className='editor-container focus:outline-none'
+                  placeholder='Meeting data will appear here...'
+                />
+              </div>
               <div
                 ref={outputHandleRef}
                 className='absolute bottom-0 left-0 right-0 h-6 flex items-center justify-center cursor-ns-resize'
               >
-                <div className='w-20 h-2 bg-gray-400 group-hover:bg-gray-500 rounded-full transition-colors duration-200'></div>
+                <div className='w-20 h-2 bg-gray-300 group-hover:bg-gray-400 rounded-full transition-colors duration-200'></div>
               </div>
             </div>
           </div>

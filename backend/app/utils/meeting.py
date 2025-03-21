@@ -53,25 +53,28 @@ def convert_parsed_meeting_to_meeting(parsed_meeting: MeetingParsedFromImage | M
 
     # Convert segments
     segments = []
-    for parsed_segment in parsed_meeting.segments:
+    for i, parsed_segment in enumerate(parsed_meeting.segments):
+        # Tell mypy that parsed_segment has a role_taker attribute
+        parsed_segment_role_taker: str = getattr(parsed_segment, "role_taker", "")
+
         # Create Attendee from role_taker string
         role_taker_attendee = None
-        if parsed_segment.role_taker:
+        if parsed_segment_role_taker:
             role_taker_attendee = Attendee(
-                id=None, name=parsed_segment.role_taker, member_id=find_member_id(parsed_segment.role_taker)
+                id=None, name=parsed_segment_role_taker, member_id=find_member_id(parsed_segment_role_taker)
             )
 
         # Create Segment with converted role_taker
         segment = Segment(
-            id=parsed_segment.id,
-            type=parsed_segment.type,
-            start_time=parsed_segment.start_time,
-            duration=parsed_segment.duration,
-            end_time=parsed_segment.end_time,
+            id=getattr(parsed_segment, "id", str(i)),
+            type=getattr(parsed_segment, "type", ""),
+            start_time=getattr(parsed_segment, "start_time", ""),
+            duration=getattr(parsed_segment, "duration", ""),
+            end_time=getattr(parsed_segment, "end_time", ""),
             role_taker=role_taker_attendee,
-            title=parsed_segment.title or "",
-            content=parsed_segment.content or "",
-            related_segment_ids=parsed_segment.related_segment_ids or "",
+            title=getattr(parsed_segment, "title", ""),
+            content=getattr(parsed_segment, "content", ""),
+            related_segment_ids=getattr(parsed_segment, "related_segment_ids", ""),
         )
         segments.append(segment)
 

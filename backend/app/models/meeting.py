@@ -136,22 +136,22 @@ class SegmentPlannedFromText(BaseModel):
     Simplified version of Segment with role_taker as string.
     """
 
-    id: str = Field(description="A unique identifier for each segment of the meeting.")
+    # id: str = Field(description="A unique identifier for each segment of the meeting.")
     type: str = Field(
         description="The type of segment, e.g., timer introduction, prepared speech, table topic session, \
 table topic evaluation."
     )
     start_time: str = Field(description="The start time of the segment.")
     duration: str = Field(description="The duration of the segment.")
-    end_time: str = Field(description="The end time of the segment.")
+    # end_time: str = Field(description="The end time of the segment.")
     role_taker: str = Field(description="The name(s) of the person(s) performing the segment.")
     title: str = Field(
         description="The title of the speech or workshop, applicable if the segment is a prepared speech or workshop.",
     )
-    content: str = Field(description="Detailed scripts or notes about the speech, evaluation, or activity.")
-    related_segment_ids: str = Field(
-        description="A list of IDs of related segments, stored as a comma-separated string."
-    )
+    # content: str = Field(description="Detailed scripts or notes about the speech, evaluation, or activity.")
+    # related_segment_ids: str = Field(
+    #     description="A list of IDs of related segments, stored as a comma-separated string."
+    # )
 
 
 class MeetingPlannedFromText(BaseModel):
