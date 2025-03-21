@@ -227,39 +227,41 @@ export const MeetingFromText = () => {
 
         {/* Output JSON Area */}
         <div className='flex flex-col md:col-span-6'>
-          <div className='flex justify-start items-center gap-2 mb-1.5'>
-            <label
-              htmlFor='outputJson'
-              className='block text-sm font-normal text-gray-500'
-            >
-              Meeting data
-            </label>
-            <div className='flex items-center gap-2'>
-              <button className='text-xs font-medium text-fuchsia-500 hover:text-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'>
-                <Table2 className='w-3 h-3' />
-                <span>Table</span>
-              </button>
-              <button className='text-xs font-medium text-indigo-500 hover:text-indigo-600 bg-indigo-50 hover:bg-indigo-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'>
-                <PlusCircle className='w-3 h-3' />
-                <span>Create</span>
-              </button>
+          <div className='flex flex-col bg-gray-700 rounded-2xl shadow-md focus-within:ring-1 focus-within:ring-blue-500 transition-colors duration-100 overflow-clip'>
+            <div className='flex justify-start items-center gap-4 py-2 px-3'>
+              <label
+                htmlFor='outputJson'
+                className='block text-sm font-medium text-gray-100'
+              >
+                Meeting data
+              </label>
+              <div className='flex items-center gap-2'>
+                <button className='text-xs font-medium text-fuchsia-500 hover:text-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'>
+                  <Table2 className='w-3 h-3' />
+                  <span>Table</span>
+                </button>
+                <button className='text-xs font-medium text-indigo-500 hover:text-indigo-600 bg-indigo-50 hover:bg-indigo-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'>
+                  <PlusCircle className='w-3 h-3' />
+                  <span>Create</span>
+                </button>
+              </div>
             </div>
-          </div>
-          <div className='relative w-full group'>
-            <textarea
-              ref={outputRef}
-              id='outputJson'
-              value={outputJson}
-              onChange={(e) => setOutputJson(e.target.value)}
-              placeholder='Meeting data will appear here...'
-              className='min-h-[320px] md:min-h-[480px] p-3 pb-6 font-mono border border-gray-300 rounded-md shadow-sm focus:outline-none focus:border-blue-500 bg-gray-200 text-xs text-gray-700 w-full transition-colors duration-100'
-              style={{ resize: 'none' }}
-            />
-            <div
-              ref={outputHandleRef}
-              className='absolute bottom-0 left-0 right-0 h-6 flex items-center justify-center cursor-ns-resize'
-            >
-              <div className='w-20 h-2 bg-gray-400 group-hover:bg-gray-500 rounded-full transition-colors duration-200'></div>
+            <div className='relative w-full group bg-gray-200 rounded-t-xl overflow-clip'>
+              <textarea
+                ref={outputRef}
+                id='outputJson'
+                value={outputJson}
+                onChange={(e) => setOutputJson(e.target.value)}
+                placeholder='Meeting data will appear here...'
+                className='min-h-[320px] md:min-h-[480px] py-5 px-3 font-mono  bg-gray-200 text-xs text-gray-700 w-full focus:outline-none'
+                style={{ resize: 'none' }}
+              />
+              <div
+                ref={outputHandleRef}
+                className='absolute bottom-0 left-0 right-0 h-6 flex items-center justify-center cursor-ns-resize'
+              >
+                <div className='w-20 h-2 bg-gray-400 group-hover:bg-gray-500 rounded-full transition-colors duration-200'></div>
+              </div>
             </div>
           </div>
         </div>
