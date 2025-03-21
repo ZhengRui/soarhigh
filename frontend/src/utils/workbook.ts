@@ -443,7 +443,7 @@ const getSegmentsWithSection = (meeting: MeetingIF) => {
     // Opening and Intro section
     if (
       matchesAny(type, [
-        'Members and Guests Registration',
+        'Registration',
         'Warm up',
         'Meeting Rules Introduction',
         'SAA',
@@ -1343,6 +1343,10 @@ export const createMeetingWorkbook = async (
     const sectionData = sectionConverters[
       sectionName as keyof typeof sectionConverters
     ]([segment]);
+
+    if (sectionName === 'tableTopics' && !segment.type.includes('Opening')) {
+      sectionData.rows[0][1] = meeting.theme;
+    }
 
     if (sectionName === 'preparedSpeeches') {
       nSpeeches++;

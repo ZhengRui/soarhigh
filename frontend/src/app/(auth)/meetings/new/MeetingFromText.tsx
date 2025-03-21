@@ -203,6 +203,21 @@ export const MeetingFromText = () => {
     }
   };
 
+  const handleWorkbookPreview = async () => {
+    if (!outputJson) return;
+
+    try {
+      localStorage.setItem('tempMeetingData', outputJson);
+      window.open(
+        '/meetings/workbook/preview',
+        '_blank',
+        'noopener,noreferrer'
+      );
+    } catch (error) {
+      console.error('Error saving to localStorage:', error);
+    }
+  };
+
   return (
     <div className='p-6'>
       <CustomStyles />
@@ -270,7 +285,10 @@ export const MeetingFromText = () => {
                 Meeting data
               </label>
               <div className='flex items-center gap-2'>
-                <button className='text-xs font-medium text-fuchsia-500 hover:text-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'>
+                <button
+                  onClick={handleWorkbookPreview}
+                  className='text-xs font-medium text-fuchsia-500 hover:text-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'
+                >
                   <Table2 className='w-3 h-3' />
                   <span>Table</span>
                 </button>

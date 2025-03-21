@@ -109,17 +109,6 @@ and deliver a 2 mins impromptu response
 - Snow Xue
 - Steve Choong
 
-## Notes
-1. If the name match the first or the full name of a club member, then it is from our club. e.g. "Rui" refers to the \
-club member "Rui Zheng", "Ray" and "Rui Zhang" both refer to a guest. In your output, please use full name if it \
-matches to a member.
-2. Between segments there can be a 1 min buffer, e.g. previous segment starts at 20:10 and duration is 2 min, the \
-next segment can start at 20:12 or 20:13. Use this buffering mechanism to adjust time to fill in the whole 2 hours \
-time window.
-3. Above segments are ordered by time, you can add or remove some segments according to how many people registered but \
-don't change their orders. e.g. Table Topic Evaluation is after TeaBreak, Prepared Speech Evaluation is after Table \
-Topic Evaluation, General Evaluation is after all other evaluations and facilitators' reports.
-
 ## Example
 
 ### Example 1
@@ -521,5 +510,20 @@ Given the following input, generate the structured agenda for me
 ```plain
 {text}
 ```
+
+## Important Notes
+1. If the name match the first or the full name of a club member, then it is from our club. e.g. "Rui" refers to the \
+club member "Rui Zheng", "Ray" and "Rui Zhang" both refer to a guest. In your output, please use full name if it \
+matches to a member.
+2. Between segments there can be a 1 min buffer, e.g. previous segment starts at 20:10 and duration is 2 min, the \
+next segment can start at 20:12 or 20:13. Use this buffering mechanism to adjust time to fill in the whole 2 hours \
+time window.
+3. Above segments are ordered by time, you can add or remove some segments according to how many people registered but \
+DO NOT change their orders.
+4. Role taker for Opening Remarks, Awards, and Closing Remarks are always the president of the club Libra Lee.
+5. Role taker for Voting Section is always the TOM (Toastmaster of Meeting Introduction).
+6. Photographer is not required, so don't add a segment for photographer.
+
+
 #### Output
 """
