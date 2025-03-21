@@ -8,6 +8,9 @@ import Editor from 'react-simple-code-editor';
 import { highlight, languages } from 'prismjs';
 import 'prismjs/components/prism-json';
 import 'prismjs/themes/prism.css';
+import { MeetingIF } from '@/interfaces';
+import { convertSegmentsToBaseSegments } from '@/utils/segments';
+import { MeetingForm } from '../MeetingForm';
 
 // Custom styles for the editor
 const editorStyles = {
@@ -45,6 +48,7 @@ export const MeetingFromText = () => {
   const outputHandleRef = useRef<HTMLDivElement>(null);
 
   const [isThinking, setIsThinking] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
     // Handle input textarea resizing
@@ -218,6 +222,28 @@ export const MeetingFromText = () => {
     }
   };
 
+  if (isEditing) {
+    const meeting = JSON.parse(outputJson) as MeetingIF;
+    const formData = {
+      ...meeting,
+      segments: convertSegmentsToBaseSegments(meeting.segments || []),
+    };
+
+    return (
+      <div className='mt-4'>
+        <div className='bg-blue-50 p-4 mb-6 rounded-md'>
+          <h3 className='text-sm font-medium text-blue-800'>
+            Meeting planned from text
+          </h3>
+          <p className='text-xs text-blue-600 mt-1'>
+            You can edit the meeting details below before saving
+          </p>
+        </div>
+        <MeetingForm initFormData={formData} mode='create' />
+      </div>
+    );
+  }
+
   return (
     <div className='p-6'>
       <CustomStyles />
@@ -292,7 +318,24 @@ export const MeetingFromText = () => {
                   <Table2 className='w-3 h-3' />
                   <span>Table</span>
                 </button>
-                <button className='text-xs font-medium text-indigo-500 hover:text-indigo-600 bg-indigo-50 hover:bg-indigo-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'>
+                <button
+                  onClick={() => {
+                    // if jsonOutput can be parsed into a valid MeetingIF then set
+                    try {
+                      const meeting = JSON.parse(outputJson) as MeetingIF;
+                      if (meeting && meeting.segments) {
+                        setIsEditing(true);
+                      } else {
+                        setIsEditing(false);
+                      }
+                    } catch (error) {
+                      setIsEditing(false);
+                      console.error('Error parsing JSON:', error);
+                      toast.error('Failed to parse meeting data');
+                    }
+                  }}
+                  className='text-xs font-medium text-indigo-500 hover:text-indigo-600 bg-indigo-50 hover:bg-indigo-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'
+                >
                   <PlusCircle className='w-3 h-3' />
                   <span>Create</span>
                 </button>

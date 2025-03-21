@@ -1,6 +1,35 @@
-from typing import Generic, List, Optional, TypeVar
+from typing import Generic, List, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, Field
+
+defaultSegmentTypes = Literal[
+    "Members and Guests Registration, Warm up",
+    "Meeting Rules Introduction (SAA)",
+    "Opening Remarks (President)",
+    "TOM (Toastmaster of Meeting) Introduction",
+    "Timer",
+    "Grammarian",
+    "Hark Master",
+    "Aha Counter",
+    "Guests Self Introduction (30s per guest)",
+    "TTM (Table Topic Master) Opening",
+    "Table Topic Session",
+    "Workshop",
+    "Prepared Speech",
+    "Tea Break & Group Photos",
+    "Table Topic Evaluation",
+    "Prepared Speech Evaluation",
+    "Grammarian's Report",
+    "Aha Counter's Report",
+    "Timer's Report",
+    "Hark Master Pop Quiz Time",
+    "General Evaluation",
+    "Voting Section (TOM)",
+    "Moment of Truth",
+    "Awards (President)",
+    "Closing Remarks (President)",
+    "Custom segment",
+]
 
 
 class Attendee(BaseModel):
@@ -95,9 +124,10 @@ class SegmentParsedFromImage(BaseModel):
     """
 
     id: str = Field(description="A unique identifier for each segment of the meeting.")
-    type: str = Field(
+    type: defaultSegmentTypes = Field(
+        ...,
         description="The type of segment, e.g., timer introduction, prepared speech, table topic session, \
-table topic evaluation."
+table topic evaluation.",
     )
     start_time: str = Field(description="The start time of the segment.")
     duration: str = Field(description="The duration of the segment.")
@@ -137,9 +167,10 @@ class SegmentPlannedFromText(BaseModel):
     """
 
     # id: str = Field(description="A unique identifier for each segment of the meeting.")
-    type: str = Field(
+    type: defaultSegmentTypes = Field(
+        ...,
         description="The type of segment, e.g., timer introduction, prepared speech, table topic session, \
-table topic evaluation."
+table topic evaluation.",
     )
     start_time: str = Field(description="The start time of the segment.")
     duration: str = Field(description="The duration of the segment.")
@@ -169,6 +200,7 @@ class MeetingPlannedFromText(BaseModel):
     start_time: str = Field(description="The start time of the meeting.")
     end_time: str = Field(description="The end time of the meeting.")
     location: str = Field(description="The location where the meeting is held.")
+    introduction: str = Field(description="The introduction of the meeting.")
     segments: List[SegmentPlannedFromText] = Field(description="A list of segments that the meeting is composed of.")
 
 

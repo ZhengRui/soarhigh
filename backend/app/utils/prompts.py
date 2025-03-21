@@ -523,6 +523,7 @@ DO NOT change their orders.
 4. Role taker for Opening Remarks, Awards, and Closing Remarks are always the president of the club Libra Lee.
 5. Role taker for Voting Section is always the TOM (Toastmaster of Meeting Introduction).
 6. Photographer is not required, so don't add a segment for photographer.
+7. Only start Prepared Speech Evaluation after all Prepared Speeches are done.
 
 
 #### Output

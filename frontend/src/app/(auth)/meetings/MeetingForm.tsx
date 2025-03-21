@@ -118,15 +118,15 @@ export function MeetingForm({
   ) => {
     setFormData((prev) => {
       const newSegments = [...prev.segments];
+      const segment = newSegments[index];
 
       if (field === 'type') {
         if (typeof value === 'string' && value in SEGMENT_TYPE_MAP) {
           // Create new segment of the selected type
-          const oldSegment = newSegments[index];
           const params = {
-            id: oldSegment.id,
-            start_time: oldSegment.start_time,
-            duration: oldSegment.duration,
+            id: segment.id,
+            start_time: segment.start_time,
+            duration: segment.duration,
           };
 
           const SegmentClass =
@@ -142,9 +142,11 @@ export function MeetingForm({
             [field]: value as string,
           };
         }
+
+        if (newSegments[index].role_taker_config.editable) {
+          newSegments[index].role_taker = segment.role_taker;
+        }
       } else {
-        // Handle other field changes while preserving the class instance
-        const segment = newSegments[index];
         (segment[field] as any) = value;
       }
 

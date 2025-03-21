@@ -83,13 +83,13 @@ def convert_parsed_meeting_to_meeting(parsed_meeting: MeetingParsedFromImage | M
         id=None,
         no=parsed_meeting.no,
         type=parsed_meeting.type,
-        theme=parsed_meeting.theme,
+        theme=parsed_meeting.theme.title(),
         manager=manager_attendee,
         date=parsed_meeting.date,
         start_time=parsed_meeting.start_time,
         end_time=parsed_meeting.end_time,
         location=parsed_meeting.location,
-        introduction="",  # Default empty introduction
+        introduction=getattr(parsed_meeting, "introduction", ""),
         segments=segments,
         status="draft",  # Default status
         awards=[],  # Default empty awards list
@@ -191,7 +191,7 @@ def plan_meeting_from_text(text: str) -> Meeting:
     json_schema = type_to_response_format_param(MeetingPlannedFromText)
 
     # Retry configuration
-    max_retries = 1
+    max_retries = 3
     retry_count = 0
 
     # Retriable exceptions
