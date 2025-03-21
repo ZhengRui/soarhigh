@@ -21,6 +21,8 @@ from .prompts import (
     plan_meeting_from_text_user_prompt,
 )
 
+default_location = "JOININ HUB, 6th Xin'an Rd, Bao'an (Metro line 1 Baoti / line 11 Bao'an)"
+
 
 def convert_parsed_meeting_to_meeting(parsed_meeting: MeetingParsedFromImage | MeetingPlannedFromText) -> Meeting:
     """
@@ -88,7 +90,7 @@ def convert_parsed_meeting_to_meeting(parsed_meeting: MeetingParsedFromImage | M
         date=parsed_meeting.date,
         start_time=parsed_meeting.start_time,
         end_time=parsed_meeting.end_time,
-        location=parsed_meeting.location,
+        location=parsed_meeting.location or default_location,
         introduction=getattr(parsed_meeting, "introduction", ""),
         segments=segments,
         status="draft",  # Default status

@@ -20,6 +20,7 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 
 ### Meeting Management
 - **/meeting/parse_agenda_image** - Endpoint to parse a meeting agenda from an uploaded image using OpenAI's GPT-4o model
+- **/meeting/plan_from_text** - Endpoint to plan a meeting from textual description using OpenAI's API
 - **/meetings** - GET: List meetings (with filter by status), POST: Create a new meeting
 - **/meetings/{id}** - GET: Retrieve meeting details
 - **/meetings/{id}** - PUT: Update an existing meeting
@@ -147,6 +148,7 @@ Model for blog posts:
 - JWT-based authentication
 - Meeting, User, Attendee, Award, and Post data models
 - Meeting agenda image parsing using OpenAI
+- Meeting planning from text description using OpenAI
 - Complete meeting CRUD functionality:
   - Creating meetings (as drafts by default)
   - Listing meetings with filtering by status
@@ -185,7 +187,7 @@ The backend now fully supports the meeting management workflow:
 
 1. **Meeting Creation**:
    - Members can create new meetings which are saved as drafts by default
-   - Meetings can be created from scratch or from parsed agenda images
+   - Meetings can be created from scratch, from parsed agenda images, or from text descriptions
 
 2. **Meeting Listing**:
    - Members can see all meetings (both draft and published)

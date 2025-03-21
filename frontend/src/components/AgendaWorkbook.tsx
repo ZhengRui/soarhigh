@@ -6,7 +6,7 @@ import { saveAs } from 'file-saver';
 import { MeetingIF } from '@/interfaces';
 import { createMeetingWorkbook } from '@/utils/workbook';
 import Image from 'next/image';
-import { Download } from 'lucide-react';
+import { Download, Loader2 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 
 type AgendaWorkbookProps = {
@@ -327,8 +327,9 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
   // Render empty state
   if (previewData.length === 0) {
     return (
-      <div className='flex flex-col items-center justify-center p-6 my-8 w-full h-64'>
-        <p className='mb-4 text-gray-600'>No workbook data available</p>
+      <div className='flex flex-col items-center justify-center p-8 w-full min-h-[80vh]'>
+        <Loader2 className='w-8 h-8 text-blue-500 animate-spin mb-4' />
+        <p className='text-gray-600'>Loading workbook data...</p>
       </div>
     );
   }

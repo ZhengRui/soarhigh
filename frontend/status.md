@@ -72,7 +72,7 @@ All routes in the (auth) group are protected by authentication middleware which 
 
 ### New Meeting Creation (/meetings/new)
 
-- Two-tab interface for different creation methods:
+- Three-tab interface for different creation methods:
 
   1. **Template-based creation**:
 
@@ -81,8 +81,14 @@ All routes in the (auth) group are protected by authentication middleware which 
      - After selection, shows comprehensive meeting form
 
   2. **Image-based creation**:
+
      - Allows uploading of agenda images
      - Extracts meeting data from images using backend API
+
+  3. **Text-based creation**:
+     - Allows entering textual descriptions of meetings
+     - Converts text descriptions into structured meeting data
+     - Provides the same comprehensive meeting form for further editing
 
 ### Meeting Edit Page (/meetings/edit/[id])
 
@@ -203,7 +209,7 @@ The meeting management workflow is now fully implemented:
 
 1. **Meeting Creation**
 
-   - Users can create meetings using templates or image upload
+   - Users can create meetings using templates, image upload, or text descriptions
    - All new meetings are saved as drafts by default
    - Multiple validation options with appropriate feedback
 
