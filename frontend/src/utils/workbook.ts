@@ -44,6 +44,27 @@ interface ArraySectionData {
 
 const defaultColumnWidths = [18, 21, 24, 30, 8, 24];
 
+// Helper function to get the ordinal suffix for a number
+function getOrdinalSuffix(n: number): string {
+  const s = String(n);
+  const last = s.slice(-1);
+  const lastTwo = s.slice(-2);
+
+  if (lastTwo === '11' || lastTwo === '12' || lastTwo === '13') {
+    return 'th';
+  }
+  if (last === '1') {
+    return 'st';
+  }
+  if (last === '2') {
+    return 'nd';
+  }
+  if (last === '3') {
+    return 'rd';
+  }
+  return 'th';
+}
+
 // Function to fetch an image and convert it to base64
 const getImageAsBase64 = async (url: string): Promise<string> => {
   try {
@@ -782,7 +803,7 @@ const createTableHeader = (
         '',
         '',
         {
-          text: `${headerData.number}th Meeting`,
+          text: `${headerData.number}${getOrdinalSuffix(headerData.number)} Meeting`,
           style: {
             font: { size: 12, color: { argb: 'FFFFFFFF' } },
           },
@@ -1040,6 +1061,7 @@ const createTimeRules = (
     13
   );
 
+  worksheet.getRow(startRow - 4).height = 28;
   worksheet.getRow(startRow - 1).height = 28;
 
   return startRow;
@@ -1104,7 +1126,7 @@ const createTeam = (
           },
         },
         {
-          text: "Soarhigh Toastmasters Club is the one and only 100% English Club in Bao'an. We are a family to love, to care, to laugh, and to inspire. \n\n搜嗨头马国际演讲俱乐部，深圳宝安区唯一的100%英文俱乐部，主打松弛感第一，包容度第一，以自己的节奏，享受每一步的成长。\n\nOur slogan: Soarhigh, so high, takes me fly!",
+          text: "Soarhigh Toastmasters Club is the one and only 100% English Club in Bao'an. We are a family to love, to care, to laugh, and to inspire. \n\n搜嗨头马国际演讲俱乐部，深圳宝安区唯一的100%英文俱乐部，主打松弛感第一，包容度第一，以自己的节奏，享受每一步的成长。\n\nOur slogan: Soarhigh, so high, takes me fly! \n\nAbout the Membership Fee: 6months - ¥906; 12months - ¥1515; (Includes registration on the Toastmasters International Website $20, venue fees, refreshments, and other membership activity costs.)",
           style: {
             alignment: {
               vertical: 'top',
@@ -1296,8 +1318,12 @@ const createTeam = (
     fontStyle
   );
 
+  [3, 4, 8].forEach((row) => {
+    worksheet.getRow(startRow - row).height = 16;
+  });
+
   [1, 2, 5, 6, 7].forEach((row) => {
-    worksheet.getRow(startRow - row).height = 27;
+    worksheet.getRow(startRow - row).height = 34;
   });
 
   worksheet.mergeCells(startRow - 8, 5, startRow - 1, 6);
@@ -1373,7 +1399,7 @@ export const createMeetingWorkbook = async (
     );
 
     if (sectionName === 'preparedSpeeches') {
-      worksheet.getRow(currentRow - 1).height = 48;
+      worksheet.getRow(currentRow - 1).height = 60;
     }
 
     prevSectionName = sectionName;
