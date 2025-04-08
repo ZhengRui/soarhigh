@@ -22,6 +22,14 @@ export interface AttendeeIF {
   member_id: string;
 }
 
+export interface MediaIF {
+  id?: string;
+  filename: string;
+  url: string;
+  fileKey: string;
+  uploadedAt: string;
+}
+
 export interface MeetingIF {
   id?: string;
   type: string;
@@ -36,6 +44,7 @@ export interface MeetingIF {
   segments: SegmentIF[];
   status?: 'draft' | 'published';
   awards?: AwardIF[];
+  media?: MediaIF[];
 }
 
 export interface AwardIF {

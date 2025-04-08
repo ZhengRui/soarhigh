@@ -1,9 +1,18 @@
+from datetime import datetime
 from typing import Dict, List, Optional, Union
 
+import oss2  # type: ignore
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
+from ...config import (
+    ALICLOUD_ACCESS_KEY_ID,
+    ALICLOUD_ACCESS_KEY_SECRET,
+    ALICLOUD_OSS_BUCKET,
+    ALICLOUD_OSS_ENDPOINT,
+    ALICLOUD_OSS_MEETING_MEDIA_PREFIX,
+)
 from ...db.core import (
     cast_votes,
     create_meeting,
@@ -65,6 +74,41 @@ class VoteCast(BaseModel):
 # Add a new class to handle text in request body
 class MeetingPlanText(BaseModel):
     text: str
+
+
+# Media upload URL request and response models
+class MediaFile(BaseModel):
+    filename: str
+    url: str
+    fileKey: str
+    uploadedAt: str
+
+
+class MediaFileList(BaseModel):
+    items: List[MediaFile]
+
+
+class MediaUploadUrlRequestItem(BaseModel):
+    filename: str
+    contentType: str
+
+
+class MediaUploadUrlRequest(BaseModel):
+    items: List[MediaUploadUrlRequestItem]
+
+
+class MediaUploadUrlResponseItem(BaseModel):
+    uploadUrl: str
+    fileKey: str
+    fileUrl: str
+
+
+class MediaUploadUrlResponse(BaseModel):
+    items: List[MediaUploadUrlResponseItem]
+
+
+class MediaDeleteRequest(BaseModel):
+    fileKeys: List[str]
 
 
 @r.post("/meeting/parse_agenda_image")
@@ -470,5 +514,116 @@ async def r_cast_vote(
         return [Vote(**vote) for vote in results]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.get("/meetings/{meeting_id}/media", response_model=MediaFileList)
+async def r_get_meeting_media(
+    meeting_id: str = Path(..., description="The ID of the meeting"),
+    user: Optional[User] = Depends(get_optional_user),
+) -> MediaFileList:
+    """
+    List all media files for a meeting directly from the storage bucket.
+    """
+    try:
+        meeting = get_meeting_by_id(meeting_id, user.uid if user else None)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        # Set up OSS client
+        auth = oss2.Auth(ALICLOUD_ACCESS_KEY_ID, ALICLOUD_ACCESS_KEY_SECRET)
+        bucket = oss2.Bucket(auth, ALICLOUD_OSS_ENDPOINT, ALICLOUD_OSS_BUCKET)
+
+        # List objects with the meeting prefix
+        prefix = f"{ALICLOUD_OSS_MEETING_MEDIA_PREFIX}/{meeting_id}/media/"
+        object_list = []
+
+        for obj in oss2.ObjectIterator(bucket, prefix=prefix):
+            if obj.key != prefix:  # Skip the directory itself
+                filename = obj.key.split("/")[-1]
+                public_url = f"https://{ALICLOUD_OSS_BUCKET}.{ALICLOUD_OSS_ENDPOINT}/{obj.key}"
+
+                modified_time = datetime.fromtimestamp(obj.last_modified)
+                formatted_time = modified_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                object_list.append(
+                    MediaFile(filename=filename, url=public_url, fileKey=obj.key, uploadedAt=formatted_time)
+                )
+
+        object_list.sort(key=lambda x: datetime.fromisoformat(x.uploadedAt.replace("Z", "+00:00")), reverse=False)
+
+        return MediaFileList(items=object_list)
+    except oss2.exceptions.OssError as e:
+        raise HTTPException(status_code=500, detail=f"AliCloud OSS error: {e!s}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.post("/meetings/{meeting_id}/media/get-upload-url", response_model=MediaUploadUrlResponse)
+async def r_get_meeting_media_upload_url(
+    request: MediaUploadUrlRequest,
+    meeting_id: str = Path(..., description="The ID of the meeting"),
+    user: User = Depends(get_current_user),
+) -> MediaUploadUrlResponse:
+    """
+    Generate pre-signed URLs for uploading multiple media files directly to AliCloud OSS.
+    """
+    try:
+        meeting = get_meeting_by_id(meeting_id, user.uid if user else None)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        auth = oss2.Auth(ALICLOUD_ACCESS_KEY_ID, ALICLOUD_ACCESS_KEY_SECRET)
+        bucket = oss2.Bucket(auth, ALICLOUD_OSS_ENDPOINT, ALICLOUD_OSS_BUCKET)
+
+        response_items = []
+
+        for item in request.items:
+            # Sanitize filename to prevent path traversal and ensure safe characters
+            safe_filename = "".join(c for c in item.filename if c.isalnum() or c in "._- ")
+            file_key = f"{ALICLOUD_OSS_MEETING_MEDIA_PREFIX}/{meeting_id}/media/{safe_filename}"
+
+            upload_url = bucket.sign_url("PUT", file_key, 3600, headers={"Content-Type": item.contentType})
+            public_url = f"https://{ALICLOUD_OSS_BUCKET}.{ALICLOUD_OSS_ENDPOINT}/{file_key}"
+
+            response_items.append(
+                MediaUploadUrlResponseItem(uploadUrl=upload_url, fileKey=file_key, fileUrl=public_url)
+            )
+
+        return MediaUploadUrlResponse(items=response_items)
+    except oss2.exceptions.OssError as e:
+        raise HTTPException(status_code=500, detail=f"AliCloud OSS error: {e!s}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
+
+
+@r.delete("/meetings/{meeting_id}/media")
+async def r_delete_meeting_media(
+    request: MediaDeleteRequest,
+    meeting_id: str = Path(..., description="The ID of the meeting"),
+    user: User = Depends(get_current_user),
+) -> Dict[str, bool]:
+    """
+    Delete multiple media files from AliCloud OSS in a single request.
+    """
+    try:
+        meeting = get_meeting_by_id(meeting_id, user.uid if user else None)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        # Set up OSS client
+        auth = oss2.Auth(ALICLOUD_ACCESS_KEY_ID, ALICLOUD_ACCESS_KEY_SECRET)
+        bucket = oss2.Bucket(auth, ALICLOUD_OSS_ENDPOINT, ALICLOUD_OSS_BUCKET)
+
+        # Delete all specified objects
+        for file_key in request.fileKeys:
+            bucket.delete_object(file_key)
+
+        return {"success": True}
+    except oss2.exceptions.OssError as e:
+        raise HTTPException(status_code=500, detail=f"AliCloud OSS error: {e!s}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")

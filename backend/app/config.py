@@ -20,3 +20,10 @@ def parse_cors_origins(v: str) -> List[str]:
 CORS_ORIGINS = config("CORS_ORIGINS", cast=parse_cors_origins, default="*")
 
 OPENAI_API_KEY = config("OPENAI_API_KEY", cast=str)
+
+# AliCloud OSS Configuration
+ALICLOUD_ACCESS_KEY_ID = config("ALICLOUD_ACCESS_KEY_ID", cast=str)
+ALICLOUD_ACCESS_KEY_SECRET = config("ALICLOUD_ACCESS_KEY_SECRET", cast=str)
+ALICLOUD_OSS_BUCKET = config("ALICLOUD_OSS_BUCKET", cast=str)
+ALICLOUD_OSS_ENDPOINT = config("ALICLOUD_OSS_ENDPOINT", cast=str)
+ALICLOUD_OSS_MEETING_MEDIA_PREFIX = config("ALICLOUD_OSS_MEETING_MEDIA_PREFIX", cast=str, default="public/meetings")

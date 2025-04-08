@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { MeetingForm } from '../../MeetingForm';
 import { MeetingAwardsForm } from '../../MeetingAwardsForm';
 import { VoteForm } from '../../VoteForm';
+import { MediaForm } from '../../MediaForm';
 import { useMeeting } from '@/hooks/useMeeting';
 import { Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -15,9 +16,9 @@ export default function EditMeetingPage() {
   const router = useRouter();
   const meetingId = Array.isArray(params.id) ? params.id[0] : params.id || '';
 
-  const [activeTab, setActiveTab] = useState<'info' | 'vote' | 'awards'>(
-    'info'
-  );
+  const [activeTab, setActiveTab] = useState<
+    'info' | 'vote' | 'awards' | 'media'
+  >('info');
 
   // Fetch the meeting data only if we have a valid meetingId
   const { data: meeting, isLoading, isError, error } = useMeeting(meetingId);
@@ -76,7 +77,7 @@ export default function EditMeetingPage() {
     segments: convertSegmentsToBaseSegments(meeting.segments),
   };
 
-  const tabClass = (tab: 'info' | 'vote' | 'awards') =>
+  const tabClass = (tab: 'info' | 'vote' | 'awards' | 'media') =>
     `flex-1 px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-t-lg border-t border-r border-l border-gray-200 text-center ${
       activeTab === tab
         ? 'bg-white text-indigo-600'
@@ -105,6 +106,12 @@ export default function EditMeetingPage() {
           >
             Awards
           </button>
+          <button
+            className={tabClass('media')}
+            onClick={() => setActiveTab('media')}
+          >
+            Media
+          </button>
         </div>
 
         <div className='bg-white rounded-xl rounded-t-none shadow-sm border border-gray-200 overflow-hidden mb-6'>
@@ -122,6 +129,10 @@ export default function EditMeetingPage() {
 
           <div style={{ display: activeTab === 'awards' ? 'block' : 'none' }}>
             <MeetingAwardsForm meetingId={meetingId} />
+          </div>
+
+          <div style={{ display: activeTab === 'media' ? 'block' : 'none' }}>
+            <MediaForm meetingId={meetingId} />
           </div>
         </div>
       </div>
