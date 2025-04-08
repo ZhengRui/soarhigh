@@ -103,6 +103,12 @@ export const uploadFileToSignedUrl = async (
   uploadUrl: string,
   onProgress?: (progress: number) => void
 ): Promise<boolean> => {
+  // Only use HTTP for localhost development, HTTPS for production
+  const secureUploadUrl =
+    window.location.hostname === 'localhost'
+      ? uploadUrl
+      : uploadUrl.replace(/^http:\/\//i, 'https://');
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
 
@@ -118,7 +124,7 @@ export const uploadFileToSignedUrl = async (
       };
     }
 
-    xhr.open('PUT', uploadUrl);
+    xhr.open('PUT', secureUploadUrl);
     xhr.setRequestHeader('Content-Type', file.type);
 
     xhr.onload = () => {
