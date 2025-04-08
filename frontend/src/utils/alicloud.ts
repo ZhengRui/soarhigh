@@ -43,7 +43,8 @@ export const listMeetingMedia = requestTemplate(
   },
   responseHandlerTemplate,
   null,
-  true // Require authentication
+  true, // Require authentication
+  true
 );
 
 /**

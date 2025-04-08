@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   MapPin,
   Trophy,
@@ -12,12 +14,16 @@ import {
   EyeOff,
   Loader2,
   Table2,
+  ImageIcon,
+  ClipboardList,
 } from 'lucide-react';
 import { MeetingIF } from '@/interfaces';
 import Link from 'next/link';
+import Image from 'next/image';
 import { updateMeetingStatus } from '@/utils/meeting';
 import toast from 'react-hot-toast';
 import { useQueryClient, useMutation } from '@tanstack/react-query';
+import { listMeetingMedia, MediaFile } from '@/utils/alicloud';
 
 type MeetingCardProps = {
   meeting: MeetingIF;
@@ -29,6 +35,13 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   isAuthenticated,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState('agenda');
+  const [mediaFiles, setMediaFiles] = useState<MediaFile[]>([]);
+  const [isMediaLoading, setIsMediaLoading] = useState(false);
+  const [mediaFetched, setMediaFetched] = useState(false);
+  const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(
+    null
+  );
   const queryClient = useQueryClient();
 
   // Destructure the meeting object
@@ -51,6 +64,28 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   // Check if the meeting date has passed
   // const hasPassed = new Date(date) < new Date();
   const hasPassed = true;
+
+  // Fetch media files when the Photos tab is selected for the first time
+  useEffect(() => {
+    const fetchMediaFiles = async () => {
+      // Only fetch if we're on the photos tab, the card is expanded, and we haven't fetched before
+      if (isExpanded && activeTab === 'photos' && id && !mediaFetched) {
+        setIsMediaLoading(true);
+        try {
+          const response = await listMeetingMedia(id);
+          setMediaFiles(response.items);
+          setMediaFetched(true); // Mark that we've fetched the data
+        } catch (error) {
+          console.error('Error fetching media files:', error);
+          toast.error('Failed to load meeting images');
+        } finally {
+          setIsMediaLoading(false);
+        }
+      }
+    };
+
+    fetchMediaFiles();
+  }, [isExpanded, activeTab, id, mediaFetched]);
 
   // Use mutation for toggling status
   const statusMutation = useMutation({
@@ -169,9 +204,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
           <div className='mt-6 pt-6 border-t border-dashed border-gray-300'>
             <div className='flex items-center gap-2 mb-3'>
               <Trophy className='w-4 h-4 text-indigo-600' />
-              <h3 className='text-sm font-semibold text-gray-800'>
-                Meeting Awards
-              </h3>
+              <h3 className='text-sm font-semibold text-gray-800'>Awards</h3>
             </div>
             <div className='grid grid-cols-2 md:grid-cols-3 gap-4'>
               {awards.map((award, index: number) => (
@@ -191,59 +224,205 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
         }`}
       >
         <div className='p-6 border-t border-gray-300 bg-gradient-to-b from-white to-[#F9FAFB]'>
-          <h3 className='text-lg font-semibold mb-4 text-gray-800 flex items-center gap-3'>
-            Meeting Agenda
-            <Link
-              href={`/meetings/workbook/${id}`}
-              className='text-xs font-medium text-fuchsia-500 hover:text-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'
-              onClick={(e) => e.stopPropagation()}
-              target='_blank'
-              rel='noopener noreferrer'
+          {/* Tab buttons */}
+          <div className='flex space-x-4 mb-6 min-w-0 overflow-x-auto p-0.5'>
+            <button
+              onClick={() => setActiveTab('agenda')}
+              className={`px-4 py-2 text-sm font-semibold text-gray-500 flex items-center gap-2 rounded-xl outline-dashed outline-1 outline-transparent transition-all duration-300 min-w-40 ${
+                activeTab === 'agenda'
+                  ? 'text-gray-800 outline-gray-400'
+                  : 'hover:text-gray-800 hover:outline-gray-400'
+              }`}
             >
-              <Table2 className='w-3 h-3' />
-              <span>Table</span>
-            </Link>
-          </h3>
-          <div className='space-y-6 sm:space-y-4'>
-            {segments.map((segment) => (
-              <div
-                key={segment.id}
-                className='flex flex-col sm:flex-row gap-1 sm:gap-4 relative mb-4'
+              <ClipboardList className='w-4 h-4 text-indigo-600' />
+              Agenda
+              <Link
+                href={`/meetings/workbook/${id}`}
+                className='ml-1 text-xs font-medium text-fuchsia-500 hover:text-fuchsia-600 bg-fuchsia-50 hover:bg-fuchsia-100 hover:shadow-md px-2 py-1.5 rounded-full transition flex items-center gap-1'
+                onClick={(e) => e.stopPropagation()}
+                target='_blank'
+                rel='noopener noreferrer'
               >
-                <div className='w-full sm:pt-1 sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between'>
-                  <div className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0'>
-                    <span className='text-sm font-medium text-indigo-600'>
-                      {segment.start_time}
-                    </span>
-                    <span className='text-xs text-gray-500'>
-                      {segment.duration}min
-                    </span>
+                <Table2 className='w-3 h-3' />
+                <span>Table</span>
+              </Link>
+            </button>
+            <button
+              onClick={() => setActiveTab('photos')}
+              className={`px-4 py-2 text-sm font-semibold text-gray-500 flex items-center gap-2 rounded-xl outline-dashed outline-1 outline-transparent transition-all duration-300 ${
+                activeTab === 'photos'
+                  ? 'text-gray-800 outline-gray-400'
+                  : 'hover:text-gray-800 hover:outline-gray-400'
+              }`}
+            >
+              <ImageIcon className='w-4 h-4 text-indigo-600' />
+              Photos
+            </button>
+          </div>
+
+          {/* Agenda Tab Content */}
+          <div className={`${activeTab === 'agenda' ? 'block' : 'hidden'}`}>
+            <div className='space-y-6 sm:space-y-4'>
+              {segments.map((segment) => (
+                <div
+                  key={segment.id}
+                  className='flex flex-col sm:flex-row gap-1 sm:gap-4 relative mb-4'
+                >
+                  <div className='w-full sm:pt-1 sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between'>
+                    <div className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0'>
+                      <span className='text-sm font-medium text-indigo-600'>
+                        {segment.start_time}
+                      </span>
+                      <span className='text-xs text-gray-500'>
+                        {segment.duration}min
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className='flex-grow'>
-                  <div className='flex flex-col'>
-                    <h4 className='font-medium text-gray-800'>
-                      {segment.type}
-                    </h4>
-                    <p className='text-sm text-gray-500'>
-                      {segment.role_taker?.name ||
-                        (segment.type.toLowerCase() === 'table topic session' ||
-                        segment.type.toLowerCase().includes('tea break') ||
-                        segment.type.toLowerCase().includes('registration')
-                          ? 'All'
-                          : '')}
-                      {segment.type.toLowerCase() === 'table topic session'
-                        ? segment.content && ` - ${segment.content}`
-                        : segment.title && ` - ${segment.title}`}
-                    </p>
+                  <div className='flex-grow'>
+                    <div className='flex flex-col'>
+                      <h4 className='font-medium text-gray-800'>
+                        {segment.type}
+                      </h4>
+                      <p className='text-sm text-gray-500'>
+                        {segment.role_taker?.name ||
+                          (segment.type.toLowerCase() ===
+                            'table topic session' ||
+                          segment.type.toLowerCase().includes('tea break') ||
+                          segment.type.toLowerCase().includes('registration')
+                            ? 'All'
+                            : '')}
+                        {segment.type.toLowerCase() === 'table topic session'
+                          ? segment.content && ` - ${segment.content}`
+                          : segment.title && ` - ${segment.title}`}
+                      </p>
+                    </div>
                   </div>
+                  <div className='hidden sm:block absolute left-24 top-0 bottom-0 w-0.5 bg-gradient-to-b from-indigo-600 to-purple-600 -z-10' />
                 </div>
-                <div className='hidden sm:block absolute left-24 top-0 bottom-0 w-0.5 bg-gradient-to-b from-indigo-600 to-purple-600 -z-10' />
+              ))}
+            </div>
+          </div>
+
+          {/* Photos Tab Content */}
+          <div className={`${activeTab === 'photos' ? 'block' : 'hidden'}`}>
+            {isMediaLoading ? (
+              <div className='bg-gray-50 border border-dashed border-gray-300 rounded-lg p-8 flex items-center justify-center'>
+                <div className='text-center text-gray-500'>
+                  <Loader2 className='w-12 h-12 mx-auto mb-2 text-gray-300 animate-spin' />
+                  <p>Loading meeting photos...</p>
+                </div>
               </div>
-            ))}
+            ) : mediaFiles.length === 0 ? (
+              <div className='bg-gray-50 border border-dashed border-gray-300 rounded-lg p-8 flex items-center justify-center'>
+                <div className='text-center text-gray-500'>
+                  <ImageIcon className='w-12 h-12 mx-auto mb-2 text-gray-300' />
+                  <p>No photos for this meeting</p>
+                </div>
+              </div>
+            ) : (
+              <div className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4'>
+                {mediaFiles.map((image, index) => (
+                  <div
+                    key={index}
+                    className='relative aspect-square rounded-lg overflow-hidden border border-gray-200 group shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer'
+                    onClick={() => setSelectedImageIndex(index)}
+                  >
+                    <Image
+                      src={image.url}
+                      alt={image.filename}
+                      fill
+                      className='object-cover'
+                      sizes='(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw'
+                    />
+                    <div className='absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all duration-300 flex items-end'>
+                      <div className='p-2 w-full text-white text-xs truncate opacity-0 group-hover:opacity-100 transition-opacity duration-300'>
+                        {image.filename}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
+
+      {/* Lightbox Modal */}
+      {selectedImageIndex !== null && mediaFiles.length > 0 && (
+        <div
+          className='fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center'
+          onClick={() => setSelectedImageIndex(null)}
+        >
+          <div className='relative max-w-full max-h-[100vh] w-full flex items-center justify-center'>
+            {/* Image container */}
+            <div
+              className='relative'
+              style={{ maxHeight: '90vh', maxWidth: '90vw' }}
+            >
+              <Image
+                src={mediaFiles[selectedImageIndex].url}
+                alt={mediaFiles[selectedImageIndex].filename}
+                width={1200}
+                height={800}
+                className='object-contain max-h-[90vh]'
+                sizes='90vw'
+                style={{ maxHeight: '90vh', maxWidth: '90vw' }}
+              />
+
+              {/* Info overlay at bottom */}
+              <div className='absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 text-white p-3'>
+                <p className='text-sm font-medium truncate'>
+                  {mediaFiles[selectedImageIndex].filename}
+                </p>
+                <p className='text-xs opacity-75'>
+                  {new Date(
+                    mediaFiles[selectedImageIndex].uploadedAt
+                  ).toLocaleString()}
+                </p>
+              </div>
+            </div>
+
+            {/* Navigation buttons */}
+            {mediaFiles.length > 1 && (
+              <>
+                {/* Previous button */}
+                <button
+                  className='absolute left-4 p-3 text-white bg-black bg-opacity-50 rounded-full hover:bg-opacity-70 transition-all'
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedImageIndex((prev) =>
+                      prev !== null
+                        ? prev === 0
+                          ? mediaFiles.length - 1
+                          : prev - 1
+                        : 0
+                    );
+                  }}
+                >
+                  <ChevronLeft className='w-6 h-6' />
+                </button>
+
+                {/* Next button */}
+                <button
+                  className='absolute right-4 p-3 text-white bg-black bg-opacity-50 rounded-full hover:bg-opacity-70 transition-all'
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedImageIndex((prev) =>
+                      prev !== null
+                        ? prev === mediaFiles.length - 1
+                          ? 0
+                          : prev + 1
+                        : 0
+                    );
+                  }}
+                >
+                  <ChevronRight className='w-6 h-6' />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
