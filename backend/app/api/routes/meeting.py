@@ -301,11 +301,40 @@ async def r_delete_meeting(
         user_token = credentials.credentials
         payload = verify_access_token(user_token)
 
-        # Delete the meeting from the database
+        # First delete the meeting from the database
         success = delete_meeting(meeting_id, payload["sub"], user_token)
 
         if not success:
             raise HTTPException(status_code=404, detail="Meeting not found or you don't have permission to delete it")
+
+        # After successful database deletion, clean up media files in OSS
+        try:
+            auth = oss2.Auth(ALICLOUD_ACCESS_KEY_ID, ALICLOUD_ACCESS_KEY_SECRET)
+            bucket = oss2.Bucket(auth, ALICLOUD_OSS_ENDPOINT, ALICLOUD_OSS_BUCKET)
+
+            # List all objects with the meeting prefix
+            media_prefix = f"{ALICLOUD_OSS_MEETING_MEDIA_PREFIX}/{meeting_id}/"
+            objects_to_delete = []
+
+            # List and collect all objects with this prefix (this includes the "folder" itself)
+            for obj in oss2.ObjectIterator(bucket, prefix=media_prefix):
+                objects_to_delete.append(obj.key)
+
+            # Delete all objects in batches (AliCloud supports max 1000 objects per batch)
+            if objects_to_delete:
+                for i in range(0, len(objects_to_delete), 1000):
+                    batch = objects_to_delete[i : i + 1000]
+                    bucket.batch_delete_objects(batch)
+        except oss2.exceptions.OssError as e:
+            # Don't fail the request since the database deletion succeeded
+            # Just add a note in the response that media deletion failed
+            return {"success": True, "message": f"Meeting deleted successfully but media cleanup failed: {e!s}"}
+        except Exception as e:
+            # For other errors, also continue but with a more generic message
+            return {
+                "success": True,
+                "message": f"Meeting deleted successfully but media cleanup encountered an issue: {e!s}",
+            }
 
         return {"success": True, "message": "Meeting deleted successfully"}
     except HTTPException:
