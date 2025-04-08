@@ -10,6 +10,7 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 - **Database**: Supabase
 - **Authentication**: JWT-based authentication via Supabase
 - **AI Services**: OpenAI API (GPT-4o) for meeting agenda image parsing
+- **Storage**: AliCloud OSS for media storage
 - **Runtime**: Python with uvicorn server
 
 ## API Endpoints
@@ -31,10 +32,15 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 - **/meetings/{id}/awards** - GET: Retrieve awards for a specific meeting
 - **/meetings/{id}/awards** - POST: Save awards for a specific meeting
 
+### Media Management
+- **/meetings/{id}/media** - GET: List all media files for a meeting
+- **/meetings/{id}/media/get-upload-url** - POST: Get pre-signed URLs for uploading media files
+- **/meetings/{id}/media** - DELETE: Delete media files from a meeting
+
 ### Voting Management
 - **/meetings/{id}/votes** - GET: Retrieve votes for a specific meeting
 - **/meetings/{id}/votes** - POST: Cast votes for a specific meeting
-- **/meetings/{id}/votes/increment** - POST: Increment vote counts atomically
+- **/meetings/{id}/votes/increment** - POST: Increment vote counts
 - **/meetings/{id}/votes/status** - GET: Get voting status (open/closed) for a meeting
 - **/meetings/{id}/votes/status** - PUT: Update voting status (open/close voting)
 
@@ -65,6 +71,7 @@ A comprehensive model for Toastmasters meetings with:
 - Introduction text
 - A list of meeting segments
 - Status field ("draft" or "published")
+- Associated media files stored in AliCloud OSS
 
 ### Meeting Segment Model
 Detailed model for meeting agenda items with:
@@ -87,6 +94,13 @@ Model for tracking votes at meetings:
 - `name`: Name of the person being voted for
 - `segment`: Optional reference to a specific meeting segment
 - `count`: Number of votes received
+
+### Media File Model
+Model for tracking meeting media files:
+- `filename`: Original filename of the media file
+- `url`: Public URL for accessing the file
+- `fileKey`: OSS object key for the file
+- `uploadedAt`: Timestamp when the file was uploaded
 
 ### Vote Status Model
 Model for tracking voting status:
@@ -207,6 +221,7 @@ The backend now fully supports the meeting management workflow:
    - Members can delete meetings they manage
    - Administrators have broader deletion rights
    - Row-level security enforced at the database level
+   - Associated media files automatically deleted from AliCloud OSS
 
 6. **Blog Post Management**:
    - Members can create, edit, and delete blog posts
@@ -223,4 +238,11 @@ The backend now fully supports the meeting management workflow:
    - Support for segment-specific voting
    - Real-time vote tallying
 
-All these features are now fully integrated with the Supabase database, with proper error handling and status codes for API responses.
+8. **Media Management**:
+   - Support for uploading media files to meetings
+   - Pre-signed URL generation for direct browser-to-OSS uploads
+   - Media file listing with proper file metadata
+   - Media file deletion with permission controls
+   - Automatic cleanup of media files when meetings are deleted
+
+All these features are now fully integrated with the Supabase database and AliCloud OSS storage, with proper error handling and status codes for API responses.

@@ -163,6 +163,7 @@ The application uses several key interfaces:
 - **AttendeeIF** - Meeting participant information
 - **SegmentIF** - Meeting segments/agenda items with role taker references to attendees
 - **MeetingIF** - Complete meeting data structure with status field ("draft" or "published")
+- **MediaFile** - Media file structure with filename, url, fileKey, and uploadedAt fields
 - **AwardIF** - Award structure with meeting_id, category, and winner fields
 - **PostIF** - Post structure with title, slug, content, visibility, and author information
 - **VoteIF** - Vote structure with meeting_id, category, name, segment (optional), and count fields
@@ -193,11 +194,13 @@ The application uses several key interfaces:
 - Role taker input component with member/guest handling
 - Time picker components for meeting segments
 - Segments editor with add/edit/delete operations
+- Media upload and management for meetings
 - Success/error notifications for user actions
 - Attendee handling for role assignments
 - Meeting awards management
 - Post management with create, read, update, and delete capabilities
 - Meeting voting system with category-based voting
+- Meeting media display with image gallery and lightbox
 - Vote status management (open/close voting)
 - Voting permissions for members and non-members
 - Meeting agenda workbook generation with Excel compatibility
@@ -270,5 +273,14 @@ The meeting management workflow is now fully implemented:
    - Preview mode for draft meetings
    - Authentication-gated download functionality
    - Proper section formatting for all meeting components
+
+10. **Meeting Media Management**
+
+- Image upload functionality for meetings
+- Media display in expandable meeting cards with tabbed interface
+- Responsive image gallery with grid layout
+- Interactive lightbox for full-size image viewing
+- Image navigation with prev/next controls in lightbox
+- Environment-aware handling of HTTP/HTTPS URLs
 
 The application follows a clean, modern UI design with gradient accents, responsive layouts, and thoughtful user interactions. The meeting creation workflow is particularly sophisticated, offering multiple creation methods and detailed customization options.
