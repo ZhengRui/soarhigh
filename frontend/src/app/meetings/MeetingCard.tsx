@@ -225,13 +225,13 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
       >
         <div className='p-6 border-t border-gray-300 bg-gradient-to-b from-white to-[#F9FAFB]'>
           {/* Tab buttons */}
-          <div className='flex space-x-4 mb-6 min-w-0 overflow-x-auto p-0.5'>
+          <div className='flex space-x-4 mb-6 min-w-0 overflow-x-auto'>
             <button
               onClick={() => setActiveTab('agenda')}
-              className={`px-4 py-2 text-sm font-semibold text-gray-500 flex items-center gap-2 rounded-xl outline-dashed outline-1 outline-transparent transition-all duration-300 min-w-40 ${
+              className={`px-4 py-2 text-sm font-semibold text-gray-500 flex items-center gap-2 rounded-xl border border-dashed border-1 transition-all duration-300 min-w-40 ${
                 activeTab === 'agenda'
-                  ? 'text-gray-800 outline-gray-400'
-                  : 'hover:text-gray-800 hover:outline-gray-400'
+                  ? 'text-gray-800 border-gray-400'
+                  : 'border-transparent hover:text-gray-800 hover:border-gray-400'
               }`}
             >
               <ClipboardList className='w-4 h-4 text-indigo-600' />
@@ -249,10 +249,10 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('photos')}
-              className={`px-4 py-2 text-sm font-semibold text-gray-500 flex items-center gap-2 rounded-xl outline-dashed outline-1 outline-transparent transition-all duration-300 ${
+              className={`px-4 py-2 text-sm font-semibold text-gray-500 flex items-center gap-2 rounded-xl border border-dashed border-1 transition-all duration-300 ${
                 activeTab === 'photos'
-                  ? 'text-gray-800 outline-gray-400'
-                  : 'hover:text-gray-800 hover:outline-gray-400'
+                  ? 'text-gray-800 border-gray-400'
+                  : 'border-transparent hover:text-gray-800 hover:border-gray-400'
               }`}
             >
               <ImageIcon className='w-4 h-4 text-indigo-600' />
