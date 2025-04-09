@@ -136,7 +136,7 @@ def parse_meeting_agenda_image(image_bytes: bytes, content_type: str) -> Meeting
                 messages=messages,
                 response_format=json_schema,
                 temperature=0.01,
-                timeout=30,
+                timeout=60,
             )
 
             content = reply.choices[0].message.content
