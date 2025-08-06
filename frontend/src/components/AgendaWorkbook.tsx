@@ -384,7 +384,7 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
           </div>
           <div className='absolute right-4 md:right-8 top-9 md:top-[30px] lg:top-6 w-14 md:w-16 aspect-square'>
             <Image
-              src='/images/vpmQR.png'
+              src='/images/vpmQR.jpg'
               alt='VPM QR Code'
               fill
               className='object-fill'
