@@ -1126,7 +1126,8 @@ const createTeam = (
           },
         },
         {
-          text: "Soarhigh Toastmasters Club is the one and only 100% English Club in Bao'an. We are a family to love, to care, to laugh, and to inspire. \n\n搜嗨头马国际演讲俱乐部，深圳宝安区唯一的100%英文俱乐部，主打松弛感第一，包容度第一，以自己的节奏，享受每一步的成长。\n\nOur slogan: Soarhigh, so high, takes me fly! \n\nAbout the Membership Fee: 6months - ¥906; 12months - ¥1515; (Includes registration on the Toastmasters International Website $20, venue fees, refreshments, and other membership activity costs.)",
+          // text: "Soarhigh Toastmasters Club is the one and only 100% English Club in Bao'an. We are a family to love, to care, to laugh, and to inspire. \n\n搜嗨头马国际演讲俱乐部，深圳宝安区唯一的100%英文俱乐部，主打松弛感第一，包容度第一，以自己的节奏，享受每一步的成长。\n\nOur slogan: Soarhigh, so high, takes me fly! \n\nAbout the Membership Fee: 6months - ¥906; 12months - ¥1515; (Includes registration on the Toastmasters International Website $20, venue fees, refreshments, and other membership activity costs.)",
+          text: "Soarhigh Toastmasters Club is the one and only 100% English Club in Bao'an. We are a family to love, to care, to laugh, and to inspire. \n\n搜嗨头马国际演讲俱乐部，深圳宝安区唯一的100%英文俱乐部，主打松弛感第一，包容度第一，以自己的节奏，享受每一步的成长。\n\nOur slogan: Soarhigh, so high, takes me fly!",
           style: {
             alignment: {
               vertical: 'top',
