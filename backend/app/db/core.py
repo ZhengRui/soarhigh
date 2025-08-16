@@ -1,6 +1,8 @@
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
+from ..models.users import User
+from ..models.wechat_user import WeChatUser
 from .supabase import create_user_client, supabase
 
 
@@ -571,6 +573,12 @@ def delete_meeting(meeting_id: str, user_id: str, user_token: str) -> bool:
         # Delete votes_status next
         user_client.table("votes_status").delete().eq("meeting_id", meeting_id).execute()
 
+        # Delete feedbacks next
+        user_client.table("feedbacks").delete().eq("meeting_id", meeting_id).execute()
+
+        # Delete checkins next
+        user_client.table("checkins").delete().eq("meeting_id", meeting_id).execute()
+
         # Delete segments next
         user_client.table("segments").delete().eq("meeting_id", meeting_id).execute()
 
@@ -963,8 +971,7 @@ def delete_post(slug: str, user_id: str) -> bool:
     is_author = existing_post[0]["author_id"] == user_id
 
     # Check if user is an admin
-    admin_check = supabase.table("members").select("is_admin").eq("id", user_id).execute()
-    is_admin = admin_check.data and admin_check.data[0].get("is_admin", False)
+    is_admin = is_user_admin(user_id)
 
     # Ensure user is the author or admin
     if not (is_author or is_admin):
@@ -1221,3 +1228,223 @@ def cast_votes(meeting_id: str, votes: List[Dict[str, str]]) -> List[Dict]:
         return result.data
 
     return []
+
+
+# Checkins functions
+def create_checkins(
+    meeting_id: str, wxid: str, segment_ids: List[str], name: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Create checkins for a user, replacing any existing ones for the same meeting."""
+    # First delete existing checkins for this wxid + meeting_id
+    supabase.table("checkins").delete().eq("meeting_id", meeting_id).eq("wxid", wxid).execute()
+
+    # Create new checkin records
+    checkins_data = []
+    for segment_id in segment_ids:
+        checkin_data = {"meeting_id": meeting_id, "wxid": wxid, "segment_id": segment_id, "name": name}
+        checkins_data.append(checkin_data)
+
+    if checkins_data:
+        result = supabase.table("checkins").insert(checkins_data).execute()
+        return result.data
+
+    return []
+
+
+def get_checkins_by_meeting(meeting_id: str, wxid: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Get checkins for a meeting, optionally filtered by wxid."""
+    query = supabase.table("checkins").select("*").eq("meeting_id", meeting_id)
+
+    if wxid:
+        query = query.eq("wxid", wxid)
+
+    result = query.execute()
+    return result.data
+
+
+# Feedbacks functions
+def create_feedback(
+    meeting_id: str,
+    wxid: str,
+    feedback_type: str,
+    value: str,
+    segment_id: Optional[str] = None,
+    to_attendee_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a new feedback record."""
+    feedback_data = {
+        "meeting_id": meeting_id,
+        "from_wxid": wxid,
+        "type": feedback_type,
+        "value": value,
+        "segment_id": segment_id,
+        "to_attendee_id": to_attendee_id,
+    }
+
+    result = supabase.table("feedbacks").insert(feedback_data).execute()
+    return result.data[0] if result.data else {}
+
+
+def get_feedbacks_by_meeting(
+    meeting_id: str,
+    wxid: Optional[str] = None,
+    user_attendee_id: Optional[str] = None,
+    is_admin: bool = False,
+    feedback_type: Optional[str] = None,
+    segment_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Get feedbacks for a meeting with comprehensive access control and filtering.
+
+    Implements sophisticated access control logic to ensure users only see feedbacks
+    they are authorized to view:
+    - Admin users: Can view all feedbacks for the meeting
+    - Users with wxid: Can view feedbacks sent by their wxid + received by their attendee_id
+    - Users with attendee_id only: Can view feedbacks received by their attendee_id
+    - Additional filtering by feedback type and segment ID is applied on top of access control
+
+    Args:
+        meeting_id: The ID of the meeting to retrieve feedbacks for
+        wxid: WeChat openid of the user (for sent feedback filtering)
+        user_attendee_id: Attendee ID of the user (for received feedback filtering)
+        is_admin: Whether the user has admin privileges (bypasses access control)
+        feedback_type: Optional filter by feedback type (experience_*, segment, attendee)
+        segment_id: Optional filter by specific segment ID
+
+    Returns:
+        List of feedback dictionaries matching the access control and filter criteria
+    """
+    query = supabase.table("feedbacks").select("*").eq("meeting_id", meeting_id)
+
+    # Apply filters
+    if feedback_type:
+        query = query.eq("type", feedback_type)
+    if segment_id:
+        query = query.eq("segment_id", segment_id)
+
+    # Get all feedbacks first, then filter based on access control
+    result = query.execute()
+    feedbacks = result.data
+
+    if is_admin:
+        return feedbacks
+
+    # Apply access control filtering
+    filtered_feedbacks = []
+    for feedback in feedbacks:
+        # User can see feedbacks they sent
+        if wxid and feedback["from_wxid"] == wxid:
+            filtered_feedbacks.append(feedback)
+        # User can see feedbacks sent to their attendee_id
+        elif user_attendee_id and feedback["to_attendee_id"] == user_attendee_id:
+            filtered_feedbacks.append(feedback)
+
+    return filtered_feedbacks
+
+
+def update_feedback(feedback_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Update a feedback record."""
+    result = supabase.table("feedbacks").update(updates).eq("id", feedback_id).execute()
+    return result.data[0] if result.data else {}
+
+
+def delete_feedback(feedback_id: str) -> bool:
+    """Delete a feedback record."""
+    result = supabase.table("feedbacks").delete().eq("id", feedback_id).execute()
+    return len(result.data) > 0
+
+
+def get_feedback_by_id(feedback_id: str) -> Optional[Dict[str, Any]]:
+    """Get a feedback by ID."""
+    result = supabase.table("feedbacks").select("*").eq("id", feedback_id).execute()
+    return result.data[0] if result.data else None
+
+
+def validate_segments_belong_to_meeting(meeting_id: str, segment_ids: List[str]) -> bool:
+    """Validate that all segment IDs belong to the given meeting."""
+    if not segment_ids:
+        return True
+
+    result = supabase.table("segments").select("id").eq("meeting_id", meeting_id).in_("id", segment_ids).execute()
+    return len(result.data) == len(segment_ids)
+
+
+def validate_attendee_id_exists(attendee_id: str) -> bool:
+    """Validate that an attendee ID exists."""
+    result = supabase.table("attendees").select("id").eq("id", attendee_id).execute()
+    return len(result.data) > 0
+
+
+# User authentication utility functions
+def get_user_wxid(user_id: str) -> Optional[str]:
+    """Get user's wxid from their attendee record."""
+    result = supabase.table("attendees").select("wxid").eq("member_id", user_id).execute()
+    if result.data and result.data[0].get("wxid"):
+        return result.data[0]["wxid"]
+    return None
+
+
+def get_user_attendee_id(user_id: str) -> Optional[str]:
+    """Get user's attendee_id from their member record."""
+    result = supabase.table("attendees").select("id").eq("member_id", user_id).execute()
+    if result.data:
+        return result.data[0]["id"]
+    return None
+
+
+def get_attendee_id_by_wxid(wxid: str) -> Optional[str]:
+    """Get attendee_id for a given wxid."""
+    result = supabase.table("attendees").select("id").eq("wxid", wxid).execute()
+    if result.data:
+        return result.data[0]["id"]
+    return None
+
+
+def is_user_admin(user_id: str) -> bool:
+    """Check if user is an admin."""
+    result = supabase.table("members").select("is_admin").eq("id", user_id).execute()
+    return bool(result.data and result.data[0].get("is_admin", False))
+
+
+def get_user_by_wxid(wxid: str) -> Optional[Dict[str, Any]]:
+    """Get user info if wxid is bound to a member."""
+    # First find the member_id from attendees table
+    attendee_result = supabase.table("attendees").select("member_id").eq("wxid", wxid).execute()
+    if not attendee_result.data or not attendee_result.data[0].get("member_id"):
+        return None
+
+    member_id = attendee_result.data[0]["member_id"]
+
+    # Get the member info
+    member_result = supabase.table("members").select("id, username, full_name").eq("id", member_id).execute()
+    if member_result.data:
+        member = member_result.data[0]
+        return {"uid": member["id"], "username": member["username"], "full_name": member["full_name"]}
+
+    return None
+
+
+# Extended user utility functions
+def get_extended_user_wxid(user: Union[User, WeChatUser]) -> Optional[str]:
+    """Extract wxid from User or WeChatUser object."""
+    if isinstance(user, WeChatUser):
+        return user.wxid
+    elif isinstance(user, User):
+        return get_user_wxid(user.uid)
+    return None
+
+
+def get_extended_user_attendee_id(user: Union[User, WeChatUser]) -> Optional[str]:
+    """Get attendee_id from User or WeChatUser object."""
+    if isinstance(user, WeChatUser):
+        return user.attendee_id
+    elif isinstance(user, User):
+        return get_user_attendee_id(user.uid)
+    return None
+
+
+def is_extended_user_admin(user: Union[User, WeChatUser]) -> bool:
+    """Check if user is admin."""
+    if isinstance(user, User):
+        return is_user_admin(user.uid)
+    return False

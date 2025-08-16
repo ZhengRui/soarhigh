@@ -21,6 +21,11 @@ CORS_ORIGINS = config("CORS_ORIGINS", cast=parse_cors_origins, default="*")
 
 OPENAI_API_KEY = config("OPENAI_API_KEY", cast=str)
 
+# WeChat Configuration
+WECHAT_APP_ID = config("WECHAT_APP_ID", cast=str)
+WECHAT_APP_SECRET = config("WECHAT_APP_SECRET", cast=str)
+WECHAT_JWT_SECRET = config("WECHAT_JWT_SECRET", cast=str)
+
 # AliCloud OSS Configuration
 ALICLOUD_ACCESS_KEY_ID = config("ALICLOUD_ACCESS_KEY_ID", cast=str)
 ALICLOUD_ACCESS_KEY_SECRET = config("ALICLOUD_ACCESS_KEY_SECRET", cast=str)

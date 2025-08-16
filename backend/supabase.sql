@@ -104,6 +104,30 @@ CREATE TABLE votes_status (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Feedbacks table - stores experience feedback from meeting participants
+CREATE TABLE feedbacks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    meeting_id UUID REFERENCES meetings(id) NOT NULL,
+    segment_id UUID REFERENCES segments(id),
+    type TEXT NOT NULL CHECK (type IN ('experience_opening', 'experience_peak', 'experience_valley', 'experience_ending', 'segment', 'attendee')),
+    value TEXT NOT NULL,
+    from_wxid TEXT NOT NULL,
+    to_attendee_id UUID REFERENCES attendees(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Checkins table - stores meeting check-ins for segment role takers
+CREATE TABLE checkins (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    meeting_id UUID REFERENCES meetings(id) NOT NULL,
+    wxid TEXT NOT NULL,
+    segment_id UUID REFERENCES segments(id),
+    name TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- =============================================
 -- INDEXES
 -- =============================================
@@ -120,6 +144,13 @@ CREATE UNIQUE INDEX unique_meeting_category_name ON votes(meeting_id, category, 
 -- Ensures meeting_id is unique
 CREATE UNIQUE INDEX unique_meeting_id ON votes_status(meeting_id);
 
+-- Ensures one experience feedback per person per meeting for experience types
+CREATE UNIQUE INDEX unique_experience_feedback ON feedbacks(meeting_id, from_wxid, type)
+WHERE type IN ('experience_opening', 'experience_peak', 'experience_valley', 'experience_ending');
+
+-- Ensures one checkin per person per segment per meeting
+CREATE UNIQUE INDEX unique_checkin_person_segment ON checkins(meeting_id, wxid, segment_id);
+
 -- =============================================
 -- ROW LEVEL SECURITY POLICIES
 -- =============================================
@@ -132,6 +163,8 @@ ALTER TABLE segments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE votes_status ENABLE ROW LEVEL SECURITY;
+ALTER TABLE feedbacks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE checkins ENABLE ROW LEVEL SECURITY;
 
 -- Members table policies
 CREATE POLICY "Members can read own data"
