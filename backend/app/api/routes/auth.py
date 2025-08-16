@@ -77,13 +77,35 @@ def get_optional_user(
 
 
 def create_wechat_access_token(wxid: str) -> str:
-    """Create a JWT access token for WeChat user."""
+    """Create a JWT access token for WeChat user with embedded user data for performance."""
+    # Get user data and embed it in the token to avoid DB queries on each request
+    user_data = get_user_by_wxid(wxid)
+    attendee_id = get_attendee_id_by_wxid(wxid)
+
     payload = {
         "type": "wechat_session",
         "wxid": wxid,
         "exp": datetime.utcnow() + timedelta(days=1),
         "iat": datetime.utcnow(),
     }
+
+    if user_data:
+        # WeChat user bound to member
+        payload.update(
+            {
+                "user_type": "member",
+                "user_data": {
+                    "uid": user_data["uid"],
+                    "username": user_data["username"],
+                    "full_name": user_data["full_name"],
+                    "attendee_id": attendee_id,
+                },
+            }
+        )
+    else:
+        # Unbound WeChat user
+        payload.update({"user_type": "guest", "user_data": {"attendee_id": attendee_id}})
+
     return jwt.encode(payload, WECHAT_JWT_SECRET, algorithm="HS256")
 
 
@@ -115,11 +137,11 @@ def get_current_extended_user(
 
     This function handles two types of JWT tokens:
     1. Supabase tokens (from webapp): Returns User object with member information
-    2. WeChat tokens (from miniapp): Returns User object if wxid is bound to member,
-       otherwise returns WeChatUser object
+    2. WeChat tokens (from miniapp): Uses embedded user data for optimal performance,
+       with fallback to DB queries for legacy tokens
 
     The function automatically detects token type and applies appropriate parsing logic.
-    For WeChat tokens, it performs wxid-to-member lookup to determine return type.
+    For WeChat tokens, it prioritizes embedded data over DB queries for performance.
 
     Args:
         credentials: HTTP Authorization header with Bearer token
@@ -135,18 +157,34 @@ def get_current_extended_user(
 
     # Check token type
     if payload.get("type") == "wechat_session":
-        # WeChat token
+        # WeChat token - use embedded data for performance
         wxid = payload["wxid"]
 
-        # Check if wxid is bound to a member
-        user_data = get_user_by_wxid(wxid)
-        if user_data:
-            # Return User object for bound members
-            return User(**user_data)
+        # Check if token has embedded user data (optimized path)
+        if "user_type" in payload and "user_data" in payload:
+            user_type = payload["user_type"]
+            user_data = payload["user_data"]
+
+            if user_type == "member":
+                # Return User object from embedded data
+                return User(
+                    uid=user_data["uid"],
+                    username=user_data["username"],
+                    full_name=user_data["full_name"],
+                )
+            else:
+                # Return WeChatUser from embedded data
+                return WeChatUser(wxid=wxid, attendee_id=user_data.get("attendee_id"))
         else:
-            # Return WeChatUser for unbound users
-            attendee_id = get_attendee_id_by_wxid(wxid)
-            return WeChatUser(wxid=wxid, attendee_id=attendee_id)
+            # Fallback to DB queries for legacy tokens
+            user_data = get_user_by_wxid(wxid)
+            if user_data:
+                # Return User object for bound members
+                return User(**user_data)
+            else:
+                # Return WeChatUser for unbound users
+                attendee_id = get_attendee_id_by_wxid(wxid)
+                return WeChatUser(wxid=wxid, attendee_id=attendee_id)
     else:
         # Supabase token
         return User(
