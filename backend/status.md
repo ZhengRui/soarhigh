@@ -44,6 +44,14 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 - **/meetings/{id}/votes/status** - GET: Get voting status (open/closed) for a meeting
 - **/meetings/{id}/votes/status** - PUT: Update voting status (open/close voting)
 
+### Feedback Management
+- **/meetings/{id}/feedbacks** - GET: Retrieve feedbacks with access control, POST: Create feedback
+- **/meetings/{id}/feedbacks/{feedback_id}** - PUT: Update feedback, DELETE: Delete feedback
+- **/meetings/{id}/feedbacks/experiences** - POST: Create experience curve feedbacks (batch operation)
+
+### Checkin Management
+- **/meetings/{id}/checkins** - GET: Retrieve checkins, POST: Create checkins for segments
+
 ### Blog Post Management
 - **/posts** - GET: List posts with pagination, POST: Create a new post
 - **/posts/{slug}** - GET: Retrieve a post by slug, PATCH: Update an existing post, DELETE: Delete a post
@@ -107,6 +115,27 @@ Model for tracking voting status:
 - `meeting_id`: Reference to the associated meeting
 - `open`: Boolean indicating if voting is open or closed
 
+### Feedback Model
+Model for meeting feedback and checkins:
+- `id`: Feedback identifier
+- `meeting_id`: Reference to the associated meeting
+- `from_wxid`: WeChat openid of the feedback provider
+- `type`: Feedback type (experience_opening/peak/valley/ending, segment, attendee)
+- `value`: Feedback content
+- `segment_id`: Optional reference to a specific meeting segment
+- `to_attendee_id`: Optional target attendee for the feedback
+- `created_at`: Timestamp of feedback creation
+- `updated_at`: Timestamp of last update
+
+### Checkin Model
+Model for meeting participation tracking:
+- `id`: Checkin identifier
+- `meeting_id`: Reference to the associated meeting
+- `wxid`: WeChat openid of the participant
+- `segment_id`: Reference to the meeting segment being checked into
+- `name`: Optional name for validation
+- `created_at`: Timestamp of checkin
+
 ### Post Model
 Model for blog posts:
 - `id`: Post identifier
@@ -140,6 +169,14 @@ Model for blog posts:
   - `increment_votes()`: Atomically increments vote counts
   - `get_vote_status()`: Gets the current voting status for a meeting
   - `update_vote_status()`: Updates the voting status (open/close)
+- Functions for feedback and checkin management:
+  - `create_feedback()`: Creates individual feedback records
+  - `create_experiences()`: Creates experience curve feedbacks (batch operation)
+  - `get_feedbacks_by_meeting()`: Retrieves feedbacks with sophisticated access control
+  - `update_feedback()`: Updates existing feedback records
+  - `delete_feedback()`: Deletes feedback records
+  - `create_checkins()`: Creates checkin records for meeting segments
+  - `get_checkins_by_meeting()`: Retrieves checkins for a meeting
 - Functions for blog post management:
   - `get_posts()`: Retrieves posts with pagination and filtering
   - `get_post_by_slug()`: Retrieves a specific post by slug
@@ -238,7 +275,16 @@ The backend now fully supports the meeting management workflow:
    - Support for segment-specific voting
    - Real-time vote tallying
 
-8. **Media Management**:
+8. **Feedback and Checkin System**:
+   - Complete feedback CRUD operations with sophisticated access control
+   - Experience curve feedback methodology (opening/peak/valley/ending)
+   - Batch experience feedback creation for efficient user input
+   - Segment and attendee-targeted feedback support
+   - Meeting participation tracking through checkins
+   - WeChat integration for miniapp user feedback submission
+   - Proper ownership validation and admin override capabilities
+
+9. **Media Management**:
    - Support for uploading media files to meetings
    - Pre-signed URL generation for direct browser-to-OSS uploads
    - Media file listing with proper file metadata

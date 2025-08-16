@@ -92,6 +92,14 @@ SoarHigh Toastmasters Club - A full-stack web application for managing Toastmast
 - `/meetings/{id}/votes/increment` - POST: Increment vote counts (atomic)
 - `/meetings/{id}/votes/status` - GET: Get voting status, PUT: Update voting status (open/close)
 
+### Feedback Management
+- `/meetings/{id}/feedbacks` - GET: Retrieve feedbacks with access control, POST: Create feedback
+- `/meetings/{id}/feedbacks/{feedback_id}` - PUT: Update feedback, DELETE: Delete feedback
+- `/meetings/{id}/feedbacks/experiences` - POST: Create experience curve feedbacks (batch operation)
+
+### Checkin Management
+- `/meetings/{id}/checkins` - GET: Retrieve checkins, POST: Create checkins for segments
+
 ### Blog Post Management
 - `/posts` - GET: List posts with pagination, POST: Create new post
 - `/posts/{slug}` - GET: Retrieve post by slug, PATCH: Update post, DELETE: Delete post
@@ -110,6 +118,8 @@ The application uses Supabase with tables for:
 - **Votes** (voting records with atomic counting)
 - **Media** (file uploads via AliCloud OSS)
 - **Vote Status** (voting session management)
+- **Feedbacks** (meeting feedback with experience curve methodology)
+- **Checkins** (meeting participation tracking by segment)
 
 ## Frontend Routes
 

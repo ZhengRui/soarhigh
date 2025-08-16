@@ -8,8 +8,13 @@ class CheckinCreate(BaseModel):
     Model for creating checkins for meeting segments.
     """
 
-    wx_code: Optional[str] = Field(default=None, description="WeChat code for miniapp authentication.")
-    segment_ids: List[str] = Field(description="Array of segment IDs the user is checking in for.")
+    segment_ids: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Array of segment IDs the user is checking in for. "
+            "None=general attendance, []=uncheckin, [ids]=specific segments."
+        ),
+    )
     name: Optional[str] = Field(default=None, description="Optional nickname for validation.")
 
 

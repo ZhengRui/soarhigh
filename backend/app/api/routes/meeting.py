@@ -411,7 +411,7 @@ async def r_get_meeting_votes(
 
     This endpoint retrieves all votes for a specific meeting.
     Anyone can access this endpoint, but the response format differs based on authentication:
-    - Authenticated users: Full vote data or form-structured data based on as_form parameter
+    - Authenticated users: Full vote data with counts
     - Non-authenticated users: Only category and candidate information (no counts)
     """
     try:
@@ -522,7 +522,7 @@ async def r_save_vote_form(
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e!s}")
 
 
-@r.post("/meetings/{meeting_id}/vote", response_model=List[Vote])
+@r.post("/meetings/{meeting_id}/votes", response_model=List[Vote])
 async def r_cast_vote(
     vote_data: VoteCast,
     meeting_id: str = Path(..., description="The ID of the meeting to cast votes for"),

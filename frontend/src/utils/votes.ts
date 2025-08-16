@@ -145,7 +145,7 @@ export const updateVoteStatus = requestTemplate(
  */
 export const castVotes = requestTemplate(
   (meetingId: string, votes: VoteRecordIF[]) => ({
-    url: `${apiEndpoint}/meetings/${meetingId}/vote`,
+    url: `${apiEndpoint}/meetings/${meetingId}/votes`,
     method: 'POST',
     headers: new Headers({
       'Content-Type': 'application/json',

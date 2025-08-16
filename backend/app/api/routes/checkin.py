@@ -35,6 +35,11 @@ async def create_meeting_checkins(
     for multiple meeting segments at once. Checkins serve as attendance records
     and role confirmations for meeting participants.
 
+    Checkin behavior based on segment_ids:
+    - None: General attendance (present but no specific role)
+    - []: Uncheckin (remove all existing checkins for this meeting)
+    - [segment1, segment2, ...]: Checkin for specific segments/roles
+
     Authentication requirements:
     - User must have a valid wxid (WeChat openid) bound to their account
     - Members without wxid binding will receive a 403 error
@@ -42,11 +47,11 @@ async def create_meeting_checkins(
 
     Validation performed:
     - Meeting existence verification
-    - Segment ownership validation (all segments must belong to the specified meeting)
+    - Segment ownership validation (only when specific segments are provided)
     - Duplicate checkin prevention (handled by database unique constraints)
 
     Args:
-        checkin_data: Checkin request containing segment IDs and optional name
+        checkin_data: Checkin request containing optional segment IDs and optional name
         meeting_id: Target meeting ID for the checkins
         current_user: Authenticated user (from JWT token)
 
@@ -69,8 +74,8 @@ async def create_meeting_checkins(
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
-    # Validate segments belong to meeting
-    if not validate_segments_belong_to_meeting(meeting_id, checkin_data.segment_ids):
+    # Validate segments belong to meeting (skip validation for None and empty list)
+    if checkin_data.segment_ids and not validate_segments_belong_to_meeting(meeting_id, checkin_data.segment_ids):
         raise HTTPException(status_code=422, detail="One or more segment IDs do not belong to this meeting")
 
     # Create checkins

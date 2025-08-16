@@ -3,6 +3,7 @@ from typing import Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from ...db.core import (
+    create_experiences,
     create_feedback,
     delete_feedback,
     get_extended_user_attendee_id,
@@ -230,7 +231,7 @@ async def update_meeting_feedback(
     """
     wxid = get_extended_user_wxid(current_user)
     is_admin = is_extended_user_admin(current_user)
-    if not wxid:
+    if not wxid and not is_admin:
         raise HTTPException(status_code=403, detail="User wxid not available")
 
     # Validate meeting exists
@@ -323,7 +324,7 @@ async def delete_meeting_feedback(
     """
     wxid = get_extended_user_wxid(current_user)
     is_admin = is_extended_user_admin(current_user)
-    if not wxid:
+    if not wxid and not is_admin:
         raise HTTPException(status_code=403, detail="User wxid not available")
 
     # Validate meeting exists
@@ -350,3 +351,77 @@ async def delete_meeting_feedback(
         raise HTTPException(status_code=500, detail="Failed to delete feedback")
 
     return {"success": True}
+
+
+@r.post("/meetings/{meeting_id}/feedbacks/experiences", response_model=FeedbackListResponse)
+async def create_meeting_experiences(
+    experience_data: dict,
+    meeting_id: str = Path(..., description="The ID of the meeting to create experience feedbacks for"),
+    current_user: Union[User, WeChatUser] = Depends(get_current_extended_user),
+):
+    """
+    Create experience curve feedbacks for a meeting - batch operation for 4 experience types.
+
+    This endpoint enables users to provide experience curve feedback for meetings using
+    the opening/peak/valley/ending methodology. It replaces any existing experience
+    feedbacks from the same user for the meeting.
+
+    Authentication requirements:
+    - User must have a valid wxid (WeChat openid) bound to their account
+    - Members without wxid binding will receive a 403 error
+    - WeChat users inherently have wxid from their authentication
+
+    Validation performed:
+    - Meeting existence verification
+    - Automatic cleanup of existing experience feedbacks
+
+    Experience types supported:
+    - opening: Opening experience feedback (None to skip)
+    - peak: Peak experience feedback (None to skip)
+    - valley: Valley experience feedback (None to skip)
+    - ending: Ending experience feedback (None to skip)
+
+    Args:
+        experience_data: Dict with opening/peak/valley/ending keys (values can be None)
+        meeting_id: Target meeting ID for the experience feedbacks
+        current_user: Authenticated user (from JWT token)
+
+    Returns:
+        FeedbackListResponse with success status and created experience feedback records
+
+    Raises:
+        HTTPException 403: If user lacks wxid binding
+        HTTPException 404: If meeting not found
+        HTTPException 500: If experience feedback creation fails
+    """
+    wxid = get_extended_user_wxid(current_user)
+    if not wxid:
+        raise HTTPException(status_code=403, detail="User wxid required for experience feedback")
+
+    # Validate meeting exists
+    meeting = get_meeting_by_id(meeting_id, current_user.uid if isinstance(current_user, User) else None)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    # Extract experience values (can be None)
+    opening = experience_data.get("opening")
+    peak = experience_data.get("peak")
+    valley = experience_data.get("valley")
+    ending = experience_data.get("ending")
+
+    # Create experience feedbacks
+    try:
+        feedback_dicts = create_experiences(
+            meeting_id=meeting_id,
+            wxid=wxid,
+            opening=opening,
+            peak=peak,
+            valley=valley,
+            ending=ending,
+        )
+
+        feedbacks = [Feedback(**feedback_dict) for feedback_dict in feedback_dicts]
+        return FeedbackListResponse(feedbacks=feedbacks)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create experience feedbacks: {e!s}")

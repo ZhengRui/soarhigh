@@ -1232,23 +1232,41 @@ def cast_votes(meeting_id: str, votes: List[Dict[str, str]]) -> List[Dict]:
 
 # Checkins functions
 def create_checkins(
-    meeting_id: str, wxid: str, segment_ids: List[str], name: Optional[str] = None
+    meeting_id: str, wxid: str, segment_ids: Optional[List[str]], name: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """Create checkins for a user, replacing any existing ones for the same meeting."""
+    """
+    Create checkins for a user, replacing any existing ones for the same meeting.
+
+    Args:
+        meeting_id: Meeting ID
+        wxid: WeChat ID of the user
+        segment_ids: None=general attendance, []=uncheckin all, [ids]=specific segments
+        name: Optional name for the checkin
+
+    Returns:
+        List of created checkin records
+    """
     # First delete existing checkins for this wxid + meeting_id
     supabase.table("checkins").delete().eq("meeting_id", meeting_id).eq("wxid", wxid).execute()
 
-    # Create new checkin records
-    checkins_data = []
-    for segment_id in segment_ids:
-        checkin_data = {"meeting_id": meeting_id, "wxid": wxid, "segment_id": segment_id, "name": name}
-        checkins_data.append(checkin_data)
+    # Handle different segment_ids cases
+    if segment_ids is None:
+        # General attendance - create a checkin with no specific segment
+        checkin_data = {"meeting_id": meeting_id, "wxid": wxid, "segment_id": None, "name": name}
+        result = supabase.table("checkins").insert([checkin_data]).execute()
+        return result.data
+    elif len(segment_ids) == 0:
+        # Empty list means uncheckin - we already deleted existing records above
+        return []
+    else:
+        # Specific segments - create checkins for each segment
+        checkins_data = []
+        for segment_id in segment_ids:
+            checkin_data = {"meeting_id": meeting_id, "wxid": wxid, "segment_id": segment_id, "name": name}
+            checkins_data.append(checkin_data)
 
-    if checkins_data:
         result = supabase.table("checkins").insert(checkins_data).execute()
         return result.data
-
-    return []
 
 
 def get_checkins_by_meeting(meeting_id: str, wxid: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1358,6 +1376,65 @@ def get_feedback_by_id(feedback_id: str) -> Optional[Dict[str, Any]]:
     """Get a feedback by ID."""
     result = supabase.table("feedbacks").select("*").eq("id", feedback_id).execute()
     return result.data[0] if result.data else None
+
+
+def create_experiences(
+    meeting_id: str,
+    wxid: str,
+    opening: Optional[str],
+    peak: Optional[str],
+    valley: Optional[str],
+    ending: Optional[str],
+) -> List[Dict[str, Any]]:
+    """
+    Create experience curve feedbacks (opening, peak, valley, ending) for a meeting.
+
+    First deletes all existing experience feedbacks for the user and meeting,
+    then creates new ones for non-None experience values.
+
+    Args:
+        meeting_id: The ID of the meeting
+        wxid: WeChat openid of the user providing feedback
+        opening: Opening experience feedback value (None to skip)
+        peak: Peak experience feedback value (None to skip)
+        valley: Valley experience feedback value (None to skip)
+        ending: Ending experience feedback value (None to skip)
+
+    Returns:
+        List of created feedback dictionaries
+    """
+    # Delete existing experience feedbacks for this user and meeting
+    supabase.table("feedbacks").delete().eq("meeting_id", meeting_id).eq("from_wxid", wxid).in_(
+        "type", ["experience_opening", "experience_peak", "experience_valley", "experience_ending"]
+    ).execute()
+
+    # Prepare new experience feedbacks
+    experiences_to_insert = []
+    experience_types = [
+        ("experience_opening", opening),
+        ("experience_peak", peak),
+        ("experience_valley", valley),
+        ("experience_ending", ending),
+    ]
+
+    for feedback_type, value in experience_types:
+        if value is not None:
+            experiences_to_insert.append(
+                {
+                    "meeting_id": meeting_id,
+                    "from_wxid": wxid,
+                    "type": feedback_type,
+                    "value": value,
+                    "segment_id": None,
+                    "to_attendee_id": None,
+                }
+            )
+
+    # Insert new experience feedbacks
+    if experiences_to_insert:
+        result = supabase.table("feedbacks").insert(experiences_to_insert).execute()
+        return result.data
+    return []
 
 
 def validate_segments_belong_to_meeting(meeting_id: str, segment_ids: List[str]) -> bool:
