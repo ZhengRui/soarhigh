@@ -565,25 +565,25 @@ def delete_meeting(meeting_id: str, user_id: str, user_token: str) -> bool:
 
         # Now we can safely proceed with deletion knowing RLS will allow it
         # Delete awards first
-        user_client.table("awards").delete().eq("meeting_id", meeting_id).execute()
+        supabase.table("awards").delete().eq("meeting_id", meeting_id).execute()
 
         # Delete votes next
-        user_client.table("votes").delete().eq("meeting_id", meeting_id).execute()
+        supabase.table("votes").delete().eq("meeting_id", meeting_id).execute()
 
         # Delete votes_status next
-        user_client.table("votes_status").delete().eq("meeting_id", meeting_id).execute()
+        supabase.table("votes_status").delete().eq("meeting_id", meeting_id).execute()
 
         # Delete feedbacks next
-        user_client.table("feedbacks").delete().eq("meeting_id", meeting_id).execute()
+        supabase.table("feedbacks").delete().eq("meeting_id", meeting_id).execute()
 
         # Delete checkins next
-        user_client.table("checkins").delete().eq("meeting_id", meeting_id).execute()
+        supabase.table("checkins").delete().eq("meeting_id", meeting_id).execute()
 
         # Delete segments next
-        user_client.table("segments").delete().eq("meeting_id", meeting_id).execute()
+        supabase.table("segments").delete().eq("meeting_id", meeting_id).execute()
 
         # Delete the meeting
-        result = user_client.table("meetings").delete().eq("id", meeting_id).execute()
+        result = supabase.table("meetings").delete().eq("id", meeting_id).execute()
 
         return len(result.data) > 0
     except Exception as e:
