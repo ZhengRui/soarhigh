@@ -382,13 +382,23 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
               className='object-fill'
             />
           </div>
-          <div className='absolute right-4 md:right-8 top-9 md:top-[30px] lg:top-6 w-14 md:w-16 aspect-square'>
-            <Image
-              src='/images/vpmQR.jpg'
-              alt='VPM QR Code'
-              fill
-              className='object-fill'
-            />
+          <div className='absolute right-4 md:right-8 top-9 md:top-[30px] lg:top-6 flex gap-0.5'>
+            <div className='relative w-14 md:w-16 aspect-square'>
+              <Image
+                src='/images/miniappQR.png'
+                alt='Miniapp QR Code'
+                fill
+                className='object-fill'
+              />
+            </div>
+            <div className='relative w-14 md:w-16 aspect-square'>
+              <Image
+                src='/images/vpmQR.jpg'
+                alt='VPM QR Code'
+                fill
+                className='object-fill'
+              />
+            </div>
           </div>
           <table className='border-collapse table-fixed w-full'>
             <colgroup>

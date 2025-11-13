@@ -948,16 +948,16 @@ const createTimeRules = (
       [
         'Type',
         {
-          text: 'Speech <=3mins\nTable Topics & Most Evaluations',
+          text: 'Speech <= 3mins\nTable Topics & Most Evaluations',
           style: { alignment: { horizontal: 'center', wrapText: true } },
         },
         '>',
         {
-          text: '3mins < Speech <=10mins\nMost prepared speeches & GE',
+          text: '3mins < Speech <= 10mins\nMost prepared speeches & GE',
           style: { alignment: { horizontal: 'center', wrapText: true } },
         },
         {
-          text: 'Speech >10mins\nLong Speeches & Workshops',
+          text: 'Speech > 10mins\nLong Speeches & Workshops',
           style: { alignment: { horizontal: 'center', wrapText: true } },
         },
         '>',
@@ -1427,7 +1427,7 @@ export const createMeetingWorkbook = async (
       extension: 'png',
     });
 
-    const vpmImage = await getImageAsBase64('/images/vpmQR_hack.png');
+    const vpmImage = await getImageAsBase64('/images/vpmQR_excel.png');
     const vpmImageId = workbook.addImage({
       base64: vpmImage,
       extension: 'png',
@@ -1435,7 +1435,7 @@ export const createMeetingWorkbook = async (
 
     // Position the images
     worksheet.addImage(tmImageId, {
-      tl: { col: 0.2, row: 0.5 },
+      tl: { col: 0.4, row: 0.5 },
       ext: { width: 100, height: 100 },
       editAs: 'absolute',
     });
@@ -1447,8 +1447,8 @@ export const createMeetingWorkbook = async (
     });
 
     worksheet.addImage(vpmImageId, {
-      tl: { col: 5, row: 1 },
-      ext: { width: 120, height: 80 },
+      tl: { col: 4, row: 1 },
+      ext: { width: 193, height: 80 },
       editAs: 'absolute',
     });
   } catch (error) {
