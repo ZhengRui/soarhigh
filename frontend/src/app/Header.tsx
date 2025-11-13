@@ -110,13 +110,19 @@ const Header = () => {
 
   const queryClient = useQueryClient();
 
-  const signout = () => {
-    void supabaseSignOut();
-    queryClient.invalidateQueries({ queryKey: ['whoami'] });
-    queryClient.invalidateQueries({ queryKey: ['isAdmin'] });
-    queryClient.invalidateQueries({ queryKey: ['meetings'] });
-    queryClient.invalidateQueries({ queryKey: ['latestMeeting'] });
-    queryClient.invalidateQueries({ queryKey: ['posts'] });
+  const signout = async () => {
+    await supabaseSignOut();
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['whoami'] }),
+      queryClient.invalidateQueries({ queryKey: ['isAdmin'] }),
+      queryClient.invalidateQueries({ queryKey: ['meetings'] }),
+      queryClient.invalidateQueries({ queryKey: ['latestMeeting'] }),
+      queryClient.invalidateQueries({ queryKey: ['posts'] }),
+    ]);
+  };
+
+  const handleSignout = () => {
+    void signout();
   };
 
   return (
@@ -154,7 +160,7 @@ const Header = () => {
                   </div>
                 </div>
                 <button
-                  onClick={signout}
+                  onClick={handleSignout}
                   className='flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900'
                 >
                   <LogOut size={18} />
@@ -169,7 +175,7 @@ const Header = () => {
           <MobileMenu
             isOpen={isOpen}
             onToggle={() => setIsOpen(!isOpen)}
-            onSignOut={signout}
+            onSignOut={handleSignout}
           />
         </div>
       </div>
