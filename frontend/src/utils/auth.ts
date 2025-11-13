@@ -13,10 +13,33 @@ const supabase = createClient(
   }
 );
 
+const TOKEN_STORAGE_KEY = 'token';
+
+if (typeof window !== 'undefined') {
+  void supabase.auth.getSession().then(({ data }) => {
+    const accessToken = data.session?.access_token;
+    if (accessToken) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  });
+
+  supabase.auth.onAuthStateChange((_event, session) => {
+    const accessToken = session?.access_token;
+
+    if (accessToken) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  });
+}
+
 const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT;
 
 export const whoami = async (token?: string) => {
-  const token_ = token || localStorage.getItem('token');
+  const token_ = token || localStorage.getItem(TOKEN_STORAGE_KEY);
 
   if (!token_) {
     return null;
@@ -50,13 +73,21 @@ export const signin = async (username: string, password: string) => {
     throw error;
   }
 
-  localStorage.setItem('token', data.session?.access_token);
+  const accessToken = data.session?.access_token;
+  if (accessToken) {
+    localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
+  }
 
   return {
     uid: data.user.id,
     username: data.user.user_metadata.username,
     full_name: data.user.user_metadata.full_name,
   };
+};
+
+export const signOut = async () => {
+  await supabase.auth.signOut();
+  localStorage.removeItem(TOKEN_STORAGE_KEY);
 };
 
 export const getMembers = requestTemplate(

@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { useQueryClient } from '@tanstack/react-query';
+import { signOut as supabaseSignOut } from '@/utils/auth';
 
 const NavLink = ({
   href,
@@ -110,7 +111,7 @@ const Header = () => {
   const queryClient = useQueryClient();
 
   const signout = () => {
-    localStorage.removeItem('token');
+    void supabaseSignOut();
     queryClient.invalidateQueries({ queryKey: ['whoami'] });
     queryClient.invalidateQueries({ queryKey: ['isAdmin'] });
     queryClient.invalidateQueries({ queryKey: ['meetings'] });
