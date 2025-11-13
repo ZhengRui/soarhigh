@@ -948,16 +948,16 @@ const createTimeRules = (
       [
         'Type',
         {
-          text: 'Speech <=3min\nTable Topics & Most Evaluations',
+          text: 'Speech <=3mins\nTable Topics & Most Evaluations',
           style: { alignment: { horizontal: 'center', wrapText: true } },
         },
         '>',
         {
-          text: '3min < Speech <=10min\nMost prepared speeches & GE',
+          text: '3mins < Speech <=10mins\nMost prepared speeches & GE',
           style: { alignment: { horizontal: 'center', wrapText: true } },
         },
         {
-          text: 'Speech >10min\nLong Speeches & Workshops',
+          text: 'Speech >10mins\nLong Speeches & Workshops',
           style: { alignment: { horizontal: 'center', wrapText: true } },
         },
         '>',
@@ -983,7 +983,7 @@ const createTimeRules = (
         },
         '>',
         {
-          text: '1 minute left',
+          text: '2 minutes left',
           style: { alignment: { horizontal: 'center' } },
         },
         {
@@ -1012,7 +1012,7 @@ const createTimeRules = (
         },
         '>',
         {
-          text: '30 seconds left',
+          text: '1 minute left',
           style: { alignment: { horizontal: 'center' } },
         },
         {
@@ -1202,7 +1202,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Homer',
+          text: 'Helen Chen',
           style: { alignment: { horizontal: 'center' } },
         },
         '',
