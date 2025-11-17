@@ -88,12 +88,12 @@ const LOCATION = {
 const MAP_LINKS = [
   {
     name: 'Google Maps',
-    url: 'https://maps.app.goo.gl/t7qzRs4K3RumCw3x7',
+    url: 'https://maps.app.goo.gl/o5wiMxgAo9rf8isU6',
     icon: Navigation,
   },
   {
     name: 'Baidu Maps',
-    url: 'https://j.map.baidu.com/50/DFjg',
+    url: 'https://j.map.baidu.com/d5/01A',
     icon: MapPin,
   },
   {
