@@ -430,7 +430,7 @@ const getHeaderData = (meeting: MeetingIF): HeaderDataIF => {
     endTime: meeting.end_time,
     location:
       meeting.location ||
-      "Venue: JOININ HUB, 6th Xin'an Rd,Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+      "Venue: 华美居装饰家居城B区809 (1号线宝体站）",
     manager: meeting.manager || { name: '', member_id: '' },
   };
 };

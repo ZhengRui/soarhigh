@@ -120,7 +120,7 @@ SOARHIGH 387th  meeting: Aging: It's an adventure
 💡 Word of Today: immortal
 📅 Date: Nov. 6, 2024 (Wed)
 ⏰ Time: Wednesday 19:30 - 21:30
-📍 **Location:** JOININ HUB, 6th Xin'an Rd,Bao'an (Metro line 1 Baoti / line 11 Bao'an)
+📍 **Location:** 华美居装饰家居城B区809 (1号线宝体站）
 👧MM: Rui Zheng
 
 🌟Context: 🌟
@@ -162,7 +162,7 @@ GE:Karman (Trainer)
   "date": "2024-11-05",
   "start_time": "19:15:00",
   "end_time": "21:30:00",
-  "location": "JOININ HUB, 6th Xin'an Rd, Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+  "location": "华美居装饰家居城B区809 (1号线宝体站）",
   "introduction": "Imagine a world where half the women you meet are over 50. Envision working until you're 75. As \
 our global population ages and birth rates decline, Elon Musk warns that population collapse is civilization's \
 greatest threat. Meanwhile, Mark Zuckerberg and his wife are striving to cure, prevent, or manage all diseases by \
@@ -318,7 +318,7 @@ SOARHIGH 390th  meeting:
 💡 Word of Today: gap
 📅 Date: Nov. 27, 2024 (Wed)
 ⏰ Time: Wednesday 19:30 - 21:30
-📍 **Location:** JOININ HUB, 6th Xin'an Rd,Bao'an (Metro line 1 Baoti / line 11 Bao'an)
+📍 **Location:** 华美居装饰家居城B区809 (1号线宝体站）
 👧MM: Leta
 
 🌟Context: 🌟
@@ -358,7 +358,7 @@ GE:Jessica
   "date": "2024-11-27",
   "start_time": "19:15:00",
   "end_time": "21:30:00",
-  "location": "JOININ HUB, 6th Xin'an Rd,Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+  "location": "华美居装饰家居城B区809 (1号线宝体站）",
   "introduction": "When someone sends a smiling face sticker[Smile] on WeChat, it might evoke a few thoughts:\n\
 Positive emotion, response cue, connection or just casual tone. However, for some Millennials and Generation Z, \
 a smiling face sticker might come across as overly simplistic or dismissive, potentially leading to feelings of \

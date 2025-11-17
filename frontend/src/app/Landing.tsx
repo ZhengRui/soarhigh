@@ -78,10 +78,10 @@ const ACTIVITY_GRID = [
 ];
 
 const LOCATION = {
-  address: '宝安区宝体众里创新社区2楼',
+  address: '宝安区华美居装饰家居城B区809',
   coordinates: {
-    lat: 22.562474235254037,
-    lng: 113.8739984820493,
+    lat: 22.56524,
+    lng: 113.8749,
   },
 };
 
