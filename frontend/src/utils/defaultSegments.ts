@@ -322,8 +322,7 @@ export const DEFAULT_REGULAR_MEETING: Omit<MeetingIF, 'segments'> & {
   date: getNextWednesday().date,
   start_time: '19:15',
   end_time: '21:30',
-  location:
-    "JOININ HUB, 6th Xin'an Rd, Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+  location: "华美居装饰家居城B区809 (1号线宝体站）",
   introduction: '',
   segments: DEFAULT_SEGMENTS_REGULAR_MEETING,
 };
@@ -338,8 +337,7 @@ export const DEFAULT_WORKSHOP_MEETING: Omit<MeetingIF, 'segments'> & {
   date: getNextWednesday().date,
   start_time: '19:15',
   end_time: '21:30',
-  location:
-    "JOININ HUB, 6th Xin'an Rd, Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+  location: "华美居装饰家居城B区809 (1号线宝体站）",
   introduction: '',
   segments: [],
 };
@@ -354,8 +352,7 @@ export const DEFAULT_CUSTOM_MEETING: Omit<MeetingIF, 'segments'> & {
   date: getNextWednesday().date,
   start_time: '19:15',
   end_time: '21:30',
-  location:
-    "JOININ HUB, 6th Xin'an Rd, Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+  location: "华美居装饰家居城B区809 (1号线宝体站）",
   introduction: '',
   segments: [
     new CustomSegment({
