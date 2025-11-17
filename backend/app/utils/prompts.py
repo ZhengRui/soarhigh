@@ -120,7 +120,7 @@ SOARHIGH 387th  meeting: Aging: It's an adventure
 💡 Word of Today: immortal
 📅 Date: Nov. 6, 2024 (Wed)
 ⏰ Time: Wednesday 19:30 - 21:30
-📍 **Location:** JOININ HUB, 6th Xin'an Rd,Bao'an (Metro line 1 Baoti / line 11 Bao'an)
+📍 **Location:** JOININ HUB, 6th Xin'an Rd, Bao'an (Metro line 1 Baoti / line 11 Bao'an)
 👧MM: Rui Zheng
 
 🌟Context: 🌟
@@ -162,7 +162,7 @@ GE:Karman (Trainer)
   "date": "2024-11-05",
   "start_time": "19:15:00",
   "end_time": "21:30:00",
-  "location": "JOININ HUB, 6th Xin'an Rd,Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
+  "location": "JOININ HUB, 6th Xin'an Rd, Bao'an (Metro line 1 Baoti / line 11 Bao'an)",
   "introduction": "Imagine a world where half the women you meet are over 50. Envision working until you're 75. As \
 our global population ages and birth rates decline, Elon Musk warns that population collapse is civilization's \
 greatest threat. Meanwhile, Mark Zuckerberg and his wife are striving to cure, prevent, or manage all diseases by \
