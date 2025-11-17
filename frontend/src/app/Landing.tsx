@@ -98,7 +98,7 @@ const MAP_LINKS = [
   },
   {
     name: 'Apple Maps',
-    url: `http://maps.apple.com/?ll=${LOCATION.coordinates.lat},${LOCATION.coordinates.lng}&q=Joinin%20Hub`,
+    url: `http://maps.apple.com/?ll=${LOCATION.coordinates.lat},${LOCATION.coordinates.lng}&q=${encodeURIComponent(LOCATION.address)}`,
     icon: MapPin,
   },
 ];
