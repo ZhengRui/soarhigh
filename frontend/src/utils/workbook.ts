@@ -1098,7 +1098,7 @@ const createTeam = (
             font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
           },
         },
-        { text: 'Rui Zheng', style: { alignment: { horizontal: 'center' } } },
+        { text: 'Amy Fang', style: { alignment: { horizontal: 'center' } } },
         {
           text: 'DL-Dynamic leadership\nMS-Motivational Strategies\nPl-Persuasive Influence\nPM-Presentation Mastery\nVC-Visionary Communication\nEH-Engaging Humor\n\nDL-动态领导力\nMS-激励策略\nPl-有说服力的影响\nPM-精通演讲\nVC-愿景沟通\nEH-善用幽默',
           style: {
@@ -1156,7 +1156,7 @@ const createTeam = (
             },
           },
         },
-        { text: 'Max Long', style: { alignment: { horizontal: 'center' } } },
+        { text: 'Helen Chen', style: { alignment: { horizontal: 'center' } } },
         '',
         '',
         '',
@@ -1178,7 +1178,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Jessica Peng',
+          text: 'Joyce Feng',
           style: { alignment: { horizontal: 'center' } },
         },
         '',
@@ -1202,7 +1202,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Helen Chen',
+          text: 'Jenny Li',
           style: { alignment: { horizontal: 'center' } },
         },
         '',
@@ -1226,7 +1226,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Leta Li',
+          text: 'Rui Zheng',
           style: { alignment: { horizontal: 'center' } },
         },
         '',
@@ -1249,7 +1249,7 @@ const createTeam = (
             },
           },
         },
-        { text: 'Jenny', style: { alignment: { horizontal: 'center' } } },
+        { text: 'Frank Zeng', style: { alignment: { horizontal: 'center' } } },
         '',
         '',
         '',
@@ -1271,7 +1271,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Frank Zeng',
+          text: 'Shelly Qu',
           style: { alignment: { horizontal: 'center' } },
         },
         '',
@@ -1295,7 +1295,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Libra Lee',
+          text: 'Rui Zheng',
           style: { alignment: { horizontal: 'center' } },
         },
         '',
