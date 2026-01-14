@@ -108,7 +108,7 @@ export const AwardPreview = ({ award }: { award: AwardResult }) => {
 
           // add president signature
           ctx.font = 'lighter 200px serif';
-          ctx.fillText('Rui Zheng', 4925, 4050 + yOffset);
+          ctx.fillText('Amy Fang', 4925, 4050 + yOffset);
 
           // Add member name
           ctx.font = '480px Brush Script MT';
