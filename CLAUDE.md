@@ -98,7 +98,9 @@ SoarHigh Toastmasters Club - A full-stack web application for managing Toastmast
 - `/meetings/{id}/feedbacks/experiences` - POST: Create experience curve feedbacks (batch operation)
 
 ### Checkin Management
-- `/meetings/{id}/checkins` - GET: Retrieve checkins, POST: Create checkins for segments
+- `/meetings/{id}/checkins` - GET: Retrieve checkins (by wxid), POST: Create/update checkins for segments
+  - Supports `referral_source` field to track how attendees heard about the meeting
+  - Checkins are automatically deleted when the parent meeting is deleted (cascade)
 
 ### Blog Post Management
 - `/posts` - GET: List posts with pagination, POST: Create new post
