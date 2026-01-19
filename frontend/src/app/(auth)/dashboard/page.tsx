@@ -150,6 +150,14 @@ export default function DashboardPage() {
         bottom: '15%',
         containLabel: true,
       },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          start: 0,
+          end: memberAttendanceData.length > 15 ? 70 : 100,
+        },
+      ],
       xAxis: {
         type: 'category',
         data: memberAttendanceData.map((d) => d.name),
@@ -208,14 +216,23 @@ export default function DashboardPage() {
       },
       legend: {
         data: ['Members', 'Guests'],
-        bottom: 0,
+        top: 0,
       },
       grid: {
         left: '3%',
         right: '4%',
+        top: '15%',
         bottom: '15%',
         containLabel: true,
       },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          start: 0,
+          end: meetingAttendanceData.length > 15 ? 70 : 100,
+        },
+      ],
       xAxis: {
         type: 'category',
         data: meetingAttendanceData.map((d) => d.label),
