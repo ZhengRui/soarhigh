@@ -16,6 +16,7 @@ class CheckinCreate(BaseModel):
         ),
     )
     name: Optional[str] = Field(default=None, description="Optional nickname for validation.")
+    referral_source: Optional[str] = Field(default=None, description="How the user heard about the meeting.")
 
 
 class Checkin(BaseModel):
@@ -28,6 +29,7 @@ class Checkin(BaseModel):
     wxid: str = Field(description="The WeChat openid of the person checking in.")
     segment_id: Optional[str] = Field(default=None, description="The ID of the segment the person is checking in for.")
     name: Optional[str] = Field(default=None, description="Optional nickname provided during checkin.")
+    referral_source: Optional[str] = Field(default=None, description="How the user heard about the meeting.")
     created_at: Optional[str] = Field(default=None, description="The timestamp when the checkin was created.")
     updated_at: Optional[str] = Field(default=None, description="The timestamp when the checkin was last updated.")
 

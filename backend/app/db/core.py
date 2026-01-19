@@ -1232,7 +1232,11 @@ def cast_votes(meeting_id: str, votes: List[Dict[str, str]]) -> List[Dict]:
 
 # Checkins functions
 def create_checkins(
-    meeting_id: str, wxid: str, segment_ids: Optional[List[str]], name: Optional[str] = None
+    meeting_id: str,
+    wxid: str,
+    segment_ids: Optional[List[str]],
+    name: Optional[str] = None,
+    referral_source: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Create checkins for a user, replacing any existing ones for the same meeting.
@@ -1242,6 +1246,7 @@ def create_checkins(
         wxid: WeChat ID of the user
         segment_ids: None=general attendance, []=uncheckin all, [ids]=specific segments
         name: Optional name for the checkin
+        referral_source: Optional referral source (how user heard about the meeting)
 
     Returns:
         List of created checkin records
@@ -1252,7 +1257,13 @@ def create_checkins(
     # Handle different segment_ids cases
     if segment_ids is None:
         # General attendance - create a checkin with no specific segment
-        checkin_data = {"meeting_id": meeting_id, "wxid": wxid, "segment_id": None, "name": name}
+        checkin_data = {
+            "meeting_id": meeting_id,
+            "wxid": wxid,
+            "segment_id": None,
+            "name": name,
+            "referral_source": referral_source,
+        }
         result = supabase.table("checkins").insert([checkin_data]).execute()
         return result.data
     elif len(segment_ids) == 0:
@@ -1262,7 +1273,13 @@ def create_checkins(
         # Specific segments - create checkins for each segment
         checkins_data = []
         for segment_id in segment_ids:
-            checkin_data = {"meeting_id": meeting_id, "wxid": wxid, "segment_id": segment_id, "name": name}
+            checkin_data = {
+                "meeting_id": meeting_id,
+                "wxid": wxid,
+                "segment_id": segment_id,
+                "name": name,
+                "referral_source": referral_source,
+            }
             checkins_data.append(checkin_data)
 
         result = supabase.table("checkins").insert(checkins_data).execute()

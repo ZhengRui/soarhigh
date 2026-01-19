@@ -81,7 +81,11 @@ async def create_meeting_checkins(
     # Create checkins
     try:
         checkins = create_checkins(
-            meeting_id=meeting_id, wxid=wxid, segment_ids=checkin_data.segment_ids, name=checkin_data.name
+            meeting_id=meeting_id,
+            wxid=wxid,
+            segment_ids=checkin_data.segment_ids,
+            name=checkin_data.name,
+            referral_source=checkin_data.referral_source,
         )
 
         checkin_models = [Checkin(**checkin) for checkin in checkins]

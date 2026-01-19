@@ -124,6 +124,7 @@ CREATE TABLE checkins (
     wxid TEXT NOT NULL,
     segment_id UUID REFERENCES segments(id),
     name TEXT NOT NULL,
+    referral_source TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
