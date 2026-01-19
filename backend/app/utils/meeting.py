@@ -21,7 +21,7 @@ from .prompts import (
     plan_meeting_from_text_user_prompt,
 )
 
-default_location = "华美居装饰家居城B区809 (1号线宝体站）"
+default_location = "华美居装饰家居城B区809 (1号线宝体站)"
 
 
 def convert_parsed_meeting_to_meeting(parsed_meeting: MeetingParsedFromImage | MeetingPlannedFromText) -> Meeting:

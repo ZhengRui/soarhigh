@@ -318,7 +318,7 @@ SOARHIGH 390th  meeting:
 💡 Word of Today: gap
 📅 Date: Nov. 27, 2024 (Wed)
 ⏰ Time: Wednesday 19:30 - 21:30
-📍 **Location:** 华美居装饰家居城B区809 (1号线宝体站）
+📍 **Location:** 华美居装饰家居城B区809 (1号线宝体站)
 👧MM: Leta
 
 🌟Context: 🌟
@@ -358,7 +358,7 @@ GE:Jessica
   "date": "2024-11-27",
   "start_time": "19:15:00",
   "end_time": "21:30:00",
-  "location": "华美居装饰家居城B区809 (1号线宝体站）",
+  "location": "华美居装饰家居城B区809 (1号线宝体站)",
   "introduction": "When someone sends a smiling face sticker[Smile] on WeChat, it might evoke a few thoughts:\n\
 Positive emotion, response cue, connection or just casual tone. However, for some Millennials and Generation Z, \
 a smiling face sticker might come across as overly simplistic or dismissive, potentially leading to feelings of \

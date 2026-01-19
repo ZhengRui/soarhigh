@@ -8,6 +8,7 @@ from .routes.checkin import checkin_router
 from .routes.feedback import feedback_router
 from .routes.meeting import meeting_router
 from .routes.post import post_router
+from .routes.stats import stats_router
 
 
 def get_application():
@@ -32,6 +33,7 @@ def get_application():
     app.include_router(feedback_router, tags=["feedback"])
     app.include_router(meeting_router, tags=["meeting"])
     app.include_router(post_router, tags=["post"])
+    app.include_router(stats_router, tags=["stats"])
 
     return app
 

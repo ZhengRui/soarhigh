@@ -108,3 +108,31 @@ export interface PaginatedResponse<T> {
 
 export type PaginatedMeetings = PaginatedResponse<MeetingIF>;
 export type PaginatedPosts = PaginatedResponse<PostIF>;
+
+// Dashboard Stats Interfaces
+export interface MemberMeetingRecordIF {
+  member_id: string;
+  username: string;
+  full_name: string;
+  meeting_id: string;
+  meeting_date: string;
+  meeting_theme: string;
+  meeting_no?: number;
+  role: string;
+}
+
+export interface MeetingAttendanceRecordIF {
+  meeting_id: string;
+  meeting_date: string;
+  meeting_theme: string;
+  meeting_no?: number;
+  member_count: number;
+  guest_count: number;
+  member_names: string[];
+  guest_names: string[];
+}
+
+export interface DashboardStatsIF {
+  member_meetings: MemberMeetingRecordIF[];
+  meeting_attendance: MeetingAttendanceRecordIF[];
+}
