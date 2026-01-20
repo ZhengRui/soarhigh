@@ -25,7 +25,7 @@ export function MeetingPillsList({
             <div
               key={meeting.meetingId}
               title={meeting.theme}
-              className={`flex flex-col items-center px-3 py-2 rounded-lg border transition-all duration-150 ${
+              className={`flex flex-col items-center px-3 py-2 rounded-lg border transition-all duration-150 min-w-[100px] ${
                 isHighlighted
                   ? 'ring-1 ring-purple-500 bg-purple-50 border-purple-300'
                   : isDimmed
