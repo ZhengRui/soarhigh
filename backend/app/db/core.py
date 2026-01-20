@@ -1237,6 +1237,7 @@ def create_checkins(
     segment_ids: Optional[List[str]],
     name: Optional[str] = None,
     referral_source: Optional[str] = None,
+    is_member: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Create checkins for a user, replacing any existing ones for the same meeting.
@@ -1247,6 +1248,7 @@ def create_checkins(
         segment_ids: None=general attendance, []=uncheckin all, [ids]=specific segments
         name: Optional name for the checkin
         referral_source: Optional referral source (how user heard about the meeting)
+        is_member: Whether the user is a club member at checkin time
 
     Returns:
         List of created checkin records
@@ -1263,6 +1265,7 @@ def create_checkins(
             "segment_id": None,
             "name": name,
             "referral_source": referral_source,
+            "is_member": is_member,
         }
         result = supabase.table("checkins").insert([checkin_data]).execute()
         return result.data
@@ -1279,6 +1282,7 @@ def create_checkins(
                 "segment_id": segment_id,
                 "name": name,
                 "referral_source": referral_source,
+                "is_member": is_member,
             }
             checkins_data.append(checkin_data)
 

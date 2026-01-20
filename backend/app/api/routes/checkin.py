@@ -7,6 +7,7 @@ from ...db.core import (
     get_checkins_by_meeting,
     get_extended_user_wxid,
     get_meeting_by_id,
+    get_user_by_wxid,
     validate_segments_belong_to_meeting,
 )
 from ...models.checkin import (
@@ -78,6 +79,9 @@ async def create_meeting_checkins(
     if checkin_data.segment_ids and not validate_segments_belong_to_meeting(meeting_id, checkin_data.segment_ids):
         raise HTTPException(status_code=422, detail="One or more segment IDs do not belong to this meeting")
 
+    # Infer membership status from wxid binding
+    is_member = get_user_by_wxid(wxid) is not None
+
     # Create checkins
     try:
         checkins = create_checkins(
@@ -86,6 +90,7 @@ async def create_meeting_checkins(
             segment_ids=checkin_data.segment_ids,
             name=checkin_data.name,
             referral_source=checkin_data.referral_source,
+            is_member=is_member,
         )
 
         checkin_models = [Checkin(**checkin) for checkin in checkins]

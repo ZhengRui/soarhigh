@@ -169,3 +169,9 @@ The application uses Supabase with tables for:
 - Both services use Vercel for deployment
 - Database operations use Supabase service role key for backend
 - Media files are stored in AliCloud OSS with proper access controls
+
+### Git Commits
+Before committing, activate the backend venv for pre-commit hooks:
+```bash
+cd backend && source .venv/bin/activate && cd .. && git add ... && git commit ...
+```

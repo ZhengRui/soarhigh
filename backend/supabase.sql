@@ -125,6 +125,7 @@ CREATE TABLE checkins (
     segment_id UUID REFERENCES segments(id),
     name TEXT NOT NULL,
     referral_source TEXT,
+    is_member BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
