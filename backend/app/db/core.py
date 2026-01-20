@@ -1686,7 +1686,7 @@ def get_meeting_attendance_stats(start_date: str, end_date: str) -> List[Dict[st
 
     # Step 2: Batch fetch all checkins for these meetings
     checkins_result = (
-        supabase.table("checkins").select("meeting_id, wxid, name").in_("meeting_id", meeting_ids).execute()
+        supabase.table("checkins").select("meeting_id, wxid, name, is_member").in_("meeting_id", meeting_ids).execute()
     )
     checkins = checkins_result.data
 
@@ -1801,20 +1801,22 @@ def get_meeting_attendance_stats(start_date: str, end_date: str) -> List[Dict[st
         segments_member_names = {member_map[mid]["full_name"] for mid in segments_members if mid in member_map}
         segments_guests = {g for g in segments_guests if not has_guest_match(g, segments_member_names)}
 
-        # Build checkins group
+        # Build checkins group (use is_member field for classification)
         checkins_members: set = set()  # member_ids
         checkins_guests: set = set()  # guest names
         for checkin in meeting_checkins:
-            wxid = checkin["wxid"]
-            checkin_name = checkin["name"] or ""
-            if wxid in wxid_to_attendee:
-                attendee_info = wxid_to_attendee[wxid]
-                if attendee_info["member_id"]:
-                    checkins_members.add(attendee_info["member_id"])
-                elif is_valid_guest_name(checkin_name):
+            if checkin.get("is_member"):
+                # Member - look up full_name via wxid
+                wxid = checkin["wxid"]
+                if wxid in wxid_to_attendee:
+                    member_id = wxid_to_attendee[wxid]["member_id"]
+                    if member_id:
+                        checkins_members.add(member_id)
+            else:
+                # Guest - use checkin name
+                checkin_name = checkin["name"] or ""
+                if is_valid_guest_name(checkin_name):
                     checkins_guests.add(checkin_name)
-            elif is_valid_guest_name(checkin_name):
-                checkins_guests.add(checkin_name)
 
         # Determine major/additional (segments wins ties)
         segments_count = len(segments_members) + len(segments_guests)
