@@ -53,6 +53,8 @@ export function MemberRoleMatrix({ memberMeetings }: MemberRoleMatrixProps) {
         matrix: emptyMatrix,
         memberMeetings: {},
         roleMeetings: emptyRoleMeetings,
+        meetingMembers: {},
+        meetingRoles: {},
       };
     }
 
@@ -61,6 +63,8 @@ export function MemberRoleMatrix({ memberMeetings }: MemberRoleMatrixProps) {
     const matrix: Record<string, Record<string, MatrixCellData>> = {};
     const memberMeetingsLookup: Record<string, Set<string>> = {};
     const roleMeetingsLookup: Record<string, Set<string>> = {};
+    const meetingMembersLookup: Record<string, Set<string>> = {};
+    const meetingRolesLookup: Record<string, Set<MatrixRoleKey>> = {};
 
     // Initialize matrix structure
     MATRIX_ROLES.forEach((role) => {
@@ -101,6 +105,16 @@ export function MemberRoleMatrix({ memberMeetings }: MemberRoleMatrixProps) {
 
         memberMeetingsLookup[record.member_id].add(record.meeting_id);
         roleMeetingsLookup[roleKey].add(record.meeting_id);
+
+        // Build reverse lookup for meeting selection
+        if (!meetingMembersLookup[record.meeting_id]) {
+          meetingMembersLookup[record.meeting_id] = new Set();
+        }
+        if (!meetingRolesLookup[record.meeting_id]) {
+          meetingRolesLookup[record.meeting_id] = new Set();
+        }
+        meetingMembersLookup[record.meeting_id].add(record.member_id);
+        meetingRolesLookup[record.meeting_id].add(roleKey);
       }
     });
 
@@ -132,6 +146,12 @@ export function MemberRoleMatrix({ memberMeetings }: MemberRoleMatrixProps) {
       roleMeetings: Object.fromEntries(
         Object.entries(roleMeetingsLookup).map(([k, v]) => [k, Array.from(v)])
       ) as Record<MatrixRoleKey, string[]>,
+      meetingMembers: Object.fromEntries(
+        Object.entries(meetingMembersLookup).map(([k, v]) => [k, Array.from(v)])
+      ),
+      meetingRoles: Object.fromEntries(
+        Object.entries(meetingRolesLookup).map(([k, v]) => [k, Array.from(v)])
+      ) as Record<string, MatrixRoleKey[]>,
     };
   }, [memberMeetings]);
 

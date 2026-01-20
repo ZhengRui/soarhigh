@@ -171,7 +171,8 @@ The application uses Supabase with tables for:
 - Media files are stored in AliCloud OSS with proper access controls
 
 ### Git Commits
-Before committing, activate the backend venv for pre-commit hooks:
+- **Never commit directly after implementing code changes** - always wait for the user to test first
+- Before committing, activate the backend venv for pre-commit hooks:
 ```bash
 cd backend && source .venv/bin/activate && cd .. && git add ... && git commit ...
 ```

@@ -50,6 +50,21 @@ export function useMatrixHighlight(matrixData: MatrixData) {
     [matrixData]
   );
 
+  const handleMeetingDoubleClick = useCallback(
+    (meetingId: string) => {
+      const memberIds = matrixData.meetingMembers[meetingId] || [];
+      const roleKeys = matrixData.meetingRoles[meetingId] || [];
+      setHighlight((prev) => {
+        // Toggle off if same meeting double-clicked
+        if (prev.type === 'meeting' && prev.meetingId === meetingId) {
+          return { type: 'none' };
+        }
+        return { type: 'meeting', meetingId, memberIds, roleKeys };
+      });
+    },
+    [matrixData]
+  );
+
   const clearHighlight = useCallback(() => {
     setHighlight({ type: 'none' });
   }, []);
@@ -67,15 +82,28 @@ export function useMatrixHighlight(matrixData: MatrixData) {
       if (highlight.type === 'row') {
         return highlight.roleKey === roleKey;
       }
+      if (highlight.type === 'meeting') {
+        // Cell is highlighted if this member took this role in the selected meeting
+        const cellMeetingIds =
+          matrixData.matrix[roleKey]?.[memberId]?.meetingIds || [];
+        return cellMeetingIds.includes(highlight.meetingId);
+      }
       return false;
     },
-    [highlight]
+    [highlight, matrixData]
   );
 
   const isMeetingHighlighted = useCallback(
     (meetingId: string) => {
       if (highlight.type === 'none') return false;
-      return highlight.meetingIds.includes(meetingId);
+      if (highlight.type === 'meeting') {
+        return highlight.meetingId === meetingId;
+      }
+      // For other highlight types, check meetingIds
+      if ('meetingIds' in highlight) {
+        return highlight.meetingIds.includes(meetingId);
+      }
+      return false;
     },
     [highlight]
   );
@@ -91,6 +119,10 @@ export function useMatrixHighlight(matrixData: MatrixData) {
         const count =
           matrixData.matrix[highlight.roleKey]?.[memberId]?.count || 0;
         return count > 0;
+      }
+      // When a meeting is selected, highlight member columns that participated
+      if (highlight.type === 'meeting') {
+        return highlight.memberIds.includes(memberId);
       }
       return false;
     },
@@ -109,6 +141,10 @@ export function useMatrixHighlight(matrixData: MatrixData) {
           matrixData.matrix[roleKey]?.[highlight.memberId]?.count || 0;
         return count > 0;
       }
+      // When a meeting is selected, highlight role rows that were filled
+      if (highlight.type === 'meeting') {
+        return highlight.roleKeys.includes(roleKey);
+      }
       return false;
     },
     [highlight, matrixData]
@@ -119,6 +155,7 @@ export function useMatrixHighlight(matrixData: MatrixData) {
     handleCellClick,
     handleColumnClick,
     handleRowClick,
+    handleMeetingDoubleClick,
     clearHighlight,
     isCellHighlighted,
     isMeetingHighlighted,
