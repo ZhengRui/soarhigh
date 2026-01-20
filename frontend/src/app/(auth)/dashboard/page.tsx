@@ -4,6 +4,7 @@ import React, { useState, useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { useDashboardStats } from '@/hooks/useDashboard';
 import { MemberMeetingRecordIF, MeetingAttendanceRecordIF } from '@/interfaces';
+import { MemberRoleMatrix } from './components/MemberRoleMatrix';
 
 // Helper to format date to YYYY-MM-DD (local timezone)
 const formatDate = (date: Date): string => {
@@ -503,6 +504,9 @@ export default function DashboardPage() {
                 </p>
               )}
             </div>
+
+            {/* Member-Role Matrix */}
+            <MemberRoleMatrix memberMeetings={data.member_meetings} />
           </div>
         )}
       </div>

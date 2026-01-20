@@ -175,3 +175,7 @@ Before committing, activate the backend venv for pre-commit hooks:
 ```bash
 cd backend && source .venv/bin/activate && cd .. && git add ... && git commit ...
 ```
+
+### Testing Changes
+- **Frontend**: Use `bun run lint` to check for errors. Do NOT use `bun run build` as it will interfere with the user's running dev server.
+- **Backend**: Use `uv run ruff check .` to check for errors.
