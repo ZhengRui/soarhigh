@@ -43,10 +43,115 @@ interface MeetingAttendanceChartData {
   guestNames: string[];
 }
 
+// Zoom state: start and end percentages (0-100)
+interface ZoomState {
+  start: number;
+  end: number;
+}
+
+const getZoomWindow = (state: ZoomState) => state.end - state.start;
+
+const zoomIn = (state: ZoomState): ZoomState => {
+  const window = getZoomWindow(state);
+  if (window <= 20) return state; // Already at min zoom
+
+  const center = (state.start + state.end) / 2;
+  const newWindow = Math.max(20, window - 20);
+  let newStart = center - newWindow / 2;
+  let newEnd = center + newWindow / 2;
+
+  // Clamp to bounds
+  if (newStart < 0) {
+    newEnd -= newStart;
+    newStart = 0;
+  }
+  if (newEnd > 100) {
+    newStart -= newEnd - 100;
+    newEnd = 100;
+  }
+
+  return { start: Math.max(0, newStart), end: Math.min(100, newEnd) };
+};
+
+const zoomOut = (state: ZoomState): ZoomState => {
+  const window = getZoomWindow(state);
+  if (window >= 100) return state; // Already at max zoom out
+
+  const center = (state.start + state.end) / 2;
+  const newWindow = Math.min(100, window + 20);
+  let newStart = center - newWindow / 2;
+  let newEnd = center + newWindow / 2;
+
+  // Clamp to bounds
+  if (newStart < 0) {
+    newEnd -= newStart;
+    newStart = 0;
+  }
+  if (newEnd > 100) {
+    newStart -= newEnd - 100;
+    newEnd = 100;
+  }
+
+  return { start: Math.max(0, newStart), end: Math.min(100, newEnd) };
+};
+
+// Zoom controls component
+const ZoomControls = ({
+  zoomState,
+  onZoomIn,
+  onZoomOut,
+}: {
+  zoomState: ZoomState;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+}) => {
+  const window = getZoomWindow(zoomState);
+  const canZoomOut = window < 100;
+  const canZoomIn = window > 20;
+
+  return (
+    <div className='absolute top-0 right-[4%] flex items-center gap-1 z-10'>
+      <span className='text-xs text-gray-500 mr-1'>{Math.round(window)}%</span>
+      <button
+        onClick={onZoomOut}
+        disabled={!canZoomOut}
+        className={`w-7 h-7 border rounded shadow-sm flex items-center justify-center text-base font-medium ${
+          canZoomOut
+            ? 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50 active:bg-gray-100'
+            : 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed'
+        }`}
+      >
+        −
+      </button>
+      <button
+        onClick={onZoomIn}
+        disabled={!canZoomIn}
+        className={`w-7 h-7 border rounded shadow-sm flex items-center justify-center text-base font-medium ${
+          canZoomIn
+            ? 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50 active:bg-gray-100'
+            : 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed'
+        }`}
+      >
+        +
+      </button>
+    </div>
+  );
+};
+
 export default function DashboardPage() {
   const defaultRange = getDefaultDateRange();
   const [startDate, setStartDate] = useState(defaultRange.startDate);
   const [endDate, setEndDate] = useState(defaultRange.endDate);
+
+  // Zoom state for charts (start and end percentages)
+  const [chart1Zoom, setChart1Zoom] = useState<ZoomState>({
+    start: 0,
+    end: 100,
+  });
+  const [chart2Zoom, setChart2Zoom] = useState<ZoomState>({
+    start: 0,
+    end: 100,
+  });
 
   const { data, isPending, error } = useDashboardStats({ startDate, endDate });
 
@@ -124,6 +229,7 @@ export default function DashboardPage() {
     return {
       tooltip: {
         trigger: 'axis',
+        triggerOn: 'click',
         axisPointer: { type: 'shadow' },
         enterable: true,
         confine: true,
@@ -154,8 +260,10 @@ export default function DashboardPage() {
         {
           type: 'inside',
           xAxisIndex: 0,
-          start: 0,
-          end: memberAttendanceData.length > 15 ? 70 : 100,
+          start: chart1Zoom.start,
+          end: chart1Zoom.end,
+          zoomLock: true,
+          filterMode: 'none',
         },
       ],
       xAxis: {
@@ -181,7 +289,7 @@ export default function DashboardPage() {
         },
       ],
     };
-  }, [memberAttendanceData]);
+  }, [memberAttendanceData, chart1Zoom]);
 
   // ECharts option for Chart 2: Meeting Attendance
   const chart2Option = useMemo(() => {
@@ -190,6 +298,7 @@ export default function DashboardPage() {
     return {
       tooltip: {
         trigger: 'axis',
+        triggerOn: 'click',
         axisPointer: { type: 'shadow' },
         enterable: true,
         confine: true,
@@ -217,11 +326,12 @@ export default function DashboardPage() {
       legend: {
         data: ['Members', 'Guests'],
         top: 0,
+        left: 0,
       },
       grid: {
         left: '3%',
         right: '4%',
-        top: '15%',
+        top: '10%',
         bottom: '15%',
         containLabel: true,
       },
@@ -229,8 +339,10 @@ export default function DashboardPage() {
         {
           type: 'inside',
           xAxisIndex: 0,
-          start: 0,
-          end: meetingAttendanceData.length > 15 ? 70 : 100,
+          start: chart2Zoom.start,
+          end: chart2Zoom.end,
+          zoomLock: true,
+          filterMode: 'none',
         },
       ],
       xAxis: {
@@ -267,7 +379,13 @@ export default function DashboardPage() {
         },
       ],
     };
-  }, [meetingAttendanceData]);
+  }, [meetingAttendanceData, chart2Zoom]);
+
+  // Zoom handlers
+  const handleChart1ZoomIn = () => setChart1Zoom((prev) => zoomIn(prev));
+  const handleChart1ZoomOut = () => setChart1Zoom((prev) => zoomOut(prev));
+  const handleChart2ZoomIn = () => setChart2Zoom((prev) => zoomIn(prev));
+  const handleChart2ZoomOut = () => setChart2Zoom((prev) => zoomOut(prev));
 
   return (
     <div className='min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8'>
@@ -326,14 +444,22 @@ export default function DashboardPage() {
                 Member Attendance
               </h2>
               <p className='text-sm text-gray-600 mb-4'>
-                Number of meetings attended by each member (hover for details)
+                Number of meetings attended by each member (tap bar for details,
+                drag to pan)
               </p>
               {chart1Option ? (
-                <ReactECharts
-                  option={chart1Option}
-                  style={{ height: '320px' }}
-                  notMerge={true}
-                />
+                <div className='relative'>
+                  <ZoomControls
+                    zoomState={chart1Zoom}
+                    onZoomIn={handleChart1ZoomIn}
+                    onZoomOut={handleChart1ZoomOut}
+                  />
+                  <ReactECharts
+                    option={chart1Option}
+                    style={{ height: '320px' }}
+                    notMerge={true}
+                  />
+                </div>
               ) : (
                 <p className='text-gray-500 text-center py-8'>
                   No data available for the selected date range.
@@ -347,14 +473,22 @@ export default function DashboardPage() {
                 Attendance per Meeting
               </h2>
               <p className='text-sm text-gray-600 mb-4'>
-                Number of members and guests per meeting (hover for names)
+                Number of members and guests per meeting (tap bar for names,
+                drag to pan)
               </p>
               {chart2Option ? (
-                <ReactECharts
-                  option={chart2Option}
-                  style={{ height: '320px' }}
-                  notMerge={true}
-                />
+                <div className='relative'>
+                  <ZoomControls
+                    zoomState={chart2Zoom}
+                    onZoomIn={handleChart2ZoomIn}
+                    onZoomOut={handleChart2ZoomOut}
+                  />
+                  <ReactECharts
+                    option={chart2Option}
+                    style={{ height: '320px' }}
+                    notMerge={true}
+                  />
+                </div>
               ) : (
                 <p className='text-gray-500 text-center py-8'>
                   No data available for the selected date range.
