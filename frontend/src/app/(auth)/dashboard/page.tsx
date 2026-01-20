@@ -326,8 +326,16 @@ export default function DashboardPage() {
       legend: {
         data: ['Members', 'Guests'],
         top: 0,
-        left: 0,
+        left: 'center',
       },
+      media: [
+        {
+          query: { maxWidth: 640 },
+          option: {
+            legend: { left: 0 },
+          },
+        },
+      ],
       grid: {
         left: '3%',
         right: '4%',
