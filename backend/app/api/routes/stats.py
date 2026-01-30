@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from ...db.core import get_meeting_attendance_stats, get_member_meeting_stats
+from ...db.stats import get_meeting_attendance_stats, get_member_meeting_stats
 from ...models.stats import DashboardStats, MeetingAttendanceRecord, MemberMeetingRecord
 from ...models.users import User
 from .auth import get_current_user
