@@ -1,13 +1,13 @@
 ---
 description: Code review using a subagent - WIP changes (default) or full codebase
-argument-hint: [--scope:diff|full] [--focus:areas]
+argument-hint: [--scope:diff/full] [--summary/--goal:"<desc>"/--file:<path>] [--focus:bugs/design/correctness/understanding/security/all]
 context: fork
 agent: general-purpose
 ---
 
 ## Usage
 ```
-/review-wip [context options] [--scope:diff|full] [--focus:areas]
+/review-wip [--scope:diff/full] [--summary/--goal:"<desc>"/--file:<path>] [--focus:bugs/design/correctness/understanding/security/all]
 ```
 
 ## Scope Options

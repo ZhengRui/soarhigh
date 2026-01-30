@@ -1,13 +1,13 @@
 ---
 description: Ask a question about the repo or codebase (context-light)
-argument-hint: [--with-context:level] <question>
+argument-hint: [--with-context:brief/medium/comprehensive] <question>
 context: fork
 agent: Explore
 ---
 
 ## Usage
 ```
-/ask [--with-context[:brief|medium|comprehensive]] <question>
+/ask [--with-context:brief/medium/comprehensive] <question>
 ```
 
 ## Flags

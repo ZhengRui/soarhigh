@@ -24,47 +24,43 @@ agent: general-purpose
 
 ## Instructions
 
-1. **Check for --amend flag**:
+1. **Receive context from main session**:
+   - Main session provides a brief summary of current task/goal
+   - Use this to understand what the user has been working on
+
+2. **Check for --amend flag**:
    - If `--amend` is present, this will modify the previous commit
    - Run `git log -1 --oneline` to see the current commit being amended
 
-2. **Check staged changes**: run `git diff --staged`
-   - If nothing staged and not amending, run `git diff` to see unstaged changes
-   - If unstaged changes exist, ask user if they want to stage all (`git add -A`) or abort
-   - If amending with no new staged changes, that's fine (user may just want to change the message)
+3. **Stage changes intelligently** (no user prompts):
+   - Run `git status` to see all changes
+   - If changes are already staged, use those
+   - If nothing staged, decide what to stage based on context and message:
+     - If user message hints at specific files/features, stage only relevant files
+     - If context suggests working on specific area, stage files in that area
+     - Otherwise, stage all changes with `git add -A`
+   - If nothing to commit and not amending, inform user and exit
 
-3. **Generate commit message**:
+4. **Generate commit message**:
    - If user provided a message/hint, use it as guidance
    - If `--amend` with no new hint, keep or refine the existing message
-   - Otherwise, analyze the diff and generate a conventional commit message
+   - Otherwise, analyze the diff and session context to generate a conventional commit message
    - Format: `<type>(<scope>): <short description>`
    - Types: feat, fix, docs, style, refactor, test, chore
 
-4. **Show the proposed commit**:
-```
-   Staged files:
-   - file1.ts
-   - file2.ts
-
-   Proposed commit message:
-   feat(auth): add JWT token refresh logic
-
-   [amending previous: feat(auth): add JWT token logic]  # if --amend
-```
-
-5. **Execute**:
+5. **Execute directly** (no confirmation needed):
    - Normal: `git commit -m "<message>"`
    - Amend: `git commit --amend -m "<message>"`
 
 6. **Return brief confirmation**:
 ```
-   ✓ Committed: feat(auth): add JWT token refresh logic
-     2 files changed, 45 insertions(+), 12 deletions(-)
+Committed: feat(auth): add JWT token refresh logic
+2 files changed, 45 insertions(+), 12 deletions(-)
 ```
-   or
+or
 ```
-   ✓ Amended: feat(auth): add JWT token refresh logic
-     2 files changed, 45 insertions(+), 12 deletions(-)
+Amended: feat(auth): add JWT token refresh logic
+2 files changed, 45 insertions(+), 12 deletions(-)
 ```
 
 ## Key Requirements
