@@ -1,13 +1,13 @@
 ---
 description: Create a git commit with auto-generated message (context-light)
-argument-hint: [optional message or flags]
+argument-hint: [--amend] [optional message or instructions]
 context: fork
 agent: general-purpose
 ---
 
 ## Usage
 ```
-/commit [optional message or instructions]
+/commit [--amend] [optional message or instructions]
 ```
 
 ## Examples
