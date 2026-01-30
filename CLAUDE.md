@@ -44,15 +44,18 @@ SoarHigh Toastmasters Club - A full-stack web application for managing Toastmast
 
 ### Backend (`/backend`)
 - `app/api/serv.py` - FastAPI application entry point
-- `app/api/routes/` - API route handlers (auth, meeting, post)
+- `app/api/routes/` - API route handlers (auth, meeting, post, stats)
 - `app/models/` - Pydantic models
 - `app/db/` - Database configuration
+  - `core.py` - Core database operations
+  - `stats.py` - Dashboard statistics queries
 - `app/utils/` - Utility functions
 
 ## Key Features
 
 ### Core Functionality
 - **Meeting Management**: Create, edit, and manage Toastmasters meetings with agendas
+- **Dashboard**: Member attendance charts, meeting statistics, and role participation matrix
 - **Awards System**: Track and assign awards for different categories
 - **Voting System**: Allow members and guests to vote for awards with real-time counting
 - **Posts/Blog**: Create and manage markdown-based blog posts with visibility controls
@@ -106,6 +109,9 @@ SoarHigh Toastmasters Club - A full-stack web application for managing Toastmast
 - `/posts` - GET: List posts with pagination, POST: Create new post
 - `/posts/{slug}` - GET: Retrieve post by slug, PATCH: Update post, DELETE: Delete post
 
+### Dashboard Statistics
+- `/stats/dashboard` - GET: Retrieve dashboard statistics (member attendance, meeting attendance) for date range
+
 - `/docs` - FastAPI documentation
 - `/static/*` - Static file serving
 
@@ -134,6 +140,7 @@ The application uses Supabase with tables for:
 - `/meetings/workbook/[id]` - Meeting agenda workbook preview
 
 ### Protected Routes (requires authentication)
+- `/dashboard` - Dashboard with attendance charts and role participation matrix
 - `/meetings/new` - Create new meetings (template, image, or text-based)
 - `/meetings/edit/[id]` - Edit existing meetings
 - `/posts/new` - Create new blog posts
