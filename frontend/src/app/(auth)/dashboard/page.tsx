@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { useDashboardStats } from '@/hooks/useDashboard';
 import { MemberMeetingRecordIF, MeetingAttendanceRecordIF } from '@/interfaces';
 import { MemberRoleMatrix } from './components/MemberRoleMatrix';
+import { useChartZoom } from './hooks/useChartZoom';
 
 // Helper to format date to YYYY-MM-DD (local timezone)
 const formatDate = (date: Date): string => {
@@ -44,115 +45,95 @@ interface MeetingAttendanceChartData {
   guestNames: string[];
 }
 
-// Zoom state: start and end percentages (0-100)
-interface ZoomState {
-  start: number;
-  end: number;
-}
-
-const getZoomWindow = (state: ZoomState) => state.end - state.start;
-
-const zoomIn = (state: ZoomState): ZoomState => {
-  const window = getZoomWindow(state);
-  if (window <= 20) return state; // Already at min zoom
-
-  const center = (state.start + state.end) / 2;
-  const newWindow = Math.max(20, window - 20);
-  let newStart = center - newWindow / 2;
-  let newEnd = center + newWindow / 2;
-
-  // Clamp to bounds
-  if (newStart < 0) {
-    newEnd -= newStart;
-    newStart = 0;
-  }
-  if (newEnd > 100) {
-    newStart -= newEnd - 100;
-    newEnd = 100;
-  }
-
-  return { start: Math.max(0, newStart), end: Math.min(100, newEnd) };
-};
-
-const zoomOut = (state: ZoomState): ZoomState => {
-  const window = getZoomWindow(state);
-  if (window >= 100) return state; // Already at max zoom out
-
-  const center = (state.start + state.end) / 2;
-  const newWindow = Math.min(100, window + 20);
-  let newStart = center - newWindow / 2;
-  let newEnd = center + newWindow / 2;
-
-  // Clamp to bounds
-  if (newStart < 0) {
-    newEnd -= newStart;
-    newStart = 0;
-  }
-  if (newEnd > 100) {
-    newStart -= newEnd - 100;
-    newEnd = 100;
-  }
-
-  return { start: Math.max(0, newStart), end: Math.min(100, newEnd) };
-};
-
 // Zoom controls component
 const ZoomControls = ({
-  zoomState,
+  window,
+  canZoomIn,
+  canZoomOut,
   onZoomIn,
   onZoomOut,
 }: {
-  zoomState: ZoomState;
+  window: number;
+  canZoomIn: boolean;
+  canZoomOut: boolean;
   onZoomIn: () => void;
   onZoomOut: () => void;
-}) => {
-  const window = getZoomWindow(zoomState);
-  const canZoomOut = window < 100;
-  const canZoomIn = window > 20;
-
-  return (
-    <div className='absolute top-0 right-[4%] flex items-center gap-1 z-10'>
-      <span className='text-xs text-gray-500 mr-1'>{Math.round(window)}%</span>
-      <button
-        onClick={onZoomOut}
-        disabled={!canZoomOut}
-        className={`w-7 h-7 border rounded shadow-sm flex items-center justify-center text-base font-medium ${
-          canZoomOut
-            ? 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50 active:bg-gray-100'
-            : 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed'
-        }`}
-      >
-        −
-      </button>
-      <button
-        onClick={onZoomIn}
-        disabled={!canZoomIn}
-        className={`w-7 h-7 border rounded shadow-sm flex items-center justify-center text-base font-medium ${
-          canZoomIn
-            ? 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50 active:bg-gray-100'
-            : 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed'
-        }`}
-      >
-        +
-      </button>
-    </div>
-  );
-};
+}) => (
+  <div className='absolute top-0 right-[4%] flex items-center gap-1 z-10'>
+    <span className='text-xs text-gray-500 mr-1'>{Math.round(window)}%</span>
+    <button
+      onClick={onZoomOut}
+      disabled={!canZoomOut}
+      className={`w-7 h-7 border rounded shadow-sm flex items-center justify-center text-base font-medium ${
+        canZoomOut
+          ? 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50 active:bg-gray-100'
+          : 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed'
+      }`}
+    >
+      −
+    </button>
+    <button
+      onClick={onZoomIn}
+      disabled={!canZoomIn}
+      className={`w-7 h-7 border rounded shadow-sm flex items-center justify-center text-base font-medium ${
+        canZoomIn
+          ? 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50 active:bg-gray-100'
+          : 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed'
+      }`}
+    >
+      +
+    </button>
+  </div>
+);
 
 export default function DashboardPage() {
   const defaultRange = getDefaultDateRange();
   const [startDate, setStartDate] = useState(defaultRange.startDate);
   const [endDate, setEndDate] = useState(defaultRange.endDate);
 
-  // Zoom state for charts (start and end percentages)
-  const [chart1Zoom, setChart1Zoom] = useState<ZoomState>({
-    start: 0,
-    end: 100,
-  });
-  const [chart2Zoom, setChart2Zoom] = useState<ZoomState>({
-    start: 0,
-    end: 100,
-  });
+  const chart1Ref = useRef<ReactECharts>(null);
+  const chart2Ref = useRef<ReactECharts>(null);
+
+  const chart1Zoom = useChartZoom();
+  const chart2Zoom = useChartZoom();
+
+  // Get current zoom from chart instance before zooming
+  const syncFromChart = (
+    chartRef: React.RefObject<ReactECharts | null>,
+    syncZoom: (start: number, end: number) => void
+  ) => {
+    const instance = chartRef.current?.getEchartsInstance();
+    if (instance) {
+      const option = instance.getOption();
+      const dataZoom = option.dataZoom as
+        | { start?: number; end?: number }[]
+        | undefined;
+      if (dataZoom?.[0]) {
+        const { start, end } = dataZoom[0];
+        if (start !== undefined && end !== undefined) {
+          syncZoom(start, end);
+        }
+      }
+    }
+  };
+
+  // Wrap zoom handlers to sync from chart first
+  const handleChart1ZoomIn = () => {
+    syncFromChart(chart1Ref, chart1Zoom.syncZoom);
+    chart1Zoom.handleZoomIn();
+  };
+  const handleChart1ZoomOut = () => {
+    syncFromChart(chart1Ref, chart1Zoom.syncZoom);
+    chart1Zoom.handleZoomOut();
+  };
+  const handleChart2ZoomIn = () => {
+    syncFromChart(chart2Ref, chart2Zoom.syncZoom);
+    chart2Zoom.handleZoomIn();
+  };
+  const handleChart2ZoomOut = () => {
+    syncFromChart(chart2Ref, chart2Zoom.syncZoom);
+    chart2Zoom.handleZoomOut();
+  };
 
   const { data, isPending, error } = useDashboardStats({ startDate, endDate });
 
@@ -261,8 +242,8 @@ export default function DashboardPage() {
         {
           type: 'inside',
           xAxisIndex: 0,
-          start: chart1Zoom.start,
-          end: chart1Zoom.end,
+          start: chart1Zoom.zoom.start,
+          end: chart1Zoom.zoom.end,
           zoomLock: true,
           filterMode: 'none',
         },
@@ -290,7 +271,7 @@ export default function DashboardPage() {
         },
       ],
     };
-  }, [memberAttendanceData, chart1Zoom]);
+  }, [memberAttendanceData, chart1Zoom.zoom]);
 
   // ECharts option for Chart 2: Meeting Attendance
   const chart2Option = useMemo(() => {
@@ -348,8 +329,8 @@ export default function DashboardPage() {
         {
           type: 'inside',
           xAxisIndex: 0,
-          start: chart2Zoom.start,
-          end: chart2Zoom.end,
+          start: chart2Zoom.zoom.start,
+          end: chart2Zoom.zoom.end,
           zoomLock: true,
           filterMode: 'none',
         },
@@ -388,13 +369,7 @@ export default function DashboardPage() {
         },
       ],
     };
-  }, [meetingAttendanceData, chart2Zoom]);
-
-  // Zoom handlers
-  const handleChart1ZoomIn = () => setChart1Zoom((prev) => zoomIn(prev));
-  const handleChart1ZoomOut = () => setChart1Zoom((prev) => zoomOut(prev));
-  const handleChart2ZoomIn = () => setChart2Zoom((prev) => zoomIn(prev));
-  const handleChart2ZoomOut = () => setChart2Zoom((prev) => zoomOut(prev));
+  }, [meetingAttendanceData, chart2Zoom.zoom]);
 
   return (
     <div className='min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8'>
@@ -459,11 +434,14 @@ export default function DashboardPage() {
               {chart1Option ? (
                 <div className='relative'>
                   <ZoomControls
-                    zoomState={chart1Zoom}
+                    window={chart1Zoom.window}
+                    canZoomIn={chart1Zoom.canZoomIn}
+                    canZoomOut={chart1Zoom.canZoomOut}
                     onZoomIn={handleChart1ZoomIn}
                     onZoomOut={handleChart1ZoomOut}
                   />
                   <ReactECharts
+                    ref={chart1Ref}
                     option={chart1Option}
                     style={{ height: '320px' }}
                     notMerge={true}
@@ -488,11 +466,14 @@ export default function DashboardPage() {
               {chart2Option ? (
                 <div className='relative'>
                   <ZoomControls
-                    zoomState={chart2Zoom}
+                    window={chart2Zoom.window}
+                    canZoomIn={chart2Zoom.canZoomIn}
+                    canZoomOut={chart2Zoom.canZoomOut}
                     onZoomIn={handleChart2ZoomIn}
                     onZoomOut={handleChart2ZoomOut}
                   />
                   <ReactECharts
+                    ref={chart2Ref}
                     option={chart2Option}
                     style={{ height: '320px' }}
                     notMerge={true}
