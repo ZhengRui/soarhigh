@@ -1,11 +1,14 @@
 'use client';
 
-import React, { useState, useMemo, useRef } from 'react';
-import ReactECharts from 'echarts-for-react';
+import React, { useState, useMemo } from 'react';
 import { useDashboardStats } from '@/hooks/useDashboard';
-import { MemberMeetingRecordIF, MeetingAttendanceRecordIF } from '@/interfaces';
 import { MemberRoleMatrix } from './components/MemberRoleMatrix';
-import { useChartZoom } from './hooks/useChartZoom';
+import { MemberAttendanceChart } from './components/MemberAttendanceChart';
+import { MeetingAttendanceChart } from './components/MeetingAttendanceChart';
+import {
+  transformMemberAttendanceData,
+  transformMeetingAttendanceData,
+} from './utils/dataTransforms';
 
 // Helper to format date to YYYY-MM-DD (local timezone)
 const formatDate = (date: Date): string => {
@@ -26,350 +29,23 @@ const getDefaultDateRange = () => {
   };
 };
 
-// Aggregated data for Chart 1
-interface MemberAttendanceData {
-  name: string;
-  fullName: string;
-  meetingCount: number;
-  meetings: { theme: string; date: string; roles: string[] }[];
-}
-
-// Chart 2 data structure
-interface MeetingAttendanceChartData {
-  label: string;
-  date: string;
-  theme: string;
-  memberCount: number;
-  guestCount: number;
-  memberNames: string[];
-  guestNames: string[];
-}
-
-// Zoom controls component
-const ZoomControls = ({
-  window,
-  canZoomIn,
-  canZoomOut,
-  onZoomIn,
-  onZoomOut,
-}: {
-  window: number;
-  canZoomIn: boolean;
-  canZoomOut: boolean;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-}) => (
-  <div className='absolute top-0 right-[4%] flex items-center gap-1 z-10'>
-    <span className='text-xs text-gray-500 mr-1'>{Math.round(window)}%</span>
-    <button
-      onClick={onZoomOut}
-      disabled={!canZoomOut}
-      className={`w-7 h-7 border rounded shadow-sm flex items-center justify-center text-base font-medium ${
-        canZoomOut
-          ? 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50 active:bg-gray-100'
-          : 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed'
-      }`}
-    >
-      −
-    </button>
-    <button
-      onClick={onZoomIn}
-      disabled={!canZoomIn}
-      className={`w-7 h-7 border rounded shadow-sm flex items-center justify-center text-base font-medium ${
-        canZoomIn
-          ? 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50 active:bg-gray-100'
-          : 'bg-gray-100 border-gray-200 text-gray-300 cursor-not-allowed'
-      }`}
-    >
-      +
-    </button>
-  </div>
-);
-
 export default function DashboardPage() {
   const defaultRange = getDefaultDateRange();
   const [startDate, setStartDate] = useState(defaultRange.startDate);
   const [endDate, setEndDate] = useState(defaultRange.endDate);
 
-  const chart1Ref = useRef<ReactECharts>(null);
-  const chart2Ref = useRef<ReactECharts>(null);
-
-  const chart1Zoom = useChartZoom();
-  const chart2Zoom = useChartZoom();
-
-  // Get current zoom from chart instance before zooming
-  const syncFromChart = (
-    chartRef: React.RefObject<ReactECharts | null>,
-    syncZoom: (start: number, end: number) => void
-  ) => {
-    const instance = chartRef.current?.getEchartsInstance();
-    if (instance) {
-      const option = instance.getOption();
-      const dataZoom = option.dataZoom as
-        | { start?: number; end?: number }[]
-        | undefined;
-      if (dataZoom?.[0]) {
-        const { start, end } = dataZoom[0];
-        if (start !== undefined && end !== undefined) {
-          syncZoom(start, end);
-        }
-      }
-    }
-  };
-
-  // Wrap zoom handlers to sync from chart first
-  const handleChart1ZoomIn = () => {
-    syncFromChart(chart1Ref, chart1Zoom.syncZoom);
-    chart1Zoom.handleZoomIn();
-  };
-  const handleChart1ZoomOut = () => {
-    syncFromChart(chart1Ref, chart1Zoom.syncZoom);
-    chart1Zoom.handleZoomOut();
-  };
-  const handleChart2ZoomIn = () => {
-    syncFromChart(chart2Ref, chart2Zoom.syncZoom);
-    chart2Zoom.handleZoomIn();
-  };
-  const handleChart2ZoomOut = () => {
-    syncFromChart(chart2Ref, chart2Zoom.syncZoom);
-    chart2Zoom.handleZoomOut();
-  };
-
   const { data, isPending, error } = useDashboardStats({ startDate, endDate });
 
-  // Process data for Chart 1: Member Attendance
-  const memberAttendanceData = useMemo<MemberAttendanceData[]>(() => {
-    if (!data?.member_meetings) return [];
+  // Transform data for charts
+  const memberAttendanceData = useMemo(
+    () => transformMemberAttendanceData(data?.member_meetings ?? []),
+    [data?.member_meetings]
+  );
 
-    // Group by member
-    const memberMap = new Map<
-      string,
-      {
-        fullName: string;
-        meetings: Map<string, { theme: string; date: string; roles: string[] }>;
-      }
-    >();
-
-    data.member_meetings.forEach((record: MemberMeetingRecordIF) => {
-      if (!memberMap.has(record.member_id)) {
-        memberMap.set(record.member_id, {
-          fullName: record.full_name,
-          meetings: new Map(),
-        });
-      }
-
-      const memberData = memberMap.get(record.member_id)!;
-      if (!memberData.meetings.has(record.meeting_id)) {
-        memberData.meetings.set(record.meeting_id, {
-          theme: record.meeting_theme,
-          date: record.meeting_date,
-          roles: [],
-        });
-      }
-      memberData.meetings.get(record.meeting_id)!.roles.push(record.role);
-    });
-
-    // Convert to array and sort by meeting count
-    const result: MemberAttendanceData[] = [];
-    memberMap.forEach((value) => {
-      const meetings = Array.from(value.meetings.values()).sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-      );
-      result.push({
-        name: value.fullName.split(' ')[0], // First name for chart label
-        fullName: value.fullName,
-        meetingCount: meetings.length,
-        meetings,
-      });
-    });
-
-    return result.sort((a, b) => b.meetingCount - a.meetingCount);
-  }, [data?.member_meetings]);
-
-  // Process data for Chart 2: Meeting Attendance
-  const meetingAttendanceData = useMemo<MeetingAttendanceChartData[]>(() => {
-    if (!data?.meeting_attendance) return [];
-
-    return data.meeting_attendance.map((record: MeetingAttendanceRecordIF) => ({
-      label:
-        record.meeting_theme.length > 10
-          ? record.meeting_theme.slice(0, 10) + '...'
-          : record.meeting_theme,
-      date: record.meeting_date,
-      theme: record.meeting_theme,
-      memberCount: record.member_count,
-      guestCount: record.guest_count,
-      memberNames: record.member_names,
-      guestNames: record.guest_names,
-    }));
-  }, [data?.meeting_attendance]);
-
-  // ECharts option for Chart 1: Member Attendance
-  const chart1Option = useMemo(() => {
-    if (memberAttendanceData.length === 0) return null;
-
-    return {
-      tooltip: {
-        trigger: 'axis',
-        triggerOn: 'click',
-        axisPointer: { type: 'shadow' },
-        enterable: true,
-        confine: true,
-        formatter: (params: { dataIndex: number }[]) => {
-          const d = memberAttendanceData[params[0].dataIndex];
-          const meetingsList = d.meetings
-            .map(
-              (m) =>
-                `<div style="margin-bottom:4px;"><span style="font-weight:500;">${m.date}</span>: ${m.theme}<br/><span style="color:#8b5cf6;">${m.roles.join(', ')}</span></div>`
-            )
-            .join('');
-          return `
-            <div style="max-width:280px;word-wrap:break-word;white-space:normal;">
-              <div style="font-weight:600;margin-bottom:4px;">${d.fullName}</div>
-              <div style="color:#666;margin-bottom:8px;">${d.meetingCount} meeting${d.meetingCount !== 1 ? 's' : ''}</div>
-              <div style="max-height:180px;overflow-y:auto;font-size:12px;">${meetingsList}</div>
-            </div>
-          `;
-        },
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '15%',
-        containLabel: true,
-      },
-      dataZoom: [
-        {
-          type: 'inside',
-          xAxisIndex: 0,
-          start: chart1Zoom.zoom.start,
-          end: chart1Zoom.zoom.end,
-          zoomLock: true,
-          filterMode: 'none',
-        },
-      ],
-      xAxis: {
-        type: 'category',
-        data: memberAttendanceData.map((d) => d.name),
-        axisLabel: {
-          rotate: 45,
-          fontSize: 12,
-        },
-      },
-      yAxis: {
-        type: 'value',
-        minInterval: 1,
-      },
-      series: [
-        {
-          type: 'bar',
-          data: memberAttendanceData.map((d) => d.meetingCount),
-          itemStyle: {
-            color: '#8b5cf6',
-            borderRadius: [4, 4, 0, 0],
-          },
-        },
-      ],
-    };
-  }, [memberAttendanceData, chart1Zoom.zoom]);
-
-  // ECharts option for Chart 2: Meeting Attendance
-  const chart2Option = useMemo(() => {
-    if (meetingAttendanceData.length === 0) return null;
-
-    return {
-      tooltip: {
-        trigger: 'axis',
-        triggerOn: 'click',
-        axisPointer: { type: 'shadow' },
-        enterable: true,
-        confine: true,
-        formatter: (
-          params: { seriesName: string; value: number; dataIndex: number }[]
-        ) => {
-          const idx = params[0].dataIndex;
-          const d = meetingAttendanceData[idx];
-          return `
-            <div style="max-width:280px;word-wrap:break-word;white-space:normal;">
-              <div style="font-weight:600;margin-bottom:4px;">${d.theme}</div>
-              <div style="color:#666;font-size:12px;margin-bottom:8px;">${d.date}</div>
-              <div style="margin-bottom:8px;">
-                <div style="font-weight:500;color:#3b82f6;">Members (${d.memberCount}):</div>
-                <div style="font-size:12px;color:#666;max-height:80px;overflow-y:auto;">${d.memberNames.join(', ') || 'None'}</div>
-              </div>
-              <div>
-                <div style="font-weight:500;color:#22c55e;">Guests (${d.guestCount}):</div>
-                <div style="font-size:12px;color:#666;max-height:80px;overflow-y:auto;">${d.guestNames.join(', ') || 'None'}</div>
-              </div>
-            </div>
-          `;
-        },
-      },
-      legend: {
-        data: ['Members', 'Guests'],
-        top: 0,
-        left: 'center',
-      },
-      media: [
-        {
-          query: { maxWidth: 640 },
-          option: {
-            legend: { left: 0 },
-          },
-        },
-      ],
-      grid: {
-        left: '3%',
-        right: '4%',
-        top: '10%',
-        bottom: '15%',
-        containLabel: true,
-      },
-      dataZoom: [
-        {
-          type: 'inside',
-          xAxisIndex: 0,
-          start: chart2Zoom.zoom.start,
-          end: chart2Zoom.zoom.end,
-          zoomLock: true,
-          filterMode: 'none',
-        },
-      ],
-      xAxis: {
-        type: 'category',
-        data: meetingAttendanceData.map((d) => d.label),
-        axisLabel: {
-          rotate: 45,
-          fontSize: 12,
-        },
-      },
-      yAxis: {
-        type: 'value',
-        minInterval: 1,
-      },
-      series: [
-        {
-          name: 'Members',
-          type: 'bar',
-          stack: 'total',
-          data: meetingAttendanceData.map((d) => d.memberCount),
-          itemStyle: {
-            color: '#3b82f6',
-          },
-        },
-        {
-          name: 'Guests',
-          type: 'bar',
-          stack: 'total',
-          data: meetingAttendanceData.map((d) => d.guestCount),
-          itemStyle: {
-            color: '#22c55e',
-            borderRadius: [4, 4, 0, 0],
-          },
-        },
-      ],
-    };
-  }, [meetingAttendanceData, chart2Zoom.zoom]);
+  const meetingAttendanceData = useMemo(
+    () => transformMeetingAttendanceData(data?.meeting_attendance ?? []),
+    [data?.meeting_attendance]
+  );
 
   return (
     <div className='min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8'>
@@ -431,27 +107,7 @@ export default function DashboardPage() {
                 Number of meetings attended by each member (tap bar for details,
                 drag to pan)
               </p>
-              {chart1Option ? (
-                <div className='relative'>
-                  <ZoomControls
-                    window={chart1Zoom.window}
-                    canZoomIn={chart1Zoom.canZoomIn}
-                    canZoomOut={chart1Zoom.canZoomOut}
-                    onZoomIn={handleChart1ZoomIn}
-                    onZoomOut={handleChart1ZoomOut}
-                  />
-                  <ReactECharts
-                    ref={chart1Ref}
-                    option={chart1Option}
-                    style={{ height: '320px' }}
-                    notMerge={true}
-                  />
-                </div>
-              ) : (
-                <p className='text-gray-500 text-center py-8'>
-                  No data available for the selected date range.
-                </p>
-              )}
+              <MemberAttendanceChart data={memberAttendanceData} />
             </div>
 
             {/* Chart 2: Meeting Attendance */}
@@ -463,27 +119,7 @@ export default function DashboardPage() {
                 Number of members and guests per meeting (tap bar for names,
                 drag to pan)
               </p>
-              {chart2Option ? (
-                <div className='relative'>
-                  <ZoomControls
-                    window={chart2Zoom.window}
-                    canZoomIn={chart2Zoom.canZoomIn}
-                    canZoomOut={chart2Zoom.canZoomOut}
-                    onZoomIn={handleChart2ZoomIn}
-                    onZoomOut={handleChart2ZoomOut}
-                  />
-                  <ReactECharts
-                    ref={chart2Ref}
-                    option={chart2Option}
-                    style={{ height: '320px' }}
-                    notMerge={true}
-                  />
-                </div>
-              ) : (
-                <p className='text-gray-500 text-center py-8'>
-                  No data available for the selected date range.
-                </p>
-              )}
+              <MeetingAttendanceChart data={meetingAttendanceData} />
             </div>
 
             {/* Member-Role Matrix */}

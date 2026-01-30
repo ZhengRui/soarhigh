@@ -2,7 +2,10 @@ import { useRef, useCallback } from 'react';
 import { MeetingInfo } from '../utils/matrixTypes';
 import { MatrixHighlightState } from '../hooks/useMatrixHighlight';
 
-const DOUBLE_TAP_DELAY = 300; // ms
+// Double-tap detection threshold in milliseconds.
+// 300ms is the standard iOS double-tap delay and provides responsive feel
+// without triggering on slow single taps. Android varies (300-500ms).
+const DOUBLE_TAP_DELAY = 300;
 
 interface MeetingPillProps {
   meeting: MeetingInfo;
