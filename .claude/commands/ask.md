@@ -3,6 +3,7 @@ description: Ask a question about the repo or codebase (context-light)
 argument-hint: [--with-context:brief/medium/comprehensive] <question>
 context: fork
 agent: Explore
+model: sonnet
 ---
 
 ## Usage
@@ -72,3 +73,4 @@ agent: Explore
 - **Cite locations** – mention file paths when relevant
 - **Cite sources** – include URLs when using web search results
 - **Stay read-only** – this is for questions, not changes
+- **Sign your report**: End with "Report by: {your exact model id}" (e.g., "Report by: claude-haiku-4-5")

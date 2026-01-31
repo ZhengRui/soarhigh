@@ -3,6 +3,7 @@ description: Code review using a subagent - WIP changes (default) or full codeba
 argument-hint: [--scope:diff/full] [--summary/--goal:"<desc>"/--file:<path>] [--focus:bugs/design/correctness/understanding/security/all]
 context: fork
 agent: general-purpose
+model: opus
 ---
 
 ## Usage
@@ -127,3 +128,4 @@ Use ASCII diagrams for:
 - **Be actionable**: every issue should have a concrete suggestion
 - **Sort by severity**: critical issues first
 - **Link to locations**: always include file:line references
+- **Sign your report**: End with "Report by: {your exact model id}" (e.g., "Report by: claude-sonnect-4-0")
