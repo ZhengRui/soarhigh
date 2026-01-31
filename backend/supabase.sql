@@ -48,7 +48,7 @@ CREATE TABLE meetings (
 -- Segments table - stores individual meeting segments (parts of a meeting agenda)
 CREATE TABLE segments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    meeting_id UUID REFERENCES meetings(id) NOT NULL,
+    meeting_id UUID REFERENCES meetings(id) ON DELETE CASCADE NOT NULL,
     attendee_id UUID REFERENCES attendees(id),
     type TEXT NOT NULL,
     start_time TIME NOT NULL,
@@ -64,7 +64,7 @@ CREATE TABLE segments (
 -- Awards table - stores awards given at meetings
 CREATE TABLE awards (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    meeting_id UUID REFERENCES meetings(id) NOT NULL,
+    meeting_id UUID REFERENCES meetings(id) ON DELETE CASCADE NOT NULL,
     category TEXT NOT NULL,
     winner TEXT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -86,7 +86,7 @@ CREATE TABLE posts (
 -- Votes table - stores votes
 CREATE TABLE votes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    meeting_id UUID REFERENCES meetings(id) NOT NULL,
+    meeting_id UUID REFERENCES meetings(id) ON DELETE CASCADE NOT NULL,
     category TEXT NOT NULL,
     name TEXT NOT NULL,
     segment TEXT,
@@ -98,7 +98,7 @@ CREATE TABLE votes (
 -- Votes status table - stores status of votes
 CREATE TABLE votes_status (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    meeting_id UUID REFERENCES meetings(id) NOT NULL,
+    meeting_id UUID REFERENCES meetings(id) ON DELETE CASCADE NOT NULL,
     open BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -107,8 +107,8 @@ CREATE TABLE votes_status (
 -- Feedbacks table - stores experience feedback from meeting participants
 CREATE TABLE feedbacks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    meeting_id UUID REFERENCES meetings(id) NOT NULL,
-    segment_id UUID REFERENCES segments(id),
+    meeting_id UUID REFERENCES meetings(id) ON DELETE CASCADE NOT NULL,
+    segment_id UUID REFERENCES segments(id) ON DELETE CASCADE,
     type TEXT NOT NULL CHECK (type IN ('experience_opening', 'experience_peak', 'experience_valley', 'experience_ending', 'segment', 'attendee')),
     value TEXT NOT NULL,
     from_wxid TEXT NOT NULL,
@@ -120,9 +120,9 @@ CREATE TABLE feedbacks (
 -- Checkins table - stores meeting check-ins for segment role takers
 CREATE TABLE checkins (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    meeting_id UUID REFERENCES meetings(id) NOT NULL,
+    meeting_id UUID REFERENCES meetings(id) ON DELETE CASCADE NOT NULL,
     wxid TEXT NOT NULL,
-    segment_id UUID REFERENCES segments(id),
+    segment_id UUID REFERENCES segments(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
     referral_source TEXT,
     is_member BOOLEAN DEFAULT FALSE,
