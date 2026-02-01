@@ -130,6 +130,20 @@ CREATE TABLE checkins (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Timings table - stores segment timing records
+CREATE TABLE timings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    meeting_id UUID REFERENCES meetings(id) ON DELETE CASCADE NOT NULL,
+    segment_id TEXT NOT NULL,
+    name TEXT,                           -- Speaker name (required for Table Topics, optional for others)
+    planned_duration_minutes INTEGER NOT NULL,
+    actual_start_time TIMESTAMPTZ NOT NULL,
+    actual_end_time TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Note: No UNIQUE constraint on (meeting_id, segment_id) because Table Topics can have multiple speakers
+
 -- =============================================
 -- INDEXES
 -- =============================================
@@ -153,6 +167,9 @@ WHERE type IN ('experience_opening', 'experience_peak', 'experience_valley', 'ex
 -- Ensures one checkin per person per segment per meeting
 CREATE UNIQUE INDEX unique_checkin_person_segment ON checkins(meeting_id, wxid, segment_id);
 
+-- Index for efficient timing queries
+CREATE INDEX idx_timings_meeting_id ON timings(meeting_id);
+
 -- =============================================
 -- ROW LEVEL SECURITY POLICIES
 -- =============================================
@@ -167,6 +184,7 @@ ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE votes_status ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feedbacks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE checkins ENABLE ROW LEVEL SECURITY;
+ALTER TABLE timings ENABLE ROW LEVEL SECURITY;
 
 -- Members table policies
 CREATE POLICY "Members can read own data"
@@ -408,6 +426,42 @@ USING (
 
 CREATE POLICY "Members can delete votes status"
 ON votes_status FOR DELETE
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+-- Timings table policies
+CREATE POLICY "Anyone can view timings"
+ON timings FOR SELECT
+TO anon, authenticated
+USING (true);
+
+CREATE POLICY "Members can create timings"
+ON timings FOR INSERT
+TO authenticated
+WITH CHECK (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+CREATE POLICY "Members can update timings"
+ON timings FOR UPDATE
+TO authenticated
+USING (
+    EXISTS (
+        SELECT 1 FROM meetings
+        WHERE meetings.id = meeting_id
+    )
+);
+
+CREATE POLICY "Members can delete timings"
+ON timings FOR DELETE
 TO authenticated
 USING (
     EXISTS (
