@@ -1,5 +1,6 @@
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..models.users import User
 from ..models.wechat_user import WeChatUser
@@ -1601,3 +1602,326 @@ def is_extended_user_admin(user: Union[User, WeChatUser]) -> bool:
     if isinstance(user, User):
         return is_user_admin(user.uid)
     return False
+
+
+# Timing functions
+def get_timer_segment_id(meeting_id: str) -> Optional[str]:
+    """
+    Find the Timer segment ID for a meeting.
+
+    The Timer segment is identified by having type 'Timer' (case-insensitive).
+
+    Args:
+        meeting_id: The ID of the meeting
+
+    Returns:
+        The segment ID if found, None otherwise
+    """
+    result = supabase.table("segments").select("id, type").eq("meeting_id", meeting_id).execute()
+
+    for segment in result.data:
+        segment_type = segment.get("type", "")
+        if segment_type and segment_type.lower() == "timer":
+            return segment["id"]
+
+    return None
+
+
+def can_control_timer(meeting_id: str, wxid: Optional[str]) -> bool:
+    """
+    Check if a user can control the timer for a meeting.
+
+    Only the person checked in as Timer can control timing.
+
+    Args:
+        meeting_id: The ID of the meeting
+        wxid: The wxid of the user to check
+
+    Returns:
+        True if the user can control the timer, False otherwise
+    """
+    if not wxid:
+        return False
+
+    # Find Timer segment
+    timer_segment_id = get_timer_segment_id(meeting_id)
+    if not timer_segment_id:
+        return False
+
+    # Check if user is checked in for Timer segment
+    checkin = get_checkin_by_segment(meeting_id, timer_segment_id)
+    if not checkin:
+        return False
+
+    return checkin["wxid"] == wxid
+
+
+def get_card_times(planned_minutes: int) -> Dict[str, int]:
+    """
+    Get card signal times based on planned duration.
+
+    Based on Toastmasters card signals:
+    - <= 3 min: green at 1 min left, yellow at 30s left, red at time's up
+    - 3-10 min: green at 2 min left, yellow at 1 min left, red at time's up
+    - > 10 min: green at 5 min left, yellow at 2 min left, red at time's up
+
+    Args:
+        planned_minutes: The planned duration in minutes
+
+    Returns:
+        Dict with green, yellow, red thresholds in seconds
+    """
+    planned_seconds = planned_minutes * 60
+
+    if planned_minutes <= 3:
+        return {
+            "green": planned_seconds - 60,  # 1 min before end
+            "yellow": planned_seconds - 30,  # 30s before end
+            "red": planned_seconds,  # at end
+        }
+    elif planned_minutes <= 10:
+        return {
+            "green": planned_seconds - 120,  # 2 min before end
+            "yellow": planned_seconds - 60,  # 1 min before end
+            "red": planned_seconds,  # at end
+        }
+    else:
+        return {
+            "green": planned_seconds - 300,  # 5 min before end
+            "yellow": planned_seconds - 120,  # 2 min before end
+            "red": planned_seconds,  # at end
+        }
+
+
+def get_timing_dot_color(planned_minutes: int, actual_seconds: int) -> str:
+    """
+    Calculate the dot color based on timing.
+
+    Args:
+        planned_minutes: The planned duration in minutes
+        actual_seconds: The actual duration in seconds
+
+    Returns:
+        Dot color: 'gray', 'green', 'yellow', 'red', or 'bell'
+    """
+    cards = get_card_times(planned_minutes)
+
+    if actual_seconds < cards["green"]:
+        return "gray"  # Before green card
+    elif actual_seconds < cards["yellow"]:
+        return "green"  # Green to yellow
+    elif actual_seconds < cards["red"]:
+        return "yellow"  # Yellow to red
+    elif actual_seconds < cards["red"] + 30:
+        return "red"  # Red + 30s grace
+    else:
+        return "bell"  # 30s+ over red
+
+
+def calculate_timing_fields(
+    actual_start_time: str, actual_end_time: str, planned_duration_minutes: int
+) -> Tuple[int, str]:
+    """
+    Calculate computed fields for a timing record.
+
+    Args:
+        actual_start_time: ISO timestamp when timing started
+        actual_end_time: ISO timestamp when timing ended
+        planned_duration_minutes: The planned duration in minutes
+
+    Returns:
+        Tuple of (actual_duration_seconds, dot_color)
+
+    Raises:
+        ValueError: If timestamps are invalid or end is before start
+    """
+    try:
+        start = datetime.fromisoformat(actual_start_time.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(actual_end_time.replace("Z", "+00:00"))
+    except (ValueError, AttributeError) as e:
+        raise ValueError(f"Invalid timestamp format: {e}")
+
+    actual_seconds = int((end - start).total_seconds())
+    if actual_seconds < 0:
+        raise ValueError("End time must be after start time")
+
+    dot_color = get_timing_dot_color(planned_duration_minutes, actual_seconds)
+    return actual_seconds, dot_color
+
+
+def get_timings_by_meeting(meeting_id: str) -> List[Dict[str, Any]]:
+    """
+    Get all timing records for a meeting.
+
+    Args:
+        meeting_id: The ID of the meeting
+
+    Returns:
+        List of timing records with calculated fields
+    """
+    result = (
+        supabase.table("timings").select("*").eq("meeting_id", meeting_id).order("created_at", desc=False).execute()
+    )
+
+    timings = []
+    for timing in result.data:
+        try:
+            actual_seconds, dot_color = calculate_timing_fields(
+                timing["actual_start_time"],
+                timing["actual_end_time"],
+                timing["planned_duration_minutes"],
+            )
+        except ValueError:
+            # Skip malformed timing records
+            continue
+
+        timings.append(
+            {
+                "id": timing["id"],
+                "meeting_id": timing["meeting_id"],
+                "segment_id": timing["segment_id"],
+                "name": timing.get("name"),
+                "planned_duration_minutes": timing["planned_duration_minutes"],
+                "actual_start_time": timing["actual_start_time"],
+                "actual_end_time": timing["actual_end_time"],
+                "actual_duration_seconds": actual_seconds,
+                "dot_color": dot_color,
+                "created_at": timing.get("created_at"),
+                "updated_at": timing.get("updated_at"),
+            }
+        )
+
+    return timings
+
+
+def create_timing(
+    meeting_id: str,
+    segment_id: str,
+    planned_duration_minutes: int,
+    actual_start_time: str,
+    actual_end_time: str,
+    name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Create a single timing record.
+
+    Args:
+        meeting_id: The ID of the meeting
+        segment_id: The ID of the segment
+        planned_duration_minutes: The planned duration in minutes
+        actual_start_time: ISO timestamp when timing started
+        actual_end_time: ISO timestamp when timing ended
+        name: Optional speaker name
+
+    Returns:
+        The created timing record with calculated fields
+
+    Raises:
+        ValueError: If timestamps are invalid or end is before start
+    """
+    # Validate timestamps before inserting
+    actual_seconds, dot_color = calculate_timing_fields(actual_start_time, actual_end_time, planned_duration_minutes)
+
+    timing_data = {
+        "meeting_id": meeting_id,
+        "segment_id": segment_id,
+        "name": name,
+        "planned_duration_minutes": planned_duration_minutes,
+        "actual_start_time": actual_start_time,
+        "actual_end_time": actual_end_time,
+    }
+
+    result = supabase.table("timings").insert(timing_data).execute()
+
+    if not result.data:
+        raise ValueError("Failed to create timing record")
+
+    timing = result.data[0]
+
+    return {
+        "id": timing["id"],
+        "meeting_id": timing["meeting_id"],
+        "segment_id": timing["segment_id"],
+        "name": timing.get("name"),
+        "planned_duration_minutes": timing["planned_duration_minutes"],
+        "actual_start_time": timing["actual_start_time"],
+        "actual_end_time": timing["actual_end_time"],
+        "actual_duration_seconds": actual_seconds,
+        "dot_color": dot_color,
+        "created_at": timing.get("created_at"),
+        "updated_at": timing.get("updated_at"),
+    }
+
+
+def create_timings_batch(
+    meeting_id: str,
+    segment_id: str,
+    timings_data: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Create multiple timing records in batch (for Table Topics).
+
+    Args:
+        meeting_id: The ID of the meeting
+        segment_id: The ID of the Table Topics segment
+        timings_data: List of timing data dicts with name, planned_duration_minutes,
+                      actual_start_time, actual_end_time
+
+    Returns:
+        List of created timing records with calculated fields
+
+    Raises:
+        ValueError: If any timestamps are invalid or end is before start
+    """
+    # Validate all timestamps before inserting
+    for timing in timings_data:
+        calculate_timing_fields(
+            timing["actual_start_time"],
+            timing["actual_end_time"],
+            timing["planned_duration_minutes"],
+        )
+
+    records_to_insert = []
+    for timing in timings_data:
+        records_to_insert.append(
+            {
+                "meeting_id": meeting_id,
+                "segment_id": segment_id,
+                "name": timing["name"],
+                "planned_duration_minutes": timing["planned_duration_minutes"],
+                "actual_start_time": timing["actual_start_time"],
+                "actual_end_time": timing["actual_end_time"],
+            }
+        )
+
+    result = supabase.table("timings").insert(records_to_insert).execute()
+
+    if not result.data:
+        raise ValueError("Failed to create timing records")
+
+    # Process results with calculated fields
+    created_timings = []
+    for timing in result.data:
+        actual_seconds, dot_color = calculate_timing_fields(
+            timing["actual_start_time"],
+            timing["actual_end_time"],
+            timing["planned_duration_minutes"],
+        )
+
+        created_timings.append(
+            {
+                "id": timing["id"],
+                "meeting_id": timing["meeting_id"],
+                "segment_id": timing["segment_id"],
+                "name": timing.get("name"),
+                "planned_duration_minutes": timing["planned_duration_minutes"],
+                "actual_start_time": timing["actual_start_time"],
+                "actual_end_time": timing["actual_end_time"],
+                "actual_duration_seconds": actual_seconds,
+                "dot_color": dot_color,
+                "created_at": timing.get("created_at"),
+                "updated_at": timing.get("updated_at"),
+            }
+        )
+
+    return created_timings
