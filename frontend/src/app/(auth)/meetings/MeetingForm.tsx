@@ -689,6 +689,7 @@ export function MeetingForm({
               onSegmentDelete={handleSegmentDelete}
               onSegmentAdd={handleSegmentAdd}
               onSegmentsShift={handleSegmentsShift}
+              meetingId={meetingId}
             />
           </div>
         )}

@@ -8,12 +8,15 @@ from ...db.core import (
     get_extended_user_wxid,
     get_meeting_by_id,
     get_user_by_wxid,
+    reset_segment_checkin,
     validate_segments_belong_to_meeting,
 )
 from ...models.checkin import (
     Checkin,
     CheckinCreate,
     CheckinListResponse,
+    CheckinResetRequest,
+    CheckinResetResponse,
     CheckinResponse,
 )
 from ...models.users import User
@@ -109,16 +112,15 @@ async def get_meeting_checkins(
     Retrieve checkins for a meeting with user-specific filtering.
 
     This endpoint allows authenticated users to view checkin records for a meeting.
-    The visibility is filtered based on the user's identity and wxid availability:
+    The visibility is filtered based on the user's identity:
 
     Access patterns:
     - Unauthenticated users: Receive empty checkin list
-    - Users with wxid: Can view checkins made by their wxid (their own checkins)
-    - All filtering is handled by the core get_checkins_by_meeting function
+    - Members (User): Can view ALL checkins for the meeting
+    - WeChat users (non-members): Can only view their own checkins (filtered by wxid)
 
     The endpoint uses optional authentication, meaning it accepts requests without
-    valid tokens but provides limited functionality. This design supports both
-    authenticated member access and potential future public visibility features.
+    valid tokens but provides limited functionality.
 
     Args:
         meeting_id: The ID of the meeting to retrieve checkins for
@@ -133,14 +135,63 @@ async def get_meeting_checkins(
     if not current_user:
         return CheckinListResponse(checkins=[])
 
-    wxid = get_extended_user_wxid(current_user)
-
     # Validate meeting exists
     meeting = get_meeting_by_id(meeting_id, current_user.uid if isinstance(current_user, User) else None)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
-    checkins = get_checkins_by_meeting(meeting_id, wxid=wxid)
+    # Members can see all checkins, non-members can only see their own
+    is_member = isinstance(current_user, User)
+    if is_member:
+        checkins = get_checkins_by_meeting(meeting_id, wxid=None)
+    else:
+        wxid = get_extended_user_wxid(current_user)
+        checkins = get_checkins_by_meeting(meeting_id, wxid=wxid)
 
     checkin_models = [Checkin(**checkin) for checkin in checkins]
     return CheckinListResponse(checkins=checkin_models)
+
+
+@r.post("/meetings/{meeting_id}/checkins/reset", response_model=CheckinResetResponse)
+async def reset_meeting_checkin(
+    reset_data: CheckinResetRequest,
+    meeting_id: str = Path(..., description="The ID of the meeting"),
+    current_user: User = Depends(get_current_extended_user),
+):
+    """
+    Reset a segment's checkin (e.g., to release the Timer role).
+
+    This endpoint allows members to reset a checkin for a specific segment.
+    The behavior depends on how many checkins the person has in the meeting:
+    - If wxid has multiple checkins: DELETE the checkin record for this segment
+    - If wxid has only one checkin: NULLIFY segment_id (preserve attendance record)
+
+    Only club members can perform this operation.
+
+    Args:
+        reset_data: Contains segment_id to reset
+        meeting_id: The ID of the meeting
+        current_user: Authenticated member (from JWT token)
+
+    Returns:
+        CheckinResetResponse with success status and action taken
+
+    Raises:
+        HTTPException 403: If user is not a member
+        HTTPException 404: If meeting not found or no checkin found for segment
+    """
+    # Only members can reset checkins
+    if not isinstance(current_user, User):
+        raise HTTPException(status_code=403, detail="Only members can reset checkins")
+
+    # Validate meeting exists
+    meeting = get_meeting_by_id(meeting_id, current_user.uid)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    # Reset the checkin
+    result = reset_segment_checkin(meeting_id, reset_data.segment_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="No checkin found for this segment")
+
+    return CheckinResetResponse(success=True, action=result["action"])

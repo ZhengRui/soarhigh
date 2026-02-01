@@ -17,6 +17,9 @@ import {
 } from '@/utils/defaultSegments';
 import { TimePickerModal } from './TimePickerModal';
 import { AttendeeIF } from '@/interfaces';
+import { useCheckins, useResetCheckin } from '@/hooks/useCheckins';
+import { getCheckinForSegment } from '@/utils/checkin';
+import toast from 'react-hot-toast';
 
 interface SegmentsEditorProps {
   segments: BaseSegment[];
@@ -33,7 +36,14 @@ interface SegmentsEditorProps {
     startTime: string,
     duration: string
   ) => void;
+  meetingId?: string;
 }
+
+// Helper to check if a segment is a Timer segment
+const isTimerSegment = (segmentType: string): boolean => {
+  const normalizedType = segmentType.toLowerCase();
+  return normalizedType.includes('timer') || normalizedType === 'timer';
+};
 
 export const timeStringToMinutes = (timeString: string) => {
   const [hours, minutes] = timeString.split(':').map(Number);
@@ -46,8 +56,30 @@ export function SegmentsEditor({
   onSegmentDelete,
   onSegmentAdd,
   onSegmentsShift,
+  meetingId,
 }: SegmentsEditorProps) {
   const [deletingSegments, setDeletingSegments] = useState<number[]>([]);
+
+  // Fetch checkins for this meeting (only in edit mode when meetingId is available)
+  const { data: checkins } = useCheckins(meetingId);
+  const resetCheckinMutation = useResetCheckin(meetingId);
+  const [resettingSegmentId, setResettingSegmentId] = useState<string | null>(
+    null
+  );
+
+  const handleResetCheckin = async (segmentId: string) => {
+    setResettingSegmentId(segmentId);
+    try {
+      await resetCheckinMutation.mutateAsync(segmentId);
+      toast.success('Checkin reset successfully');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to reset checkin';
+      toast.error(message);
+    } finally {
+      setResettingSegmentId(null);
+    }
+  };
 
   const [openTypeDropdownIndex, setOpenTypeDropdownIndex] = useState<
     number | null
@@ -377,6 +409,10 @@ export function SegmentsEditor({
                     }}
                     placeholder={segment.role_taker_config.placeholder}
                     className={`${hoveredClasses} ${deletingClassesFunction(index)}`}
+                    checkin={getCheckinForSegment(checkins, segment.id)}
+                    isTimerSegment={isTimerSegment(segment.type)}
+                    onResetCheckin={() => handleResetCheckin(segment.id)}
+                    isResettingCheckin={resettingSegmentId === segment.id}
                   />
                 )}
 

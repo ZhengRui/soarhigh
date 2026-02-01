@@ -136,3 +136,16 @@ export interface DashboardStatsIF {
   member_meetings: MemberMeetingRecordIF[];
   meeting_attendance: MeetingAttendanceRecordIF[];
 }
+
+// Checkin Interfaces
+export interface CheckinIF {
+  id: string;
+  meeting_id: string;
+  wxid: string;
+  segment_id: string | null;
+  name: string | null;
+  referral_source: string | null;
+  is_member: boolean;
+  created_at: string;
+  updated_at: string;
+}

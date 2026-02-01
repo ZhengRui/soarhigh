@@ -50,3 +50,20 @@ class CheckinListResponse(BaseModel):
     """
 
     checkins: List[Checkin] = Field(description="List of checkins for the meeting.")
+
+
+class CheckinResetRequest(BaseModel):
+    """
+    Model for resetting a segment's checkin (e.g., Timer role).
+    """
+
+    segment_id: str = Field(description="The ID of the segment to reset checkin for.")
+
+
+class CheckinResetResponse(BaseModel):
+    """
+    Response model for checkin reset operation.
+    """
+
+    success: bool = Field(description="Whether the reset operation was successful.")
+    action: str = Field(description="The action taken: 'deleted' or 'nullified'.")

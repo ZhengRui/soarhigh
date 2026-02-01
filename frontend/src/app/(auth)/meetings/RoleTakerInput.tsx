@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Users } from 'lucide-react';
-import { AttendeeIF, UserIF } from '@/interfaces';
+import { AttendeeIF, UserIF, CheckinIF } from '@/interfaces';
 import { useMembers } from '@/hooks/useMember';
+import { CheckinIndicator } from '@/components/CheckinIndicator';
 
 interface RoleTakerInputProps {
   value: AttendeeIF | undefined;
@@ -10,6 +11,10 @@ interface RoleTakerInputProps {
   className?: string;
   required?: boolean;
   disableMemberLookup?: boolean;
+  checkin?: CheckinIF;
+  isTimerSegment?: boolean;
+  onResetCheckin?: () => void;
+  isResettingCheckin?: boolean;
 }
 
 export const RoleTakerInput = ({
@@ -19,6 +24,10 @@ export const RoleTakerInput = ({
   className = '',
   required = false,
   disableMemberLookup = false,
+  checkin,
+  isTimerSegment = false,
+  onResetCheckin,
+  isResettingCheckin = false,
 }: RoleTakerInputProps) => {
   const membersQuery = useMembers();
   const members = membersQuery.data || [];
@@ -109,17 +118,27 @@ export const RoleTakerInput = ({
           />
         </div>
 
-        {!disableMemberLookup &&
-          roleTaker?.name &&
-          (roleTaker?.member_id ? (
-            <span className='absolute right-2 top-1/2 -translate-y-1/2 bg-indigo-50 rounded-xl px-4 py-1 text-xs text-indigo-600'>
-              Member
-            </span>
-          ) : (
-            <span className='absolute right-2 top-1/2 -translate-y-1/2 bg-emerald-50 rounded-xl px-4 py-1 text-xs text-emerald-600'>
-              Guest
-            </span>
-          ))}
+        {!disableMemberLookup && roleTaker?.name && (
+          <div className='absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5'>
+            {checkin && (
+              <CheckinIndicator
+                checkin={checkin}
+                isTimerSegment={isTimerSegment}
+                onReset={onResetCheckin}
+                isResetting={isResettingCheckin}
+              />
+            )}
+            {roleTaker?.member_id ? (
+              <span className='bg-indigo-50 rounded-xl px-4 py-1 text-xs text-indigo-600'>
+                Member
+              </span>
+            ) : (
+              <span className='bg-emerald-50 rounded-xl px-4 py-1 text-xs text-emerald-600'>
+                Guest
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {isDropdownOpen && (

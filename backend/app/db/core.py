@@ -1301,6 +1301,61 @@ def get_checkins_by_meeting(meeting_id: str, wxid: Optional[str] = None) -> List
     return result.data
 
 
+def get_checkin_by_segment(meeting_id: str, segment_id: str) -> Optional[Dict[str, Any]]:
+    """Get the checkin record for a specific segment."""
+    result = supabase.table("checkins").select("*").eq("meeting_id", meeting_id).eq("segment_id", segment_id).execute()
+    return result.data[0] if result.data else None
+
+
+def count_checkins_by_wxid(meeting_id: str, wxid: str) -> int:
+    """Count how many checkins a wxid has in a meeting."""
+    result = (
+        supabase.table("checkins").select("id", count="exact").eq("meeting_id", meeting_id).eq("wxid", wxid).execute()  # type: ignore
+    )
+    return result.count or 0
+
+
+def delete_checkin(checkin_id: str) -> bool:
+    """Delete a checkin record by ID."""
+    result = supabase.table("checkins").delete().eq("id", checkin_id).execute()
+    return len(result.data) > 0
+
+
+def nullify_checkin_segment(checkin_id: str) -> bool:
+    """Set segment_id to null for a checkin (preserve attendance record)."""
+    result = supabase.table("checkins").update({"segment_id": None}).eq("id", checkin_id).execute()
+    return len(result.data) > 0
+
+
+def reset_segment_checkin(meeting_id: str, segment_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Reset a segment's checkin - delete or nullify based on wxid's checkin count.
+
+    Returns:
+        - {"success": True, "action": "deleted"} if checkin was deleted
+        - {"success": True, "action": "nullified"} if segment_id was nullified
+        - None if no checkin found for this segment
+    """
+    checkin = get_checkin_by_segment(meeting_id, segment_id)
+    if not checkin:
+        return None
+
+    wxid = checkin["wxid"]
+    checkin_id = checkin["id"]
+
+    # Count how many checkins this wxid has in this meeting
+    checkin_count = count_checkins_by_wxid(meeting_id, wxid)
+
+    if checkin_count > 1:
+        # Multiple checkins - delete this one
+        delete_checkin(checkin_id)
+        return {"success": True, "action": "deleted"}
+    else:
+        # Only one checkin - nullify segment_id to preserve attendance
+        nullify_checkin_segment(checkin_id)
+        return {"success": True, "action": "nullified"}
+
+
 # Feedbacks functions
 def create_feedback(
     meeting_id: str,
