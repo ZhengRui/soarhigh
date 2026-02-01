@@ -1523,6 +1523,14 @@ def validate_segments_belong_to_meeting(meeting_id: str, segment_ids: List[str])
     return len(result.data) == len(segment_ids)
 
 
+def is_table_topics_segment(segment_id: str) -> bool:
+    """Check if a segment is a Table Topic Session segment."""
+    result = supabase.table("segments").select("type").eq("id", segment_id).execute()
+    if not result.data:
+        return False
+    return result.data[0].get("type") == "Table Topic Session"
+
+
 def validate_attendee_id_exists(attendee_id: str) -> bool:
     """Validate that an attendee ID exists."""
     result = supabase.table("attendees").select("id").eq("id", attendee_id).execute()
@@ -1805,13 +1813,16 @@ def create_timing(
     """
     Create a single timing record.
 
+    For regular segments: replaces any existing timing for that segment.
+    For Table Topic Session: always creates a new record (multiple speakers allowed).
+
     Args:
         meeting_id: The ID of the meeting
         segment_id: The ID of the segment
         planned_duration_minutes: The planned duration in minutes
         actual_start_time: ISO timestamp when timing started
         actual_end_time: ISO timestamp when timing ended
-        name: Optional speaker name
+        name: Optional speaker name (for Table Topic Session speakers)
 
     Returns:
         The created timing record with calculated fields
@@ -1821,6 +1832,12 @@ def create_timing(
     """
     # Validate timestamps before inserting
     actual_seconds, dot_color = calculate_timing_fields(actual_start_time, actual_end_time, planned_duration_minutes)
+
+    # For regular segments (not Table Topic Session), delete existing timing first
+    # This ensures one segment = one timing record for regular segments
+    # Table Topic Session allows multiple timing records (one per speaker)
+    if not is_table_topics_segment(segment_id):
+        supabase.table("timings").delete().eq("meeting_id", meeting_id).eq("segment_id", segment_id).execute()
 
     timing_data = {
         "meeting_id": meeting_id,

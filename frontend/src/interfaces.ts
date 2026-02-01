@@ -149,3 +149,43 @@ export interface CheckinIF {
   created_at: string;
   updated_at: string;
 }
+
+// Timing Interfaces
+export interface TimingIF {
+  id?: string;
+  meeting_id: string;
+  segment_id: string;
+  name?: string | null;
+  planned_duration_minutes: number;
+  actual_start_time: string;
+  actual_end_time: string;
+  actual_duration_seconds: number;
+  dot_color: 'gray' | 'green' | 'yellow' | 'red' | 'bell';
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TimingsListResponseIF {
+  can_control: boolean;
+  timings: TimingIF[];
+}
+
+export interface TimingCreateIF {
+  segment_id: string;
+  name?: string | null;
+  planned_duration_minutes: number;
+  actual_start_time: string;
+  actual_end_time: string;
+}
+
+export interface TimingBatchItemIF {
+  name: string;
+  planned_duration_minutes: number;
+  actual_start_time: string;
+  actual_end_time: string;
+}
+
+export interface TimingBatchCreateIF {
+  segment_id: string;
+  timings: TimingBatchItemIF[];
+}

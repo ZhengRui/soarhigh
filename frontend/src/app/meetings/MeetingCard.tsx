@@ -16,6 +16,7 @@ import {
   Table2,
   ImageIcon,
   ClipboardList,
+  Timer,
 } from 'lucide-react';
 import { MeetingIF } from '@/interfaces';
 import Link from 'next/link';
@@ -24,6 +25,7 @@ import { updateMeetingStatus } from '@/utils/meeting';
 import toast from 'react-hot-toast';
 import { useQueryClient, useMutation } from '@tanstack/react-query';
 import { listMeetingMedia, MediaFile } from '@/utils/alicloud';
+import { TimerTab } from '@/app/(auth)/meetings/TimerTab';
 
 type MeetingCardProps = {
   meeting: MeetingIF;
@@ -35,7 +37,9 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   isAuthenticated,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState('agenda');
+  const [activeTab, setActiveTab] = useState<'agenda' | 'photos' | 'timer'>(
+    'agenda'
+  );
   const [mediaFiles, setMediaFiles] = useState<MediaFile[]>([]);
   const [isMediaLoading, setIsMediaLoading] = useState(false);
   const [mediaFetched, setMediaFetched] = useState(false);
@@ -224,8 +228,13 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
         }`}
       >
         <div className='p-6 border-t border-gray-300 bg-gradient-to-b from-white to-[#F9FAFB]'>
+          {/* Hide scrollbar CSS */}
+          <style>{`.hide-scrollbar::-webkit-scrollbar { display: none; }`}</style>
           {/* Tab buttons */}
-          <div className='flex space-x-4 mb-6 min-w-0 overflow-x-auto'>
+          <div
+            className='hide-scrollbar flex space-x-4 mb-6 min-w-0 overflow-x-auto'
+            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+          >
             <button
               onClick={() => setActiveTab('agenda')}
               className={`px-4 py-2 text-sm font-semibold text-gray-500 flex items-center gap-2 rounded-xl border border-dashed border-1 transition-all duration-300 min-w-40 ${
@@ -258,6 +267,19 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
               <ImageIcon className='w-4 h-4 text-indigo-600' />
               Photos
             </button>
+            {isAuthenticated && (
+              <button
+                onClick={() => setActiveTab('timer')}
+                className={`px-4 py-2 text-sm font-semibold text-gray-500 flex items-center gap-2 rounded-xl border border-dashed border-1 transition-all duration-300 ${
+                  activeTab === 'timer'
+                    ? 'text-gray-800 border-gray-400'
+                    : 'border-transparent hover:text-gray-800 hover:border-gray-400'
+                }`}
+              >
+                <Timer className='w-4 h-4 text-indigo-600' />
+                Timer
+              </button>
+            )}
           </div>
 
           {/* Agenda Tab Content */}
@@ -344,6 +366,13 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
               </div>
             )}
           </div>
+
+          {/* Timer Tab Content */}
+          {isAuthenticated && id && (
+            <div className={`${activeTab === 'timer' ? 'block' : 'hidden'}`}>
+              <TimerTab meetingId={id} segments={segments} />
+            </div>
+          )}
         </div>
       </div>
 
