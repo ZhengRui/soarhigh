@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ChevronDown,
   ChevronUp,
@@ -17,8 +18,9 @@ import {
   ImageIcon,
   ClipboardList,
   Timer,
+  Bell,
 } from 'lucide-react';
-import { MeetingIF } from '@/interfaces';
+import { MeetingIF, TimingIF } from '@/interfaces';
 import Link from 'next/link';
 import Image from 'next/image';
 import { updateMeetingStatus } from '@/utils/meeting';
@@ -26,6 +28,12 @@ import toast from 'react-hot-toast';
 import { useQueryClient, useMutation } from '@tanstack/react-query';
 import { listMeetingMedia, MediaFile } from '@/utils/alicloud';
 import { TimerTab } from '@/app/(auth)/meetings/TimerTab';
+import {
+  getTimings,
+  getTimingsForSegment,
+  getTimingTooltip,
+  dotColors,
+} from '@/utils/timing';
 
 type MeetingCardProps = {
   meeting: MeetingIF;
@@ -43,9 +51,16 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   const [mediaFiles, setMediaFiles] = useState<MediaFile[]>([]);
   const [isMediaLoading, setIsMediaLoading] = useState(false);
   const [mediaFetched, setMediaFetched] = useState(false);
+  const [timings, setTimings] = useState<TimingIF[]>([]);
+  const [timingsFetched, setTimingsFetched] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(
     null
   );
+  // Timing popover state
+  const [popoverTiming, setPopoverTiming] = useState<TimingIF | null>(null);
+  const [popoverPosition, setPopoverPosition] = useState({ top: 0, left: 0 });
+  const popoverRef = useRef<HTMLDivElement>(null);
+
   const queryClient = useQueryClient();
 
   // Destructure the meeting object
@@ -90,6 +105,55 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
 
     fetchMediaFiles();
   }, [isExpanded, activeTab, id, mediaFetched]);
+
+  // Fetch timings when the card is expanded (for Agenda view dots)
+  useEffect(() => {
+    if (!isExpanded || !id || timingsFetched) return;
+
+    const fetchTimings = async () => {
+      try {
+        const response = await getTimings(id);
+        setTimings(response.timings);
+        setTimingsFetched(true);
+      } catch (error) {
+        console.error('Error fetching timings:', error);
+      }
+    };
+
+    fetchTimings();
+  }, [isExpanded, id, timingsFetched]);
+
+  // Close timing popover when clicking outside or scrolling
+  useEffect(() => {
+    if (!popoverTiming) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        popoverRef.current &&
+        !popoverRef.current.contains(e.target as Node)
+      ) {
+        setPopoverTiming(null);
+      }
+    };
+
+    const handleScroll = () => {
+      setPopoverTiming(null);
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('scroll', handleScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [popoverTiming]);
+
+  // Close popover when card collapses
+  useEffect(() => {
+    if (!isExpanded) {
+      setPopoverTiming(null);
+    }
+  }, [isExpanded]);
 
   // Use mutation for toggling status
   const statusMutation = useMutation({
@@ -285,43 +349,83 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
           {/* Agenda Tab Content */}
           <div className={`${activeTab === 'agenda' ? 'block' : 'hidden'}`}>
             <div className='space-y-6 sm:space-y-4'>
-              {segments.map((segment) => (
-                <div
-                  key={segment.id}
-                  className='flex flex-col sm:flex-row gap-1 sm:gap-4 relative mb-4'
-                >
-                  <div className='w-full sm:pt-1 sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between'>
-                    <div className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0'>
-                      <span className='text-sm font-medium text-indigo-600'>
-                        {segment.start_time}
-                      </span>
-                      <span className='text-xs text-gray-500'>
-                        {segment.duration}min
-                      </span>
+              {segments.map((segment) => {
+                const segmentTimings = getTimingsForSegment(
+                  timings,
+                  segment.id
+                );
+                const latestTiming =
+                  segmentTimings.length > 0
+                    ? segmentTimings[segmentTimings.length - 1]
+                    : null;
+
+                return (
+                  <div
+                    key={segment.id}
+                    className='flex flex-col sm:flex-row gap-1 sm:gap-4 relative mb-4'
+                  >
+                    <div className='w-full sm:pt-1 sm:w-24 flex-shrink-0 flex sm:flex-col items-center sm:items-start justify-between'>
+                      <div className='flex sm:flex-col items-center sm:items-start gap-2 sm:gap-0'>
+                        <span className='text-sm font-medium text-indigo-600'>
+                          {segment.start_time}
+                        </span>
+                        <span className='text-xs text-gray-500 flex items-center gap-1'>
+                          {segment.duration}min
+                          {latestTiming && (
+                            <button
+                              type='button'
+                              className='inline-flex items-center justify-center w-4 h-4'
+                              title={getTimingTooltip(latestTiming)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (popoverTiming?.id === latestTiming.id) {
+                                  setPopoverTiming(null);
+                                } else {
+                                  const rect =
+                                    e.currentTarget.getBoundingClientRect();
+                                  setPopoverPosition({
+                                    top: rect.bottom + 4,
+                                    left: rect.left,
+                                  });
+                                  setPopoverTiming(latestTiming);
+                                }
+                              }}
+                            >
+                              {latestTiming.dot_color === 'bell' ? (
+                                <Bell className='w-3 h-3 text-red-600 fill-red-600' />
+                              ) : (
+                                <span
+                                  className={`w-2 h-2 rounded-full ${dotColors[latestTiming.dot_color]}`}
+                                />
+                              )}
+                            </button>
+                          )}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                  <div className='flex-grow'>
-                    <div className='flex flex-col'>
-                      <h4 className='font-medium text-gray-800'>
-                        {segment.type}
-                      </h4>
-                      <p className='text-sm text-gray-500'>
-                        {segment.role_taker?.name ||
-                          (segment.type.toLowerCase() ===
-                            'table topic session' ||
-                          segment.type.toLowerCase().includes('tea break') ||
-                          segment.type.toLowerCase().includes('registration')
-                            ? 'All'
-                            : '')}
-                        {segment.type.toLowerCase() === 'table topic session'
-                          ? segment.content && ` - ${segment.content}`
-                          : segment.title && ` - ${segment.title}`}
-                      </p>
+                    <div className='flex-grow'>
+                      <div className='flex flex-col'>
+                        <h4 className='font-medium text-gray-800'>
+                          {segment.type}
+                        </h4>
+                        <p className='text-sm text-gray-500'>
+                          {segment.role_taker?.name ||
+                            (segment.type.toLowerCase() ===
+                              'table topic session' ||
+                            segment.type.toLowerCase().includes('tea break') ||
+                            segment.type.toLowerCase().includes('registration')
+                              ? 'All'
+                              : '')}
+                          {segment.type.toLowerCase() === 'table topic session'
+                            ? segment.content && ` - ${segment.content}`
+                            : segment.title && ` - ${segment.title}`}
+                        </p>
+                      </div>
                     </div>
+                    <div className='hidden sm:block absolute left-24 top-0 bottom-0 w-0.5 bg-gradient-to-b from-indigo-600 to-purple-600 -z-10' />
                   </div>
-                  <div className='hidden sm:block absolute left-24 top-0 bottom-0 w-0.5 bg-gradient-to-b from-indigo-600 to-purple-600 -z-10' />
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -368,13 +472,31 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
           </div>
 
           {/* Timer Tab Content */}
-          {isAuthenticated && id && (
-            <div className={`${activeTab === 'timer' ? 'block' : 'hidden'}`}>
-              <TimerTab meetingId={id} segments={segments} />
-            </div>
+          {isAuthenticated && id && activeTab === 'timer' && (
+            <TimerTab meetingId={id} segments={segments} />
           )}
         </div>
       </div>
+
+      {/* Timing Popover - rendered via portal */}
+      {popoverTiming &&
+        typeof window !== 'undefined' &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            className='fixed z-[9999] bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2'
+            style={{
+              top: popoverPosition.top,
+              left: popoverPosition.left,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className='text-xs text-gray-700 whitespace-nowrap'>
+              {getTimingTooltip(popoverTiming)}
+            </div>
+          </div>,
+          document.body
+        )}
 
       {/* Lightbox Modal */}
       {selectedImageIndex !== null && mediaFiles.length > 0 && (
