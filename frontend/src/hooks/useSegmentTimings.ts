@@ -6,7 +6,6 @@ import {
 } from '@tanstack/react-query';
 import { getTimings, createTiming, createTimingBatch } from '@/utils/timing';
 import {
-  TimingIF,
   TimingCreateIF,
   TimingBatchCreateIF,
   TimingsListResponseIF,
@@ -68,14 +67,4 @@ export function useCreateTimingBatch(meetingId?: string) {
       queryClient.invalidateQueries({ queryKey: ['timings', meetingId] });
     },
   });
-}
-
-/**
- * Helper hook to get timing for a specific segment
- */
-export function useTimingForSegment(
-  timings: TimingIF[] | undefined,
-  segmentId: string
-): TimingIF[] {
-  return timings?.filter((t) => t.segment_id === segmentId) || [];
 }

@@ -176,7 +176,7 @@ export function TimerReportSubtab({
                     : formatDuration(timing.actual_duration_seconds)}
                 </span>
                 <span className='text-[10px] sm:text-[11px] text-gray-400'>
-                  /{timing.planned_duration_minutes}m
+                  / {timing.planned_duration_minutes}m
                 </span>
               </button>
             </div>

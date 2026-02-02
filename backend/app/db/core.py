@@ -1898,6 +1898,13 @@ def create_timings_batch(
             timing["planned_duration_minutes"],
         )
 
+    # Delete existing timings for this segment (overwrite mode)
+    supabase.table("timings").delete().eq("segment_id", segment_id).execute()
+
+    # If no timings to insert, just return empty list (delete-only operation)
+    if not timings_data:
+        return []
+
     records_to_insert = []
     for timing in timings_data:
         records_to_insert.append(

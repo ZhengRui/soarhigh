@@ -3,7 +3,7 @@
 import React from 'react';
 import { Bell } from 'lucide-react';
 import { TimingIF, SegmentIF } from '@/interfaces';
-import { dotColors } from '@/utils/timing';
+import { dotColors, TABLE_TOPICS_SEGMENT_TYPE } from '@/utils/timing';
 
 interface SegmentCardProps {
   segment: SegmentIF;
@@ -11,6 +11,7 @@ interface SegmentCardProps {
   timing: TimingIF | null;
   onClick: () => void;
   disabled?: boolean;
+  isRunning?: boolean;
 }
 
 // Abbreviate segment type for card display
@@ -71,6 +72,7 @@ export function SegmentCard({
   timing,
   onClick,
   disabled = false,
+  isRunning = false,
 }: SegmentCardProps) {
   const abbreviatedType = abbreviateType(segment.type);
   const roleTaker = segment.role_taker?.name;
@@ -84,9 +86,11 @@ export function SegmentCard({
         min-w-[140px] max-w-[160px] p-2.5
         rounded-lg border transition-all
         ${
-          isSelected
-            ? 'border-indigo-400 bg-indigo-50 shadow-sm'
-            : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+          isRunning
+            ? 'border-indigo-500 bg-indigo-50 shadow-md shadow-indigo-200 ring-2 ring-indigo-300 ring-opacity-50 animate-pulse'
+            : isSelected
+              ? 'border-indigo-400 bg-indigo-50 shadow-sm'
+              : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
         }
         ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
       `}
@@ -108,7 +112,8 @@ export function SegmentCard({
           >
             {formatDurationWithUnit(segment.duration)}
           </span>
-          {timing && (
+          {/* Hide timing info for Table Topics (multi-speaker session) */}
+          {timing && segment.type !== TABLE_TOPICS_SEGMENT_TYPE && (
             <>
               <span
                 className={`text-[10px] ${isSelected ? 'text-indigo-300' : 'text-gray-300'}`}

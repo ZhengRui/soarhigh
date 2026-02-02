@@ -167,11 +167,7 @@ async def create_meeting_timings_batch(
     if not validate_segments_belong_to_meeting(meeting_id, [batch_data.segment_id]):
         raise HTTPException(status_code=422, detail="Segment does not belong to this meeting")
 
-    # Validate we have timings to create
-    if not batch_data.timings:
-        raise HTTPException(status_code=422, detail="No timings provided")
-
-    # Convert to dict format for db function
+    # Convert to dict format for db function (empty list is valid - means delete all)
     timings_data = [
         {
             "name": t.name,
@@ -182,7 +178,7 @@ async def create_meeting_timings_batch(
         for t in batch_data.timings
     ]
 
-    # Create timing records
+    # Create timing records (or delete all if empty list)
     try:
         timings = create_timings_batch(
             meeting_id=meeting_id,

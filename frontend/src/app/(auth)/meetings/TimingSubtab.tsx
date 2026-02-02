@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useAtom } from 'jotai';
 import { createPortal } from 'react-dom';
 import { Play, Square, Bell } from 'lucide-react';
 import { TimingIF, TimingCreateIF, SegmentIF } from '@/interfaces';
@@ -11,10 +12,15 @@ import {
   formatDuration,
   formatTime,
   getTimingsForSegment,
+  timerTextColors,
+  TABLE_TOPICS_SEGMENT_TYPE,
 } from '@/utils/timing';
 import { useCreateTiming } from '@/hooks/useSegmentTimings';
+import { runningTimerAtom, selectedSegmentIdAtom } from '@/atoms/timerAtoms';
 import toast from 'react-hot-toast';
 import { SegmentCard } from './SegmentCard';
+import { TableTopicsTimer } from './TableTopicsTimer';
+import { CardSignals } from './TimerComponents';
 
 interface TimingSubtabProps {
   meetingId: string;
@@ -40,7 +46,7 @@ function parseDurationToMinutes(duration: string): number {
 
 // Check if segment is Table Topic Session (the only special segment type)
 function isTableTopicsSegment(segment: SegmentIF): boolean {
-  return segment.type === 'Table Topic Session';
+  return segment.type === TABLE_TOPICS_SEGMENT_TYPE;
 }
 
 export function TimingSubtab({
@@ -48,13 +54,15 @@ export function TimingSubtab({
   segments,
   timings,
 }: TimingSubtabProps) {
-  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(
-    null
-  );
-  const [isRunning, setIsRunning] = useState(false);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Use Jotai atoms for persistent state
+  const [runningTimer, setRunningTimer] = useAtom(runningTimerAtom);
+  const [selectedSegmentId, setSelectedSegmentId] = useAtom(
+    selectedSegmentIdAtom
+  );
 
   const createTimingMutation = useCreateTiming(meetingId);
 
@@ -63,6 +71,14 @@ export function TimingSubtab({
   const plannedMinutes = selectedSegment
     ? parseDurationToMinutes(selectedSegment.duration)
     : 0;
+
+  // Check if this segment's timer is running (for regular segments, not Table Topics)
+  const isThisSegmentRunning =
+    runningTimer?.segmentId === selectedSegmentId && runningTimer.isRunning;
+
+  // Check if any timer is running (could be on a different segment)
+  const isAnyTimerRunning = runningTimer?.isRunning ?? false;
+  const runningSegmentId = runningTimer?.segmentId ?? null;
 
   // Get timings for selected segment
   const segmentTimings = selectedSegmentId
@@ -73,46 +89,71 @@ export function TimingSubtab({
     ? segmentTimings[segmentTimings.length - 1]
     : null;
 
-  // Update elapsed time when running
+  // Update elapsed time when this segment's timer is running
   useEffect(() => {
-    if (!isRunning || !startedAt) return;
+    if (!isThisSegmentRunning || !runningTimer?.startedAt) {
+      // Don't reset elapsed if we're saving (keep it frozen)
+      return;
+    }
+
+    // Capture startedAt to satisfy TypeScript in the interval callback
+    const startedAt = runningTimer.startedAt;
+
+    // Immediately calculate elapsed on mount
+    setElapsed(Math.floor((Date.now() - startedAt) / 1000));
 
     const interval = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startedAt) / 1000));
     }, 100);
 
     return () => clearInterval(interval);
-  }, [isRunning, startedAt]);
+  }, [isThisSegmentRunning, runningTimer?.startedAt]);
 
   // Auto-select first segment if none selected
   useEffect(() => {
     if (!selectedSegmentId && segments.length > 0) {
       setSelectedSegmentId(segments[0].id);
     }
-  }, [segments, selectedSegmentId]);
+  }, [segments, selectedSegmentId, setSelectedSegmentId]);
+
+  // Check if selected segment is Table Topics
+  const isTableTopics =
+    selectedSegment && isTableTopicsSegment(selectedSegment);
+
+  const startTimer = useCallback(() => {
+    if (!selectedSegmentId) return;
+    setRunningTimer({
+      segmentId: selectedSegmentId,
+      isRunning: true,
+      startedAt: Date.now(),
+      speakerName: '', // Not used for regular segments
+    });
+    setElapsed(0);
+  }, [selectedSegmentId, setRunningTimer]);
 
   const handleStartClick = useCallback(() => {
     if (hasTiming) {
       setShowConfirmDialog(true);
     } else {
-      setStartedAt(Date.now());
-      setIsRunning(true);
-      setElapsed(0);
+      startTimer();
     }
-  }, [hasTiming]);
+  }, [hasTiming, startTimer]);
 
   const handleConfirmStart = useCallback(() => {
     setShowConfirmDialog(false);
-    setStartedAt(Date.now());
-    setIsRunning(true);
-    setElapsed(0);
-  }, []);
+    startTimer();
+  }, [startTimer]);
 
   const handleStop = useCallback(async () => {
-    if (!startedAt || !selectedSegment) return;
+    if (!runningTimer?.startedAt || !selectedSegment) return;
 
+    // Capture values before clearing state
+    const startedAt = runningTimer.startedAt;
     const endTime = Date.now();
-    setIsRunning(false);
+
+    // Stop the timer immediately (so counter stops updating) but keep elapsed frozen
+    setRunningTimer(null);
+    setIsSaving(true);
 
     const timingData: TimingCreateIF = {
       segment_id: selectedSegment.id,
@@ -125,27 +166,25 @@ export function TimingSubtab({
     try {
       await createTimingMutation.mutateAsync(timingData);
       toast.success('Timing saved!');
-      setStartedAt(null);
-      setElapsed(0);
+      setElapsed(0); // Only reset after successful save
     } catch (error) {
       toast.error('Failed to save timing');
       console.error('Failed to save timing:', error);
+    } finally {
+      setIsSaving(false);
     }
-  }, [startedAt, selectedSegment, plannedMinutes, createTimingMutation]);
+  }, [
+    runningTimer,
+    selectedSegment,
+    plannedMinutes,
+    createTimingMutation,
+    setRunningTimer,
+  ]);
 
   // Get current zone color
   const zone = getCountdownZone(plannedMinutes, elapsed);
   const cards = getCardTimes(plannedMinutes);
   const remaining = Math.max(0, cards.red - elapsed);
-
-  // Timer text colors based on zone
-  const timerTextColor: Record<string, string> = {
-    gray: 'text-gray-400',
-    green: 'text-green-600',
-    yellow: 'text-yellow-600',
-    red: 'text-red-600',
-    overtime: 'text-red-600',
-  };
 
   return (
     <div className='space-y-4'>
@@ -171,20 +210,26 @@ export function TimingSubtab({
                 segment={segment}
                 isSelected={segment.id === selectedSegmentId}
                 timing={latestTiming}
-                onClick={() => {
-                  if (!isRunning) {
-                    setSelectedSegmentId(segment.id);
-                  }
-                }}
-                disabled={isRunning}
+                onClick={() => setSelectedSegmentId(segment.id)}
+                disabled={false}
+                isRunning={segment.id === runningSegmentId && isAnyTimerRunning}
               />
             );
           })}
         </div>
       </div>
 
-      {/* Countdown Area */}
-      {selectedSegment && (
+      {/* Table Topics Timer - special UI for multiple speakers */}
+      {selectedSegment && isTableTopics && (
+        <TableTopicsTimer
+          meetingId={meetingId}
+          segment={selectedSegment}
+          timings={getTimingsForSegment(timings, selectedSegment.id)}
+        />
+      )}
+
+      {/* Regular Countdown Area */}
+      {selectedSegment && !isTableTopics && (
         <div className='bg-white border border-gray-200 rounded-lg p-5 sm:p-6'>
           {/* Header: Centered stack on mobile, two-column on desktop */}
           <div className='text-center sm:text-left sm:flex sm:items-start sm:justify-between sm:gap-4 mb-4'>
@@ -203,30 +248,11 @@ export function TimingSubtab({
             </div>
             {/* Right: Checkpoints and used duration */}
             <div className='mt-2 sm:mt-0 sm:text-right space-y-1 sm:space-y-0'>
-              {/* Card signal times - fixed width for consistency */}
-              <div className='flex items-center justify-center sm:justify-end gap-3 text-xs'>
-                <span className='text-green-600 font-mono'>
-                  <span className='inline-block w-2 h-2 bg-green-500 rounded-full mr-1'></span>
-                  <span className='inline-block w-10 text-left'>
-                    {formatDuration(cards.green)}
-                  </span>
-                </span>
-                <span className='text-yellow-600 font-mono'>
-                  <span className='inline-block w-2 h-2 bg-yellow-500 rounded-full mr-1'></span>
-                  <span className='inline-block w-10 text-left'>
-                    {formatDuration(cards.yellow)}
-                  </span>
-                </span>
-                <span className='text-red-600 font-mono'>
-                  <span className='inline-block w-2 h-2 bg-red-500 rounded-full mr-1'></span>
-                  <span className='inline-block w-10 text-left'>
-                    {formatDuration(cards.red)}
-                  </span>
-                </span>
-              </div>
+              {/* Card signal times */}
+              <CardSignals plannedMinutes={plannedMinutes} />
               {/* Previous timing info - always reserve height */}
               <div className='text-xs text-gray-400 h-8 flex flex-col items-center sm:items-end justify-center sm:mt-1'>
-                {latestTiming && !isRunning && (
+                {latestTiming && !isThisSegmentRunning && (
                   <>
                     <span className='font-mono tabular-nums'>
                       {formatTime(latestTiming.actual_start_time)} -{' '}
@@ -258,19 +284,21 @@ export function TimingSubtab({
             <div className='relative inline-flex items-center justify-center'>
               <span
                 className={`text-5xl sm:text-6xl font-mono font-bold tracking-tight transition-colors tabular-nums ${
-                  isRunning ? timerTextColor[zone] : 'text-gray-300'
+                  isThisSegmentRunning || isSaving
+                    ? timerTextColors[zone]
+                    : 'text-gray-300'
                 }`}
               >
-                {formatDuration(elapsed)}
+                {formatDuration(isThisSegmentRunning || isSaving ? elapsed : 0)}
               </span>
               {/* Bell icon when 30+ seconds over - floated to the right */}
-              {isRunning && zone === 'overtime' && (
+              {isThisSegmentRunning && zone === 'overtime' && (
                 <Bell className='absolute -right-10 sm:-right-12 w-8 h-8 sm:w-10 sm:h-10 text-red-600 fill-red-600 animate-pulse' />
               )}
             </div>
             {/* Time hint - always reserve height */}
             <p className='text-xs text-gray-400 mt-2 h-4 tabular-nums'>
-              {isRunning &&
+              {isThisSegmentRunning &&
                 (elapsed >= cards.red
                   ? `${formatDuration(elapsed - cards.red)} over`
                   : `${formatDuration(remaining)} remaining`)}
@@ -279,10 +307,18 @@ export function TimingSubtab({
 
           {/* Control Button */}
           <div className='flex justify-center mt-2'>
-            {!isRunning ? (
+            {isSaving ? (
+              <button
+                disabled
+                className='flex items-center justify-center gap-2 py-2 px-6 rounded-md text-sm font-medium text-white bg-gray-600 opacity-50 cursor-not-allowed'
+              >
+                Saving...
+              </button>
+            ) : !isThisSegmentRunning ? (
               <button
                 onClick={handleStartClick}
-                className='flex items-center justify-center gap-2 py-2 px-6 rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 transition-colors'
+                disabled={isAnyTimerRunning}
+                className='flex items-center justify-center gap-2 py-2 px-6 rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
               >
                 <Play className='w-4 h-4' />
                 Start
@@ -290,11 +326,10 @@ export function TimingSubtab({
             ) : (
               <button
                 onClick={handleStop}
-                disabled={createTimingMutation.isPending}
-                className='flex items-center justify-center gap-2 py-2 px-6 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-900 transition-colors disabled:opacity-50'
+                className='flex items-center justify-center gap-2 py-2 px-6 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-900 transition-colors'
               >
                 <Square className='w-4 h-4' />
-                {createTimingMutation.isPending ? 'Saving...' : 'Stop'}
+                Stop
               </button>
             )}
           </div>
@@ -338,17 +373,6 @@ export function TimingSubtab({
           </div>,
           document.body
         )}
-
-      {/* Table Topics Note */}
-      {selectedSegment && isTableTopicsSegment(selectedSegment) && (
-        <div className='p-4 bg-amber-50 rounded-lg text-sm text-amber-700'>
-          <p className='font-medium mb-1'>Table Topics Session</p>
-          <p>
-            For multiple speakers, time each one individually. The batch timing
-            feature will be available in a future update.
-          </p>
-        </div>
-      )}
     </div>
   );
 }

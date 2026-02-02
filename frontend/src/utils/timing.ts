@@ -8,6 +8,12 @@ import { requestTemplate, responseHandlerTemplate } from './requestTemplate';
 
 const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT;
 
+// Segment type constant for Table Topics (multi-speaker session)
+export const TABLE_TOPICS_SEGMENT_TYPE = 'Table Topic Session';
+
+// Fixed duration for Table Topics speakers (2 minutes)
+export const TABLE_TOPICS_SPEAKER_MINUTES = 2;
+
 // Shared dot color mapping for timing status indicators
 export const dotColors: Record<string, string> = {
   gray: 'bg-gray-400',
@@ -15,6 +21,15 @@ export const dotColors: Record<string, string> = {
   yellow: 'bg-yellow-500',
   red: 'bg-red-500',
   bell: 'bg-red-600',
+};
+
+// Timer text colors based on countdown zone
+export const timerTextColors: Record<string, string> = {
+  gray: 'text-gray-400',
+  green: 'text-green-600',
+  yellow: 'text-yellow-600',
+  red: 'text-red-600',
+  overtime: 'text-red-600',
 };
 
 /**
@@ -171,6 +186,23 @@ export function formatTime(isoString: string): string {
     second: '2-digit',
     hour12: false,
   });
+}
+
+/**
+ * Calculate dot color for a timing based on Toastmasters card signals.
+ * Used for frontend preview of cached Table Topics entries before saving.
+ */
+export function getTimingDotColor(
+  plannedMinutes: number,
+  actualSeconds: number
+): 'gray' | 'green' | 'yellow' | 'red' | 'bell' {
+  const cards = getCardTimes(plannedMinutes);
+
+  if (actualSeconds < cards.green) return 'gray';
+  if (actualSeconds < cards.yellow) return 'green';
+  if (actualSeconds < cards.red) return 'yellow';
+  if (actualSeconds < cards.red + 30) return 'red';
+  return 'bell';
 }
 
 /**
