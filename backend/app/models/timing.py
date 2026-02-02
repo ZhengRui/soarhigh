@@ -92,3 +92,9 @@ class TimingBatchAllCreate(BaseModel):
     """Model for batch creating timing records across multiple segments."""
 
     segments: List[TimingBatchAllSegment] = Field(description="List of segments with their timing records.")
+
+
+class TimingDeleteResponse(BaseModel):
+    """Response model for timing deletion."""
+
+    success: bool = Field(description="Whether the deletion was successful.")

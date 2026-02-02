@@ -7,6 +7,7 @@ from ...db.core import (
     create_timing,
     create_timings_batch,
     create_timings_batch_all,
+    delete_timing,
     get_extended_user_wxid,
     get_meeting_by_id,
     get_timings_by_meeting,
@@ -18,6 +19,7 @@ from ...models.timing import (
     TimingBatchCreate,
     TimingBatchResponse,
     TimingCreate,
+    TimingDeleteResponse,
     TimingResponse,
     TimingsListResponse,
 )
@@ -59,7 +61,7 @@ async def get_meeting_timings(
 
     # Check if user can control timer
     wxid = get_extended_user_wxid(current_user) if current_user else None
-    can_control = can_control_timer(meeting_id, wxid)
+    can_control = can_control_timer(meeting_id, wxid, user_id)
 
     # Get timing records
     timings = get_timings_by_meeting(meeting_id)
@@ -100,10 +102,10 @@ async def create_meeting_timing(
 
     # Check if user can control timer
     wxid = get_extended_user_wxid(current_user)
-    if not can_control_timer(meeting_id, wxid):
+    if not can_control_timer(meeting_id, wxid, user_id):
         raise HTTPException(
             status_code=403,
-            detail="Only the Timer can create timing records. Please check in as Timer first.",
+            detail="Only the Timer or an admin can create timing records.",
         )
 
     # Validate segment belongs to meeting
@@ -159,10 +161,10 @@ async def create_meeting_timings_batch(
 
     # Check if user can control timer
     wxid = get_extended_user_wxid(current_user)
-    if not can_control_timer(meeting_id, wxid):
+    if not can_control_timer(meeting_id, wxid, user_id):
         raise HTTPException(
             status_code=403,
-            detail="Only the Timer can create timing records. Please check in as Timer first.",
+            detail="Only the Timer or an admin can create timing records.",
         )
 
     # Validate segment belongs to meeting
@@ -232,10 +234,10 @@ async def create_meeting_timings_batch_all(
 
     # Check if user can control timer
     wxid = get_extended_user_wxid(current_user)
-    if not can_control_timer(meeting_id, wxid):
+    if not can_control_timer(meeting_id, wxid, user_id):
         raise HTTPException(
             status_code=403,
-            detail="Only the Timer can create timing records. Please check in as Timer first.",
+            detail="Only the Timer or an admin can create timing records.",
         )
 
     # Validate all segments belong to meeting
@@ -270,3 +272,52 @@ async def create_meeting_timings_batch_all(
         return TimingBatchResponse(success=True, timings=timing_models)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create timings: {e!s}")
+
+
+@r.delete("/meetings/{meeting_id}/timings/{timing_id}", response_model=TimingDeleteResponse)
+async def delete_meeting_timing(
+    meeting_id: str = Path(..., description="The ID of the meeting"),
+    timing_id: str = Path(..., description="The ID of the timing record to delete"),
+    current_user: Union[User, WeChatUser] = Depends(get_current_extended_user),
+):
+    """
+    Delete a single timing record.
+
+    Only the person checked in as Timer can delete timing records.
+
+    Args:
+        meeting_id: The ID of the meeting
+        timing_id: The ID of the timing record to delete
+        current_user: Authenticated user (must be the Timer)
+
+    Returns:
+        TimingDeleteResponse indicating success
+
+    Raises:
+        HTTPException 403: If user is not the Timer
+        HTTPException 404: If meeting or timing not found
+    """
+    # Validate meeting exists
+    user_id = current_user.uid if isinstance(current_user, User) else None
+    meeting = get_meeting_by_id(meeting_id, user_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    # Check if user can control timer
+    wxid = get_extended_user_wxid(current_user)
+    if not can_control_timer(meeting_id, wxid, user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the Timer or an admin can delete timing records.",
+        )
+
+    # Delete the timing
+    try:
+        deleted = delete_timing(timing_id, meeting_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Timing record not found")
+        return TimingDeleteResponse(success=True)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete timing: {e!s}")

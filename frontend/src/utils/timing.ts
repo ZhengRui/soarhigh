@@ -81,6 +81,29 @@ export const createTimingBatchAll = requestTemplate(
 );
 
 /**
+ * Deletes a single timing record
+ * Only the Timer role holder can delete timing records
+ * @param meetingId The meeting ID
+ * @param timingId The timing record ID to delete
+ * @returns Success response
+ */
+export const deleteTiming = requestTemplate(
+  (meetingId: string, timingId: string) => ({
+    url: `${apiEndpoint}/meetings/${meetingId}/timings/${timingId}`,
+    method: 'DELETE',
+    headers: new Headers({
+      Accept: 'application/json',
+    }),
+  }),
+  async (response: Response): Promise<{ success: boolean }> => {
+    const data = await responseHandlerTemplate(response);
+    return data;
+  },
+  null,
+  true // Requires authentication
+);
+
+/**
  * Helper to get timing for a specific segment
  * @param timings All timings
  * @param segmentId The segment ID to find
@@ -204,5 +227,22 @@ export function getTimingTooltip(timing: TimingIF): string {
   const end = formatTime(timing.actual_end_time);
   const mins = Math.floor(timing.actual_duration_seconds / 60);
   const secs = timing.actual_duration_seconds % 60;
+  return `${start} - ${end} (${mins.toString().padStart(2, '0')}m${secs.toString().padStart(2, '0')}s)`;
+}
+
+/**
+ * Get tooltip content for a cached timing entry
+ * @param entry The cached timing entry with startedAt/endedAt timestamps
+ * @returns Tooltip string like "20:12 - 20:19 (06m48s)"
+ */
+export function getCachedTimingTooltip(entry: {
+  startedAt: number;
+  endedAt: number;
+}): string {
+  const start = formatTime(new Date(entry.startedAt).toISOString());
+  const end = formatTime(new Date(entry.endedAt).toISOString());
+  const durationSeconds = Math.floor((entry.endedAt - entry.startedAt) / 1000);
+  const mins = Math.floor(durationSeconds / 60);
+  const secs = durationSeconds % 60;
   return `${start} - ${end} (${mins.toString().padStart(2, '0')}m${secs.toString().padStart(2, '0')}s)`;
 }

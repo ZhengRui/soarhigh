@@ -1,56 +1,45 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Play, Square } from 'lucide-react';
-import { SegmentIF, TimingIF } from '@/interfaces';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Play, Square, ChevronLeft, ChevronRight } from 'lucide-react';
+import { SegmentIF } from '@/interfaces';
 import {
   getTimingDotColor,
   TABLE_TOPICS_SPEAKER_MINUTES,
 } from '@/utils/timing';
-import {
-  CachedTimingsState,
-  CachedTimingEntry,
-  DotColor,
-} from '@/utils/timingStorage';
+import { CachedTimingsState, CachedTimingEntry } from '@/utils/timingStorage';
 import toast from 'react-hot-toast';
 import { CardSignals, TimerDisplay } from './TimerComponents';
 import { RunningTimerState } from './TimerTab';
 
 interface TableTopicsTimerProps {
   segment: SegmentIF;
-  timings: TimingIF[]; // Existing timings for this segment from server
   // Lifted state from TimerTab
   runningTimer: RunningTimerState | null;
   setRunningTimer: (state: RunningTimerState | null) => void;
   // Cached timings from localStorage (managed by TimerTab)
   cachedTimings: CachedTimingsState;
   updateCache: (cache: CachedTimingsState) => void;
-}
-
-// Convert server TimingIF to local CachedTimingEntry format
-function serverTimingToCached(timing: TimingIF): CachedTimingEntry {
-  return {
-    name: timing.name ?? null,
-    plannedDurationMinutes: timing.planned_duration_minutes,
-    startedAt: new Date(timing.actual_start_time).getTime(),
-    endedAt: new Date(timing.actual_end_time).getTime(),
-    dotColor: timing.dot_color as DotColor,
-  };
+  // Navigation
+  canGoPrev: boolean;
+  canGoNext: boolean;
+  onGoPrev: () => void;
+  onGoNext: () => void;
 }
 
 export function TableTopicsTimer({
   segment,
-  timings,
   runningTimer,
   setRunningTimer,
   cachedTimings,
   updateCache,
+  canGoPrev,
+  canGoNext,
+  onGoPrev,
+  onGoNext,
 }: TableTopicsTimerProps) {
   const [speakerNameInput, setSpeakerNameInput] = useState('');
   const [elapsed, setElapsed] = useState(0);
-
-  // Track if we've initialized from server data for this segment
-  const initializedSegmentRef = useRef<string | null>(null);
 
   // Check if this segment's timer is running
   const isThisSegmentRunning =
@@ -93,33 +82,6 @@ export function TableTopicsTimer({
     },
     [segment.id, segment.type, cachedTimings, updateCache]
   );
-
-  // Initialize from server timings when segment changes or on first load
-  useEffect(() => {
-    // Only initialize if we haven't already for this segment
-    if (initializedSegmentRef.current === segment.id) {
-      return;
-    }
-
-    // Check if this segment has been initialized (key exists in cachedTimings)
-    // This distinguishes "never loaded" from "user deleted all speakers"
-    const hasBeenInitialized = segment.id in cachedTimings;
-
-    if (!hasBeenInitialized && timings.length > 0) {
-      // First time loading this segment - populate from server timings
-      const converted = timings.map(serverTimingToCached);
-      updateCache({
-        ...cachedTimings,
-        [segment.id]: {
-          segmentId: segment.id,
-          segmentType: segment.type,
-          entries: converted,
-        },
-      });
-    }
-
-    initializedSegmentRef.current = segment.id;
-  }, [segment.id, segment.type, timings, cachedTimings, updateCache]);
 
   // Fixed 2 minutes per speaker
   const plannedMinutes = TABLE_TOPICS_SPEAKER_MINUTES;
@@ -218,8 +180,19 @@ export function TableTopicsTimer({
         isRunning={isThisSegmentRunning}
       />
 
-      {/* Control Button */}
-      <div className='flex justify-center mt-2'>
+      {/* Control Buttons */}
+      <div className='flex items-center justify-center gap-3 mt-2'>
+        {/* Prev Button */}
+        <button
+          onClick={onGoPrev}
+          disabled={!canGoPrev || isThisSegmentRunning}
+          className='flex items-center justify-center w-10 h-10 rounded-full text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed'
+          title='Previous segment'
+        >
+          <ChevronLeft className='w-5 h-5' />
+        </button>
+
+        {/* Start/Stop Button */}
         {!isThisSegmentRunning ? (
           <button
             onClick={handleStart}
@@ -238,6 +211,16 @@ export function TableTopicsTimer({
             Stop
           </button>
         )}
+
+        {/* Next Button */}
+        <button
+          onClick={onGoNext}
+          disabled={!canGoNext || isThisSegmentRunning}
+          className='flex items-center justify-center w-10 h-10 rounded-full text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed'
+          title='Next segment'
+        >
+          <ChevronRight className='w-5 h-5' />
+        </button>
       </div>
     </div>
   );

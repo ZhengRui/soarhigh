@@ -1,14 +1,20 @@
 'use client';
 
-import React from 'react';
-import { Bell } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { Bell, Users } from 'lucide-react';
 import { TimingIF, SegmentIF } from '@/interfaces';
-import { dotColors, TABLE_TOPICS_SEGMENT_TYPE } from '@/utils/timing';
+import {
+  dotColors,
+  TABLE_TOPICS_SEGMENT_TYPE,
+  formatDuration,
+} from '@/utils/timing';
 
 interface SegmentCardProps {
   segment: SegmentIF;
   isSelected: boolean;
   timing: TimingIF | null;
+  allTimings?: TimingIF[]; // All timings for Table Topics (multiple speakers)
   onClick: () => void;
   disabled?: boolean;
   isRunning?: boolean;
@@ -71,6 +77,7 @@ export function SegmentCard({
   segment,
   isSelected,
   timing,
+  allTimings = [],
   onClick,
   disabled = false,
   isRunning = false,
@@ -78,6 +85,55 @@ export function SegmentCard({
 }: SegmentCardProps) {
   const abbreviatedType = abbreviateType(segment.type);
   const roleTaker = segment.role_taker?.name;
+  const isTableTopics = segment.type === TABLE_TOPICS_SEGMENT_TYPE;
+
+  // Popover state for Table Topics speakers
+  const [showSpeakers, setShowSpeakers] = useState(false);
+  const [popoverPosition, setPopoverPosition] = useState({ top: 0, left: 0 });
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  // Handle opening popover - calculate position immediately
+  const handleToggleSpeakers = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (allTimings.length === 0) return;
+
+    if (!showSpeakers && triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPopoverPosition({
+        top: rect.bottom + 4,
+        left: rect.left,
+      });
+    }
+    setShowSpeakers(!showSpeakers);
+  };
+
+  // Close popover when clicking outside or scrolling
+  useEffect(() => {
+    if (!showSpeakers) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        popoverRef.current &&
+        !popoverRef.current.contains(e.target as Node) &&
+        triggerRef.current &&
+        !triggerRef.current.contains(e.target as Node)
+      ) {
+        setShowSpeakers(false);
+      }
+    };
+
+    const handleScroll = () => {
+      setShowSpeakers(false);
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('scroll', handleScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [showSpeakers]);
 
   // Determine card styling based on state
   const getCardClasses = () => {
@@ -97,9 +153,16 @@ export function SegmentCard({
   };
 
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
+    <div
+      role='button'
+      tabIndex={disabled ? -1 : 0}
+      onClick={disabled ? undefined : onClick}
+      onKeyDown={(e) => {
+        if (!disabled && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       className={`
         relative flex flex-col items-start text-left
         min-w-[140px] max-w-[160px] p-2.5
@@ -161,16 +224,85 @@ export function SegmentCard({
         {abbreviatedType}
       </span>
 
-      {/* Role taker */}
-      {roleTaker && (
-        <span
-          className={`text-[10px] mt-1 truncate w-full ${
-            isSelected ? 'text-indigo-500' : 'text-gray-400'
-          }`}
-        >
-          {roleTaker}
-        </span>
+      {/* Role taker or Table Topics speakers icon */}
+      {isTableTopics ? (
+        <div className='mt-1'>
+          <button
+            ref={triggerRef}
+            onClick={handleToggleSpeakers}
+            className={`flex items-center gap-1 text-[10px] ${
+              allTimings.length > 0
+                ? isSelected
+                  ? 'text-indigo-500 hover:text-indigo-600'
+                  : 'text-gray-400 hover:text-gray-600'
+                : isSelected
+                  ? 'text-indigo-300'
+                  : 'text-gray-300'
+            } transition-colors`}
+            disabled={allTimings.length === 0}
+          >
+            <Users className='w-3 h-3' />
+            <span>
+              {allTimings.length} speaker{allTimings.length !== 1 ? 's' : ''}
+            </span>
+          </button>
+
+          {/* Speakers Popover - rendered via portal to avoid clipping */}
+          {showSpeakers &&
+            allTimings.length > 0 &&
+            typeof window !== 'undefined' &&
+            createPortal(
+              <div
+                ref={popoverRef}
+                className='fixed z-[9999] bg-white border border-gray-200 rounded-lg shadow-lg p-2 min-w-[160px] max-w-[200px]'
+                style={{
+                  top: popoverPosition.top,
+                  left: popoverPosition.left,
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className='text-[10px] font-medium text-gray-500 mb-1.5 px-1'>
+                  Speakers ({allTimings.length})
+                </div>
+                <div className='space-y-1 max-h-[150px] overflow-y-auto'>
+                  {allTimings.map((t, idx) => (
+                    <div
+                      key={t.id || idx}
+                      className='flex items-center justify-between gap-2 px-1 py-0.5 rounded hover:bg-gray-50'
+                    >
+                      <div className='flex items-center gap-1.5 min-w-0'>
+                        {t.dot_color === 'bell' ? (
+                          <Bell className='w-2.5 h-2.5 text-red-600 fill-red-600 flex-shrink-0' />
+                        ) : (
+                          <div
+                            className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColors[t.dot_color]}`}
+                          />
+                        )}
+                        <span className='text-[10px] text-gray-700 truncate'>
+                          {t.name || 'Speaker'}
+                        </span>
+                      </div>
+                      <span className='text-[10px] font-mono text-gray-500 flex-shrink-0'>
+                        {formatDuration(t.actual_duration_seconds)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>,
+              document.body
+            )}
+        </div>
+      ) : (
+        roleTaker && (
+          <span
+            className={`text-[10px] mt-1 truncate w-full ${
+              isSelected ? 'text-indigo-500' : 'text-gray-400'
+            }`}
+          >
+            {roleTaker}
+          </span>
+        )
       )}
-    </button>
+    </div>
   );
 }

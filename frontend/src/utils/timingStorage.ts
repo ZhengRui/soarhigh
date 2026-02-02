@@ -118,10 +118,13 @@ export function clearCachedTimings(meetingId: string): void {
 }
 
 /**
- * Get the count of segments with unsaved timings.
+ * Get the total count of unsaved timing entries across all segments.
  */
 export function getUnsavedCount(data: CachedTimingsState): number {
-  return Object.keys(data).length;
+  return Object.values(data).reduce(
+    (total, seg) => total + seg.entries.length,
+    0
+  );
 }
 
 /**

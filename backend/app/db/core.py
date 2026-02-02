@@ -1635,19 +1635,26 @@ def get_timer_segment_id(meeting_id: str) -> Optional[str]:
     return None
 
 
-def can_control_timer(meeting_id: str, wxid: Optional[str]) -> bool:
+def can_control_timer(meeting_id: str, wxid: Optional[str], user_id: Optional[str] = None) -> bool:
     """
     Check if a user can control the timer for a meeting.
 
-    Only the person checked in as Timer can control timing.
+    Returns True if:
+    - User is an admin, OR
+    - User is checked in as Timer for this meeting
 
     Args:
         meeting_id: The ID of the meeting
         wxid: The wxid of the user to check
+        user_id: Optional user ID to check admin status
 
     Returns:
         True if the user can control the timer, False otherwise
     """
+    # Check if user is admin
+    if user_id and is_user_admin(user_id):
+        return True
+
     if not wxid:
         return False
 
@@ -2042,3 +2049,32 @@ def create_timings_batch_all(
             )
 
     return all_created_timings
+
+
+def delete_timing(timing_id: str, meeting_id: str) -> bool:
+    """
+    Delete a single timing record by ID.
+
+    Args:
+        timing_id: The ID of the timing record to delete
+        meeting_id: The ID of the meeting (for validation)
+
+    Returns:
+        True if the timing was deleted, False if not found
+
+    Raises:
+        ValueError: If the timing doesn't belong to the specified meeting
+    """
+    # First verify the timing exists and belongs to the meeting
+    result = supabase.table("timings").select("id, meeting_id").eq("id", timing_id).execute()
+
+    if not result.data:
+        return False
+
+    timing = result.data[0]
+    if timing["meeting_id"] != meeting_id:
+        raise ValueError("Timing does not belong to this meeting")
+
+    # Delete the timing
+    supabase.table("timings").delete().eq("id", timing_id).execute()
+    return True

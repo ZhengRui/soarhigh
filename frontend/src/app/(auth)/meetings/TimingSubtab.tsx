@@ -2,7 +2,16 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Play, Square, Bell, Save, X } from 'lucide-react';
+import {
+  Play,
+  Square,
+  Bell,
+  Save,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Trash2,
+} from 'lucide-react';
 import { TimingIF, SegmentIF } from '@/interfaces';
 import {
   dotColors,
@@ -15,6 +24,7 @@ import {
   getTimingDotColor,
   timerTextColors,
   TABLE_TOPICS_SEGMENT_TYPE,
+  getCachedTimingTooltip,
 } from '@/utils/timing';
 import {
   CachedTimingsState,
@@ -78,7 +88,8 @@ export function TimingSubtab({
   updateCache,
 }: TimingSubtabProps) {
   const [elapsed, setElapsed] = useState(0);
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [showRetimeDialog, setShowRetimeDialog] = useState(false);
+  const [showDiscardDialog, setShowDiscardDialog] = useState(false);
   const [isSavingAll, setIsSavingAll] = useState(false);
   const [showRelative, setShowRelative] = useState(false);
 
@@ -158,16 +169,35 @@ export function TimingSubtab({
   const handleStartClick = useCallback(() => {
     // Check if there's existing timing OR unsaved cached timing
     if (hasTiming || hasCachedTiming) {
-      setShowConfirmDialog(true);
+      setShowRetimeDialog(true);
     } else {
       startTimer();
     }
   }, [hasTiming, hasCachedTiming, startTimer]);
 
   const handleConfirmStart = useCallback(() => {
-    setShowConfirmDialog(false);
+    setShowRetimeDialog(false);
     startTimer();
   }, [startTimer]);
+
+  // Navigation handlers
+  const currentSegmentIndex = segments.findIndex(
+    (s) => s.id === selectedSegmentId
+  );
+  const canGoPrev = currentSegmentIndex > 0;
+  const canGoNext = currentSegmentIndex < segments.length - 1;
+
+  const handleGoPrev = useCallback(() => {
+    if (canGoPrev) {
+      setSelectedSegmentId(segments[currentSegmentIndex - 1].id);
+    }
+  }, [canGoPrev, segments, currentSegmentIndex, setSelectedSegmentId]);
+
+  const handleGoNext = useCallback(() => {
+    if (canGoNext) {
+      setSelectedSegmentId(segments[currentSegmentIndex + 1].id);
+    }
+  }, [canGoNext, segments, currentSegmentIndex, setSelectedSegmentId]);
 
   // Handle stop - cache locally instead of saving immediately
   const handleStop = useCallback(() => {
@@ -237,6 +267,13 @@ export function TimingSubtab({
     }
   }, [cachedTimings, unsavedCount, meetingId, updateCache, queryClient]);
 
+  // Handle Discard All - clear all cached timings
+  const handleDiscardAll = useCallback(() => {
+    clearCachedTimings(meetingId);
+    updateCache({});
+    setShowDiscardDialog(false);
+  }, [meetingId, updateCache]);
+
   // Handle removing a single cached entry
   const handleRemoveCachedEntry = useCallback(
     (segmentId: string, entryIndex: number) => {
@@ -305,6 +342,7 @@ export function TimingSubtab({
             const segmentLatestTiming =
               segTimings.length > 0 ? segTimings[segTimings.length - 1] : null;
             const isCached = hasUnsavedTiming(cachedTimings, segment.id);
+            const isSegmentTableTopics = isTableTopicsSegment(segment);
 
             return (
               <SegmentCard
@@ -312,6 +350,7 @@ export function TimingSubtab({
                 segment={segment}
                 isSelected={segment.id === selectedSegmentId}
                 timing={segmentLatestTiming}
+                allTimings={isSegmentTableTopics ? segTimings : undefined}
                 onClick={() => setSelectedSegmentId(segment.id)}
                 disabled={false}
                 isRunning={segment.id === runningSegmentId && isAnyTimerRunning}
@@ -326,11 +365,14 @@ export function TimingSubtab({
       {selectedSegment && isTableTopics && (
         <TableTopicsTimer
           segment={selectedSegment}
-          timings={getTimingsForSegment(timings, selectedSegment.id)}
           runningTimer={runningTimer}
           setRunningTimer={setRunningTimer}
           cachedTimings={cachedTimings}
           updateCache={updateCache}
+          canGoPrev={canGoPrev}
+          canGoNext={canGoNext}
+          onGoPrev={handleGoPrev}
+          onGoNext={handleGoNext}
         />
       )}
 
@@ -414,8 +456,19 @@ export function TimingSubtab({
             </p>
           </div>
 
-          {/* Control Button */}
-          <div className='flex justify-center mt-2'>
+          {/* Control Buttons */}
+          <div className='flex items-center justify-center gap-3 mt-2'>
+            {/* Prev Button */}
+            <button
+              onClick={handleGoPrev}
+              disabled={!canGoPrev || isThisSegmentRunning}
+              className='flex items-center justify-center w-10 h-10 rounded-full text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed'
+              title='Previous segment'
+            >
+              <ChevronLeft className='w-5 h-5' />
+            </button>
+
+            {/* Start/Stop Button */}
             {!isThisSegmentRunning ? (
               <button
                 onClick={handleStartClick}
@@ -434,28 +487,48 @@ export function TimingSubtab({
                 Stop
               </button>
             )}
+
+            {/* Next Button */}
+            <button
+              onClick={handleGoNext}
+              disabled={!canGoNext || isThisSegmentRunning}
+              className='flex items-center justify-center w-10 h-10 rounded-full text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed'
+              title='Next segment'
+            >
+              <ChevronRight className='w-5 h-5' />
+            </button>
           </div>
         </div>
       )}
 
       {/* Unsaved Changes List */}
       <div className='bg-white border border-gray-200 rounded-lg p-4'>
-        <div className='flex items-center justify-between mb-3'>
+        <div className='flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-2 mb-3'>
           <h4 className='text-xs font-medium text-gray-500'>
             Unsaved Changes ({unsavedEntries.length})
           </h4>
-          <button
-            onClick={handleSaveAll}
-            disabled={isSavingAll || isAnyTimerRunning || unsavedCount === 0}
-            className={`flex items-center justify-center gap-1.5 py-1.5 px-4 rounded-md text-xs font-medium text-white transition-colors ${
-              unsavedCount > 0
-                ? 'bg-amber-600 hover:bg-amber-700'
-                : 'bg-gray-400 cursor-not-allowed'
-            } disabled:opacity-50 disabled:cursor-not-allowed`}
-          >
-            <Save className='w-3.5 h-3.5' />
-            {isSavingAll ? 'Saving...' : 'Save All'}
-          </button>
+          <div className='flex items-center gap-2'>
+            <button
+              onClick={() => setShowDiscardDialog(true)}
+              disabled={unsavedCount === 0}
+              className='flex-1 sm:flex-none flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+            >
+              <Trash2 className='w-3.5 h-3.5' />
+              Discard All
+            </button>
+            <button
+              onClick={handleSaveAll}
+              disabled={isSavingAll || isAnyTimerRunning || unsavedCount === 0}
+              className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 py-1.5 px-4 rounded-md text-xs font-medium text-white transition-colors ${
+                unsavedCount > 0
+                  ? 'bg-amber-600 hover:bg-amber-700'
+                  : 'bg-gray-400 cursor-not-allowed'
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              <Save className='w-3.5 h-3.5' />
+              {isSavingAll ? 'Saving...' : 'Save All'}
+            </button>
+          </div>
         </div>
         {unsavedEntries.length === 0 ? (
           <p className='text-xs text-gray-400 text-center py-2'>
@@ -478,6 +551,7 @@ export function TimingSubtab({
                 <div
                   key={`${segment.id}-${entryIndex}`}
                   className='flex items-center justify-between py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg'
+                  title={getCachedTimingTooltip(entry)}
                 >
                   <div className='flex items-center gap-2 min-w-0'>
                     {entry.dotColor === 'bell' ? (
@@ -531,13 +605,13 @@ export function TimingSubtab({
         )}
       </div>
 
-      {/* Confirmation Dialog - rendered via portal to escape overflow-hidden ancestors */}
-      {showConfirmDialog &&
+      {/* Re-time Confirmation Dialog */}
+      {showRetimeDialog &&
         typeof window !== 'undefined' &&
         createPortal(
           <div
             className='fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]'
-            onClick={() => setShowConfirmDialog(false)}
+            onClick={() => setShowRetimeDialog(false)}
           >
             <div
               className='bg-white rounded-lg p-6 mx-4 max-w-sm sm:max-w-md shadow-xl'
@@ -547,12 +621,13 @@ export function TimingSubtab({
                 Re-time this segment?
               </h4>
               <p className='text-xs sm:text-sm text-gray-500 mb-4'>
-                This segment has already been timed. Starting will create a new
-                timing record.
+                This segment already has a timing record. Starting will cache a
+                new timing locally. Click &quot;Save All&quot; to sync to
+                server.
               </p>
               <div className='flex gap-3 justify-end'>
                 <button
-                  onClick={() => setShowConfirmDialog(false)}
+                  onClick={() => setShowRetimeDialog(false)}
                   className='px-3 py-1.5 text-xs sm:text-sm text-gray-600 hover:text-gray-800 transition-colors'
                 >
                   Cancel
@@ -562,6 +637,45 @@ export function TimingSubtab({
                   className='px-4 py-1.5 text-xs sm:text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors'
                 >
                   Start Anyway
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* Discard All Confirmation Dialog */}
+      {showDiscardDialog &&
+        typeof window !== 'undefined' &&
+        createPortal(
+          <div
+            className='fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]'
+            onClick={() => setShowDiscardDialog(false)}
+          >
+            <div
+              className='bg-white rounded-lg p-6 mx-4 max-w-sm sm:max-w-md shadow-xl'
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h4 className='text-sm sm:text-base font-medium text-gray-900 mb-2'>
+                Discard all unsaved changes?
+              </h4>
+              <p className='text-xs sm:text-sm text-gray-500 mb-4'>
+                This will discard {unsavedCount} locally cached timing
+                {unsavedCount > 1 ? 's' : ''} that haven&apos;t been synced to
+                server. To delete saved records, use the Report tab.
+              </p>
+              <div className='flex gap-3 justify-end'>
+                <button
+                  onClick={() => setShowDiscardDialog(false)}
+                  className='px-3 py-1.5 text-xs sm:text-sm text-gray-600 hover:text-gray-800 transition-colors'
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDiscardAll}
+                  className='px-4 py-1.5 text-xs sm:text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors'
+                >
+                  Discard All
                 </button>
               </div>
             </div>

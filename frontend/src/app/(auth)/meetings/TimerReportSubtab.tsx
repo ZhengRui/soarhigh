@@ -1,18 +1,26 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { TimingIF, SegmentIF } from '@/interfaces';
 import {
   dotColors,
   getTimingTooltip,
   formatDuration,
   formatRelativeDuration,
+  deleteTiming,
 } from '@/utils/timing';
-import { Bell, Clock } from 'lucide-react';
+import { Bell, Clock, X } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
+import type { ReportSortOrder } from './TimerTab';
 
 interface TimerReportSubtabProps {
+  meetingId: string;
   segments: SegmentIF[];
   timings: TimingIF[];
+  canControl: boolean;
+  sortOrder?: ReportSortOrder;
 }
 
 // Labels for each status (based on Toastmasters timing)
@@ -34,7 +42,7 @@ const statusOrder: Record<string, number> = {
 };
 
 // Sort timings by status, then by distance to planned duration
-function sortTimings(timings: TimingIF[]): TimingIF[] {
+function sortByStatus(timings: TimingIF[]): TimingIF[] {
   return [...timings].sort((a, b) => {
     // First sort by status
     const statusDiff = statusOrder[a.dot_color] - statusOrder[b.dot_color];
@@ -46,6 +54,19 @@ function sortTimings(timings: TimingIF[]): TimingIF[] {
     const aDistance = Math.abs(a.actual_duration_seconds - aPlannedSeconds);
     const bDistance = Math.abs(b.actual_duration_seconds - bPlannedSeconds);
     return aDistance - bDistance;
+  });
+}
+
+// Sort timings chronologically by start time
+function sortByTime(timings: TimingIF[]): TimingIF[] {
+  return [...timings].sort((a, b) => {
+    const aTime = a.actual_start_time
+      ? new Date(a.actual_start_time).getTime()
+      : 0;
+    const bTime = b.actual_start_time
+      ? new Date(b.actual_start_time).getTime()
+      : 0;
+    return aTime - bTime;
   });
 }
 
@@ -67,11 +88,18 @@ function countTimingsByColor(timings: TimingIF[]): Record<string, number> {
 }
 
 export function TimerReportSubtab({
+  meetingId,
   segments,
   timings,
+  canControl,
+  sortOrder = 'status',
 }: TimerReportSubtabProps) {
   // Toggle between absolute and relative duration display
   const [showRelative, setShowRelative] = useState(false);
+  const [timingToDelete, setTimingToDelete] = useState<TimingIF | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const queryClient = useQueryClient();
 
   // Create a map from segment_id to segment for quick lookup
   const segmentMap = new Map(segments.map((s) => [s.id, s]));
@@ -81,6 +109,24 @@ export function TimerReportSubtab({
 
   // Order to display groups (by time progression)
   const colorOrder = ['gray', 'green', 'yellow', 'red', 'bell'] as const;
+
+  // Handle delete timing
+  const handleDelete = useCallback(async () => {
+    if (!timingToDelete) return;
+
+    setIsDeleting(true);
+    try {
+      await deleteTiming(meetingId, timingToDelete.id!);
+      queryClient.invalidateQueries({ queryKey: ['timings', meetingId] });
+      toast.success('Timing deleted');
+      setTimingToDelete(null);
+    } catch (error) {
+      toast.error('Failed to delete timing');
+      console.error('Failed to delete timing:', error);
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [timingToDelete, meetingId, queryClient]);
 
   if (timings.length === 0) {
     return (
@@ -131,9 +177,12 @@ export function TimerReportSubtab({
         ))}
       </div>
 
-      {/* Timing List - sorted by status, then by distance to planned duration */}
+      {/* Timing List */}
       <div className='space-y-1.5'>
-        {sortTimings(timings).map((timing) => {
+        {(sortOrder === 'chronological'
+          ? sortByTime(timings)
+          : sortByStatus(timings)
+        ).map((timing) => {
           const segment = segmentMap.get(timing.segment_id);
           const color = timing.dot_color;
           const name = timing.name || segment?.role_taker?.name;
@@ -163,26 +212,84 @@ export function TimerReportSubtab({
                   )}
                 </span>
               </div>
-              <button
-                onClick={() => setShowRelative(!showRelative)}
-                className='flex items-center gap-1.5 flex-shrink-0 ml-2 hover:opacity-70 transition-opacity'
-              >
-                <span className='text-xs sm:text-sm font-mono text-gray-800 tabular-nums'>
-                  {showRelative
-                    ? formatRelativeDuration(
-                        timing.actual_duration_seconds,
-                        timing.planned_duration_minutes
-                      )
-                    : formatDuration(timing.actual_duration_seconds)}
-                </span>
-                <span className='text-[10px] sm:text-[11px] text-gray-400'>
-                  / {timing.planned_duration_minutes}m
-                </span>
-              </button>
+              <div className='flex items-center gap-1.5 flex-shrink-0 ml-2'>
+                <button
+                  onClick={() => setShowRelative(!showRelative)}
+                  className='flex items-center gap-1.5 hover:opacity-70 transition-opacity'
+                >
+                  <span className='text-xs sm:text-sm font-mono text-gray-800 tabular-nums'>
+                    {showRelative
+                      ? formatRelativeDuration(
+                          timing.actual_duration_seconds,
+                          timing.planned_duration_minutes
+                        )
+                      : formatDuration(timing.actual_duration_seconds)}
+                  </span>
+                  <span className='text-[10px] sm:text-[11px] text-gray-400'>
+                    / {timing.planned_duration_minutes}m
+                  </span>
+                </button>
+                {canControl && (
+                  <button
+                    onClick={() => setTimingToDelete(timing)}
+                    className='p-1 text-gray-400 hover:text-red-500 transition-colors'
+                    title='Delete timing'
+                  >
+                    <X className='w-3.5 h-3.5' />
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}
       </div>
+
+      {/* Delete Confirmation Dialog */}
+      {timingToDelete &&
+        typeof window !== 'undefined' &&
+        createPortal(
+          <div
+            className='fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]'
+            onClick={() => setTimingToDelete(null)}
+          >
+            <div
+              className='bg-white rounded-lg p-6 mx-4 max-w-sm sm:max-w-md shadow-xl'
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h4 className='text-sm sm:text-base font-medium text-gray-900 mb-2'>
+                Delete timing record?
+              </h4>
+              <p className='text-xs sm:text-sm text-gray-500 mb-4'>
+                This will permanently delete the timing record for{' '}
+                <span className='font-medium'>
+                  {timingToDelete.name ||
+                    segmentMap.get(timingToDelete.segment_id)?.role_taker
+                      ?.name ||
+                    segmentMap.get(timingToDelete.segment_id)?.type ||
+                    'this segment'}
+                </span>
+                . This action cannot be undone.
+              </p>
+              <div className='flex gap-3 justify-end'>
+                <button
+                  onClick={() => setTimingToDelete(null)}
+                  disabled={isDeleting}
+                  className='px-3 py-1.5 text-xs sm:text-sm text-gray-600 hover:text-gray-800 transition-colors disabled:opacity-50'
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className='px-4 py-1.5 text-xs sm:text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50'
+                >
+                  {isDeleting ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

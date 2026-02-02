@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Clock, FileText } from 'lucide-react';
+import { Clock, FileText, ArrowUpDown, Clock3 } from 'lucide-react';
 import { useSegmentTimings } from '@/hooks/useSegmentTimings';
 import { SegmentIF } from '@/interfaces';
 import { TimingSubtab } from './TimingSubtab';
@@ -14,6 +14,8 @@ import {
   saveRunningTimer,
   CachedTimingsState,
 } from '@/utils/timingStorage';
+
+export type ReportSortOrder = 'status' | 'chronological';
 
 // Running timer state - lifted from Jotai to parent component
 export interface RunningTimerState {
@@ -33,6 +35,8 @@ export function TimerTab({ meetingId, segments }: TimerTabProps) {
   const [activeSubtab, setActiveSubtab] = useState<'timing' | 'report'>(
     'timing'
   );
+  const [reportSortOrder, setReportSortOrder] =
+    useState<ReportSortOrder>('status');
 
   // Lifted state (previously Jotai atoms)
   const [runningTimer, setRunningTimer] = useState<RunningTimerState | null>(
@@ -96,14 +100,22 @@ export function TimerTab({ meetingId, segments }: TimerTabProps) {
 
   // For non-Timer members, show report content directly without subtabs
   if (!canControl) {
-    return <TimerReportSubtab segments={segments} timings={timings} />;
+    return (
+      <TimerReportSubtab
+        meetingId={meetingId}
+        segments={segments}
+        timings={timings}
+        canControl={false}
+      />
+    );
   }
 
   // For Timer role holder, show subtabs
   return (
     <div>
-      {/* Subtab Navigation - compact centered toggle */}
-      <div className='flex justify-center mb-4'>
+      {/* Subtab Navigation */}
+      <div className='flex items-center justify-center relative mb-4'>
+        {/* Center - Timing/Report toggle */}
         <div className='inline-flex bg-gray-100 rounded-full p-0.5'>
           <button
             className={`px-3 py-1 text-xs font-medium rounded-full transition-colors flex items-center gap-1.5 ${
@@ -128,6 +140,35 @@ export function TimerTab({ meetingId, segments }: TimerTabProps) {
             Report
           </button>
         </div>
+
+        {/* Right side - Sort toggle (only in report view) */}
+        {activeSubtab === 'report' && (
+          <button
+            onClick={() =>
+              setReportSortOrder((prev) =>
+                prev === 'status' ? 'chronological' : 'status'
+              )
+            }
+            className='absolute right-0 flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full transition-colors'
+            title={
+              reportSortOrder === 'status'
+                ? 'Sorted by status'
+                : 'Sorted by time'
+            }
+          >
+            {reportSortOrder === 'status' ? (
+              <>
+                <ArrowUpDown className='w-3 h-3' />
+                <span className='hidden sm:inline'>Status</span>
+              </>
+            ) : (
+              <>
+                <Clock3 className='w-3 h-3' />
+                <span className='hidden sm:inline'>Time</span>
+              </>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Subtab Content */}
@@ -145,7 +186,13 @@ export function TimerTab({ meetingId, segments }: TimerTabProps) {
         />
       )}
       {activeSubtab === 'report' && (
-        <TimerReportSubtab segments={segments} timings={timings} />
+        <TimerReportSubtab
+          meetingId={meetingId}
+          segments={segments}
+          timings={timings}
+          canControl={canControl}
+          sortOrder={reportSortOrder}
+        />
       )}
     </div>
   );
