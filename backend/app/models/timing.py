@@ -67,3 +67,28 @@ class TimingBatchResponse(BaseModel):
 
     success: bool = Field(description="Whether the operation was successful.")
     timings: List[Timing] = Field(description="List of created timing records.")
+
+
+class TimingBatchAllItem(BaseModel):
+    """A single timing item within a batch-all segment."""
+
+    name: Optional[str] = Field(
+        default=None,
+        description="Speaker name (required for Table Topics, optional for other segments).",
+    )
+    planned_duration_minutes: int = Field(description="The planned duration in minutes.")
+    actual_start_time: str = Field(description="ISO timestamp when timing started.")
+    actual_end_time: str = Field(description="ISO timestamp when timing ended.")
+
+
+class TimingBatchAllSegment(BaseModel):
+    """A segment with its timing records for batch-all creation."""
+
+    segment_id: str = Field(description="The ID of the segment.")
+    timings: List[TimingBatchAllItem] = Field(description="List of timing records for this segment.")
+
+
+class TimingBatchAllCreate(BaseModel):
+    """Model for batch creating timing records across multiple segments."""
+
+    segments: List[TimingBatchAllSegment] = Field(description="List of segments with their timing records.")

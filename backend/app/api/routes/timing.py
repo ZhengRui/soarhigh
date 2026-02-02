@@ -6,6 +6,7 @@ from ...db.core import (
     can_control_timer,
     create_timing,
     create_timings_batch,
+    create_timings_batch_all,
     get_extended_user_wxid,
     get_meeting_by_id,
     get_timings_by_meeting,
@@ -13,6 +14,7 @@ from ...db.core import (
 )
 from ...models.timing import (
     Timing,
+    TimingBatchAllCreate,
     TimingBatchCreate,
     TimingBatchResponse,
     TimingCreate,
@@ -184,6 +186,85 @@ async def create_meeting_timings_batch(
             meeting_id=meeting_id,
             segment_id=batch_data.segment_id,
             timings_data=timings_data,
+        )
+        timing_models = [Timing(**t) for t in timings]
+        return TimingBatchResponse(success=True, timings=timing_models)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create timings: {e!s}")
+
+
+@r.post("/meetings/{meeting_id}/timings/batch-all", response_model=TimingBatchResponse)
+async def create_meeting_timings_batch_all(
+    batch_data: TimingBatchAllCreate,
+    meeting_id: str = Path(..., description="The ID of the meeting"),
+    current_user: Union[User, WeChatUser] = Depends(get_current_extended_user),
+):
+    """
+    Create timing records for multiple segments in batch.
+
+    Only the person checked in as Timer can create timing records.
+    This endpoint saves all segment timings in a single request for better
+    network efficiency than multiple individual calls.
+
+    Note: This is not a fully atomic operation. If an error occurs mid-batch,
+    some segments may be updated while others are not.
+
+    Each segment's existing timings are deleted before inserting new ones.
+
+    Args:
+        batch_data: Batch timing data with list of segments and their timings
+        meeting_id: The ID of the meeting
+        current_user: Authenticated user (must be the Timer)
+
+    Returns:
+        TimingBatchResponse with list of all created timing records
+
+    Raises:
+        HTTPException 403: If user is not the Timer
+        HTTPException 404: If meeting not found
+        HTTPException 422: If any segment doesn't belong to meeting
+    """
+    # Validate meeting exists
+    user_id = current_user.uid if isinstance(current_user, User) else None
+    meeting = get_meeting_by_id(meeting_id, user_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    # Check if user can control timer
+    wxid = get_extended_user_wxid(current_user)
+    if not can_control_timer(meeting_id, wxid):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the Timer can create timing records. Please check in as Timer first.",
+        )
+
+    # Validate all segments belong to meeting
+    segment_ids = [seg.segment_id for seg in batch_data.segments]
+    if segment_ids and not validate_segments_belong_to_meeting(meeting_id, segment_ids):
+        raise HTTPException(status_code=422, detail="One or more segments do not belong to this meeting")
+
+    # Convert to dict format for db function
+    segments_data = [
+        {
+            "segment_id": seg.segment_id,
+            "timings": [
+                {
+                    "name": t.name,
+                    "planned_duration_minutes": t.planned_duration_minutes,
+                    "actual_start_time": t.actual_start_time,
+                    "actual_end_time": t.actual_end_time,
+                }
+                for t in seg.timings
+            ],
+        }
+        for seg in batch_data.segments
+    ]
+
+    # Create timing records
+    try:
+        timings = create_timings_batch_all(
+            meeting_id=meeting_id,
+            segments_data=segments_data,
         )
         timing_models = [Timing(**t) for t in timings]
         return TimingBatchResponse(success=True, timings=timing_models)

@@ -1,8 +1,7 @@
 import {
   TimingIF,
   TimingsListResponseIF,
-  TimingCreateIF,
-  TimingBatchCreateIF,
+  TimingBatchAllCreateIF,
 } from '../interfaces';
 import { requestTemplate, responseHandlerTemplate } from './requestTemplate';
 
@@ -55,42 +54,15 @@ export const getTimings = requestTemplate(
 );
 
 /**
- * Creates a single timing record
+ * Creates timing records for multiple segments in batch
  * Only the Timer role holder can create timing records
  * @param meetingId The meeting ID
- * @param timingData The timing data
- * @returns The created timing record
+ * @param batchData The batch data with multiple segments
+ * @returns List of all created timing records
  */
-export const createTiming = requestTemplate(
-  (meetingId: string, timingData: TimingCreateIF) => ({
-    url: `${apiEndpoint}/meetings/${meetingId}/timings`,
-    method: 'POST',
-    headers: new Headers({
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    }),
-    body: JSON.stringify(timingData),
-  }),
-  async (
-    response: Response
-  ): Promise<{ success: boolean; timing: TimingIF }> => {
-    const data = await responseHandlerTemplate(response);
-    return data;
-  },
-  null,
-  true // Requires authentication
-);
-
-/**
- * Creates multiple timing records in batch (for Table Topics)
- * Only the Timer role holder can create timing records
- * @param meetingId The meeting ID
- * @param batchData The batch timing data
- * @returns List of created timing records
- */
-export const createTimingBatch = requestTemplate(
-  (meetingId: string, batchData: TimingBatchCreateIF) => ({
-    url: `${apiEndpoint}/meetings/${meetingId}/timings/batch`,
+export const createTimingBatchAll = requestTemplate(
+  (meetingId: string, batchData: TimingBatchAllCreateIF) => ({
+    url: `${apiEndpoint}/meetings/${meetingId}/timings/batch-all`,
     method: 'POST',
     headers: new Headers({
       'Content-Type': 'application/json',

@@ -1899,7 +1899,7 @@ def create_timings_batch(
         )
 
     # Delete existing timings for this segment (overwrite mode)
-    supabase.table("timings").delete().eq("segment_id", segment_id).execute()
+    supabase.table("timings").delete().eq("meeting_id", meeting_id).eq("segment_id", segment_id).execute()
 
     # If no timings to insert, just return empty list (delete-only operation)
     if not timings_data:
@@ -1949,3 +1949,96 @@ def create_timings_batch(
         )
 
     return created_timings
+
+
+def create_timings_batch_all(
+    meeting_id: str,
+    segments_data: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Create timing records for multiple segments in batch.
+
+    Each segment's existing timings are deleted before inserting new ones.
+
+    Note: This is NOT atomic - if an error occurs mid-way, some segments may
+    be updated while others are not. For true atomicity, a Supabase RPC/stored
+    procedure would be required.
+
+    Args:
+        meeting_id: The ID of the meeting
+        segments_data: List of segment data dicts, each containing:
+            - segment_id: The segment ID
+            - timings: List of timing dicts with name, planned_duration_minutes,
+                      actual_start_time, actual_end_time
+
+    Returns:
+        List of all created timing records with calculated fields
+
+    Raises:
+        ValueError: If any timestamps are invalid or end is before start
+    """
+    # Validate all timestamps before making any changes
+    for segment in segments_data:
+        for timing in segment.get("timings", []):
+            calculate_timing_fields(
+                timing["actual_start_time"],
+                timing["actual_end_time"],
+                timing["planned_duration_minutes"],
+            )
+
+    all_created_timings = []
+
+    for segment in segments_data:
+        segment_id = segment["segment_id"]
+        timings_data = segment.get("timings", [])
+
+        # Delete existing timings for this segment (overwrite mode)
+        supabase.table("timings").delete().eq("meeting_id", meeting_id).eq("segment_id", segment_id).execute()
+
+        # If no timings for this segment, continue to next
+        if not timings_data:
+            continue
+
+        records_to_insert = []
+        for timing in timings_data:
+            records_to_insert.append(
+                {
+                    "meeting_id": meeting_id,
+                    "segment_id": segment_id,
+                    "name": timing.get("name"),
+                    "planned_duration_minutes": timing["planned_duration_minutes"],
+                    "actual_start_time": timing["actual_start_time"],
+                    "actual_end_time": timing["actual_end_time"],
+                }
+            )
+
+        result = supabase.table("timings").insert(records_to_insert).execute()
+
+        if not result.data:
+            raise ValueError(f"Failed to create timing records for segment {segment_id}")
+
+        # Process results with calculated fields
+        for timing in result.data:
+            actual_seconds, dot_color = calculate_timing_fields(
+                timing["actual_start_time"],
+                timing["actual_end_time"],
+                timing["planned_duration_minutes"],
+            )
+
+            all_created_timings.append(
+                {
+                    "id": timing["id"],
+                    "meeting_id": timing["meeting_id"],
+                    "segment_id": timing["segment_id"],
+                    "name": timing.get("name"),
+                    "planned_duration_minutes": timing["planned_duration_minutes"],
+                    "actual_start_time": timing["actual_start_time"],
+                    "actual_end_time": timing["actual_end_time"],
+                    "actual_duration_seconds": actual_seconds,
+                    "dot_color": dot_color,
+                    "created_at": timing.get("created_at"),
+                    "updated_at": timing.get("updated_at"),
+                }
+            )
+
+    return all_created_timings

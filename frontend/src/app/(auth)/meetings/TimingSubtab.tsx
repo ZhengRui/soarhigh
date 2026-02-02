@@ -1,31 +1,48 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAtom } from 'jotai';
 import { createPortal } from 'react-dom';
-import { Play, Square, Bell } from 'lucide-react';
-import { TimingIF, TimingCreateIF, SegmentIF } from '@/interfaces';
+import { Play, Square, Bell, Save, X } from 'lucide-react';
+import { TimingIF, SegmentIF } from '@/interfaces';
 import {
   dotColors,
   getCardTimes,
   getCountdownZone,
   formatDuration,
+  formatRelativeDuration,
   formatTime,
   getTimingsForSegment,
+  getTimingDotColor,
   timerTextColors,
   TABLE_TOPICS_SEGMENT_TYPE,
 } from '@/utils/timing';
-import { useCreateTiming } from '@/hooks/useSegmentTimings';
-import { runningTimerAtom, selectedSegmentIdAtom } from '@/atoms/timerAtoms';
+import {
+  CachedTimingsState,
+  CachedTimingEntry,
+  getUnsavedCount,
+  hasUnsavedTiming,
+  clearCachedTimings,
+} from '@/utils/timingStorage';
+import { createTimingBatchAll } from '@/utils/timing';
+import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { SegmentCard } from './SegmentCard';
 import { TableTopicsTimer } from './TableTopicsTimer';
 import { CardSignals } from './TimerComponents';
+import { RunningTimerState } from './TimerTab';
 
 interface TimingSubtabProps {
   meetingId: string;
   segments: SegmentIF[];
   timings: TimingIF[];
+  // Lifted state from TimerTab
+  runningTimer: RunningTimerState | null;
+  setRunningTimer: (state: RunningTimerState | null) => void;
+  selectedSegmentId: string | null;
+  setSelectedSegmentId: (id: string | null) => void;
+  // Cached timings from localStorage (managed by TimerTab)
+  cachedTimings: CachedTimingsState;
+  updateCache: (cache: CachedTimingsState) => void;
 }
 
 // Parse duration string like "5", "5min", or "1h30min" to minutes
@@ -53,18 +70,19 @@ export function TimingSubtab({
   meetingId,
   segments,
   timings,
+  runningTimer,
+  setRunningTimer,
+  selectedSegmentId,
+  setSelectedSegmentId,
+  cachedTimings,
+  updateCache,
 }: TimingSubtabProps) {
   const [elapsed, setElapsed] = useState(0);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [isSavingAll, setIsSavingAll] = useState(false);
+  const [showRelative, setShowRelative] = useState(false);
 
-  // Use Jotai atoms for persistent state
-  const [runningTimer, setRunningTimer] = useAtom(runningTimerAtom);
-  const [selectedSegmentId, setSelectedSegmentId] = useAtom(
-    selectedSegmentIdAtom
-  );
-
-  const createTimingMutation = useCreateTiming(meetingId);
+  const queryClient = useQueryClient();
 
   // Find selected segment
   const selectedSegment = segments.find((s) => s.id === selectedSegmentId);
@@ -89,17 +107,23 @@ export function TimingSubtab({
     ? segmentTimings[segmentTimings.length - 1]
     : null;
 
+  // Check for unsaved cached timing
+  const hasCachedTiming =
+    selectedSegmentId && hasUnsavedTiming(cachedTimings, selectedSegmentId);
+  const cachedEntry = hasCachedTiming
+    ? cachedTimings[selectedSegmentId]?.entries[0]
+    : null;
+
+  // Count total unsaved segments
+  const unsavedCount = getUnsavedCount(cachedTimings);
+
   // Update elapsed time when this segment's timer is running
   useEffect(() => {
     if (!isThisSegmentRunning || !runningTimer?.startedAt) {
-      // Don't reset elapsed if we're saving (keep it frozen)
       return;
     }
 
-    // Capture startedAt to satisfy TypeScript in the interval callback
     const startedAt = runningTimer.startedAt;
-
-    // Immediately calculate elapsed on mount
     setElapsed(Math.floor((Date.now() - startedAt) / 1000));
 
     const interval = setInterval(() => {
@@ -126,65 +150,142 @@ export function TimingSubtab({
       segmentId: selectedSegmentId,
       isRunning: true,
       startedAt: Date.now(),
-      speakerName: '', // Not used for regular segments
+      speakerName: '',
     });
     setElapsed(0);
   }, [selectedSegmentId, setRunningTimer]);
 
   const handleStartClick = useCallback(() => {
-    if (hasTiming) {
+    // Check if there's existing timing OR unsaved cached timing
+    if (hasTiming || hasCachedTiming) {
       setShowConfirmDialog(true);
     } else {
       startTimer();
     }
-  }, [hasTiming, startTimer]);
+  }, [hasTiming, hasCachedTiming, startTimer]);
 
   const handleConfirmStart = useCallback(() => {
     setShowConfirmDialog(false);
     startTimer();
   }, [startTimer]);
 
-  const handleStop = useCallback(async () => {
+  // Handle stop - cache locally instead of saving immediately
+  const handleStop = useCallback(() => {
     if (!runningTimer?.startedAt || !selectedSegment) return;
 
-    // Capture values before clearing state
     const startedAt = runningTimer.startedAt;
-    const endTime = Date.now();
+    const endedAt = Date.now();
+    const durationSeconds = Math.floor((endedAt - startedAt) / 1000);
+    const dotColor = getTimingDotColor(plannedMinutes, durationSeconds);
 
-    // Stop the timer immediately (so counter stops updating) but keep elapsed frozen
-    setRunningTimer(null);
-    setIsSaving(true);
-
-    const timingData: TimingCreateIF = {
-      segment_id: selectedSegment.id,
+    const entry: CachedTimingEntry = {
       name: selectedSegment.role_taker?.name || null,
-      planned_duration_minutes: plannedMinutes,
-      actual_start_time: new Date(startedAt).toISOString(),
-      actual_end_time: new Date(endTime).toISOString(),
+      plannedDurationMinutes: plannedMinutes,
+      startedAt,
+      endedAt,
+      dotColor,
     };
 
-    try {
-      await createTimingMutation.mutateAsync(timingData);
-      toast.success('Timing saved!');
-      setElapsed(0); // Only reset after successful save
-    } catch (error) {
-      toast.error('Failed to save timing');
-      console.error('Failed to save timing:', error);
-    } finally {
-      setIsSaving(false);
-    }
+    // Cache the timing (overwrites any existing cache for this segment)
+    updateCache({
+      ...cachedTimings,
+      [selectedSegment.id]: {
+        segmentId: selectedSegment.id,
+        segmentType: selectedSegment.type,
+        entries: [entry],
+      },
+    });
+
+    setRunningTimer(null);
+    setElapsed(0);
   }, [
     runningTimer,
     selectedSegment,
     plannedMinutes,
-    createTimingMutation,
+    cachedTimings,
+    updateCache,
     setRunningTimer,
   ]);
+
+  // Handle Save All - batch save all cached timings
+  const handleSaveAll = useCallback(async () => {
+    if (unsavedCount === 0) return;
+
+    setIsSavingAll(true);
+
+    const segmentsData = Object.values(cachedTimings).map((seg) => ({
+      segment_id: seg.segmentId,
+      timings: seg.entries.map((e) => ({
+        name: e.name,
+        planned_duration_minutes: e.plannedDurationMinutes,
+        actual_start_time: new Date(e.startedAt).toISOString(),
+        actual_end_time: new Date(e.endedAt).toISOString(),
+      })),
+    }));
+
+    try {
+      await createTimingBatchAll(meetingId, { segments: segmentsData });
+      clearCachedTimings(meetingId);
+      updateCache({});
+      queryClient.invalidateQueries({ queryKey: ['timings', meetingId] });
+      toast.success(`Saved ${unsavedCount} timing(s)`);
+    } catch (error) {
+      toast.error('Failed to save timings');
+      console.error('Failed to save timings:', error);
+    } finally {
+      setIsSavingAll(false);
+    }
+  }, [cachedTimings, unsavedCount, meetingId, updateCache, queryClient]);
+
+  // Handle removing a single cached entry
+  const handleRemoveCachedEntry = useCallback(
+    (segmentId: string, entryIndex: number) => {
+      const segment = cachedTimings[segmentId];
+      if (!segment) return;
+
+      const newEntries = segment.entries.filter((_, i) => i !== entryIndex);
+      if (newEntries.length === 0) {
+        // Remove segment from cache if no entries left
+        const { [segmentId]: _removed, ...rest } = cachedTimings;
+        void _removed;
+        updateCache(rest);
+      } else {
+        updateCache({
+          ...cachedTimings,
+          [segmentId]: { ...segment, entries: newEntries },
+        });
+      }
+    },
+    [cachedTimings, updateCache]
+  );
+
+  // Build flat list of unsaved entries in segment order
+  const unsavedEntries = segments.flatMap((segment) => {
+    const cached = cachedTimings[segment.id];
+    if (!cached) return [];
+    return cached.entries.map((entry, entryIndex) => ({
+      segment,
+      entry,
+      entryIndex,
+    }));
+  });
 
   // Get current zone color
   const zone = getCountdownZone(plannedMinutes, elapsed);
   const cards = getCardTimes(plannedMinutes);
   const remaining = Math.max(0, cards.red - elapsed);
+
+  // Display timing - prefer cached over saved
+  const displayTiming = cachedEntry
+    ? {
+        actual_start_time: new Date(cachedEntry.startedAt).toISOString(),
+        actual_end_time: new Date(cachedEntry.endedAt).toISOString(),
+        actual_duration_seconds: Math.floor(
+          (cachedEntry.endedAt - cachedEntry.startedAt) / 1000
+        ),
+        dot_color: cachedEntry.dotColor,
+      }
+    : latestTiming;
 
   return (
     <div className='space-y-4'>
@@ -201,18 +302,20 @@ export function TimingSubtab({
         <div className='flex gap-2 min-w-max'>
           {segments.map((segment) => {
             const segTimings = getTimingsForSegment(timings, segment.id);
-            const latestTiming =
+            const segmentLatestTiming =
               segTimings.length > 0 ? segTimings[segTimings.length - 1] : null;
+            const isCached = hasUnsavedTiming(cachedTimings, segment.id);
 
             return (
               <SegmentCard
                 key={segment.id}
                 segment={segment}
                 isSelected={segment.id === selectedSegmentId}
-                timing={latestTiming}
+                timing={segmentLatestTiming}
                 onClick={() => setSelectedSegmentId(segment.id)}
                 disabled={false}
                 isRunning={segment.id === runningSegmentId && isAnyTimerRunning}
+                isCached={isCached}
               />
             );
           })}
@@ -222,9 +325,12 @@ export function TimingSubtab({
       {/* Table Topics Timer - special UI for multiple speakers */}
       {selectedSegment && isTableTopics && (
         <TableTopicsTimer
-          meetingId={meetingId}
           segment={selectedSegment}
           timings={getTimingsForSegment(timings, selectedSegment.id)}
+          runningTimer={runningTimer}
+          setRunningTimer={setRunningTimer}
+          cachedTimings={cachedTimings}
+          updateCache={updateCache}
         />
       )}
 
@@ -252,26 +358,31 @@ export function TimingSubtab({
               <CardSignals plannedMinutes={plannedMinutes} />
               {/* Previous timing info - always reserve height */}
               <div className='text-xs text-gray-400 h-8 flex flex-col items-center sm:items-end justify-center sm:mt-1'>
-                {latestTiming && !isThisSegmentRunning && (
+                {displayTiming && !isThisSegmentRunning && (
                   <>
                     <span className='font-mono tabular-nums'>
-                      {formatTime(latestTiming.actual_start_time)} -{' '}
-                      {formatTime(latestTiming.actual_end_time)}
+                      {formatTime(displayTiming.actual_start_time)} -{' '}
+                      {formatTime(displayTiming.actual_end_time)}
                     </span>
                     <span className='flex items-center gap-1'>
                       <span className='font-mono tabular-nums'>
                         Used:{' '}
-                        {formatDuration(latestTiming.actual_duration_seconds)}
+                        {formatDuration(displayTiming.actual_duration_seconds)}
                       </span>
                       <span className='inline-flex items-center justify-center w-3 h-3'>
-                        {latestTiming.dot_color === 'bell' ? (
+                        {displayTiming.dot_color === 'bell' ? (
                           <Bell className='w-3 h-3 text-red-600 fill-red-600' />
                         ) : (
                           <span
-                            className={`inline-block w-2 h-2 rounded-full ${dotColors[latestTiming.dot_color]}`}
+                            className={`inline-block w-2 h-2 rounded-full ${dotColors[displayTiming.dot_color]}`}
                           ></span>
                         )}
                       </span>
+                      {hasCachedTiming && (
+                        <span className='text-amber-600 text-[10px]'>
+                          (unsaved)
+                        </span>
+                      )}
                     </span>
                   </>
                 )}
@@ -284,12 +395,10 @@ export function TimingSubtab({
             <div className='relative inline-flex items-center justify-center'>
               <span
                 className={`text-5xl sm:text-6xl font-mono font-bold tracking-tight transition-colors tabular-nums ${
-                  isThisSegmentRunning || isSaving
-                    ? timerTextColors[zone]
-                    : 'text-gray-300'
+                  isThisSegmentRunning ? timerTextColors[zone] : 'text-gray-300'
                 }`}
               >
-                {formatDuration(isThisSegmentRunning || isSaving ? elapsed : 0)}
+                {formatDuration(isThisSegmentRunning ? elapsed : 0)}
               </span>
               {/* Bell icon when 30+ seconds over - floated to the right */}
               {isThisSegmentRunning && zone === 'overtime' && (
@@ -307,14 +416,7 @@ export function TimingSubtab({
 
           {/* Control Button */}
           <div className='flex justify-center mt-2'>
-            {isSaving ? (
-              <button
-                disabled
-                className='flex items-center justify-center gap-2 py-2 px-6 rounded-md text-sm font-medium text-white bg-gray-600 opacity-50 cursor-not-allowed'
-              >
-                Saving...
-              </button>
-            ) : !isThisSegmentRunning ? (
+            {!isThisSegmentRunning ? (
               <button
                 onClick={handleStartClick}
                 disabled={isAnyTimerRunning}
@@ -335,6 +437,99 @@ export function TimingSubtab({
           </div>
         </div>
       )}
+
+      {/* Unsaved Changes List */}
+      <div className='bg-white border border-gray-200 rounded-lg p-4'>
+        <div className='flex items-center justify-between mb-3'>
+          <h4 className='text-xs font-medium text-gray-500'>
+            Unsaved Changes ({unsavedEntries.length})
+          </h4>
+          <button
+            onClick={handleSaveAll}
+            disabled={isSavingAll || isAnyTimerRunning || unsavedCount === 0}
+            className={`flex items-center justify-center gap-1.5 py-1.5 px-4 rounded-md text-xs font-medium text-white transition-colors ${
+              unsavedCount > 0
+                ? 'bg-amber-600 hover:bg-amber-700'
+                : 'bg-gray-400 cursor-not-allowed'
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            <Save className='w-3.5 h-3.5' />
+            {isSavingAll ? 'Saving...' : 'Save All'}
+          </button>
+        </div>
+        {unsavedEntries.length === 0 ? (
+          <p className='text-xs text-gray-400 text-center py-2'>
+            No unsaved changes
+          </p>
+        ) : (
+          <div className='space-y-1.5'>
+            {unsavedEntries.map(({ segment, entry, entryIndex }) => {
+              const actualSeconds = Math.floor(
+                (entry.endedAt - entry.startedAt) / 1000
+              );
+              const isSegmentTableTopics = isTableTopicsSegment(segment);
+              // For Table Topics, name comes from entry; for others from segment.role_taker
+              const name = isSegmentTableTopics
+                ? entry.name
+                : segment.role_taker?.name;
+              const segmentType = segment.type;
+
+              return (
+                <div
+                  key={`${segment.id}-${entryIndex}`}
+                  className='flex items-center justify-between py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg'
+                >
+                  <div className='flex items-center gap-2 min-w-0'>
+                    {entry.dotColor === 'bell' ? (
+                      <Bell className='w-3 h-3 text-red-600 fill-red-600 flex-shrink-0' />
+                    ) : (
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full ${dotColors[entry.dotColor]} flex-shrink-0`}
+                      />
+                    )}
+                    <span className='text-xs sm:text-sm text-gray-800 truncate'>
+                      {name || segmentType || 'Unknown'}
+                      {name && segmentType && (
+                        <span className='text-[10px] sm:text-xs text-gray-400'>
+                          {' '}
+                          · {segmentType}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                  <div className='flex items-center gap-1.5 flex-shrink-0 ml-2'>
+                    <button
+                      onClick={() => setShowRelative(!showRelative)}
+                      className='flex items-center gap-1.5 hover:opacity-70 transition-opacity'
+                    >
+                      <span className='text-xs sm:text-sm font-mono text-gray-800 tabular-nums'>
+                        {showRelative
+                          ? formatRelativeDuration(
+                              actualSeconds,
+                              entry.plannedDurationMinutes
+                            )
+                          : formatDuration(actualSeconds)}
+                      </span>
+                      <span className='text-[10px] sm:text-[11px] text-gray-400'>
+                        / {entry.plannedDurationMinutes}m
+                      </span>
+                    </button>
+                    <button
+                      onClick={() =>
+                        handleRemoveCachedEntry(segment.id, entryIndex)
+                      }
+                      className='p-1 text-gray-400 hover:text-red-500 transition-colors'
+                      title='Remove'
+                    >
+                      <X className='w-3.5 h-3.5' />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Confirmation Dialog - rendered via portal to escape overflow-hidden ancestors */}
       {showConfirmDialog &&

@@ -1,11 +1,27 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Clock, FileText } from 'lucide-react';
 import { useSegmentTimings } from '@/hooks/useSegmentTimings';
 import { SegmentIF } from '@/interfaces';
 import { TimingSubtab } from './TimingSubtab';
 import { TimerReportSubtab } from './TimerReportSubtab';
+import {
+  loadCachedTimings,
+  saveCachedTimings,
+  cleanupExpiredCaches,
+  loadRunningTimer,
+  saveRunningTimer,
+  CachedTimingsState,
+} from '@/utils/timingStorage';
+
+// Running timer state - lifted from Jotai to parent component
+export interface RunningTimerState {
+  segmentId: string;
+  isRunning: boolean;
+  startedAt: number | null;
+  speakerName: string; // Used for Table Topics
+}
 
 interface TimerTabProps {
   meetingId: string;
@@ -16,6 +32,47 @@ export function TimerTab({ meetingId, segments }: TimerTabProps) {
   const { data, isLoading, isError } = useSegmentTimings(meetingId);
   const [activeSubtab, setActiveSubtab] = useState<'timing' | 'report'>(
     'timing'
+  );
+
+  // Lifted state (previously Jotai atoms)
+  const [runningTimer, setRunningTimer] = useState<RunningTimerState | null>(
+    null
+  );
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(
+    null
+  );
+
+  // Cached timings state (loaded from localStorage)
+  const [cachedTimings, setCachedTimings] = useState<CachedTimingsState>({});
+
+  // Cleanup expired caches on mount (runs once)
+  useEffect(() => {
+    cleanupExpiredCaches();
+  }, []);
+
+  // Load from localStorage/sessionStorage on mount
+  useEffect(() => {
+    const cached = loadCachedTimings(meetingId);
+    setCachedTimings(cached);
+
+    const savedTimer = loadRunningTimer(meetingId);
+    if (savedTimer) {
+      setRunningTimer(savedTimer);
+    }
+  }, [meetingId]);
+
+  // Persist running timer to sessionStorage whenever it changes
+  useEffect(() => {
+    saveRunningTimer(meetingId, runningTimer);
+  }, [meetingId, runningTimer]);
+
+  // Persist to localStorage whenever cache changes
+  const updateCache = useCallback(
+    (newCache: CachedTimingsState) => {
+      setCachedTimings(newCache);
+      saveCachedTimings(meetingId, newCache);
+    },
+    [meetingId]
   );
 
   const canControl = data?.can_control ?? false;
@@ -79,6 +136,12 @@ export function TimerTab({ meetingId, segments }: TimerTabProps) {
           meetingId={meetingId}
           segments={segments}
           timings={timings}
+          runningTimer={runningTimer}
+          setRunningTimer={setRunningTimer}
+          selectedSegmentId={selectedSegmentId}
+          setSelectedSegmentId={setSelectedSegmentId}
+          cachedTimings={cachedTimings}
+          updateCache={updateCache}
         />
       )}
       {activeSubtab === 'report' && (

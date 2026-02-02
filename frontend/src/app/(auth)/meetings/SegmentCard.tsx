@@ -12,6 +12,7 @@ interface SegmentCardProps {
   onClick: () => void;
   disabled?: boolean;
   isRunning?: boolean;
+  isCached?: boolean; // Has unsaved timing in localStorage
 }
 
 // Abbreviate segment type for card display
@@ -73,9 +74,27 @@ export function SegmentCard({
   onClick,
   disabled = false,
   isRunning = false,
+  isCached = false,
 }: SegmentCardProps) {
   const abbreviatedType = abbreviateType(segment.type);
   const roleTaker = segment.role_taker?.name;
+
+  // Determine card styling based on state
+  const getCardClasses = () => {
+    if (isRunning) {
+      return 'border-indigo-500 bg-indigo-50 shadow-md shadow-indigo-200 ring-2 ring-indigo-300 ring-opacity-50 animate-pulse';
+    }
+    if (isCached) {
+      // Unsaved timing - amber background with border
+      return isSelected
+        ? 'border-amber-500 bg-amber-100 shadow-sm ring-1 ring-amber-400'
+        : 'border-amber-400 bg-amber-50 hover:border-amber-500 hover:shadow-sm';
+    }
+    if (isSelected) {
+      return 'border-indigo-400 bg-indigo-50 shadow-sm';
+    }
+    return 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm';
+  };
 
   return (
     <button
@@ -85,13 +104,7 @@ export function SegmentCard({
         relative flex flex-col items-start text-left
         min-w-[140px] max-w-[160px] p-2.5
         rounded-lg border transition-all
-        ${
-          isRunning
-            ? 'border-indigo-500 bg-indigo-50 shadow-md shadow-indigo-200 ring-2 ring-indigo-300 ring-opacity-50 animate-pulse'
-            : isSelected
-              ? 'border-indigo-400 bg-indigo-50 shadow-sm'
-              : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
-        }
+        ${getCardClasses()}
         ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
       `}
     >

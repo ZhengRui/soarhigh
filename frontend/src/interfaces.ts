@@ -189,3 +189,19 @@ export interface TimingBatchCreateIF {
   segment_id: string;
   timings: TimingBatchItemIF[];
 }
+
+export interface TimingBatchAllItemIF {
+  name?: string | null;
+  planned_duration_minutes: number;
+  actual_start_time: string;
+  actual_end_time: string;
+}
+
+export interface TimingBatchAllSegmentIF {
+  segment_id: string;
+  timings: TimingBatchAllItemIF[];
+}
+
+export interface TimingBatchAllCreateIF {
+  segments: TimingBatchAllSegmentIF[];
+}
