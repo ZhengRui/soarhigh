@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 
 from ...db.core import (
     create_checkins,
+    get_checkin_by_segment,
     get_checkins_by_meeting,
     get_extended_user_wxid,
     get_meeting_by_id,
@@ -82,6 +83,19 @@ async def create_meeting_checkins(
     if checkin_data.segment_ids and not validate_segments_belong_to_meeting(meeting_id, checkin_data.segment_ids):
         raise HTTPException(status_code=422, detail="One or more segment IDs do not belong to this meeting")
 
+    # Check if Timer segment is being requested and already taken by someone else
+    if checkin_data.segment_ids and meeting.get("segments"):
+        # Find the Timer segment in the meeting
+        timer_segment = next(
+            (s for s in meeting["segments"] if s.get("type", "").lower() == "timer"),
+            None,
+        )
+        if timer_segment and timer_segment["id"] in checkin_data.segment_ids:
+            # Check if Timer is already taken
+            existing_timer_checkin = get_checkin_by_segment(meeting_id, timer_segment["id"])
+            if existing_timer_checkin and existing_timer_checkin.get("wxid") != wxid:
+                raise HTTPException(status_code=409, detail="Timer role is already taken")
+
     # Infer membership status from wxid binding
     is_member = get_user_by_wxid(wxid) is not None
 
@@ -127,7 +141,8 @@ async def get_meeting_checkins(
         current_user: Optional authenticated user (None for unauthenticated requests)
 
     Returns:
-        CheckinListResponse containing list of checkins visible to the user
+        CheckinListResponse containing list of checkins visible to the user,
+        plus timer_wxid indicating who holds the Timer role (for miniapp use)
 
     Raises:
         HTTPException 404: If meeting not found (only for authenticated users)
@@ -142,14 +157,24 @@ async def get_meeting_checkins(
 
     # Members can see all checkins, non-members can only see their own
     is_member = isinstance(current_user, User)
+
     if is_member:
         checkins = get_checkins_by_meeting(meeting_id, wxid=None)
     else:
         wxid = get_extended_user_wxid(current_user)
         checkins = get_checkins_by_meeting(meeting_id, wxid=wxid)
 
+    # Get Timer wxid for miniapp Timer disable feature
+    timer_wxid = None
+    if meeting.get("segments"):
+        timer_segment = next((s for s in meeting["segments"] if s.get("type", "").lower() == "timer"), None)
+        if timer_segment:
+            timer_checkin = get_checkin_by_segment(meeting_id, timer_segment["id"])
+            if timer_checkin:
+                timer_wxid = timer_checkin.get("wxid")
+
     checkin_models = [Checkin(**checkin) for checkin in checkins]
-    return CheckinListResponse(checkins=checkin_models)
+    return CheckinListResponse(checkins=checkin_models, timer_wxid=timer_wxid)
 
 
 @r.post("/meetings/{meeting_id}/checkins/reset", response_model=CheckinResetResponse)

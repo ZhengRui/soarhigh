@@ -50,6 +50,7 @@ class CheckinListResponse(BaseModel):
     """
 
     checkins: List[Checkin] = Field(description="List of checkins for the meeting.")
+    timer_wxid: Optional[str] = Field(default=None, description="wxid of the Timer role holder, or null if not taken.")
 
 
 class CheckinResetRequest(BaseModel):
