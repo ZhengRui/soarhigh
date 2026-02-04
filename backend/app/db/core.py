@@ -1641,18 +1641,23 @@ def can_control_timer(meeting_id: str, wxid: Optional[str], user_id: Optional[st
 
     Returns True if:
     - User is an admin, OR
-    - User is checked in as Timer for this meeting
+    - User is a club member (authenticated with user_id), OR
+    - User is checked in as Timer for this meeting (for guests)
 
     Args:
         meeting_id: The ID of the meeting
         wxid: The wxid of the user to check
-        user_id: Optional user ID to check admin status
+        user_id: Optional user ID to check admin/member status
 
     Returns:
         True if the user can control the timer, False otherwise
     """
     # Check if user is admin
     if user_id and is_user_admin(user_id):
+        return True
+
+    # Check if user is a club member (authenticated users have user_id)
+    if user_id:
         return True
 
     if not wxid:
