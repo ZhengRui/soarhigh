@@ -125,6 +125,8 @@ async def create_meeting_timing(
             name=timing_data.name,
         )
         return TimingResponse(success=True, timing=Timing(**timing))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create timing: {e!s}")
 

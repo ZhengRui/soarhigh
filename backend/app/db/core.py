@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from ..models.users import User
 from ..models.wechat_user import WeChatUser
@@ -1531,6 +1531,40 @@ def is_table_topics_segment(segment_id: str) -> bool:
     return result.data[0].get("type") == "Table Topic Session"
 
 
+def get_existing_timing_names_for_segment(segment_id: str) -> Set[str]:
+    """Get all existing timing names for a segment (lowercased for comparison)."""
+    result = supabase.table("timings").select("name").eq("segment_id", segment_id).execute()
+    return {t["name"].lower() for t in result.data if t.get("name")}
+
+
+def format_time_suffix(iso_timestamp: str) -> str:
+    """Format ISO timestamp into suffix like '(14:32)'."""
+    try:
+        dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+        return f"({dt.strftime('%H:%M')})"
+    except (ValueError, AttributeError):
+        return ""
+
+
+def make_unique_timing_name(base_name: str, existing_names: Set[str], start_time: str) -> str:
+    """Generate unique name by adding time suffix if duplicate exists."""
+    if base_name.lower() not in existing_names:
+        return base_name
+    suffix = format_time_suffix(start_time)
+    return f"{base_name} {suffix}" if suffix else base_name
+
+
+def check_timing_name_exists(segment_id: str, name: str, exclude_timing_id: Optional[str] = None) -> bool:
+    """Check if timing name exists for segment (for validation)."""
+    result = supabase.table("timings").select("id, name").eq("segment_id", segment_id).execute()
+    for timing in result.data:
+        if timing.get("name") and timing["name"].lower() == name.lower():
+            if exclude_timing_id and timing["id"] == exclude_timing_id:
+                continue
+            return True
+    return False
+
+
 def validate_attendee_id_exists(attendee_id: str) -> bool:
     """Validate that an attendee ID exists."""
     result = supabase.table("attendees").select("id").eq("id", attendee_id).execute()
@@ -1850,6 +1884,13 @@ def create_timing(
     # Table Topic Session allows multiple timing records (one per speaker)
     if not is_table_topics_segment(segment_id):
         supabase.table("timings").delete().eq("meeting_id", meeting_id).eq("segment_id", segment_id).execute()
+    else:
+        # Table Topics: check for duplicate names
+        if name and check_timing_name_exists(segment_id, name):
+            raise ValueError(
+                f"A speaker named '{name}' already exists in this Table Topics session. "
+                "Delete it first if you want to replace it."
+            )
 
     timing_data = {
         "meeting_id": meeting_id,
@@ -1888,11 +1929,16 @@ def create_timings_batch(
     timings_data: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
-    Create multiple timing records in batch (for Table Topics).
+    Create multiple timing records in batch.
+
+    For Table Topics segments: APPENDS new records (preserves existing).
+    For regular segments: OVERWRITES (deletes existing, then inserts).
+
+    Duplicate names in Table Topics are auto-suffixed with start time "(HH:MM)".
 
     Args:
         meeting_id: The ID of the meeting
-        segment_id: The ID of the Table Topics segment
+        segment_id: The ID of the segment
         timings_data: List of timing data dicts with name, planned_duration_minutes,
                       actual_start_time, actual_end_time
 
@@ -1910,20 +1956,37 @@ def create_timings_batch(
             timing["planned_duration_minutes"],
         )
 
-    # Delete existing timings for this segment (overwrite mode)
-    supabase.table("timings").delete().eq("meeting_id", meeting_id).eq("segment_id", segment_id).execute()
+    is_table_topics = is_table_topics_segment(segment_id)
 
-    # If no timings to insert, just return empty list (delete-only operation)
+    if is_table_topics:
+        # APPEND mode for Table Topics: get existing names, track batch names
+        existing_names = get_existing_timing_names_for_segment(segment_id)
+        batch_names: Set[str] = set()
+    else:
+        # OVERWRITE mode for regular segments: delete existing timings
+        supabase.table("timings").delete().eq("meeting_id", meeting_id).eq("segment_id", segment_id).execute()
+
+    # If no timings to insert, just return empty list
     if not timings_data:
         return []
 
     records_to_insert = []
     for timing in timings_data:
+        name = timing["name"]
+
+        if is_table_topics and name:
+            # Auto-suffix duplicate names with start time
+            all_existing = existing_names | batch_names
+            unique_name = make_unique_timing_name(name, all_existing, timing["actual_start_time"])
+            batch_names.add(unique_name.lower())
+        else:
+            unique_name = name
+
         records_to_insert.append(
             {
                 "meeting_id": meeting_id,
                 "segment_id": segment_id,
-                "name": timing["name"],
+                "name": unique_name,
                 "planned_duration_minutes": timing["planned_duration_minutes"],
                 "actual_start_time": timing["actual_start_time"],
                 "actual_end_time": timing["actual_end_time"],
@@ -1970,7 +2033,10 @@ def create_timings_batch_all(
     """
     Create timing records for multiple segments in batch.
 
-    Each segment's existing timings are deleted before inserting new ones.
+    For Table Topics segments: APPENDS new records (preserves existing).
+    For regular segments: OVERWRITES (deletes existing, then inserts).
+
+    Duplicate names in Table Topics are auto-suffixed with start time "(HH:MM)".
 
     Note: This is NOT atomic - if an error occurs mid-way, some segments may
     be updated while others are not. For true atomicity, a Supabase RPC/stored
@@ -2004,8 +2070,15 @@ def create_timings_batch_all(
         segment_id = segment["segment_id"]
         timings_data = segment.get("timings", [])
 
-        # Delete existing timings for this segment (overwrite mode)
-        supabase.table("timings").delete().eq("meeting_id", meeting_id).eq("segment_id", segment_id).execute()
+        is_table_topics = is_table_topics_segment(segment_id)
+
+        if is_table_topics:
+            # APPEND mode for Table Topics: get existing names, track batch names
+            existing_names = get_existing_timing_names_for_segment(segment_id)
+            batch_names: Set[str] = set()
+        else:
+            # OVERWRITE mode for regular segments: delete existing timings
+            supabase.table("timings").delete().eq("meeting_id", meeting_id).eq("segment_id", segment_id).execute()
 
         # If no timings for this segment, continue to next
         if not timings_data:
@@ -2013,11 +2086,21 @@ def create_timings_batch_all(
 
         records_to_insert = []
         for timing in timings_data:
+            name = timing.get("name")
+
+            if is_table_topics and name:
+                # Auto-suffix duplicate names with start time
+                all_existing = existing_names | batch_names
+                unique_name = make_unique_timing_name(name, all_existing, timing["actual_start_time"])
+                batch_names.add(unique_name.lower())
+            else:
+                unique_name = name
+
             records_to_insert.append(
                 {
                     "meeting_id": meeting_id,
                     "segment_id": segment_id,
-                    "name": timing.get("name"),
+                    "name": unique_name,
                     "planned_duration_minutes": timing["planned_duration_minutes"],
                     "actual_start_time": timing["actual_start_time"],
                     "actual_end_time": timing["actual_end_time"],
@@ -2133,6 +2216,14 @@ def update_timing(
 
     if not update_data:
         raise ValueError("No fields to update")
+
+    # For Table Topics: validate name uniqueness (if name is being changed)
+    if name is not None and is_table_topics_segment(timing["segment_id"]):
+        if check_timing_name_exists(timing["segment_id"], name, exclude_timing_id=timing_id):
+            raise ValueError(
+                f"A speaker named '{name}' already exists in this Table Topics session. "
+                "Delete it first if you want to replace it."
+            )
 
     # Update the timing
     result = supabase.table("timings").update(update_data).eq("id", timing_id).execute()
