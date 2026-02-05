@@ -11,6 +11,7 @@ from ...db.core import (
     get_extended_user_wxid,
     get_meeting_by_id,
     get_timings_by_meeting,
+    update_timing,
     validate_segments_belong_to_meeting,
 )
 from ...models.timing import (
@@ -22,6 +23,7 @@ from ...models.timing import (
     TimingDeleteResponse,
     TimingResponse,
     TimingsListResponse,
+    TimingUpdate,
 )
 from ...models.users import User
 from ...models.wechat_user import WeChatUser
@@ -272,6 +274,63 @@ async def create_meeting_timings_batch_all(
         return TimingBatchResponse(success=True, timings=timing_models)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create timings: {e!s}")
+
+
+@r.put("/meetings/{meeting_id}/timings/{timing_id}", response_model=TimingResponse)
+async def update_meeting_timing(
+    timing_data: TimingUpdate,
+    meeting_id: str = Path(..., description="The ID of the meeting"),
+    timing_id: str = Path(..., description="The ID of the timing record to update"),
+    current_user: Union[User, WeChatUser] = Depends(get_current_extended_user),
+):
+    """
+    Update an existing timing record.
+
+    Only users with timer control permission can update timing records.
+
+    Args:
+        timing_data: Updated timing fields (all optional)
+        meeting_id: The ID of the meeting
+        timing_id: The ID of the timing record to update
+        current_user: Authenticated user
+
+    Returns:
+        TimingResponse with the updated timing record
+
+    Raises:
+        HTTPException 403: If user cannot control timer
+        HTTPException 404: If meeting or timing not found
+        HTTPException 422: If update data is invalid
+    """
+    # Validate meeting exists
+    user_id = current_user.uid if isinstance(current_user, User) else None
+    meeting = get_meeting_by_id(meeting_id, user_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    # Check if user can control timer
+    wxid = get_extended_user_wxid(current_user)
+    if not can_control_timer(meeting_id, wxid, user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Only members or the Timer can update timing records.",
+        )
+
+    # Update timing record
+    try:
+        timing = update_timing(
+            timing_id=timing_id,
+            meeting_id=meeting_id,
+            name=timing_data.name,
+            planned_duration_minutes=timing_data.planned_duration_minutes,
+            actual_start_time=timing_data.actual_start_time,
+            actual_end_time=timing_data.actual_end_time,
+        )
+        return TimingResponse(success=True, timing=Timing(**timing))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update timing: {e!s}")
 
 
 @r.delete("/meetings/{meeting_id}/timings/{timing_id}", response_model=TimingDeleteResponse)

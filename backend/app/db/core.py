@@ -2083,3 +2083,82 @@ def delete_timing(timing_id: str, meeting_id: str) -> bool:
     # Delete the timing
     supabase.table("timings").delete().eq("id", timing_id).execute()
     return True
+
+
+def update_timing(
+    timing_id: str,
+    meeting_id: str,
+    name: Optional[str] = None,
+    planned_duration_minutes: Optional[int] = None,
+    actual_start_time: Optional[str] = None,
+    actual_end_time: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Update an existing timing record.
+
+    Args:
+        timing_id: The ID of the timing record to update
+        meeting_id: The ID of the meeting (for validation)
+        name: Optional new speaker name
+        planned_duration_minutes: Optional new planned duration
+        actual_start_time: Optional new start time (ISO timestamp)
+        actual_end_time: Optional new end time (ISO timestamp)
+
+    Returns:
+        The updated timing record with calculated fields
+
+    Raises:
+        ValueError: If timing not found, doesn't belong to meeting, or invalid timestamps
+    """
+    # Verify the timing exists and belongs to the meeting
+    result = supabase.table("timings").select("*").eq("id", timing_id).execute()
+
+    if not result.data:
+        raise ValueError("Timing record not found")
+
+    timing = result.data[0]
+    if timing["meeting_id"] != meeting_id:
+        raise ValueError("Timing does not belong to this meeting")
+
+    # Build update data with only provided fields
+    update_data: Dict[str, Any] = {}
+    if name is not None:
+        update_data["name"] = name
+    if planned_duration_minutes is not None:
+        update_data["planned_duration_minutes"] = planned_duration_minutes
+    if actual_start_time is not None:
+        update_data["actual_start_time"] = actual_start_time
+    if actual_end_time is not None:
+        update_data["actual_end_time"] = actual_end_time
+
+    if not update_data:
+        raise ValueError("No fields to update")
+
+    # Update the timing
+    result = supabase.table("timings").update(update_data).eq("id", timing_id).execute()
+
+    if not result.data:
+        raise ValueError("Failed to update timing record")
+
+    updated = result.data[0]
+
+    # Calculate derived fields using final values
+    final_start = updated.get("actual_start_time") or timing["actual_start_time"]
+    final_end = updated.get("actual_end_time") or timing["actual_end_time"]
+    final_planned = updated.get("planned_duration_minutes") or timing["planned_duration_minutes"]
+
+    actual_seconds, dot_color = calculate_timing_fields(final_start, final_end, final_planned)
+
+    return {
+        "id": updated["id"],
+        "meeting_id": updated["meeting_id"],
+        "segment_id": updated["segment_id"],
+        "name": updated.get("name"),
+        "planned_duration_minutes": updated["planned_duration_minutes"],
+        "actual_start_time": updated["actual_start_time"],
+        "actual_end_time": updated["actual_end_time"],
+        "actual_duration_seconds": actual_seconds,
+        "dot_color": dot_color,
+        "created_at": updated.get("created_at"),
+        "updated_at": updated.get("updated_at"),
+    }

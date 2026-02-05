@@ -94,6 +94,27 @@ class TimingBatchAllCreate(BaseModel):
     segments: List[TimingBatchAllSegment] = Field(description="List of segments with their timing records.")
 
 
+class TimingUpdate(BaseModel):
+    """Model for updating an existing timing record."""
+
+    name: Optional[str] = Field(
+        default=None,
+        description="Speaker name (optional, can be updated).",
+    )
+    planned_duration_minutes: Optional[int] = Field(
+        default=None,
+        description="The planned duration in minutes.",
+    )
+    actual_start_time: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp when timing started.",
+    )
+    actual_end_time: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp when timing ended.",
+    )
+
+
 class TimingDeleteResponse(BaseModel):
     """Response model for timing deletion."""
 
