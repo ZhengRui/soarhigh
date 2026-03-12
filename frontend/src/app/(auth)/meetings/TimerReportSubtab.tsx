@@ -1,6 +1,12 @@
 'use client';
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useMemo,
+  useEffect,
+  useRef,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { TimingIF, SegmentIF } from '@/interfaces';
 import {
@@ -15,7 +21,7 @@ import {
   TABLE_TOPICS_SEGMENT_TYPE,
   TABLE_TOPICS_SPEAKER_MINUTES,
 } from '@/utils/timing';
-import { Bell, Clock, PlusCircle, X } from 'lucide-react';
+import { Bell, ChevronDown, Clock, PlusCircle, X } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import type { ReportSortOrder } from './TimerTab';
@@ -170,8 +176,10 @@ export function TimerReportSubtab({
   const [timingToDelete, setTimingToDelete] = useState<TimingIF | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSegmentDropdownOpen, setIsSegmentDropdownOpen] = useState(false);
   const [timingModal, setTimingModal] =
     useState<TimingModalState>(emptyTimingModal);
+  const segmentDropdownRef = useRef<HTMLDivElement>(null);
 
   const queryClient = useQueryClient();
 
@@ -183,6 +191,10 @@ export function TimerReportSubtab({
     sortOrder === 'chronological' ? sortByTime(timings) : sortByStatus(timings);
   const colorCounts = countTimingsByColor(timings);
   const colorOrder = ['gray', 'green', 'yellow', 'red', 'bell'] as const;
+  const inputClasses =
+    'mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 transition-colors duration-200 focus:border-blue-500 focus:outline-none focus:ring-0';
+  const readOnlyFieldClasses =
+    'mt-1 rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm text-gray-900';
 
   const segmentOptions = segments.map((segment) => {
     const hasSavedTiming =
@@ -196,6 +208,33 @@ export function TimerReportSubtab({
       disabled: hasSavedTiming,
     };
   });
+  const selectedSegmentOption = segmentOptions.find(
+    (option) => option.id === timingModal.segmentId
+  );
+
+  useEffect(() => {
+    if (!timingModal.visible) {
+      setIsSegmentDropdownOpen(false);
+    }
+  }, [timingModal.visible]);
+
+  useEffect(() => {
+    if (!isSegmentDropdownOpen) {
+      return;
+    }
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        segmentDropdownRef.current &&
+        !segmentDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsSegmentDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isSegmentDropdownOpen]);
 
   const getPlannedDurationMinutes = useCallback(
     (segmentId: string): number => {
@@ -250,8 +289,22 @@ export function TimerReportSubtab({
   }, [segmentMap, segmentOptions]);
 
   const closeTimingModal = useCallback(() => {
+    setIsSegmentDropdownOpen(false);
     setTimingModal(emptyTimingModal);
   }, []);
+
+  const handleSegmentSelect = useCallback(
+    (segmentId: string) => {
+      const segment = segmentMap.get(segmentId);
+      setTimingModal((current) => ({
+        ...current,
+        segmentId,
+        speakerName: segment?.role_taker?.name || '',
+      }));
+      setIsSegmentDropdownOpen(false);
+    },
+    [segmentMap]
+  );
 
   const handleDelete = useCallback(async () => {
     if (!timingToDelete?.id) return;
@@ -549,32 +602,76 @@ export function TimerReportSubtab({
                     Segment
                   </span>
                   {timingModal.mode === 'add' ? (
-                    <select
-                      value={timingModal.segmentId}
-                      onChange={(event) => {
-                        const segment = segmentMap.get(event.target.value);
-                        setTimingModal((current) => ({
-                          ...current,
-                          segmentId: event.target.value,
-                          speakerName: segment?.role_taker?.name || '',
-                        }));
-                      }}
-                      disabled={modalReadOnly}
-                      className='mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500'
-                    >
-                      <option value=''>Select segment</option>
-                      {segmentOptions.map((option) => (
-                        <option
-                          key={option.id}
-                          value={option.id}
-                          disabled={option.disabled}
+                    <div ref={segmentDropdownRef} className='relative mt-1'>
+                      <button
+                        type='button'
+                        aria-haspopup='listbox'
+                        aria-expanded={isSegmentDropdownOpen}
+                        onClick={() =>
+                          setIsSegmentDropdownOpen((current) => !current)
+                        }
+                        className={`${inputClasses} mt-0 flex items-center justify-between text-left`}
+                      >
+                        <span
+                          className={
+                            selectedSegmentOption
+                              ? 'truncate'
+                              : 'truncate text-gray-400'
+                          }
                         >
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                          {selectedSegmentOption?.label || 'Select segment'}
+                        </span>
+                        <ChevronDown
+                          className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform duration-200 ${
+                            isSegmentDropdownOpen ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+
+                      {isSegmentDropdownOpen && (
+                        <div className='absolute left-0 right-0 top-full z-30 mt-1 rounded-md border border-gray-200 bg-gray-50 shadow-lg'>
+                          <div
+                            role='listbox'
+                            className='max-h-60 overflow-auto py-1'
+                          >
+                            <button
+                              type='button'
+                              onClick={() => handleSegmentSelect('')}
+                              className={`block w-full px-4 py-2 text-left text-xs transition-colors ${
+                                !timingModal.segmentId
+                                  ? 'bg-indigo-50 text-indigo-600'
+                                  : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                              }`}
+                            >
+                              Select segment
+                            </button>
+                            {segmentOptions.map((option) => (
+                              <button
+                                key={option.id}
+                                type='button'
+                                role='option'
+                                aria-selected={
+                                  option.id === timingModal.segmentId
+                                }
+                                disabled={option.disabled}
+                                onClick={() => handleSegmentSelect(option.id)}
+                                className={`block w-full px-4 py-2 text-left text-xs transition-colors ${
+                                  option.id === timingModal.segmentId
+                                    ? 'bg-indigo-50 text-indigo-600'
+                                    : option.disabled
+                                      ? 'cursor-not-allowed text-gray-300'
+                                      : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   ) : (
-                    <div className='mt-1 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 bg-gray-50'>
+                    <div className={readOnlyFieldClasses}>
                       {selectedSegment?.type || 'Unknown'}
                     </div>
                   )}
@@ -585,7 +682,7 @@ export function TimerReportSubtab({
                     Speaker
                   </span>
                   {modalReadOnly ? (
-                    <div className='mt-1 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 bg-gray-50'>
+                    <div className={readOnlyFieldClasses}>
                       {timingModal.speakerName || '-'}
                     </div>
                   ) : (
@@ -598,7 +695,7 @@ export function TimerReportSubtab({
                           speakerName: event.target.value,
                         }))
                       }
-                      className='mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500'
+                      className={inputClasses}
                     />
                   )}
                 </label>
@@ -609,7 +706,7 @@ export function TimerReportSubtab({
                       Date
                     </span>
                     {modalReadOnly ? (
-                      <div className='mt-1 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 bg-gray-50'>
+                      <div className={readOnlyFieldClasses}>
                         {timingModal.dateStr}
                       </div>
                     ) : (
@@ -622,7 +719,7 @@ export function TimerReportSubtab({
                             dateStr: event.target.value,
                           }))
                         }
-                        className='mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500'
+                        className={inputClasses}
                       />
                     )}
                   </label>
@@ -632,7 +729,7 @@ export function TimerReportSubtab({
                       Start Time
                     </span>
                     {modalReadOnly ? (
-                      <div className='mt-1 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 bg-gray-50'>
+                      <div className={readOnlyFieldClasses}>
                         {timingModal.startTimeStr}
                       </div>
                     ) : (
@@ -646,7 +743,7 @@ export function TimerReportSubtab({
                             startTimeStr: event.target.value,
                           }))
                         }
-                        className='mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500'
+                        className={inputClasses}
                       />
                     )}
                   </label>
@@ -657,7 +754,7 @@ export function TimerReportSubtab({
                     Duration (MM:SS)
                   </span>
                   {modalReadOnly ? (
-                    <div className='mt-1 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 bg-gray-50'>
+                    <div className={readOnlyFieldClasses}>
                       {timingModal.durationStr}
                     </div>
                   ) : (
@@ -673,7 +770,7 @@ export function TimerReportSubtab({
                           ),
                         }))
                       }
-                      className='mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500'
+                      className={inputClasses}
                     />
                   )}
                 </label>
