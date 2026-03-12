@@ -34,9 +34,18 @@ import {
   getTimingsForSegment,
   getTimingTooltip,
   dotColors,
+  formatDuration,
   formatTime,
   TABLE_TOPICS_SEGMENT_TYPE,
 } from '@/utils/timing';
+
+const speakerStatusOrder: Record<TimingIF['dot_color'], number> = {
+  gray: 0,
+  green: 1,
+  yellow: 2,
+  red: 3,
+  bell: 4,
+};
 
 type MeetingCardProps = {
   meeting: MeetingIF;
@@ -55,6 +64,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
   const [isMediaLoading, setIsMediaLoading] = useState(false);
   const [mediaFetched, setMediaFetched] = useState(false);
   const [timings, setTimings] = useState<TimingIF[]>([]);
+  const [canControlTimer, setCanControlTimer] = useState(false);
   const [timingsFetched, setTimingsFetched] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(
     null
@@ -117,6 +127,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
       try {
         const response = await getTimings(id);
         setTimings(response.timings);
+        setCanControlTimer(response.can_control);
         setTimingsFetched(true);
       } catch (error) {
         console.error('Error fetching timings:', error);
@@ -126,28 +137,38 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
     fetchTimings();
   }, [isExpanded, id, timingsFetched]);
 
-  // Close timing popover when clicking outside or scrolling
+  const showTimerTab =
+    timingsFetched && (canControlTimer || timings.length > 0);
+
+  // Close timing popover when clicking outside or when an outside container scrolls.
   useEffect(() => {
     if (popoverTimings.length === 0) return;
 
+    const isWithinPopover = (target: EventTarget | null) => {
+      if (!(target instanceof Node)) {
+        return false;
+      }
+
+      return Boolean(popoverRef.current?.contains(target));
+    };
+
     const handleClickOutside = (e: MouseEvent) => {
-      if (
-        popoverRef.current &&
-        !popoverRef.current.contains(e.target as Node)
-      ) {
+      if (!isWithinPopover(e.target)) {
         setPopoverTimings([]);
       }
     };
 
-    const handleScroll = () => {
-      setPopoverTimings([]);
+    const handleScrollOutside = (e: Event) => {
+      if (!isWithinPopover(e.target)) {
+        setPopoverTimings([]);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
-    window.addEventListener('scroll', handleScroll, true);
+    document.addEventListener('scroll', handleScrollOutside, true);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('scroll', handleScroll, true);
+      document.removeEventListener('scroll', handleScrollOutside, true);
     };
   }, [popoverTimings]);
 
@@ -334,7 +355,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
               <ImageIcon className='w-4 h-4 text-indigo-600' />
               Photos
             </button>
-            {isAuthenticated && (
+            {showTimerTab && (
               <button
                 onClick={() => setActiveTab('timer')}
                 className={`px-4 py-2 text-sm font-semibold text-gray-500 flex items-center gap-2 rounded-xl border border-dashed border-1 transition-all duration-300 ${
@@ -363,6 +384,24 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
                   segmentTimings.length > 0
                     ? segmentTimings[segmentTimings.length - 1]
                     : null;
+                const sortedSpeakerTimings = [...segmentTimings].sort(
+                  (a, b) => {
+                    const statusDiff =
+                      speakerStatusOrder[a.dot_color] -
+                      speakerStatusOrder[b.dot_color];
+                    if (statusDiff !== 0) {
+                      return statusDiff;
+                    }
+
+                    const aDistance =
+                      a.actual_duration_seconds -
+                      a.planned_duration_minutes * 60;
+                    const bDistance =
+                      b.actual_duration_seconds -
+                      b.planned_duration_minutes * 60;
+                    return aDistance - bDistance;
+                  }
+                );
 
                 return (
                   <div
@@ -380,7 +419,7 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
                           {isTableTopics && segmentTimings.length > 0 && (
                             <button
                               type='button'
-                              className='inline-flex items-center justify-center w-4 h-4 text-gray-400 hover:text-gray-600'
+                              className='inline-flex items-center gap-0.5 text-gray-400 hover:text-gray-600'
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (
@@ -395,11 +434,14 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
                                     top: rect.bottom + 4,
                                     left: rect.left,
                                   });
-                                  setPopoverTimings(segmentTimings);
+                                  setPopoverTimings(sortedSpeakerTimings);
                                 }
                               }}
                             >
                               <Users className='w-3 h-3' />
+                              <span className='text-[10px]'>
+                                {segmentTimings.length}
+                              </span>
                             </button>
                           )}
                           {/* Regular segments: show timing dot */}
@@ -506,8 +548,19 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
           </div>
 
           {/* Timer Tab Content */}
-          {isAuthenticated && id && activeTab === 'timer' && (
-            <TimerTab meetingId={id} segments={segments} />
+          {id && activeTab === 'timer' && showTimerTab && (
+            <TimerTab
+              meetingId={id}
+              meetingDate={date}
+              meetingStartTime={start_time}
+              meetingEndTime={end_time}
+              segments={segments}
+              onTimingsUpdated={(nextCanControl, nextTimings) => {
+                setCanControlTimer(nextCanControl);
+                setTimings(nextTimings);
+                setTimingsFetched(true);
+              }}
+            />
           )}
         </div>
       </div>
@@ -533,38 +586,33 @@ export const MeetingCard: React.FC<MeetingCardProps> = ({
             )}
             {/* Multiple timings or has name (Table Topics speakers) */}
             {(popoverTimings.length > 1 || popoverTimings[0]?.name) && (
-              <div className='space-y-2 sm:space-y-1 max-h-[200px] overflow-y-auto'>
-                {popoverTimings.map((t, idx) => (
-                  <div
-                    key={t.id || idx}
-                    className='flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-2 text-xs'
-                  >
-                    <div className='flex items-center gap-1.5'>
-                      {t.dot_color === 'bell' ? (
-                        <Bell className='w-2.5 h-2.5 text-red-600 fill-red-600 flex-shrink-0' />
-                      ) : (
-                        <span
-                          className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColors[t.dot_color]}`}
-                        />
-                      )}
-                      <span className='text-gray-700'>
-                        {t.name || 'Speaker'}
-                      </span>
+              <div className='w-[240px] max-w-[260px]'>
+                <div className='text-[10px] font-medium text-gray-500 mb-2 px-1'>
+                  Speakers ({popoverTimings.length})
+                </div>
+                <div className='space-y-3 max-h-[24vh] overflow-y-auto pr-1 overscroll-contain'>
+                  {popoverTimings.map((t, idx) => (
+                    <div key={t.id || idx} className='px-1'>
+                      <div className='flex items-center gap-1.5 mb-1 min-w-0'>
+                        {t.dot_color === 'bell' ? (
+                          <Bell className='w-2.5 h-2.5 text-red-600 fill-red-600 flex-shrink-0' />
+                        ) : (
+                          <span
+                            className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColors[t.dot_color]}`}
+                          />
+                        )}
+                        <span className='text-[10px] text-gray-700 truncate'>
+                          {t.name || 'Speaker'}
+                        </span>
+                      </div>
+                      <div className='pl-4 text-[10px] font-mono text-gray-500 whitespace-nowrap'>
+                        {formatTime(t.actual_start_time)} -{' '}
+                        {formatTime(t.actual_end_time)} (
+                        {formatDuration(t.actual_duration_seconds)})
+                      </div>
                     </div>
-                    <span className='text-gray-500 pl-3.5 sm:pl-0 whitespace-nowrap'>
-                      {formatTime(t.actual_start_time)} -{' '}
-                      {formatTime(t.actual_end_time)} (
-                      {Math.floor(t.actual_duration_seconds / 60)
-                        .toString()
-                        .padStart(2, '0')}
-                      m
-                      {(t.actual_duration_seconds % 60)
-                        .toString()
-                        .padStart(2, '0')}
-                      s)
-                    </span>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
           </div>,

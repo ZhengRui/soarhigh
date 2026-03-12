@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Clock, FileText, ArrowUpDown, Clock3 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { useSegmentTimings } from '@/hooks/useSegmentTimings';
-import { SegmentIF } from '@/interfaces';
+import { SegmentIF, TimingIF } from '@/interfaces';
 import { TimingSubtab } from './TimingSubtab';
 import { TimerReportSubtab } from './TimerReportSubtab';
 import {
@@ -14,6 +15,14 @@ import {
   saveRunningTimer,
   CachedTimingsState,
 } from '@/utils/timingStorage';
+import {
+  determineTimingWindowStatus,
+  getTimingDotColor,
+  parseDurationToMinutes,
+  TABLE_TOPICS_SEGMENT_TYPE,
+  TABLE_TOPICS_SPEAKER_MINUTES,
+  TimingWindowState,
+} from '@/utils/timing';
 
 export type ReportSortOrder = 'status' | 'chronological';
 
@@ -27,10 +36,21 @@ export interface RunningTimerState {
 
 interface TimerTabProps {
   meetingId: string;
+  meetingDate: string;
+  meetingStartTime: string;
+  meetingEndTime: string;
   segments: SegmentIF[];
+  onTimingsUpdated?: (canControl: boolean, timings: TimingIF[]) => void;
 }
 
-export function TimerTab({ meetingId, segments }: TimerTabProps) {
+export function TimerTab({
+  meetingId,
+  meetingDate,
+  meetingStartTime,
+  meetingEndTime,
+  segments,
+  onTimingsUpdated,
+}: TimerTabProps) {
   const { data, isLoading, isError } = useSegmentTimings(meetingId);
   const [activeSubtab, setActiveSubtab] = useState<'timing' | 'report'>(
     'timing'
@@ -48,6 +68,9 @@ export function TimerTab({ meetingId, segments }: TimerTabProps) {
 
   // Cached timings state (loaded from localStorage)
   const [cachedTimings, setCachedTimings] = useState<CachedTimingsState>({});
+  const [timingWindow, setTimingWindow] = useState<TimingWindowState>(() =>
+    determineTimingWindowStatus(meetingDate, meetingStartTime, meetingEndTime)
+  );
 
   // Cleanup expired caches on mount (runs once)
   useEffect(() => {
@@ -70,6 +93,22 @@ export function TimerTab({ meetingId, segments }: TimerTabProps) {
     saveRunningTimer(meetingId, runningTimer);
   }, [meetingId, runningTimer]);
 
+  useEffect(() => {
+    const syncTimingWindow = () => {
+      setTimingWindow(
+        determineTimingWindowStatus(
+          meetingDate,
+          meetingStartTime,
+          meetingEndTime
+        )
+      );
+    };
+
+    syncTimingWindow();
+    const intervalId = window.setInterval(syncTimingWindow, 30000);
+    return () => window.clearInterval(intervalId);
+  }, [meetingDate, meetingEndTime, meetingStartTime]);
+
   // Persist to localStorage whenever cache changes
   const updateCache = useCallback(
     (newCache: CachedTimingsState) => {
@@ -79,8 +118,124 @@ export function TimerTab({ meetingId, segments }: TimerTabProps) {
     [meetingId]
   );
 
+  const stopRunningTimer = useCallback(() => {
+    if (!runningTimer?.startedAt || !runningTimer.segmentId) {
+      return;
+    }
+
+    const timedSegment = segments.find(
+      (segment) => segment.id === runningTimer.segmentId
+    );
+    if (!timedSegment) {
+      setRunningTimer(null);
+      return;
+    }
+
+    const isTableTopics = timedSegment.type === TABLE_TOPICS_SEGMENT_TYPE;
+    const plannedMinutes = isTableTopics
+      ? TABLE_TOPICS_SPEAKER_MINUTES
+      : parseDurationToMinutes(timedSegment.duration);
+    const endedAt = Date.now();
+    const entry = {
+      name:
+        runningTimer.speakerName.trim() ||
+        timedSegment.role_taker?.name ||
+        null,
+      plannedDurationMinutes: plannedMinutes,
+      startedAt: runningTimer.startedAt,
+      endedAt,
+      dotColor: getTimingDotColor(
+        plannedMinutes,
+        Math.floor((endedAt - runningTimer.startedAt) / 1000)
+      ),
+    };
+    const existingEntries = cachedTimings[timedSegment.id]?.entries || [];
+    const nextEntries = isTableTopics ? [...existingEntries, entry] : [entry];
+
+    updateCache({
+      ...cachedTimings,
+      [timedSegment.id]: {
+        segmentId: timedSegment.id,
+        segmentType: timedSegment.type,
+        entries: nextEntries,
+      },
+    });
+    setRunningTimer(null);
+  }, [cachedTimings, runningTimer, segments, updateCache]);
+
+  useEffect(() => {
+    if (!runningTimer?.isRunning || timingWindow.status !== 'too-late') {
+      return;
+    }
+
+    stopRunningTimer();
+    toast.error('Timing window closed');
+  }, [runningTimer?.isRunning, stopRunningTimer, timingWindow.status]);
+
+  useEffect(() => {
+    if (
+      !runningTimer?.isRunning ||
+      typeof navigator === 'undefined' ||
+      !('wakeLock' in navigator)
+    ) {
+      return;
+    }
+
+    type WakeLockHandle = {
+      released?: boolean;
+      release: () => Promise<void>;
+    };
+
+    const wakeLockApi = (
+      navigator as Navigator & {
+        wakeLock?: { request: (type: 'screen') => Promise<WakeLockHandle> };
+      }
+    ).wakeLock;
+    let wakeLock: WakeLockHandle | null = null;
+
+    const requestWakeLock = async () => {
+      if (!wakeLockApi) {
+        return;
+      }
+
+      try {
+        wakeLock = await wakeLockApi.request('screen');
+      } catch (error) {
+        console.error('Failed to acquire wake lock:', error);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (
+        document.visibilityState === 'visible' &&
+        runningTimer.isRunning &&
+        (!wakeLock || wakeLock.released)
+      ) {
+        void requestWakeLock();
+      }
+    };
+
+    void requestWakeLock();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (wakeLock) {
+        void wakeLock.release().catch(() => undefined);
+      }
+    };
+  }, [runningTimer?.isRunning]);
+
   const canControl = data?.can_control ?? false;
   const timings = data?.timings ?? [];
+
+  useEffect(() => {
+    if (!data || !onTimingsUpdated) {
+      return;
+    }
+
+    onTimingsUpdated(data.can_control, data.timings);
+  }, [data, onTimingsUpdated]);
 
   if (isLoading) {
     return (
@@ -179,10 +334,13 @@ export function TimerTab({ meetingId, segments }: TimerTabProps) {
           timings={timings}
           runningTimer={runningTimer}
           setRunningTimer={setRunningTimer}
+          stopRunningTimer={stopRunningTimer}
           selectedSegmentId={selectedSegmentId}
           setSelectedSegmentId={setSelectedSegmentId}
           cachedTimings={cachedTimings}
           updateCache={updateCache}
+          timingWindowStatus={timingWindow.status}
+          timingWindowMessage={timingWindow.message}
         />
       )}
       {activeSubtab === 'report' && (

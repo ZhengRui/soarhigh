@@ -10,11 +10,34 @@ import {
   formatDuration,
 } from '@/utils/timing';
 
+export interface SpeakerTimingEntry {
+  id?: string;
+  name?: string | null;
+  dotColor: TimingIF['dot_color'];
+  actualDurationSeconds: number;
+  plannedDurationMinutes: number;
+  actualStartTime?: string;
+  actualEndTime?: string;
+  isCached?: boolean;
+}
+
+const speakerStatusOrder: Record<TimingIF['dot_color'], number> = {
+  gray: 0,
+  green: 1,
+  yellow: 2,
+  red: 3,
+  bell: 4,
+};
+
 interface SegmentCardProps {
   segment: SegmentIF;
   isSelected: boolean;
   timing: TimingIF | null;
-  allTimings?: TimingIF[]; // All timings for Table Topics (multiple speakers)
+  speakerEntries?: SpeakerTimingEntry[];
+  cachedTiming?: {
+    dotColor: TimingIF['dot_color'];
+    actualDurationSeconds: number;
+  } | null;
   onClick: () => void;
   disabled?: boolean;
   isRunning?: boolean;
@@ -77,7 +100,8 @@ export function SegmentCard({
   segment,
   isSelected,
   timing,
-  allTimings = [],
+  speakerEntries = [],
+  cachedTiming = null,
   onClick,
   disabled = false,
   isRunning = false,
@@ -86,6 +110,25 @@ export function SegmentCard({
   const abbreviatedType = abbreviateType(segment.type);
   const roleTaker = segment.role_taker?.name;
   const isTableTopics = segment.type === TABLE_TOPICS_SEGMENT_TYPE;
+  const displayTiming =
+    timing ||
+    (cachedTiming
+      ? {
+          actual_duration_seconds: cachedTiming.actualDurationSeconds,
+          dot_color: cachedTiming.dotColor,
+        }
+      : null);
+  const sortedSpeakerEntries = [...speakerEntries].sort((a, b) => {
+    const statusDiff =
+      speakerStatusOrder[a.dotColor] - speakerStatusOrder[b.dotColor];
+    if (statusDiff !== 0) {
+      return statusDiff;
+    }
+
+    const aDistance = a.actualDurationSeconds - a.plannedDurationMinutes * 60;
+    const bDistance = b.actualDurationSeconds - b.plannedDurationMinutes * 60;
+    return aDistance - bDistance;
+  });
 
   // Popover state for Table Topics speakers
   const [showSpeakers, setShowSpeakers] = useState(false);
@@ -96,7 +139,7 @@ export function SegmentCard({
   // Handle opening popover - calculate position immediately
   const handleToggleSpeakers = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (allTimings.length === 0) return;
+    if (sortedSpeakerEntries.length === 0) return;
 
     if (!showSpeakers && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
@@ -108,30 +151,38 @@ export function SegmentCard({
     setShowSpeakers(!showSpeakers);
   };
 
-  // Close popover when clicking outside or scrolling
+  // Close popover when clicking outside or when an outside container scrolls.
   useEffect(() => {
     if (!showSpeakers) return;
 
+    const isWithinPopover = (target: EventTarget | null) => {
+      if (!(target instanceof Node)) {
+        return false;
+      }
+
+      return Boolean(
+        popoverRef.current?.contains(target) ||
+          triggerRef.current?.contains(target)
+      );
+    };
+
     const handleClickOutside = (e: MouseEvent) => {
-      if (
-        popoverRef.current &&
-        !popoverRef.current.contains(e.target as Node) &&
-        triggerRef.current &&
-        !triggerRef.current.contains(e.target as Node)
-      ) {
+      if (!isWithinPopover(e.target)) {
         setShowSpeakers(false);
       }
     };
 
-    const handleScroll = () => {
-      setShowSpeakers(false);
+    const handleScrollOutside = (e: Event) => {
+      if (!isWithinPopover(e.target)) {
+        setShowSpeakers(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
-    window.addEventListener('scroll', handleScroll, true);
+    document.addEventListener('scroll', handleScrollOutside, true);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('scroll', handleScroll, true);
+      document.removeEventListener('scroll', handleScrollOutside, true);
     };
   }, [showSpeakers]);
 
@@ -189,7 +240,7 @@ export function SegmentCard({
             {formatDurationWithUnit(segment.duration)}
           </span>
           {/* Hide timing info for Table Topics (multi-speaker session) */}
-          {timing && segment.type !== TABLE_TOPICS_SEGMENT_TYPE && (
+          {displayTiming && segment.type !== TABLE_TOPICS_SEGMENT_TYPE && (
             <>
               <span
                 className={`text-[10px] ${isSelected ? 'text-indigo-300' : 'text-gray-300'}`}
@@ -201,13 +252,13 @@ export function SegmentCard({
                   isSelected ? 'text-indigo-600' : 'text-gray-600'
                 }`}
               >
-                {formatTimedDuration(timing.actual_duration_seconds)}
+                {formatTimedDuration(displayTiming.actual_duration_seconds)}
               </span>
-              {timing.dot_color === 'bell' ? (
+              {displayTiming.dot_color === 'bell' ? (
                 <Bell className='w-2.5 h-2.5 text-red-600 fill-red-600' />
               ) : (
                 <div
-                  className={`w-2 h-2 rounded-full ${dotColors[timing.dot_color]}`}
+                  className={`w-2 h-2 rounded-full ${dotColors[displayTiming.dot_color]}`}
                 />
               )}
             </>
@@ -231,7 +282,7 @@ export function SegmentCard({
             ref={triggerRef}
             onClick={handleToggleSpeakers}
             className={`flex items-center gap-1 text-[10px] ${
-              allTimings.length > 0
+              sortedSpeakerEntries.length > 0
                 ? isSelected
                   ? 'text-indigo-500 hover:text-indigo-600'
                   : 'text-gray-400 hover:text-gray-600'
@@ -239,52 +290,52 @@ export function SegmentCard({
                   ? 'text-indigo-300'
                   : 'text-gray-300'
             } transition-colors`}
-            disabled={allTimings.length === 0}
+            disabled={sortedSpeakerEntries.length === 0}
           >
             <Users className='w-3 h-3' />
             <span>
-              {allTimings.length} speaker{allTimings.length !== 1 ? 's' : ''}
+              {sortedSpeakerEntries.length} speaker
+              {sortedSpeakerEntries.length !== 1 ? 's' : ''}
             </span>
           </button>
 
           {/* Speakers Popover - rendered via portal to avoid clipping */}
           {showSpeakers &&
-            allTimings.length > 0 &&
+            sortedSpeakerEntries.length > 0 &&
             typeof window !== 'undefined' &&
             createPortal(
               <div
                 ref={popoverRef}
-                className='fixed z-[9999] bg-white border border-gray-200 rounded-lg shadow-lg p-2 min-w-[160px] max-w-[200px]'
+                className='fixed z-[9999] bg-white border border-gray-200 rounded-xl shadow-lg p-3 w-[240px] max-w-[260px]'
                 style={{
                   top: popoverPosition.top,
                   left: popoverPosition.left,
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className='text-[10px] font-medium text-gray-500 mb-1.5 px-1'>
-                  Speakers ({allTimings.length})
+                <div className='text-[10px] font-medium text-gray-500 mb-2 px-1'>
+                  Speakers ({sortedSpeakerEntries.length})
                 </div>
-                <div className='space-y-1 max-h-[150px] overflow-y-auto'>
-                  {allTimings.map((t, idx) => (
-                    <div
-                      key={t.id || idx}
-                      className='flex items-center justify-between gap-2 px-1 py-0.5 rounded hover:bg-gray-50'
-                    >
-                      <div className='flex items-center gap-1.5 min-w-0'>
-                        {t.dot_color === 'bell' ? (
+                <div className='space-y-3 max-h-[24vh] overflow-y-auto pr-1 overscroll-contain'>
+                  {sortedSpeakerEntries.map((entry, idx) => (
+                    <div key={entry.id || idx} className='px-1'>
+                      <div className='flex items-center gap-1.5 mb-1 min-w-0'>
+                        {entry.dotColor === 'bell' ? (
                           <Bell className='w-2.5 h-2.5 text-red-600 fill-red-600 flex-shrink-0' />
                         ) : (
                           <div
-                            className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColors[t.dot_color]}`}
+                            className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColors[entry.dotColor]}`}
                           />
                         )}
                         <span className='text-[10px] text-gray-700 truncate'>
-                          {t.name || 'Speaker'}
+                          {entry.name || 'Speaker'}
                         </span>
                       </div>
-                      <span className='text-[10px] font-mono text-gray-500 flex-shrink-0'>
-                        {formatDuration(t.actual_duration_seconds)}
-                      </span>
+                      <div className='pl-4 text-[10px] font-mono text-gray-500 whitespace-nowrap'>
+                        {entry.actualStartTime && entry.actualEndTime
+                          ? `${entry.actualStartTime} - ${entry.actualEndTime} (${formatDuration(entry.actualDurationSeconds)}${entry.isCached ? ', unsaved' : ''})`
+                          : `${formatDuration(entry.actualDurationSeconds)}${entry.isCached ? ' (unsaved)' : ''}`}
+                      </div>
                     </div>
                   ))}
                 </div>

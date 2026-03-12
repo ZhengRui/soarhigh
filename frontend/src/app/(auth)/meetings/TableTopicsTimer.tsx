@@ -1,13 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Play, Square, ChevronLeft, ChevronRight } from 'lucide-react';
 import { SegmentIF } from '@/interfaces';
-import {
-  getTimingDotColor,
-  TABLE_TOPICS_SPEAKER_MINUTES,
-} from '@/utils/timing';
-import { CachedTimingsState, CachedTimingEntry } from '@/utils/timingStorage';
+import { CachedTimingsState } from '@/utils/timingStorage';
+import { TABLE_TOPICS_SPEAKER_MINUTES } from '@/utils/timing';
 import toast from 'react-hot-toast';
 import { CardSignals, TimerDisplay } from './TimerComponents';
 import { RunningTimerState } from './TimerTab';
@@ -17,9 +14,11 @@ interface TableTopicsTimerProps {
   // Lifted state from TimerTab
   runningTimer: RunningTimerState | null;
   setRunningTimer: (state: RunningTimerState | null) => void;
+  stopRunningTimer: () => void;
   // Cached timings from localStorage (managed by TimerTab)
   cachedTimings: CachedTimingsState;
   updateCache: (cache: CachedTimingsState) => void;
+  timingWindowStatus: 'can-time' | 'too-early' | 'too-late';
   // Navigation
   canGoPrev: boolean;
   canGoNext: boolean;
@@ -31,15 +30,16 @@ export function TableTopicsTimer({
   segment,
   runningTimer,
   setRunningTimer,
-  cachedTimings,
-  updateCache,
+  stopRunningTimer,
   canGoPrev,
   canGoNext,
   onGoPrev,
   onGoNext,
+  timingWindowStatus,
 }: TableTopicsTimerProps) {
   const [speakerNameInput, setSpeakerNameInput] = useState('');
   const [elapsed, setElapsed] = useState(0);
+  const wasRunningRef = useRef(false);
 
   // Check if this segment's timer is running
   const isThisSegmentRunning =
@@ -52,36 +52,6 @@ export function TableTopicsTimer({
   // Check if another segment is timing
   const isOtherSegmentRunning =
     runningTimer?.isRunning && runningTimer.segmentId !== segment.id;
-
-  // Update cached entries for this segment
-  const setCachedEntries = useCallback(
-    (
-      updater:
-        | CachedTimingEntry[]
-        | ((prev: CachedTimingEntry[]) => CachedTimingEntry[])
-    ) => {
-      const currentEntries = cachedTimings[segment.id]?.entries || [];
-      const newEntries =
-        typeof updater === 'function' ? updater(currentEntries) : updater;
-
-      if (newEntries.length === 0) {
-        // Remove segment from cache if empty
-        const { [segment.id]: _removed, ...rest } = cachedTimings;
-        void _removed; // Suppress unused variable warning
-        updateCache(rest);
-      } else {
-        updateCache({
-          ...cachedTimings,
-          [segment.id]: {
-            segmentId: segment.id,
-            segmentType: segment.type,
-            entries: newEntries,
-          },
-        });
-      }
-    },
-    [segment.id, segment.type, cachedTimings, updateCache]
-  );
 
   // Fixed 2 minutes per speaker
   const plannedMinutes = TABLE_TOPICS_SPEAKER_MINUTES;
@@ -100,6 +70,14 @@ export function TableTopicsTimer({
     return () => clearInterval(interval);
   }, [isThisSegmentRunning, startedAt]);
 
+  useEffect(() => {
+    if (wasRunningRef.current && !isThisSegmentRunning) {
+      setSpeakerNameInput('');
+      setElapsed(0);
+    }
+    wasRunningRef.current = isThisSegmentRunning;
+  }, [isThisSegmentRunning]);
+
   const handleStart = useCallback(() => {
     const name = speakerNameInput.trim();
     if (!name) {
@@ -116,30 +94,8 @@ export function TableTopicsTimer({
   }, [speakerNameInput, segment.id, setRunningTimer]);
 
   const handleStop = useCallback(() => {
-    if (!runningTimer?.startedAt) return;
-
-    // Capture values before clearing state
-    const startTime = runningTimer.startedAt;
-    const speakerName = runningTimer.speakerName.trim();
-    const endTime = Date.now();
-    const actualSeconds = Math.floor((endTime - startTime) / 1000);
-    const dotColor = getTimingDotColor(plannedMinutes, actualSeconds);
-
-    setCachedEntries((prev) => [
-      ...prev,
-      {
-        name: speakerName,
-        plannedDurationMinutes: plannedMinutes,
-        startedAt: startTime,
-        endedAt: endTime,
-        dotColor,
-      },
-    ]);
-
-    setRunningTimer(null);
-    setElapsed(0);
-    setSpeakerNameInput('');
-  }, [runningTimer, plannedMinutes, setCachedEntries, setRunningTimer]);
+    stopRunningTimer();
+  }, [stopRunningTimer]);
 
   return (
     <div className='bg-white border border-gray-200 rounded-lg p-5 sm:p-6'>
@@ -185,7 +141,7 @@ export function TableTopicsTimer({
         {/* Prev Button */}
         <button
           onClick={onGoPrev}
-          disabled={!canGoPrev || isThisSegmentRunning}
+          disabled={!canGoPrev}
           className='flex items-center justify-center w-10 h-10 rounded-full text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed'
           title='Previous segment'
         >
@@ -196,7 +152,11 @@ export function TableTopicsTimer({
         {!isThisSegmentRunning ? (
           <button
             onClick={handleStart}
-            disabled={!speakerNameInput.trim() || isOtherSegmentRunning}
+            disabled={
+              !speakerNameInput.trim() ||
+              isOtherSegmentRunning ||
+              timingWindowStatus !== 'can-time'
+            }
             className='flex items-center justify-center gap-2 py-2 px-6 rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
           >
             <Play className='w-4 h-4' />
@@ -215,7 +175,7 @@ export function TableTopicsTimer({
         {/* Next Button */}
         <button
           onClick={onGoNext}
-          disabled={!canGoNext || isThisSegmentRunning}
+          disabled={!canGoNext}
           className='flex items-center justify-center w-10 h-10 rounded-full text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed'
           title='Next segment'
         >

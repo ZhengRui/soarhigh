@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { createPortal } from 'react-dom';
 import {
   Play,
   Square,
@@ -11,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import { TimingIF, SegmentIF } from '@/interfaces';
 import {
@@ -21,14 +21,13 @@ import {
   formatRelativeDuration,
   formatTime,
   getTimingsForSegment,
-  getTimingDotColor,
   timerTextColors,
   TABLE_TOPICS_SEGMENT_TYPE,
   getCachedTimingTooltip,
+  parseDurationToMinutes,
 } from '@/utils/timing';
 import {
   CachedTimingsState,
-  CachedTimingEntry,
   getUnsavedCount,
   hasUnsavedTiming,
   clearCachedTimings,
@@ -38,6 +37,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { SegmentCard } from './SegmentCard';
 import { TableTopicsTimer } from './TableTopicsTimer';
+import { TimingConfirmDialog } from './TimingConfirmDialog';
 import { CardSignals } from './TimerComponents';
 import { RunningTimerState } from './TimerTab';
 
@@ -48,27 +48,14 @@ interface TimingSubtabProps {
   // Lifted state from TimerTab
   runningTimer: RunningTimerState | null;
   setRunningTimer: (state: RunningTimerState | null) => void;
+  stopRunningTimer: () => void;
   selectedSegmentId: string | null;
   setSelectedSegmentId: (id: string | null) => void;
   // Cached timings from localStorage (managed by TimerTab)
   cachedTimings: CachedTimingsState;
   updateCache: (cache: CachedTimingsState) => void;
-}
-
-// Parse duration string like "5", "5min", or "1h30min" to minutes
-function parseDurationToMinutes(duration: string): number {
-  // Handle plain number (just digits)
-  if (/^\d+$/.test(duration.trim())) {
-    return parseInt(duration.trim(), 10);
-  }
-
-  const hourMatch = duration.match(/(\d+)h/);
-  const minMatch = duration.match(/(\d+)min/);
-
-  const hours = hourMatch ? parseInt(hourMatch[1], 10) : 0;
-  const mins = minMatch ? parseInt(minMatch[1], 10) : 0;
-
-  return hours * 60 + mins;
+  timingWindowStatus: 'can-time' | 'too-early' | 'too-late';
+  timingWindowMessage: string;
 }
 
 // Check if segment is Table Topic Session (the only special segment type)
@@ -76,20 +63,47 @@ function isTableTopicsSegment(segment: SegmentIF): boolean {
   return segment.type === TABLE_TOPICS_SEGMENT_TYPE;
 }
 
+type TimingConfirmAction =
+  | { type: 'retime' }
+  | { type: 'discard-all' }
+  | { type: 'discard-entry'; segmentId: string; entryIndex: number }
+  | { type: 'save-all' };
+
+interface TimingConfirmState {
+  visible: boolean;
+  title: string;
+  message: string;
+  confirmText: string;
+  confirmDanger: boolean;
+  action: TimingConfirmAction | null;
+}
+
+const emptyConfirmDialog: TimingConfirmState = {
+  visible: false,
+  title: '',
+  message: '',
+  confirmText: 'Confirm',
+  confirmDanger: false,
+  action: null,
+};
+
 export function TimingSubtab({
   meetingId,
   segments,
   timings,
   runningTimer,
   setRunningTimer,
+  stopRunningTimer,
   selectedSegmentId,
   setSelectedSegmentId,
   cachedTimings,
   updateCache,
+  timingWindowStatus,
+  timingWindowMessage,
 }: TimingSubtabProps) {
   const [elapsed, setElapsed] = useState(0);
-  const [showRetimeDialog, setShowRetimeDialog] = useState(false);
-  const [showDiscardDialog, setShowDiscardDialog] = useState(false);
+  const [confirmDialog, setConfirmDialog] =
+    useState<TimingConfirmState>(emptyConfirmDialog);
   const [isSavingAll, setIsSavingAll] = useState(false);
   const [showRelative, setShowRelative] = useState(false);
 
@@ -167,18 +181,25 @@ export function TimingSubtab({
   }, [selectedSegmentId, setRunningTimer]);
 
   const handleStartClick = useCallback(() => {
+    if (timingWindowStatus !== 'can-time') {
+      return;
+    }
+
     // Check if there's existing timing OR unsaved cached timing
     if (hasTiming || hasCachedTiming) {
-      setShowRetimeDialog(true);
+      setConfirmDialog({
+        visible: true,
+        title: 'Re-time this segment?',
+        message:
+          'This segment already has a timing record. Starting will cache a new timing locally. Click "Save All" to sync to server.',
+        confirmText: 'Start Anyway',
+        confirmDanger: false,
+        action: { type: 'retime' },
+      });
     } else {
       startTimer();
     }
-  }, [hasTiming, hasCachedTiming, startTimer]);
-
-  const handleConfirmStart = useCallback(() => {
-    setShowRetimeDialog(false);
-    startTimer();
-  }, [startTimer]);
+  }, [hasCachedTiming, hasTiming, startTimer, timingWindowStatus]);
 
   // Navigation handlers
   const currentSegmentIndex = segments.findIndex(
@@ -199,46 +220,8 @@ export function TimingSubtab({
     }
   }, [canGoNext, segments, currentSegmentIndex, setSelectedSegmentId]);
 
-  // Handle stop - cache locally instead of saving immediately
-  const handleStop = useCallback(() => {
-    if (!runningTimer?.startedAt || !selectedSegment) return;
-
-    const startedAt = runningTimer.startedAt;
-    const endedAt = Date.now();
-    const durationSeconds = Math.floor((endedAt - startedAt) / 1000);
-    const dotColor = getTimingDotColor(plannedMinutes, durationSeconds);
-
-    const entry: CachedTimingEntry = {
-      name: selectedSegment.role_taker?.name || null,
-      plannedDurationMinutes: plannedMinutes,
-      startedAt,
-      endedAt,
-      dotColor,
-    };
-
-    // Cache the timing (overwrites any existing cache for this segment)
-    updateCache({
-      ...cachedTimings,
-      [selectedSegment.id]: {
-        segmentId: selectedSegment.id,
-        segmentType: selectedSegment.type,
-        entries: [entry],
-      },
-    });
-
-    setRunningTimer(null);
-    setElapsed(0);
-  }, [
-    runningTimer,
-    selectedSegment,
-    plannedMinutes,
-    cachedTimings,
-    updateCache,
-    setRunningTimer,
-  ]);
-
   // Handle Save All - batch save all cached timings
-  const handleSaveAll = useCallback(async () => {
+  const performSaveAll = useCallback(async () => {
     if (unsavedCount === 0) return;
 
     setIsSavingAll(true);
@@ -268,14 +251,13 @@ export function TimingSubtab({
   }, [cachedTimings, unsavedCount, meetingId, updateCache, queryClient]);
 
   // Handle Discard All - clear all cached timings
-  const handleDiscardAll = useCallback(() => {
+  const performDiscardAll = useCallback(() => {
     clearCachedTimings(meetingId);
     updateCache({});
-    setShowDiscardDialog(false);
   }, [meetingId, updateCache]);
 
   // Handle removing a single cached entry
-  const handleRemoveCachedEntry = useCallback(
+  const removeCachedEntry = useCallback(
     (segmentId: string, entryIndex: number) => {
       const segment = cachedTimings[segmentId];
       if (!segment) return;
@@ -295,6 +277,42 @@ export function TimingSubtab({
     },
     [cachedTimings, updateCache]
   );
+
+  const closeConfirmDialog = useCallback(() => {
+    setConfirmDialog(emptyConfirmDialog);
+  }, []);
+
+  const handleConfirmDialog = useCallback(() => {
+    const action = confirmDialog.action;
+    setConfirmDialog(emptyConfirmDialog);
+
+    if (!action) {
+      return;
+    }
+
+    switch (action.type) {
+      case 'retime':
+        startTimer();
+        break;
+      case 'discard-all':
+        performDiscardAll();
+        break;
+      case 'discard-entry':
+        removeCachedEntry(action.segmentId, action.entryIndex);
+        break;
+      case 'save-all':
+        void performSaveAll();
+        break;
+      default:
+        break;
+    }
+  }, [
+    confirmDialog.action,
+    performDiscardAll,
+    performSaveAll,
+    removeCachedEntry,
+    startTimer,
+  ]);
 
   // Build flat list of unsaved entries in segment order
   const unsavedEntries = segments.flatMap((segment) => {
@@ -326,6 +344,13 @@ export function TimingSubtab({
 
   return (
     <div className='space-y-4'>
+      {timingWindowMessage && (
+        <div className='bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-start gap-3'>
+          <AlertTriangle className='w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0' />
+          <p className='text-sm text-amber-800'>{timingWindowMessage}</p>
+        </div>
+      )}
+
       {/* Segment Cards - Horizontal Scrollable (hide scrollbar) */}
       <div
         className='overflow-x-auto pb-2 scrollbar-hide'
@@ -343,6 +368,39 @@ export function TimingSubtab({
               segTimings.length > 0 ? segTimings[segTimings.length - 1] : null;
             const isCached = hasUnsavedTiming(cachedTimings, segment.id);
             const isSegmentTableTopics = isTableTopicsSegment(segment);
+            const cachedEntries = cachedTimings[segment.id]?.entries || [];
+            const speakerEntries = isSegmentTableTopics
+              ? segTimings.length > 0
+                ? segTimings.map((timing) => ({
+                    id: timing.id,
+                    name: timing.name,
+                    dotColor: timing.dot_color,
+                    actualDurationSeconds: timing.actual_duration_seconds,
+                    plannedDurationMinutes: timing.planned_duration_minutes,
+                    actualStartTime: formatTime(timing.actual_start_time),
+                    actualEndTime: formatTime(timing.actual_end_time),
+                  }))
+                : cachedEntries.map((entry, entryIndex) => ({
+                    id: `${segment.id}-cached-${entryIndex}`,
+                    name: entry.name,
+                    dotColor: entry.dotColor,
+                    actualDurationSeconds: Math.floor(
+                      (entry.endedAt - entry.startedAt) / 1000
+                    ),
+                    plannedDurationMinutes: entry.plannedDurationMinutes,
+                    isCached: true,
+                  }))
+              : undefined;
+            const cachedTiming =
+              !isSegmentTableTopics && cachedEntries[0]
+                ? {
+                    dotColor: cachedEntries[0].dotColor,
+                    actualDurationSeconds: Math.floor(
+                      (cachedEntries[0].endedAt - cachedEntries[0].startedAt) /
+                        1000
+                    ),
+                  }
+                : null;
 
             return (
               <SegmentCard
@@ -350,7 +408,8 @@ export function TimingSubtab({
                 segment={segment}
                 isSelected={segment.id === selectedSegmentId}
                 timing={segmentLatestTiming}
-                allTimings={isSegmentTableTopics ? segTimings : undefined}
+                speakerEntries={speakerEntries}
+                cachedTiming={cachedTiming}
                 onClick={() => setSelectedSegmentId(segment.id)}
                 disabled={false}
                 isRunning={segment.id === runningSegmentId && isAnyTimerRunning}
@@ -367,8 +426,10 @@ export function TimingSubtab({
           segment={selectedSegment}
           runningTimer={runningTimer}
           setRunningTimer={setRunningTimer}
+          stopRunningTimer={stopRunningTimer}
           cachedTimings={cachedTimings}
           updateCache={updateCache}
+          timingWindowStatus={timingWindowStatus}
           canGoPrev={canGoPrev}
           canGoNext={canGoNext}
           onGoPrev={handleGoPrev}
@@ -461,7 +522,7 @@ export function TimingSubtab({
             {/* Prev Button */}
             <button
               onClick={handleGoPrev}
-              disabled={!canGoPrev || isThisSegmentRunning}
+              disabled={!canGoPrev}
               className='flex items-center justify-center w-10 h-10 rounded-full text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed'
               title='Previous segment'
             >
@@ -472,7 +533,9 @@ export function TimingSubtab({
             {!isThisSegmentRunning ? (
               <button
                 onClick={handleStartClick}
-                disabled={isAnyTimerRunning}
+                disabled={
+                  isAnyTimerRunning || timingWindowStatus !== 'can-time'
+                }
                 className='flex items-center justify-center gap-2 py-2 px-6 rounded-md text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
               >
                 <Play className='w-4 h-4' />
@@ -480,7 +543,7 @@ export function TimingSubtab({
               </button>
             ) : (
               <button
-                onClick={handleStop}
+                onClick={stopRunningTimer}
                 className='flex items-center justify-center gap-2 py-2 px-6 rounded-md text-sm font-medium text-white bg-gray-800 hover:bg-gray-900 transition-colors'
               >
                 <Square className='w-4 h-4' />
@@ -491,7 +554,7 @@ export function TimingSubtab({
             {/* Next Button */}
             <button
               onClick={handleGoNext}
-              disabled={!canGoNext || isThisSegmentRunning}
+              disabled={!canGoNext}
               className='flex items-center justify-center w-10 h-10 rounded-full text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed'
               title='Next segment'
             >
@@ -509,7 +572,18 @@ export function TimingSubtab({
           </h4>
           <div className='flex items-center gap-2'>
             <button
-              onClick={() => setShowDiscardDialog(true)}
+              onClick={() =>
+                setConfirmDialog({
+                  visible: true,
+                  title: 'Discard all unsaved changes?',
+                  message: `This will discard ${unsavedCount} locally cached timing${
+                    unsavedCount > 1 ? 's' : ''
+                  } that haven't been synced to server. To delete saved records, use the Report tab.`,
+                  confirmText: 'Discard All',
+                  confirmDanger: true,
+                  action: { type: 'discard-all' },
+                })
+              }
               disabled={unsavedCount === 0}
               className='flex-1 sm:flex-none flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
             >
@@ -517,7 +591,20 @@ export function TimingSubtab({
               Discard All
             </button>
             <button
-              onClick={handleSaveAll}
+              onClick={() =>
+                setConfirmDialog({
+                  visible: true,
+                  title: 'Save all unsaved timings?',
+                  message: `This will push ${unsavedCount} locally cached timing${
+                    unsavedCount > 1 ? 's' : ''
+                  } to the server and remove ${
+                    unsavedCount > 1 ? 'them' : 'it'
+                  } from local cache. Suggest to save after timing all important segments, but you can still save now.`,
+                  confirmText: 'Save All',
+                  confirmDanger: false,
+                  action: { type: 'save-all' },
+                })
+              }
               disabled={isSavingAll || isAnyTimerRunning || unsavedCount === 0}
               className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 py-1.5 px-4 rounded-md text-xs font-medium text-white transition-colors ${
                 unsavedCount > 0
@@ -590,7 +677,20 @@ export function TimingSubtab({
                     </button>
                     <button
                       onClick={() =>
-                        handleRemoveCachedEntry(segment.id, entryIndex)
+                        setConfirmDialog({
+                          visible: true,
+                          title: 'Discard unsaved timing?',
+                          message: `This will discard the locally cached timing for ${
+                            name ? `"${name}"` : 'this timing'
+                          } that hasn't been synced to server.`,
+                          confirmText: 'Discard',
+                          confirmDanger: true,
+                          action: {
+                            type: 'discard-entry',
+                            segmentId: segment.id,
+                            entryIndex,
+                          },
+                        })
                       }
                       className='p-1 text-gray-400 hover:text-red-500 transition-colors'
                       title='Remove'
@@ -605,83 +705,21 @@ export function TimingSubtab({
         )}
       </div>
 
-      {/* Re-time Confirmation Dialog */}
-      {showRetimeDialog &&
-        typeof window !== 'undefined' &&
-        createPortal(
-          <div
-            className='fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]'
-            onClick={() => setShowRetimeDialog(false)}
-          >
-            <div
-              className='bg-white rounded-lg p-6 mx-4 max-w-sm sm:max-w-md shadow-xl'
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h4 className='text-sm sm:text-base font-medium text-gray-900 mb-2'>
-                Re-time this segment?
-              </h4>
-              <p className='text-xs sm:text-sm text-gray-500 mb-4'>
-                This segment already has a timing record. Starting will cache a
-                new timing locally. Click &quot;Save All&quot; to sync to
-                server.
-              </p>
-              <div className='flex gap-3 justify-end'>
-                <button
-                  onClick={() => setShowRetimeDialog(false)}
-                  className='px-3 py-1.5 text-xs sm:text-sm text-gray-600 hover:text-gray-800 transition-colors'
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleConfirmStart}
-                  className='px-4 py-1.5 text-xs sm:text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors'
-                >
-                  Start Anyway
-                </button>
-              </div>
-            </div>
-          </div>,
-          document.body
-        )}
-
-      {/* Discard All Confirmation Dialog */}
-      {showDiscardDialog &&
-        typeof window !== 'undefined' &&
-        createPortal(
-          <div
-            className='fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]'
-            onClick={() => setShowDiscardDialog(false)}
-          >
-            <div
-              className='bg-white rounded-lg p-6 mx-4 max-w-sm sm:max-w-md shadow-xl'
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h4 className='text-sm sm:text-base font-medium text-gray-900 mb-2'>
-                Discard all unsaved changes?
-              </h4>
-              <p className='text-xs sm:text-sm text-gray-500 mb-4'>
-                This will discard {unsavedCount} locally cached timing
-                {unsavedCount > 1 ? 's' : ''} that haven&apos;t been synced to
-                server. To delete saved records, use the Report tab.
-              </p>
-              <div className='flex gap-3 justify-end'>
-                <button
-                  onClick={() => setShowDiscardDialog(false)}
-                  className='px-3 py-1.5 text-xs sm:text-sm text-gray-600 hover:text-gray-800 transition-colors'
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDiscardAll}
-                  className='px-4 py-1.5 text-xs sm:text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors'
-                >
-                  Discard All
-                </button>
-              </div>
-            </div>
-          </div>,
-          document.body
-        )}
+      <TimingConfirmDialog
+        visible={confirmDialog.visible}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmText={confirmDialog.confirmText}
+        confirmDanger={confirmDialog.confirmDanger}
+        confirmDisabled={
+          isSavingAll && confirmDialog.action?.type === 'save-all'
+        }
+        cancelDisabled={
+          isSavingAll && confirmDialog.action?.type === 'save-all'
+        }
+        onCancel={closeConfirmDialog}
+        onConfirm={handleConfirmDialog}
+      />
     </div>
   );
 }

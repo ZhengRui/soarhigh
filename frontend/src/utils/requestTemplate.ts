@@ -31,7 +31,9 @@ export const requestTemplate =
         throw new Error('Not Authorized');
       }
 
-      headersFinal.set('Authorization', `Bearer ${token}`);
+      if (token) {
+        headersFinal.set('Authorization', `Bearer ${token}`);
+      }
     }
 
     const request = new Request(url, {

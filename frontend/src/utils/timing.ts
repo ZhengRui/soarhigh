@@ -1,6 +1,7 @@
 import {
   TimingIF,
   TimingsListResponseIF,
+  TimingCreateIF,
   TimingBatchAllCreateIF,
 } from '../interfaces';
 import { requestTemplate, responseHandlerTemplate } from './requestTemplate';
@@ -12,6 +13,13 @@ export const TABLE_TOPICS_SEGMENT_TYPE = 'Table Topic Session';
 
 // Fixed duration for Table Topics speakers (2 minutes)
 export const TABLE_TOPICS_SPEAKER_MINUTES = 2;
+
+export type TimingWindowStatus = 'can-time' | 'too-early' | 'too-late';
+
+export interface TimingWindowState {
+  status: TimingWindowStatus;
+  message: string;
+}
 
 // Shared dot color mapping for timing status indicators
 export const dotColors: Record<string, string> = {
@@ -81,6 +89,56 @@ export const createTimingBatchAll = requestTemplate(
 );
 
 /**
+ * Creates a single timing record.
+ */
+export const createTiming = requestTemplate(
+  (meetingId: string, timingData: TimingCreateIF) => ({
+    url: `${apiEndpoint}/meetings/${meetingId}/timings`,
+    method: 'POST',
+    headers: new Headers({
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    }),
+    body: JSON.stringify(timingData),
+  }),
+  async (
+    response: Response
+  ): Promise<{ success: boolean; timing: TimingIF }> => {
+    const data = await responseHandlerTemplate(response);
+    return data;
+  },
+  null,
+  true
+);
+
+/**
+ * Updates a single timing record.
+ */
+export const updateTiming = requestTemplate(
+  (
+    meetingId: string,
+    timingId: string,
+    timingData: Partial<Omit<TimingCreateIF, 'segment_id'>>
+  ) => ({
+    url: `${apiEndpoint}/meetings/${meetingId}/timings/${timingId}`,
+    method: 'PUT',
+    headers: new Headers({
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    }),
+    body: JSON.stringify(timingData),
+  }),
+  async (
+    response: Response
+  ): Promise<{ success: boolean; timing: TimingIF }> => {
+    const data = await responseHandlerTemplate(response);
+    return data;
+  },
+  null,
+  true
+);
+
+/**
  * Deletes a single timing record
  * Only the Timer role holder can delete timing records
  * @param meetingId The meeting ID
@@ -114,6 +172,66 @@ export function getTimingsForSegment(
   segmentId: string
 ): TimingIF[] {
   return timings?.filter((t) => t.segment_id === segmentId) || [];
+}
+
+/**
+ * Parse duration strings like "5", "5min", or "1h30min" into minutes.
+ */
+export function parseDurationToMinutes(duration: string): number {
+  if (/^\d+$/.test(duration.trim())) {
+    return parseInt(duration.trim(), 10);
+  }
+
+  const hourMatch = duration.match(/(\d+)h/);
+  const minMatch = duration.match(/(\d+)min/);
+
+  const hours = hourMatch ? parseInt(hourMatch[1], 10) : 0;
+  const mins = minMatch ? parseInt(minMatch[1], 10) : 0;
+
+  return hours * 60 + mins;
+}
+
+function formatLocalClock(date: Date): string {
+  return date.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+/**
+ * Mirror the miniapp timing availability window.
+ */
+export function determineTimingWindowStatus(
+  meetingDate: string,
+  meetingStartTime: string,
+  meetingEndTime: string,
+  now: Date = new Date()
+): TimingWindowState {
+  const startTime = new Date(`${meetingDate}T${meetingStartTime}`);
+  const endTime = new Date(`${meetingDate}T${meetingEndTime}`);
+
+  const timingStart = new Date(startTime.getTime() - 20 * 60 * 1000);
+  const timingEnd = new Date(endTime.getTime() + 40 * 60 * 1000);
+
+  if (now < timingStart) {
+    return {
+      status: 'too-early',
+      message: `Timing opens at ${formatLocalClock(timingStart)} (20 minutes before meeting starts)`,
+    };
+  }
+
+  if (now > timingEnd) {
+    return {
+      status: 'too-late',
+      message: 'Timing window has closed for this meeting',
+    };
+  }
+
+  return {
+    status: 'can-time',
+    message: '',
+  };
 }
 
 /**

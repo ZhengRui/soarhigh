@@ -8,8 +8,9 @@
 // Storage key pattern: `timing_cache_{meetingId}`
 const STORAGE_KEY_PREFIX = 'timing_cache_';
 
-// Session storage key for running timer
+// Running timer key (stored in localStorage so it survives refresh/reopen)
 const RUNNING_TIMER_KEY = 'running_timer';
+const RUNNING_TIMER_TTL_MS = 4 * 60 * 60 * 1000;
 
 // Cache TTL: 24 hours in milliseconds
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -180,7 +181,7 @@ export function cleanupExpiredCaches(): void {
 }
 
 /**
- * Load running timer state from sessionStorage for a meeting.
+ * Load running timer state for a meeting.
  * Returns null if no running timer or if it's for a different meeting.
  */
 export function loadRunningTimer(
@@ -188,12 +189,22 @@ export function loadRunningTimer(
 ): Omit<RunningTimerState, 'meetingId'> | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = sessionStorage.getItem(RUNNING_TIMER_KEY);
+    const raw =
+      localStorage.getItem(RUNNING_TIMER_KEY) ||
+      sessionStorage.getItem(RUNNING_TIMER_KEY);
     if (!raw) return null;
 
     const state = JSON.parse(raw) as RunningTimerState;
     // Only return if for the same meeting
     if (state.meetingId !== meetingId) return null;
+
+    if (
+      typeof state.startedAt === 'number' &&
+      Date.now() - state.startedAt > RUNNING_TIMER_TTL_MS
+    ) {
+      clearRunningTimer();
+      return null;
+    }
 
     // Return without meetingId (component doesn't need it)
     const { meetingId: _, ...rest } = state;
@@ -205,7 +216,7 @@ export function loadRunningTimer(
 }
 
 /**
- * Save running timer state to sessionStorage.
+ * Save running timer state.
  * Clears the storage if state is null.
  */
 export function saveRunningTimer(
@@ -215,20 +226,22 @@ export function saveRunningTimer(
   if (typeof window === 'undefined') return;
   try {
     if (!state) {
-      sessionStorage.removeItem(RUNNING_TIMER_KEY);
+      clearRunningTimer();
     } else {
       const fullState: RunningTimerState = { meetingId, ...state };
-      sessionStorage.setItem(RUNNING_TIMER_KEY, JSON.stringify(fullState));
+      localStorage.setItem(RUNNING_TIMER_KEY, JSON.stringify(fullState));
+      sessionStorage.removeItem(RUNNING_TIMER_KEY);
     }
   } catch {
-    console.error('Failed to save running timer to sessionStorage');
+    console.error('Failed to save running timer to storage');
   }
 }
 
 /**
- * Clear running timer from sessionStorage.
+ * Clear running timer from storage.
  */
 export function clearRunningTimer(): void {
   if (typeof window === 'undefined') return;
+  localStorage.removeItem(RUNNING_TIMER_KEY);
   sessionStorage.removeItem(RUNNING_TIMER_KEY);
 }
