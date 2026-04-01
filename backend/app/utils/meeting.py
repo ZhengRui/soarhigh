@@ -136,7 +136,7 @@ def parse_meeting_agenda_image(image_bytes: bytes, content_type: str) -> Meeting
                 model=AGENDA_MODEL,
                 messages=messages,
                 response_format=json_schema,
-                temperature=0.01,
+                # GPT-5 models reject non-default temperature values.
                 timeout=60,
             )
 
