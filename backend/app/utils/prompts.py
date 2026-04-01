@@ -94,20 +94,21 @@ and deliver a 2 mins impromptu response
 ## Club members
 - Rui Zheng
 - Joyce Feng
-- Joseph Zhang
-- Libra Lee
-- Leta li
+- Leta Li
 - Frank Zeng
 - Max Long
 - Julia Cao
 - Jessica Peng
-- Tina Zhang
-- Phyllis Hao
-- Owen Liang
-- Danica Zhan
 - Amy Fang
-- Snow Xue
-- Steve Choong
+- Jenny Li
+- Alice Song
+- Jean Li
+- Helen Chen
+- John Lin
+- Catherine Yang
+- Liz Huang
+- Shelly Qu
+- Vicky Yang
 
 ## Example
 

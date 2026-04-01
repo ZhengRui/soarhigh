@@ -22,7 +22,6 @@ from .prompts import (
 )
 
 default_location = "华美居装饰家居城B区809 (1号线宝体站)"
-AGENDA_MODEL = "gpt-5-mini"
 
 
 def convert_parsed_meeting_to_meeting(parsed_meeting: MeetingParsedFromImage | MeetingPlannedFromText) -> Meeting:
@@ -133,10 +132,10 @@ def parse_meeting_agenda_image(image_bytes: bytes, content_type: str) -> Meeting
                 # time.sleep(delay)
 
             reply = client.chat.completions.create(
-                model=AGENDA_MODEL,
+                model="gpt-4o",
                 messages=messages,
                 response_format=json_schema,
-                # GPT-5 models reject non-default temperature values.
+                temperature=0.01,
                 timeout=60,
             )
 
@@ -210,7 +209,7 @@ def plan_meeting_from_text(text: str) -> Meeting:
 
             # Create a response using the Responses API
             response = client.responses.create(
-                model=AGENDA_MODEL,
+                model="o3-mini",
                 input=[
                     {"role": "system", "content": plan_meeting_from_text_developer_prompt},
                     {"role": "user", "content": formatted_user_prompt},
