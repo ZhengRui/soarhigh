@@ -1421,15 +1421,9 @@ export const createMeetingWorkbook = async (
   // Add header section images
   try {
     // Load the images from public directory
-    const tmImage = await getImageAsBase64('/images/toastmasters.png');
+    const tmImage = await getImageAsBase64('/images/toastmasters_excel.png');
     const tmImageId = workbook.addImage({
       base64: tmImage,
-      extension: 'png',
-    });
-
-    const shImage = await getImageAsBase64('/images/soarhighQR.png');
-    const shImageId = workbook.addImage({
-      base64: shImage,
       extension: 'png',
     });
 
@@ -1441,14 +1435,8 @@ export const createMeetingWorkbook = async (
 
     // Position the images
     worksheet.addImage(tmImageId, {
-      tl: { col: 0.4, row: 0.5 },
-      ext: { width: 100, height: 100 },
-      editAs: 'absolute',
-    });
-
-    worksheet.addImage(shImageId, {
-      tl: { col: 1.2, row: 0.8 },
-      ext: { width: 90, height: 90 },
+      tl: { col: 0.05, row: 0.3 },
+      ext: { width: 156, height: 76 },
       editAs: 'absolute',
     });
 

@@ -376,7 +376,7 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
           </div>
           <div className='absolute left-[76px] md:left-[84px] top-2.5 w-16 md:w-[72px] aspect-square'>
             <Image
-              src='/logo-square.svg'
+              src='/images/logo-square.svg'
               alt='SoarHigh Logo'
               fill
               className='object-contain'
