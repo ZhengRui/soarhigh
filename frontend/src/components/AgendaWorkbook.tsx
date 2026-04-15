@@ -366,7 +366,7 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
       <div className='w-full border border-gray-300 border-opacity-30 rounded-md overflow-auto'>
         <div className='min-w-[600px] relative'>
           {/* Images with responsive containers */}
-          <div className='absolute left-2.5 top-2.5 w-[72px] md:w-20 aspect-square'>
+          <div className='absolute left-2.5 top-2.5 w-16 md:w-[72px] aspect-square'>
             <Image
               src='/images/toastmasters.png'
               alt='Toastmasters Logo'
@@ -374,12 +374,12 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
               className='object-fill'
             />
           </div>
-          <div className='absolute left-[88px] md:left-28 lg:left-36 top-[18px] md:top-2.5 w-16 md:w-[72px] aspect-square'>
+          <div className='absolute left-[76px] md:left-[84px] top-2.5 w-16 md:w-[72px] aspect-square'>
             <Image
-              src='/images/soarhighQR.png'
-              alt='Soarhigh QR Code'
+              src='/logo-square.svg'
+              alt='SoarHigh Logo'
               fill
-              className='object-fill'
+              className='object-contain'
             />
           </div>
           <div className='absolute right-4 md:right-8 top-9 md:top-[30px] lg:top-6 flex gap-0.5'>

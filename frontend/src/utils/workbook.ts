@@ -429,8 +429,7 @@ const getHeaderData = (meeting: MeetingIF): HeaderDataIF => {
     startTime: meeting.start_time,
     endTime: meeting.end_time,
     location:
-      meeting.location ||
-      "Venue: 华美居装饰家居城B区809 (1号线宝体站）",
+      meeting.location || 'Venue: 华美居装饰家居城B区809 (1号线宝体站）',
     manager: meeting.manager || { name: '', member_id: '' },
   };
 };
@@ -836,8 +835,14 @@ const createTableHeader = (
         '',
       ],
       [
-        '',
-        '',
+        {
+          text: 'Web: https://soarhigh.top',
+          style: {
+            alignment: { horizontal: 'left' },
+            font: { color: { argb: 'FFFFFFFF' } },
+          },
+        },
+        '>',
         {
           text: headerData.location,
           style: {
@@ -849,13 +854,14 @@ const createTableHeader = (
         '>',
       ],
       [
-        '',
         {
-          text: '👆 WeChat Subscription',
+          text: 'Miniapp: 搜嗨头马',
           style: {
+            alignment: { horizontal: 'left' },
             font: { color: { argb: 'FFFFFFFF' } },
           },
         },
+        '>',
         {
           text: 'Club#4234120 | Area A4 | Division A | District 118',
           style: {
