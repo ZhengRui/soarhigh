@@ -366,7 +366,7 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
       <div className='w-full border border-gray-300 border-opacity-30 rounded-md overflow-auto'>
         <div className='min-w-[600px] relative'>
           {/* Images with responsive containers */}
-          <div className='absolute left-2.5 top-2.5 w-16 md:w-[72px] aspect-square'>
+          <div className='absolute left-2.5 top-2.5 w-16 aspect-square'>
             <Image
               src='/images/toastmasters.png'
               alt='Toastmasters Logo'
@@ -374,7 +374,7 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
               className='object-fill'
             />
           </div>
-          <div className='absolute left-[76px] md:left-[84px] top-2.5 w-16 md:w-[72px] aspect-square'>
+          <div className='absolute left-[76px] top-2.5 w-16 aspect-square'>
             <Image
               src='/images/logo-square.svg'
               alt='SoarHigh Logo'
@@ -437,7 +437,11 @@ const AgendaWorkbook: React.FC<AgendaWorkbookProps> = ({ meeting }) => {
                             | 'right',
                           // width: `${columnWidths[cellIndex] * 7}px`, // Scale column width based on Excel width
                           padding: cell.style.padding,
-                          height: '12px', // Standard Excel row height
+                          // Reserve two lines for the theme cell so wide screens don't clip it behind the QR codes
+                          height:
+                            rowIndex === 1 && cellIndex === 3
+                              ? '2.5em'
+                              : '12px',
                           whiteSpace: 'pre-wrap', // Preserve whitespace and wrap text
                           verticalAlign: cell.style.verticalAlign || 'middle', // Center vertically
                         }}
