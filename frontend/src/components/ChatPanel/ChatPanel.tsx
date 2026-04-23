@@ -24,6 +24,7 @@ export function ChatPanel({
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     // Auto-scroll to bottom on any message change
@@ -31,6 +32,14 @@ export function ChatPanel({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  useEffect(() => {
+    // Auto-grow the textarea to fit its content, capped at ~6 lines.
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [input]);
 
   const onEvent = useCallback(
     (ev: AgentTurnEvent) => {
@@ -167,13 +176,16 @@ export function ChatPanel({
       </div>
       <div className='border-t border-gray-200 p-3 bg-white'>
         <div
-          className='flex items-center gap-1.5 rounded-full border border-gray-200
+          className='flex items-end gap-1.5 rounded-2xl border border-gray-200
                      bg-gray-50 pl-4 pr-1 py-1
                      focus-within:border-gray-300 focus-within:bg-white transition-colors'
         >
-          <input
-            className='flex-1 bg-transparent text-sm leading-8 text-gray-900
-                       placeholder-gray-400 focus:outline-none disabled:text-gray-400'
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            className='flex-1 bg-transparent text-sm leading-6 text-gray-900
+                       placeholder-gray-400 focus:outline-none disabled:text-gray-400
+                       resize-none py-1.5 max-h-40 overflow-y-auto'
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -181,6 +193,7 @@ export function ChatPanel({
                 e.preventDefault();
                 void submit();
               }
+              // Shift+Enter falls through to default behavior (insert newline).
             }}
             placeholder='Type a message…'
             disabled={loading}
