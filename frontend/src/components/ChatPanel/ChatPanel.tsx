@@ -6,11 +6,15 @@ import { useAgentTurn } from './useAgentTurn';
 import { AgendaSnapshot, AgentTurnEvent, ChatMessage } from './types';
 
 function formatToolArgs(args: Record<string, unknown>): string {
-  return Object.values(args)
-    .map((v) => {
-      if (typeof v === 'string') return JSON.stringify(v);
-      if (v === null || v === undefined) return 'null';
-      return String(v);
+  // key=value so the display is unambiguous even when the model emits the
+  // keys in different orders across calls (JSON key order is model-dependent).
+  return Object.entries(args)
+    .map(([k, v]) => {
+      let val: string;
+      if (typeof v === 'string') val = JSON.stringify(v);
+      else if (v === null || v === undefined) val = 'null';
+      else val = String(v);
+      return `${k}=${val}`;
     })
     .join(', ');
 }
