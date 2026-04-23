@@ -167,13 +167,13 @@ export function ChatPanel({
       </div>
       <div className='border-t border-gray-200 p-3 bg-white'>
         <div
-          className='flex items-end gap-2 rounded-2xl border border-gray-200 bg-gray-50
-                     px-3 py-2 focus-within:border-indigo-300 focus-within:bg-white
-                     focus-within:ring-1 focus-within:ring-indigo-200 transition-colors'
+          className='flex items-center gap-1.5 rounded-full border border-gray-200
+                     bg-gray-50 pl-4 pr-1 py-1
+                     focus-within:border-gray-300 focus-within:bg-white transition-colors'
         >
           <input
-            className='flex-1 bg-transparent text-sm text-gray-900 placeholder-gray-400
-                       focus:outline-none disabled:text-gray-400'
+            className='flex-1 bg-transparent text-sm leading-8 text-gray-900
+                       placeholder-gray-400 focus:outline-none disabled:text-gray-400'
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -190,7 +190,7 @@ export function ChatPanel({
               type='button'
               onClick={stop}
               aria-label='Stop'
-              className='shrink-0 flex items-center justify-center h-7 w-7 rounded-full
+              className='shrink-0 flex items-center justify-center h-8 w-8 rounded-full
                          bg-gray-900 text-white hover:bg-black transition-colors'
             >
               <Square className='w-3 h-3 fill-white' />
@@ -201,7 +201,7 @@ export function ChatPanel({
               onClick={submit}
               aria-label='Send'
               disabled={!input.trim()}
-              className='shrink-0 flex items-center justify-center h-7 w-7 rounded-full
+              className='shrink-0 flex items-center justify-center h-8 w-8 rounded-full
                          bg-indigo-600 text-white hover:bg-indigo-700
                          disabled:bg-gray-200 disabled:text-gray-400
                          disabled:cursor-not-allowed transition-colors'
