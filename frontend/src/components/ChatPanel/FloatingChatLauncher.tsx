@@ -61,8 +61,8 @@ export function FloatingChatLauncher({
           aria-label='Meeting assistant'
           className='fixed z-50 bg-white border border-gray-200 rounded-xl shadow-2xl
                      flex flex-col overflow-hidden
-                     right-4 bottom-4 top-4 w-96
-                     max-md:inset-x-2 max-md:top-auto max-md:bottom-2 max-md:h-[60vh] max-md:w-auto'
+                     right-4 bottom-4 w-96 h-[640px] max-h-[calc(100vh-7rem)]
+                     max-md:inset-x-2 max-md:w-auto max-md:h-[65vh]'
         >
           <div className='flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50'>
             <div className='flex items-center gap-2'>

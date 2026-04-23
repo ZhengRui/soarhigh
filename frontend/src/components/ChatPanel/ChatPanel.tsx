@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowUp, Square } from 'lucide-react';
 import { useAgentTurn } from './useAgentTurn';
 import { AgendaSnapshot, AgentTurnEvent, ChatMessage } from './types';
 
@@ -164,45 +165,51 @@ export function ChatPanel({
           </div>
         ))}
       </div>
-      <div className='border-t border-gray-200 px-3 py-2 flex items-center gap-2 bg-white'>
-        <input
-          className='flex-1 border border-gray-300 rounded-md px-3 py-1.5 text-sm placeholder-gray-400
-                     focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
-                     disabled:bg-gray-50 disabled:text-gray-400 transition-colors'
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void submit();
-            }
-          }}
-          placeholder='Type a message…'
-          disabled={loading}
-        />
-        {loading ? (
-          <button
-            type='button'
-            onClick={stop}
-            className='px-3 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700
-                       rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500
-                       transition-colors'
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            type='button'
-            onClick={submit}
-            className='px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700
-                       rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500
-                       disabled:opacity-50 disabled:cursor-not-allowed
-                       transition-colors'
-            disabled={!input.trim()}
-          >
-            Send
-          </button>
-        )}
+      <div className='border-t border-gray-200 p-3 bg-white'>
+        <div
+          className='flex items-end gap-2 rounded-2xl border border-gray-200 bg-gray-50
+                     px-3 py-2 focus-within:border-indigo-300 focus-within:bg-white
+                     focus-within:ring-1 focus-within:ring-indigo-200 transition-colors'
+        >
+          <input
+            className='flex-1 bg-transparent text-sm text-gray-900 placeholder-gray-400
+                       focus:outline-none disabled:text-gray-400'
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void submit();
+              }
+            }}
+            placeholder='Type a message…'
+            disabled={loading}
+          />
+          {loading ? (
+            <button
+              type='button'
+              onClick={stop}
+              aria-label='Stop'
+              className='shrink-0 flex items-center justify-center h-7 w-7 rounded-full
+                         bg-gray-900 text-white hover:bg-black transition-colors'
+            >
+              <Square className='w-3 h-3 fill-white' />
+            </button>
+          ) : (
+            <button
+              type='button'
+              onClick={submit}
+              aria-label='Send'
+              disabled={!input.trim()}
+              className='shrink-0 flex items-center justify-center h-7 w-7 rounded-full
+                         bg-indigo-600 text-white hover:bg-indigo-700
+                         disabled:bg-gray-200 disabled:text-gray-400
+                         disabled:cursor-not-allowed transition-colors'
+            >
+              <ArrowUp className='w-4 h-4' strokeWidth={2.5} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
