@@ -97,11 +97,15 @@ async def agent_turn(req: AgentTurnRequest, user=Depends(get_current_user)):
                                         },
                                     )
                                 elif isinstance(tool_event, FunctionToolResultEvent):
+                                    # tool_event.result is ToolReturnPart | RetryPromptPart;
+                                    # .content holds the actual tool return value (dict, str, list, etc.).
+                                    # tool_event.content is a flattened string form for the model and
+                                    # is None for non-string returns — don't use it for SSE.
                                     yield _sse(
                                         "tool_call_end",
                                         {
                                             "id": tool_event.tool_call_id,
-                                            "result": tool_event.content,
+                                            "result": tool_event.result.content,
                                             "agenda_after": deps.agenda.model_dump(),
                                         },
                                     )

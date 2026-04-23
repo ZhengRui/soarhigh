@@ -89,6 +89,17 @@ def test_turn_happy_path_streams_done(client, mock_auth_dep):
     assert "agenda_after" in last_tool_end["data"]
     assert isinstance(last_tool_end["data"]["agenda_after"], dict)
 
+    # Regression guard: `result` must carry the actual tool return value, not None.
+    # apply_set_role returns {"segment_id": ..., "new_role_taker": ...}. If we
+    # incorrectly read event.content instead of event.result.content, this asserts.
+    assert last_tool_end["data"]["result"] is not None, (
+        "tool_call_end.result was None — likely using FunctionToolResultEvent.content " "instead of .result.content"
+    )
+    assert last_tool_end["data"]["result"] == {
+        "segment_id": "s1",
+        "new_role_taker": "Test",
+    }
+
 
 def test_turn_requires_auth(client):
     """Without the auth override, POST /agent/turn must reject."""
