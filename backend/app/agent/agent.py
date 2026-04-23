@@ -6,6 +6,7 @@ from pydantic_ai.usage import UsageLimits
 from app.agent import tools as _tools
 from app.agent.models import AgendaDeps
 from app.agent.prompts import ROUTER_SYSTEM_PROMPT_MINIMAL
+from app.agent.validators import run_validators
 from app.config import AGENT_MODEL, GOOGLE_API_KEY
 
 # Ensure the provider can construct at import time even when no real key is set
@@ -169,3 +170,13 @@ def shift_segment_time(
     move the first segment earlier (use set_meta(start_time) instead). NOT
     for reordering (use move_segment)."""
     return _tools.apply_shift_segment_time(ctx, segment_id=segment_id, delta_min=delta_min)
+
+
+@agent.tool
+def validate_agenda(ctx: RunContext[AgendaDeps]) -> list[dict]:
+    """Check all global invariants and return a list of issues (empty if clean).
+    HARD issues (TTE_ORDER, BUFFER_SEGMENT_ANTIPATTERN) must be fixed before
+    you reply — use other tools to correct them and call validate_agenda again.
+    SOFT issues (DURATION_OVERFLOW, DURATION_UNDERFLOW) should be surfaced to
+    the user in your summary reply, not silently corrected."""
+    return [i.model_dump() for i in run_validators(ctx.deps.agenda)]
