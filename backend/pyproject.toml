@@ -25,6 +25,7 @@ dev = [
     "pre-commit>=4.0.1",
     "ipdb>=0.13.13",
     "types-python-jose>=3.3.4.20240106",
+    "pytest-asyncio>=1.3.0",
 ]
 
 [tool.ruff]
@@ -37,3 +38,7 @@ fix = true
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
+
+[tool.pytest.ini_options]
+markers = ["live: requires live LLM provider; run with -m live"]
+asyncio_mode = "auto"
