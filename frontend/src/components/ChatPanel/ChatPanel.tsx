@@ -1,9 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Square } from 'lucide-react';
+import { ArrowUp, Check, Loader2, Square, Wrench } from 'lucide-react';
 import { useAgentTurn } from './useAgentTurn';
 import { AgendaSnapshot, AgentTurnEvent, ChatMessage } from './types';
+
+function formatToolArgs(args: Record<string, unknown>): string {
+  return Object.values(args)
+    .map((v) => {
+      if (typeof v === 'string') return JSON.stringify(v);
+      if (v === null || v === undefined) return 'null';
+      return String(v);
+    })
+    .join(', ');
+}
 
 function uuid() {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -142,22 +152,36 @@ export function ChatPanel({
               {m.role === 'assistant' &&
                 m.toolCalls &&
                 m.toolCalls.length > 0 && (
-                  <div className='flex flex-wrap gap-1 mb-1.5'>
-                    {m.toolCalls.map((tc) => (
-                      <span
-                        key={tc.id}
-                        className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-md border ${
-                          tc.pending
-                            ? 'bg-amber-50 border-amber-200 text-amber-700'
-                            : 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                        }`}
-                      >
-                        <span className='font-mono'>
-                          {tc.pending ? '⋯' : '✓'}
-                        </span>
-                        {tc.name}
-                      </span>
-                    ))}
+                  <div className='flex flex-col gap-1 mb-1.5'>
+                    {m.toolCalls.map((tc) => {
+                      const argsStr = formatToolArgs(tc.args);
+                      return (
+                        <div
+                          key={tc.id}
+                          title={`${tc.name}(${argsStr})`}
+                          className={`flex items-center gap-1.5 text-[11px] font-mono px-2 py-1 rounded-md border cursor-default ${
+                            tc.pending
+                              ? 'bg-amber-50 border-amber-200 text-amber-800'
+                              : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          }`}
+                        >
+                          <Wrench className='w-3 h-3 shrink-0 opacity-70' />
+                          <span className='font-semibold shrink-0'>
+                            {tc.name}
+                          </span>
+                          <span className='flex-1 min-w-0 truncate opacity-75'>
+                            ({argsStr})
+                          </span>
+                          <span className='shrink-0 pl-0.5'>
+                            {tc.pending ? (
+                              <Loader2 className='w-3 h-3 animate-spin' />
+                            ) : (
+                              <Check className='w-3 h-3' strokeWidth={3} />
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               <div className='whitespace-pre-wrap'>
