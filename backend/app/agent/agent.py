@@ -76,3 +76,70 @@ def set_meta(
     """Change a meeting-level field. Supported: theme, location, date, start_time, no,
     manager, introduction. end_time is derived and cannot be set directly."""
     return _tools.apply_set_meta(ctx, field=field, value=value)
+
+
+@agent.tool
+def add_segment(
+    ctx: RunContext[AgendaDeps],
+    type: str,
+    duration_min: int,
+    after_id: str | None = None,
+    before_id: str | None = None,
+    role_taker: str = "",
+) -> dict:
+    """Insert a new segment into the agenda. Provide exactly one of after_id or
+    before_id to anchor the position. Type may be standard ('Grammarian',
+    'Workshop') or custom ('Ice Breaker Game'). Downstream start times
+    recompute automatically. role_taker defaults to empty; pass a name only
+    when the user specifies one. DO NOT use this to add a buffer/gap — see
+    set_buffer instead."""
+    return _tools.apply_add_segment(
+        ctx,
+        type=type,
+        duration_min=duration_min,
+        after_id=after_id,
+        before_id=before_id,
+        role_taker=role_taker,
+    )
+
+
+@agent.tool
+def remove_segment(ctx: RunContext[AgendaDeps], segment_id: str) -> dict:
+    """Delete an existing segment by id. Downstream start times recompute
+    automatically."""
+    return _tools.apply_remove_segment(ctx, segment_id=segment_id)
+
+
+@agent.tool
+def move_segment(
+    ctx: RunContext[AgendaDeps],
+    segment_id: str,
+    after_id: str | None = None,
+    before_id: str | None = None,
+) -> dict:
+    """UNILATERAL sequence reorder: relocate ONE segment to a new slot. Other
+    segments stay in place; only their indices shift to make room. NOT a swap
+    (use swap_time for that). NOT for 'earlier/later by N minutes' (use
+    shift_segment_time). Provide exactly one of after_id or before_id.
+    Downstream start times recompute."""
+    return _tools.apply_move_segment(
+        ctx,
+        segment_id=segment_id,
+        after_id=after_id,
+        before_id=before_id,
+    )
+
+
+@agent.tool
+def shift_segment_time(
+    ctx: RunContext[AgendaDeps],
+    segment_id: str,
+    delta_min: int,
+) -> dict:
+    """UNILATERAL clock-time shift: move ONE segment earlier/later by signed
+    minutes while keeping agenda order unchanged. Positive delta pushes later
+    by inflating the gap before the segment. Negative delta pulls earlier by
+    consuming the EXISTING gap — refuses if that gap is insufficient. Cannot
+    move the first segment earlier (use set_meta(start_time) instead). NOT
+    for reordering (use move_segment)."""
+    return _tools.apply_shift_segment_time(ctx, segment_id=segment_id, delta_min=delta_min)
