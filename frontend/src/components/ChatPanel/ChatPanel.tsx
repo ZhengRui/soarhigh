@@ -130,10 +130,10 @@ export function ChatPanel({
         {messages.map((m) => (
           <div
             key={m.id}
-            className={m.role === 'user' ? 'text-right' : 'text-left'}
+            className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`inline-block max-w-[85%] px-3 py-2 rounded-lg text-sm ${
+              className={`max-w-[85%] px-3 py-2 rounded-lg text-sm text-left ${
                 m.role === 'user'
                   ? 'bg-indigo-600 text-white'
                   : 'bg-gray-100 text-gray-900'

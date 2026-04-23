@@ -55,14 +55,19 @@ export function FloatingChatLauncher({
           <MessageCircle className='w-5 h-5' />
         </button>
       )}
-      {open && sessionKey && (
+      {/* Keep the panel mounted once it's been opened once, so conversation state
+          (messages, in-flight SSE consumers, etc.) survives close/reopen toggles.
+          Hide it with CSS when `open` is false. */}
+      {sessionKey && (
         <div
           role='dialog'
           aria-label='Meeting assistant'
-          className='fixed z-50 bg-white border border-gray-200 rounded-xl shadow-2xl
-                     flex flex-col overflow-hidden
+          aria-hidden={!open}
+          className={`fixed z-50 bg-white border border-gray-200 rounded-xl shadow-2xl
+                     flex-col overflow-hidden
                      right-4 bottom-4 w-96 h-[640px] max-h-[calc(100vh-7rem)]
-                     max-md:inset-x-2 max-md:w-auto max-md:h-[65vh]'
+                     max-md:inset-x-2 max-md:w-auto max-md:h-[65vh]
+                     ${open ? 'flex' : 'hidden'}`}
         >
           <div className='flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50'>
             <div className='flex items-center gap-2'>
