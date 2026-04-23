@@ -5,7 +5,7 @@ from pydantic_ai.usage import UsageLimits
 
 from app.agent import tools as _tools
 from app.agent.models import AgendaDeps
-from app.agent.prompts import ROUTER_SYSTEM_PROMPT_MINIMAL
+from app.agent.prompts import ROUTER_SYSTEM_PROMPT
 from app.agent.validators import run_validators
 from app.config import AGENT_MODEL, GOOGLE_API_KEY
 
@@ -18,7 +18,7 @@ USAGE_LIMITS = UsageLimits(request_limit=15, total_tokens_limit=50_000)
 
 agent = Agent(
     AGENT_MODEL,
-    system_prompt=ROUTER_SYSTEM_PROMPT_MINIMAL,
+    system_prompt=ROUTER_SYSTEM_PROMPT,
     deps_type=AgendaDeps,
     retries=2,
 )
