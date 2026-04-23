@@ -193,6 +193,78 @@ def apply_move_segment(
     return {"segment_id": segment_id, "new_index": new_idx}
 
 
+def apply_swap_roles(ctx, segment_id_a: str, segment_id_b: str) -> dict:
+    """Bilateral: atomically exchange the role_taker between TWO segments.
+    Positions, durations, buffers, and start_times are unchanged."""
+    if segment_id_a == segment_id_b:
+        raise ModelRetry("cannot swap a segment with itself")
+
+    agenda = ctx.deps.agenda
+
+    seg_a = None
+    seg_b = None
+    for seg in agenda.segments:
+        if seg.id == segment_id_a:
+            seg_a = seg
+        elif seg.id == segment_id_b:
+            seg_b = seg
+    if seg_a is None:
+        raise ModelRetry(f"unknown segment: {segment_id_a}")
+    if seg_b is None:
+        raise ModelRetry(f"unknown segment: {segment_id_b}")
+
+    seg_a.role_taker, seg_b.role_taker = seg_b.role_taker, seg_a.role_taker
+
+    return {
+        "segment_id_a": segment_id_a,
+        "segment_id_b": segment_id_b,
+        "role_taker_a": seg_a.role_taker,
+        "role_taker_b": seg_b.role_taker,
+    }
+
+
+def apply_swap_time(ctx, segment_id_a: str, segment_id_b: str) -> dict:
+    """Bilateral: exchange the sequence positions of TWO segments. Also swaps
+    buffer_before values because a buffer is a gap at a POSITION — it belongs
+    to the slot, not the segment. Downstream times recompute."""
+    if segment_id_a == segment_id_b:
+        raise ModelRetry("cannot swap a segment with itself")
+
+    agenda = ctx.deps.agenda
+
+    idx_a = None
+    idx_b = None
+    for i, seg in enumerate(agenda.segments):
+        if seg.id == segment_id_a:
+            idx_a = i
+        elif seg.id == segment_id_b:
+            idx_b = i
+    if idx_a is None:
+        raise ModelRetry(f"unknown segment: {segment_id_a}")
+    if idx_b is None:
+        raise ModelRetry(f"unknown segment: {segment_id_b}")
+
+    seg_a = agenda.segments[idx_a]
+    seg_b = agenda.segments[idx_b]
+
+    # Swap array positions.
+    agenda.segments[idx_a], agenda.segments[idx_b] = seg_b, seg_a
+    # Swap buffer_before so gaps stay anchored to their positions, not segments.
+    buf_a = seg_a.buffer_before or 0
+    seg_a.buffer_before = seg_b.buffer_before or 0
+    seg_b.buffer_before = buf_a
+
+    recompute_start_times(agenda)
+
+    # After swap: a is at idx_b, b is at idx_a.
+    return {
+        "segment_id_a": segment_id_a,
+        "segment_id_b": segment_id_b,
+        "new_index_a": idx_b,
+        "new_index_b": idx_a,
+    }
+
+
 def apply_shift_segment_time(ctx, segment_id: str, delta_min: int) -> dict:
     """Shift ONE segment earlier/later by signed minutes via buffer_before.
     Positive delta increases the gap (pushes later). Negative delta consumes

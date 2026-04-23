@@ -16,6 +16,8 @@ from app.agent.tools import (
     apply_set_role,
     apply_set_type,
     apply_shift_segment_time,
+    apply_swap_roles,
+    apply_swap_time,
 )
 
 
@@ -491,3 +493,168 @@ def test_shift_unknown_segment_raises():
     ctx = FakeCtx(deps=deps)
     with pytest.raises(ModelRetry, match="unknown segment"):
         apply_shift_segment_time(ctx, segment_id="ghost", delta_min=3)
+
+
+# --- swap_roles ---
+
+
+def test_swap_roles_exchanges_only_role_taker():
+    deps = make_deps_3()
+    # s1.role_taker="Liz"; give s2 a real name so the swap is observable.
+    deps.agenda.segments[0].role_taker = "Alice"
+    deps.agenda.segments[1].role_taker = "Bob"
+    # Capture pre-swap state for other fields.
+    s1_before = {
+        "type": deps.agenda.segments[0].type,
+        "duration": deps.agenda.segments[0].duration,
+        "start_time": deps.agenda.segments[0].start_time,
+        "buffer_before": deps.agenda.segments[0].buffer_before,
+    }
+    s2_before = {
+        "type": deps.agenda.segments[1].type,
+        "duration": deps.agenda.segments[1].duration,
+        "start_time": deps.agenda.segments[1].start_time,
+        "buffer_before": deps.agenda.segments[1].buffer_before,
+    }
+    ctx = FakeCtx(deps=deps)
+
+    result = apply_swap_roles(ctx, segment_id_a="s1", segment_id_b="s2")
+
+    assert result == {
+        "segment_id_a": "s1",
+        "segment_id_b": "s2",
+        "role_taker_a": "Bob",
+        "role_taker_b": "Alice",
+    }
+    assert deps.agenda.segments[0].role_taker == "Bob"
+    assert deps.agenda.segments[1].role_taker == "Alice"
+    # Every other field on each segment is unchanged.
+    assert deps.agenda.segments[0].type == s1_before["type"]
+    assert deps.agenda.segments[0].duration == s1_before["duration"]
+    assert deps.agenda.segments[0].start_time == s1_before["start_time"]
+    assert deps.agenda.segments[0].buffer_before == s1_before["buffer_before"]
+    assert deps.agenda.segments[1].type == s2_before["type"]
+    assert deps.agenda.segments[1].duration == s2_before["duration"]
+    assert deps.agenda.segments[1].start_time == s2_before["start_time"]
+    assert deps.agenda.segments[1].buffer_before == s2_before["buffer_before"]
+    # Untouched third segment.
+    assert deps.agenda.segments[2].role_taker == "Joyce"
+
+
+def test_swap_roles_with_same_id_raises():
+    deps = make_deps_3()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="itself"):
+        apply_swap_roles(ctx, segment_id_a="s1", segment_id_b="s1")
+    assert deps.agenda.segments[0].role_taker == "Liz"
+
+
+def test_swap_roles_unknown_id_a_raises():
+    deps = make_deps_3()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="unknown segment"):
+        apply_swap_roles(ctx, segment_id_a="ghost", segment_id_b="s2")
+    # Unchanged.
+    assert deps.agenda.segments[0].role_taker == "Liz"
+    assert deps.agenda.segments[2].role_taker == "Joyce"
+
+
+def test_swap_roles_unknown_id_b_raises():
+    deps = make_deps_3()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="unknown segment"):
+        apply_swap_roles(ctx, segment_id_a="s1", segment_id_b="ghost")
+    assert deps.agenda.segments[0].role_taker == "Liz"
+    assert deps.agenda.segments[2].role_taker == "Joyce"
+
+
+def test_swap_roles_does_not_recompute_times():
+    deps = make_deps_3()
+    starts_before = [s.start_time for s in deps.agenda.segments]
+    ctx = FakeCtx(deps=deps)
+
+    apply_swap_roles(ctx, segment_id_a="s1", segment_id_b="s3")
+
+    starts_after = [s.start_time for s in deps.agenda.segments]
+    assert starts_after == starts_before
+
+
+# --- swap_time ---
+
+
+def test_swap_time_adjacent_segments():
+    deps = make_deps_3()
+    ctx = FakeCtx(deps=deps)
+    # Swap s1 and s2 -> order [s2, s1, s3].
+    result = apply_swap_time(ctx, segment_id_a="s1", segment_id_b="s2")
+
+    assert result["segment_id_a"] == "s1"
+    assert result["segment_id_b"] == "s2"
+    # s1 was at idx 0, s2 at idx 1. After swap a is at 1, b at 0.
+    assert result["new_index_a"] == 1
+    assert result["new_index_b"] == 0
+    assert [s.id for s in deps.agenda.segments] == ["s2", "s1", "s3"]
+    # s2 10min @19:15, s1 5min @19:25, s3 7min @19:30.
+    assert deps.agenda.segments[0].start_time == "19:15"
+    assert deps.agenda.segments[1].start_time == "19:25"
+    assert deps.agenda.segments[2].start_time == "19:30"
+
+
+def test_swap_time_non_adjacent_segments():
+    deps = make_deps_3()
+    ctx = FakeCtx(deps=deps)
+    # Swap s1 and s3 -> order [s3, s2, s1].
+    result = apply_swap_time(ctx, segment_id_a="s1", segment_id_b="s3")
+
+    assert result["new_index_a"] == 2
+    assert result["new_index_b"] == 0
+    assert [s.id for s in deps.agenda.segments] == ["s3", "s2", "s1"]
+    # s3 7min @19:15, s2 10min @19:22, s1 5min @19:32.
+    assert deps.agenda.segments[0].start_time == "19:15"
+    assert deps.agenda.segments[1].start_time == "19:22"
+    assert deps.agenda.segments[2].start_time == "19:32"
+
+
+def test_swap_time_swaps_buffer_before_values():
+    deps = make_deps_3()
+    # Set buffer_before on s2 and s3 so we can track slot-level gaps.
+    deps.agenda.segments[1].buffer_before = 5  # gap at slot 1
+    deps.agenda.segments[2].buffer_before = 1  # gap at slot 2
+    recompute_start_times(deps.agenda)
+    ctx = FakeCtx(deps=deps)
+
+    apply_swap_time(ctx, segment_id_a="s2", segment_id_b="s3")
+
+    # Order is now [s1, s3, s2].
+    assert [s.id for s in deps.agenda.segments] == ["s1", "s3", "s2"]
+    # Segment NOW at slot 1 (old s2's position) is s3 — it should carry
+    # the buffer_before that was originally at that slot = 5.
+    assert deps.agenda.segments[1].id == "s3"
+    assert deps.agenda.segments[1].buffer_before == 5
+    # Segment NOW at slot 2 (old s3's position) is s2 — carries buffer = 1.
+    assert deps.agenda.segments[2].id == "s2"
+    assert deps.agenda.segments[2].buffer_before == 1
+    # Cascade: s1 5min @19:15, s3 (buf 5) 7min @19:25, s2 (buf 1) 10min @19:33.
+    assert deps.agenda.segments[0].start_time == "19:15"
+    assert deps.agenda.segments[1].start_time == "19:25"
+    assert deps.agenda.segments[2].start_time == "19:33"
+
+
+def test_swap_time_with_same_id_raises():
+    deps = make_deps_3()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="itself"):
+        apply_swap_time(ctx, segment_id_a="s2", segment_id_b="s2")
+    assert [s.id for s in deps.agenda.segments] == ["s1", "s2", "s3"]
+
+
+def test_swap_time_unknown_id_raises():
+    deps = make_deps_3()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="unknown segment"):
+        apply_swap_time(ctx, segment_id_a="s1", segment_id_b="ghost")
+    # Unchanged order.
+    assert [s.id for s in deps.agenda.segments] == ["s1", "s2", "s3"]
+    with pytest.raises(ModelRetry, match="unknown segment"):
+        apply_swap_time(ctx, segment_id_a="ghost", segment_id_b="s2")
+    assert [s.id for s in deps.agenda.segments] == ["s1", "s2", "s3"]

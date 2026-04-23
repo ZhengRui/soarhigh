@@ -131,6 +131,32 @@ def move_segment(
 
 
 @agent.tool
+def swap_roles(
+    ctx: RunContext[AgendaDeps],
+    segment_id_a: str,
+    segment_id_b: str,
+) -> dict:
+    """BIDIRECTIONAL: swap the role takers of TWO segments — atomic exchange of
+    only the role_taker field. Positions and times do NOT change. Use for
+    'swap A and B's roles'. Does NOT move the cards."""
+    return _tools.apply_swap_roles(ctx, segment_id_a=segment_id_a, segment_id_b=segment_id_b)
+
+
+@agent.tool
+def swap_time(
+    ctx: RunContext[AgendaDeps],
+    segment_id_a: str,
+    segment_id_b: str,
+) -> dict:
+    """BIDIRECTIONAL: swap the time slots / positions of TWO segments — they
+    exchange where they sit in the sequence. Both segments keep their
+    id/type/duration/role_taker; only sequence positions (and thus times)
+    swap. Use for 'swap A and B's time slots'. Works for adjacent AND
+    non-adjacent pairs — one call is always enough."""
+    return _tools.apply_swap_time(ctx, segment_id_a=segment_id_a, segment_id_b=segment_id_b)
+
+
+@agent.tool
 def shift_segment_time(
     ctx: RunContext[AgendaDeps],
     segment_id: str,
