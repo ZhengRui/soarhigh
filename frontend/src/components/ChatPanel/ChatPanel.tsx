@@ -53,6 +53,16 @@ export function ChatPanel({
 
   const onEvent = useCallback(
     (ev: AgentTurnEvent) => {
+      // Propagate agenda updates to the parent FIRST, outside the setMessages
+      // updater. Calling a parent's setState from inside another component's
+      // updater function triggers React's "setState during render" warning.
+      if (ev.type === 'tool_call_end') {
+        onAgendaAfter(ev.data.agenda_after);
+      } else if (ev.type === 'done') {
+        onAgendaAfter(ev.data.final_agenda);
+      }
+
+      // Then update our own local message state (pure updater, no side effects).
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (!last || last.role !== 'assistant') return prev;
@@ -79,11 +89,9 @@ export function ChatPanel({
               ? { ...tc, pending: false, result: ev.data.result }
               : tc
           );
-          onAgendaAfter(ev.data.agenda_after);
         }
         if (ev.type === 'done') {
           msg.seq = ev.data.seq;
-          onAgendaAfter(ev.data.final_agenda);
         }
         if (ev.type === 'error') {
           msg.error = ev.data.message;
