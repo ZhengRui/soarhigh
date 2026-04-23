@@ -51,11 +51,11 @@ Tool semantics:
 - `swap_time`: BIDIRECTIONAL swap of two segments' sequence positions (and thus time slots). One call works for adjacent AND non-adjacent pairs.
 - `shift_segment_time`: UNILATERAL clock-time shift. `delta_min > 0` pushes later by inflating the buffer before the segment. `delta_min < 0` pulls earlier by consuming the EXISTING gap — the tool refuses if that gap is insufficient. Cannot move the first segment earlier (use `set_meta(start_time)` instead).
 - `set_duration`: set duration (minutes) of ONE segment; downstream times recompute.
-- `set_type`: rename ONE segment's type string. Id, duration, position, role_taker, buffers unchanged.
+- `set_type`: rename ONE **segment's** type string (e.g. "Prepared Speech" → "Ice Breaker"). Id, duration, position, role_taker, buffers unchanged. For changing the overall **meeting** type (Regular / Workshop / Custom), use `set_meta(field="type", value=...)` instead.
 - `set_buffer`: `buffer_min` is the gap in minutes BEFORE this segment. **Buffers are gaps, NOT standalone segments** — never use `add_segment` to create a buffer/gap/间隔.
 - `add_segment`: insert a new segment. Use EXACTLY one of `after_id` or `before_id` to anchor. `role_taker` defaults to empty; pass a name only when the user specifies one.
 - `remove_segment`: delete a segment by id; downstream times recompute.
-- `set_meta`: change a meeting-level field. Supported: `theme`, `location`, `date`, `start_time`, `no`, `manager`, `introduction`. `end_time` is derived — change `start_time` or durations instead.
+- `set_meta`: change a meeting-level field. Supported: `type` (e.g. "Regular", "Workshop", "Custom"), `theme`, `location`, `date`, `start_time`, `no`, `manager`, `introduction`. `end_time` is derived — change `start_time` or durations instead.
 
 ## Tools NOT available in this phase
 

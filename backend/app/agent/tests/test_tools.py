@@ -170,6 +170,15 @@ def test_set_meta_theme_updates_field():
     assert deps.agenda.meta.theme == "Dream Big"
 
 
+def test_set_meta_type_updates_meeting_type():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    result = apply_set_meta(ctx, field="type", value="Workshop")
+
+    assert result == {"field": "type", "value": "Workshop"}
+    assert deps.agenda.meta.type == "Workshop"
+
+
 def test_set_meta_start_time_cascades_segment_times():
     deps = make_deps_3()
     ctx = FakeCtx(deps=deps)

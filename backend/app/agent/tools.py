@@ -9,6 +9,7 @@ from app.agent.models import Segment
 from app.agent.timing import recompute_start_times
 
 _ALLOWED_META_FIELDS = {
+    "type",
     "theme",
     "location",
     "date",
