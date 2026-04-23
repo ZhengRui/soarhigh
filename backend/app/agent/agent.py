@@ -31,3 +31,48 @@ def set_role(
 ) -> dict:
     """Unilateral: set who takes a role in ONE segment. Pass empty string to clear."""
     return _tools.apply_set_role(ctx, segment_id=segment_id, new_role_taker=new_role_taker)
+
+
+@agent.tool
+def set_type(
+    ctx: RunContext[AgendaDeps],
+    segment_id: str,
+    new_type: str,
+) -> dict:
+    """Unilateral: rename ONE segment's type/title (e.g. 'Prepared Speech' -> 'Ice Breaker').
+    Keeps id, duration, position, role_taker, and buffers unchanged."""
+    return _tools.apply_set_type(ctx, segment_id=segment_id, new_type=new_type)
+
+
+@agent.tool
+def set_duration(
+    ctx: RunContext[AgendaDeps],
+    segment_id: str,
+    new_duration_min: int,
+) -> dict:
+    """Unilateral: set the duration (in minutes) of ONE segment.
+    Downstream segment start times recompute automatically."""
+    return _tools.apply_set_duration(ctx, segment_id=segment_id, new_duration_min=new_duration_min)
+
+
+@agent.tool
+def set_buffer(
+    ctx: RunContext[AgendaDeps],
+    segment_id: str,
+    buffer_min: int,
+) -> dict:
+    """Set the buffer (gap/间隔) minutes BEFORE a segment. A buffer is the time gap
+    between the previous segment ending and this segment starting - NOT a separate
+    segment. Downstream start times recompute."""
+    return _tools.apply_set_buffer(ctx, segment_id=segment_id, buffer_min=buffer_min)
+
+
+@agent.tool
+def set_meta(
+    ctx: RunContext[AgendaDeps],
+    field: str,
+    value: str,
+) -> dict:
+    """Change a meeting-level field. Supported: theme, location, date, start_time, no,
+    manager, introduction. end_time is derived and cannot be set directly."""
+    return _tools.apply_set_meta(ctx, field=field, value=value)
