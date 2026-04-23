@@ -103,14 +103,17 @@ export function ChatPanel({
   };
 
   return (
-    <div className='flex flex-col h-full min-h-0'>
+    <div className='flex flex-col h-full min-h-0 bg-white'>
       <div
         ref={scrollRef}
-        className='flex-1 min-h-0 overflow-y-auto p-3 space-y-2'
+        className='flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3'
       >
         {messages.length === 0 && (
-          <div className='text-xs text-gray-400 text-center py-6'>
-            Ask me to edit the agenda — e.g. &ldquo;change SAA to Joyce&rdquo;,
+          <div className='text-xs text-gray-400 text-center py-10 leading-relaxed'>
+            Ask me to edit the agenda.
+            <br />
+            e.g. &ldquo;change SAA to Joyce&rdquo;,
+            <br />
             &ldquo;move Timer 2 min later&rdquo;.
           </div>
         )}
@@ -120,23 +123,34 @@ export function ChatPanel({
             className={m.role === 'user' ? 'text-right' : 'text-left'}
           >
             <div
-              className={`inline-block max-w-[85%] px-3 py-2 rounded-lg ${
-                m.role === 'user' ? 'bg-blue-100' : 'bg-gray-100'
+              className={`inline-block max-w-[85%] px-3 py-2 rounded-lg text-sm ${
+                m.role === 'user'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 text-gray-900'
               }`}
             >
               {m.role === 'assistant' &&
                 m.toolCalls &&
                 m.toolCalls.length > 0 && (
-                  <div className='text-xs text-gray-500 mb-1'>
+                  <div className='flex flex-wrap gap-1 mb-1.5'>
                     {m.toolCalls.map((tc) => (
-                      <span key={tc.id} className='mr-2'>
-                        {tc.pending ? '🛠 ' : '🛠 ✓ '}
+                      <span
+                        key={tc.id}
+                        className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-md border ${
+                          tc.pending
+                            ? 'bg-amber-50 border-amber-200 text-amber-700'
+                            : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        }`}
+                      >
+                        <span className='font-mono'>
+                          {tc.pending ? '⋯' : '✓'}
+                        </span>
                         {tc.name}
                       </span>
                     ))}
                   </div>
                 )}
-              <div className='whitespace-pre-wrap text-sm'>
+              <div className='whitespace-pre-wrap'>
                 {m.content ||
                   (m.role === 'assistant' &&
                   !(m.toolCalls && m.toolCalls.length)
@@ -150,9 +164,11 @@ export function ChatPanel({
           </div>
         ))}
       </div>
-      <div className='border-t p-2 flex gap-2'>
+      <div className='border-t border-gray-200 px-3 py-2 flex items-center gap-2 bg-white'>
         <input
-          className='flex-1 border rounded px-2 py-1 text-sm disabled:bg-gray-50'
+          className='flex-1 border border-gray-300 rounded-md px-3 py-1.5 text-sm placeholder-gray-400
+                     focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+                     disabled:bg-gray-50 disabled:text-gray-400 transition-colors'
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -166,15 +182,22 @@ export function ChatPanel({
         />
         {loading ? (
           <button
+            type='button'
             onClick={stop}
-            className='px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600'
+            className='px-3 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700
+                       rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500
+                       transition-colors'
           >
             Stop
           </button>
         ) : (
           <button
+            type='button'
             onClick={submit}
-            className='px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600'
+            className='px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700
+                       rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500
+                       disabled:opacity-50 disabled:cursor-not-allowed
+                       transition-colors'
             disabled={!input.trim()}
           >
             Send
