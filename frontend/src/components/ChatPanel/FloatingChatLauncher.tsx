@@ -57,12 +57,14 @@ export function FloatingChatLauncher({
       )}
       {/* Keep the panel mounted once it's been opened once, so conversation state
           (messages, in-flight SSE consumers, etc.) survives close/reopen toggles.
-          Hide it with CSS when `open` is false. */}
+          Hide it with CSS when `open` is false. We don't set aria-hidden — the
+          `hidden` Tailwind class applies display:none which already removes the
+          subtree from the accessibility tree, and setting aria-hidden while the
+          close button retains focus triggers a React a11y warning. */}
       {sessionKey && (
         <div
           role='dialog'
           aria-label='Meeting assistant'
-          aria-hidden={!open}
           className={`fixed z-50 bg-white border border-gray-200 rounded-xl shadow-2xl
                      flex-col overflow-hidden
                      right-4 bottom-4 w-96 h-[640px] max-h-[calc(100vh-7rem)]

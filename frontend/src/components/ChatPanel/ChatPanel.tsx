@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Check, Loader2, Square, Wrench } from 'lucide-react';
+import { ChatMarkdown } from './ChatMarkdown';
 import { useAgentTurn } from './useAgentTurn';
 import { AgendaSnapshot, AgentTurnEvent, ChatMessage } from './types';
 
@@ -196,13 +197,15 @@ export function ChatPanel({
                     })}
                   </div>
                 )}
-              <div className='whitespace-pre-wrap'>
-                {m.content ||
-                  (m.role === 'assistant' &&
-                  !(m.toolCalls && m.toolCalls.length)
-                    ? '…'
-                    : '')}
-              </div>
+              {m.role === 'assistant' ? (
+                m.content ? (
+                  <ChatMarkdown source={m.content} />
+                ) : !(m.toolCalls && m.toolCalls.length) ? (
+                  <div className='whitespace-pre-wrap'>…</div>
+                ) : null
+              ) : (
+                <div className='whitespace-pre-wrap'>{m.content}</div>
+              )}
               {m.error && (
                 <div className='text-red-600 text-xs mt-1'>{m.error}</div>
               )}

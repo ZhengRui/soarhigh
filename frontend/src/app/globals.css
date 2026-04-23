@@ -179,3 +179,70 @@
 .animate-blink {
   animation: blink 1s step-end infinite;
 }
+
+/* Compact markdown rendering for assistant bubbles in the ChatPanel.
+   Tames the default .markdown-body styles so they fit in a ~360px bubble. */
+.chat-markdown .wmde-markdown,
+.chat-markdown .wmde-markdown-color {
+  background: transparent !important;
+  font-size: 0.875rem !important; /* text-sm */
+  line-height: 1.5 !important;
+  color: inherit !important;
+}
+.chat-markdown .wmde-markdown p {
+  margin: 0 0 0.5em 0 !important;
+}
+.chat-markdown .wmde-markdown p:last-child {
+  margin-bottom: 0 !important;
+}
+.chat-markdown .wmde-markdown h1,
+.chat-markdown .wmde-markdown h2,
+.chat-markdown .wmde-markdown h3,
+.chat-markdown .wmde-markdown h4 {
+  font-size: 1em !important;
+  font-weight: 600 !important;
+  margin: 0.5em 0 0.25em !important;
+  padding-bottom: 0 !important;
+  border-bottom: none !important;
+}
+.chat-markdown .wmde-markdown ul,
+.chat-markdown .wmde-markdown ol {
+  padding-left: 1.25em !important;
+  margin: 0.25em 0 0.5em !important;
+}
+.chat-markdown .wmde-markdown li {
+  margin: 0.125em 0 !important;
+  color: inherit !important;
+}
+.chat-markdown .wmde-markdown code {
+  background: rgba(0, 0, 0, 0.06) !important;
+  padding: 0.125em 0.3em !important;
+  border-radius: 0.25em !important;
+  font-size: 0.85em !important;
+}
+.chat-markdown .wmde-markdown pre {
+  background: rgba(0, 0, 0, 0.05) !important;
+  padding: 0.5em 0.75em !important;
+  border-radius: 0.375em !important;
+  margin: 0.5em 0 !important;
+  font-size: 0.8em !important;
+}
+.chat-markdown .wmde-markdown pre code {
+  background: transparent !important;
+  padding: 0 !important;
+}
+.chat-markdown .wmde-markdown blockquote {
+  border-left: 3px solid rgba(0, 0, 0, 0.15) !important;
+  padding: 0 0.75em !important;
+  margin: 0.5em 0 !important;
+  color: inherit !important;
+  opacity: 0.85;
+}
+.chat-markdown .wmde-markdown a {
+  color: #4f46e5 !important; /* indigo-600 */
+  text-decoration: underline;
+}
+.chat-markdown .wmde-markdown table {
+  font-size: 0.85em !important;
+  margin: 0.5em 0 !important;
+}
