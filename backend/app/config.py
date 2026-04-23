@@ -1,4 +1,3 @@
-import os
 from os import path
 from typing import List
 
@@ -23,8 +22,8 @@ CORS_ORIGINS = config("CORS_ORIGINS", cast=parse_cors_origins, default="*")
 OPENAI_API_KEY = config("OPENAI_API_KEY", cast=str)
 
 # Agent Configuration (Pydantic AI)
-AGENT_MODEL = os.environ.get("AGENT_MODEL", "google-gla:gemini-3-flash-lite")
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+AGENT_MODEL = config("AGENT_MODEL", cast=str, default="google-gla:gemini-3-flash-lite")
+GOOGLE_API_KEY = config("GOOGLE_API_KEY", cast=str, default="")
 
 # WeChat Configuration
 WECHAT_APP_ID = config("WECHAT_APP_ID", cast=str)
