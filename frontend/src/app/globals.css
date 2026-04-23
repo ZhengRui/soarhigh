@@ -243,6 +243,23 @@
   text-decoration: underline;
 }
 .chat-markdown .wmde-markdown table {
+  display: block !important;
+  width: max-content !important;
+  max-width: 100% !important;
+  overflow-x: auto !important;
   font-size: 0.85em !important;
   margin: 0.5em 0 !important;
+  /* Let the scrollbar sit below the last row */
+  padding-bottom: 2px;
+}
+.chat-markdown .wmde-markdown th,
+.chat-markdown .wmde-markdown td {
+  white-space: nowrap !important;
+  padding: 0.25em 0.5em !important;
+}
+/* Re-allow wrapping inside a cell only when the author uses <br> or a soft
+   hyphen; long words will still push the whole table wider rather than
+   breaking mid-word, which is the behavior we want for this narrow bubble. */
+.chat-markdown .wmde-markdown td br {
+  white-space: normal !important;
 }
