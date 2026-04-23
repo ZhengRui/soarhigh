@@ -8,9 +8,10 @@ from app.agent.models import AgendaDeps
 from app.agent.prompts import ROUTER_SYSTEM_PROMPT_MINIMAL
 from app.config import AGENT_MODEL, GOOGLE_API_KEY
 
-# Ensure the provider can see the key.
-if GOOGLE_API_KEY and not os.environ.get("GOOGLE_API_KEY"):
-    os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+# Ensure the provider can construct at import time even when no real key is set
+# (tests that use TestModel override never hit the provider; missing-key errors
+# should surface at request time, not import time).
+os.environ.setdefault("GOOGLE_API_KEY", GOOGLE_API_KEY or "not-configured")
 
 USAGE_LIMITS = UsageLimits(request_limit=15, total_tokens_limit=50_000)
 

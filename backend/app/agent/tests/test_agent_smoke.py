@@ -2,19 +2,15 @@ import os
 
 import pytest
 
-from app.config import GOOGLE_API_KEY
-
-# Skip collection entirely when the Google API key is unavailable; importing
-# app.agent.agent with no key raises at Agent(...) construction time.
-if not (os.environ.get("GOOGLE_API_KEY") or GOOGLE_API_KEY):
-    pytest.skip("GOOGLE_API_KEY not set; skipping live agent smoke test", allow_module_level=True)
-
 from app.agent.agent import USAGE_LIMITS, agent
 from app.agent.models import Agenda, AgendaDeps, Meta, Segment
 
 
 @pytest.mark.live
 def test_agent_fires_set_role_for_simple_edit():
+    if os.environ.get("GOOGLE_API_KEY", "") in ("", "not-configured"):
+        pytest.skip("GOOGLE_API_KEY not set; cannot run live smoke test")
+
     agenda = Agenda(
         meta=Meta(theme="Test"),
         segments=[
