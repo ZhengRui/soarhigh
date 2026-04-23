@@ -14,6 +14,7 @@ dependencies = [
     "httpx[socks]>=0.27.2",
     "openai>=1.59.7",
     "oss2>=2.19.1",
+    "pydantic-ai>=1.0",
 ]
 
 [dependency-groups]
