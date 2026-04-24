@@ -14,7 +14,12 @@ from app.config import AGENT_MODEL, GOOGLE_API_KEY
 # should surface at request time, not import time).
 os.environ.setdefault("GOOGLE_API_KEY", GOOGLE_API_KEY or "not-configured")
 
-USAGE_LIMITS = UsageLimits(request_limit=15, total_tokens_limit=50_000)
+# request_limit (15) is the primary guard against runaway agent loops.
+# total_tokens_limit is a backstop for "something is very wrong" scenarios;
+# 500K accommodates long multi-turn sessions with the full Phase 2 system
+# prompt + tool schemas + growing history + per-call agenda snapshots, which
+# realistically consume 10-20K tokens per model call and 3-5 calls per turn.
+USAGE_LIMITS = UsageLimits(request_limit=15, total_tokens_limit=500_000)
 
 agent = Agent(
     AGENT_MODEL,
