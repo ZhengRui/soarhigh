@@ -1,7 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, Loader2, Square, Wrench } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowUp,
+  Check,
+  Loader2,
+  Square,
+  Wrench,
+} from 'lucide-react';
 import { ChatMarkdown } from './ChatMarkdown';
 import { useAgentTurn } from './useAgentTurn';
 import { AgendaSnapshot, AgentTurnEvent, ChatMessage } from './types';
@@ -85,14 +92,15 @@ export function ChatPanel({
               id: ev.data.id,
               name: ev.data.name,
               args: ev.data.args,
-              pending: true,
+              status: 'pending',
             },
           ];
         }
         if (ev.type === 'tool_call_end') {
+          const status = ev.data.status === 'retry' ? 'retry' : 'ok';
           msg.toolCalls = (msg.toolCalls || []).map((tc) =>
             tc.id === ev.data.id
-              ? { ...tc, pending: false, result: ev.data.result }
+              ? { ...tc, status, result: ev.data.result }
               : tc
           );
         }
@@ -169,15 +177,17 @@ export function ChatPanel({
                   <div className='flex flex-col gap-1 mb-1.5'>
                     {m.toolCalls.map((tc) => {
                       const argsStr = formatToolArgs(tc.args);
+                      const palette =
+                        tc.status === 'pending'
+                          ? 'bg-sky-50 border-sky-200 text-sky-800'
+                          : tc.status === 'retry'
+                            ? 'bg-amber-50 border-amber-300 text-amber-800'
+                            : 'bg-emerald-50 border-emerald-200 text-emerald-800';
                       return (
                         <div
                           key={tc.id}
-                          title={`${tc.name}(${argsStr})`}
-                          className={`flex items-center gap-1.5 text-[11px] font-mono px-2 py-1 rounded-md border cursor-default ${
-                            tc.pending
-                              ? 'bg-amber-50 border-amber-200 text-amber-800'
-                              : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                          }`}
+                          title={`${tc.name}(${argsStr})${tc.status === 'retry' ? ' — refused' : ''}`}
+                          className={`flex items-center gap-1.5 text-[11px] font-mono px-2 py-1 rounded-md border cursor-default ${palette}`}
                         >
                           <Wrench className='w-3 h-3 shrink-0 opacity-70' />
                           <span className='font-semibold shrink-0'>
@@ -187,8 +197,13 @@ export function ChatPanel({
                             ({argsStr})
                           </span>
                           <span className='shrink-0 pl-0.5'>
-                            {tc.pending ? (
+                            {tc.status === 'pending' ? (
                               <Loader2 className='w-3 h-3 animate-spin' />
+                            ) : tc.status === 'retry' ? (
+                              <AlertTriangle
+                                className='w-3 h-3'
+                                strokeWidth={2.5}
+                              />
                             ) : (
                               <Check className='w-3 h-3' strokeWidth={3} />
                             )}

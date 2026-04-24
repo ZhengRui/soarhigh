@@ -10,6 +10,8 @@ export type AgendaSnapshot = {
   }>;
 };
 
+export type ToolCallStatus = 'pending' | 'ok' | 'retry';
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -20,7 +22,7 @@ export type ChatMessage = {
     name: string;
     args: Record<string, unknown>;
     result?: unknown;
-    pending: boolean;
+    status: ToolCallStatus;
   }>;
   seq?: number;
   error?: string;
@@ -35,7 +37,12 @@ export type AgentTurnEvent =
     }
   | {
       type: 'tool_call_end';
-      data: { id: string; result: unknown; agenda_after: AgendaSnapshot };
+      data: {
+        id: string;
+        status?: 'ok' | 'retry';
+        result: unknown;
+        agenda_after: AgendaSnapshot;
+      };
     }
   | {
       type: 'done';

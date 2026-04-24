@@ -12,6 +12,7 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     PartDeltaEvent,
     PartStartEvent,
+    RetryPromptPart,
     TextPart,
     TextPartDelta,
     ThinkingPart,
@@ -102,15 +103,18 @@ async def agent_turn(req: AgentTurnRequest, user=Depends(get_current_user)):
                                         },
                                     )
                                 elif isinstance(tool_event, FunctionToolResultEvent):
-                                    # tool_event.result is ToolReturnPart | RetryPromptPart;
-                                    # .content holds the actual tool return value (dict, str, list, etc.).
-                                    # tool_event.content is a flattened string form for the model and
-                                    # is None for non-string returns — don't use it for SSE.
+                                    # tool_event.result is ToolReturnPart on success or
+                                    # RetryPromptPart when the tool raised ModelRetry (soft
+                                    # refusal). Surface which via `status` so the UI can
+                                    # render a warning badge vs a success badge.
+                                    result_part = tool_event.result
+                                    is_retry = isinstance(result_part, RetryPromptPart)
                                     yield _sse(
                                         "tool_call_end",
                                         {
                                             "id": tool_event.tool_call_id,
-                                            "result": tool_event.result.content,
+                                            "status": "retry" if is_retry else "ok",
+                                            "result": result_part.content,
                                             "agenda_after": deps.agenda.model_dump(),
                                         },
                                     )
