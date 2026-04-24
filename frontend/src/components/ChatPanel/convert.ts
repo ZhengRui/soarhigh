@@ -6,12 +6,29 @@ type MeetingFormState = Omit<MeetingIF, 'segments'> & {
   segments: BaseSegment[];
 };
 
+function parseHhmmToMinutes(hhmm: string): number {
+  const parts = hhmm.split(':');
+  const h = parseInt(parts[0] ?? '0', 10);
+  const m = parseInt(parts[1] ?? '0', 10);
+  if (isNaN(h) || isNaN(m)) return 0;
+  return h * 60 + m;
+}
+
 /**
  * Build the agenda snapshot that the agent sees on each turn.
  * role_taker is flattened to a plain string (the agent works with names, not
  * member records).
+ *
+ * buffer_before is derived from the gap between each segment's start_time and
+ * the previous segment's end_time. The frontend's BaseSegment doesn't carry a
+ * buffer_before field, but templates can encode gaps implicitly via start_time
+ * values (e.g. PS1 ends 20:20, PS2 starts 20:21 = a 1-min gap). Without this
+ * derivation the agent sees every buffer as 0 and cannot manipulate those gaps,
+ * AND any mutation would trigger the backend's recompute_start_times to wipe
+ * out the implicit gap on the next tool call.
  */
 export function buildAgendaSnapshot(meeting: MeetingFormState): AgendaSnapshot {
+  const segs = meeting.segments;
   return {
     meta: {
       no: meeting.no ?? null,
@@ -24,14 +41,25 @@ export function buildAgendaSnapshot(meeting: MeetingFormState): AgendaSnapshot {
       location: meeting.location ?? null,
       introduction: meeting.introduction ?? null,
     },
-    segments: meeting.segments.map((s) => ({
-      id: s.id,
-      type: s.type,
-      start_time: s.start_time,
-      duration: parseInt(s.duration, 10) || 0,
-      role_taker: s.role_taker?.name ?? '',
-      buffer_before: 0, // frontend doesn't track this yet — Phase 4
-    })),
+    segments: segs.map((s, i) => {
+      let buffer_before = 0;
+      if (i > 0) {
+        const prev = segs[i - 1];
+        const prevStart = parseHhmmToMinutes(prev.start_time);
+        const prevDuration = parseInt(prev.duration, 10) || 0;
+        const curStart = parseHhmmToMinutes(s.start_time);
+        const gap = curStart - (prevStart + prevDuration);
+        buffer_before = Math.max(gap, 0);
+      }
+      return {
+        id: s.id,
+        type: s.type,
+        start_time: s.start_time,
+        duration: parseInt(s.duration, 10) || 0,
+        role_taker: s.role_taker?.name ?? '',
+        buffer_before,
+      };
+    }),
   };
 }
 
