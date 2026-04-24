@@ -20,6 +20,7 @@ from pydantic_ai.messages import (
 )
 
 from ...agent.agent import USAGE_LIMITS, agent
+from ...agent.history import truncate_to_last_turns
 from ...agent.models import AgendaDeps
 from ...agent.prompts import SNAPSHOT_TEMPLATE
 from ...agent.store import session_store
@@ -41,7 +42,11 @@ async def agent_turn(req: AgentTurnRequest, user=Depends(get_current_user)):
             tail_seq, history_json = await session_store.load(req.session_id)
             next_seq = tail_seq + 1
 
-            history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
+            full_history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
+            # Cap context window at the last N user turns. Older turns drop off
+            # here; they remain in session_store (so the UI can still show the
+            # full conversation), only the portion fed to the LLM is trimmed.
+            history = truncate_to_last_turns(full_history)
             deps = AgendaDeps(
                 agenda=copy.deepcopy(req.agenda_snapshot),
                 session_id=req.session_id,
