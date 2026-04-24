@@ -593,8 +593,66 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- =============================================
+-- MEETING MANAGER AGENT (Phase 3)
+-- =============================================
+-- Scratch tables for the AI meeting-agenda assistant. These are NOT the
+-- canonical meeting data; the user still clicks Save to write into meetings /
+-- attendees / etc. These tables only hold the conversation + per-turn
+-- agenda snapshots so a session can be resumed, reverted, or served from
+-- multiple channels (web, Telegram, Hermes).
+
+-- agent_sessions: one row per chat session. session_id is a client-generated
+-- string (e.g. "new:a1b2c3d4", "edit:<meeting_id>:<uuid>", "tg:<chat_id>")
+-- so different channels can coexist.
+CREATE TABLE agent_sessions (
+    session_id   TEXT PRIMARY KEY,
+    user_id      UUID REFERENCES auth.users(id),
+    tail_seq     INT NOT NULL DEFAULT 0,
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- agent_turns: append-only log of user turns within a session. Each row
+-- captures the agenda snapshot BEFORE the turn ran and AFTER, plus the
+-- Pydantic AI ModelMessage[] cursor so the next turn can resume with the
+-- right conversation context. Deleting rows at or after seq N is the
+-- "hard revert" path for the UI ↺ icon.
+CREATE TABLE agent_turns (
+    session_id      TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
+    seq             INT  NOT NULL,
+    user_message    TEXT NOT NULL,
+    assistant_text  TEXT,
+    tool_trace      JSONB,          -- [{id, name, args, result, status}, ...] for UI replay
+    agenda_before   JSONB NOT NULL, -- snapshot at turn start (for revert)
+    agenda_after    JSONB NOT NULL, -- snapshot after turn commits
+    history_cursor  JSONB NOT NULL, -- ModelMessage[] at end of this turn
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (session_id, seq)
+);
+
+CREATE INDEX idx_agent_turns_session_created ON agent_turns(session_id, created_at);
+
+-- Row-level security: a user can only read/write their own sessions.
+ALTER TABLE agent_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_turns ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY agent_sessions_owner ON agent_sessions
+    FOR ALL USING (user_id = auth.uid());
+
+CREATE POLICY agent_turns_owner ON agent_turns
+    FOR ALL USING (
+        session_id IN (
+            SELECT session_id FROM agent_sessions WHERE user_id = auth.uid()
+        )
+    );
+
+-- =============================================
 -- POTENTIAL FUTURE CHANGES
 -- =============================================
 
 -- Add index on meetings status for faster filtering if needed
 -- CREATE INDEX idx_meetings_status ON meetings(status);
+
+-- Retention / cleanup policy for agent sessions is TBD (see design doc). Could
+-- be a pg_cron job deleting rows where updated_at < now() - interval '24 hours',
+-- or driven by an explicit client-side /reset action.
