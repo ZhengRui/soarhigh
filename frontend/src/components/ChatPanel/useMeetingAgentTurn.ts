@@ -3,7 +3,7 @@ import { AgendaSnapshot, AgentTurnEvent } from './types';
 
 const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT;
 
-export function useAgentTurn({
+export function useMeetingAgentTurn({
   onEvent,
 }: {
   onEvent: (ev: AgentTurnEvent) => void;
@@ -23,7 +23,7 @@ export function useAgentTurn({
       const token =
         typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
-      const res = await fetch(`${apiEndpoint}/agent/turn`, {
+      const res = await fetch(`${apiEndpoint}/meeting-agent/turn`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -57,7 +57,14 @@ export function useAgentTurn({
           }
         }
       } catch (e) {
-        if ((e as Error).name !== 'AbortError') throw e;
+        if ((e as Error).name === 'AbortError') {
+          // Synthetic event so ChatPanel can mark the bubble cancelled and
+          // reset loading state via its normal onEvent path. Otherwise
+          // loading stays stuck true because no done/error event arrives.
+          onEvent({ type: 'cancelled', data: {} });
+        } else {
+          throw e;
+        }
       }
     },
     [onEvent]

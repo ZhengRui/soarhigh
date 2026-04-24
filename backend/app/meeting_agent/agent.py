@@ -3,16 +3,21 @@ import os
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
 
-from app.agent import tools as _tools
-from app.agent.models import AgendaDeps
-from app.agent.prompts import ROUTER_SYSTEM_PROMPT
-from app.agent.validators import run_validators
-from app.config import AGENT_MODEL, GOOGLE_API_KEY
+from app.config import GOOGLE_API_KEY, MEETING_AGENT_MODEL, OPENAI_API_KEY
+from app.meeting_agent import tools as _tools
+from app.meeting_agent.models import AgendaDeps
+from app.meeting_agent.prompts import ROUTER_SYSTEM_PROMPT
+from app.meeting_agent.validators import run_validators
 
-# Ensure the provider can construct at import time even when no real key is set
-# (tests that use TestModel override never hit the provider; missing-key errors
-# should surface at request time, not import time).
+# Pydantic AI providers read their API keys from os.environ at Agent()
+# construction time. Our config uses starlette.Config which reads .env into
+# Python variables without populating os.environ — so we have to bridge here.
+# Using setdefault so real env values (CI, prod) take precedence over .env.
+# "not-configured" placeholder lets the module import even without a key;
+# tests using TestModel override never reach the provider. Real missing-key
+# errors surface at request time, which is what we want.
 os.environ.setdefault("GOOGLE_API_KEY", GOOGLE_API_KEY or "not-configured")
+os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY or "not-configured")
 
 # request_limit (15) is the primary guard against runaway agent loops.
 # total_tokens_limit is a backstop for "something is very wrong" scenarios;
@@ -21,11 +26,33 @@ os.environ.setdefault("GOOGLE_API_KEY", GOOGLE_API_KEY or "not-configured")
 # realistically consume 10-20K tokens per model call and 3-5 calls per turn.
 USAGE_LIMITS = UsageLimits(request_limit=15, total_tokens_limit=500_000)
 
+# Gemini thinking models emit thought summaries only when explicitly asked
+# via `include_thoughts: True`. Flash Lite doesn't support thinking at all —
+# sending the config to it may error or be silently ignored, so guard with a
+# substring match. Extend this set when new thinking-capable models ship.
+_GEMINI_THINKING_MODELS = {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-pro"}
+
+
+def _build_model_settings(model_spec: str):
+    if any(m in model_spec for m in _GEMINI_THINKING_MODELS):
+        # Lazy import so non-Google setups don't pay the import cost.
+        from pydantic_ai.models.google import GoogleModelSettings
+
+        return GoogleModelSettings(
+            google_thinking_config={
+                "thinking_budget": -1,  # dynamic; model decides per request
+                "include_thoughts": True,
+            },
+        )
+    return None
+
+
 agent = Agent(
-    AGENT_MODEL,
+    MEETING_AGENT_MODEL,
     system_prompt=ROUTER_SYSTEM_PROMPT,
     deps_type=AgendaDeps,
     retries=2,
+    model_settings=_build_model_settings(MEETING_AGENT_MODEL),
 )
 
 
@@ -33,32 +60,32 @@ agent = Agent(
 def set_role(
     ctx: RunContext[AgendaDeps],
     segment_id: str,
-    new_role_taker: str,
+    role_taker: str,
 ) -> dict:
     """Unilateral: set who takes a role in ONE segment. Pass empty string to clear."""
-    return _tools.apply_set_role(ctx, segment_id=segment_id, new_role_taker=new_role_taker)
+    return _tools.apply_set_role(ctx, segment_id=segment_id, role_taker=role_taker)
 
 
 @agent.tool
 def set_type(
     ctx: RunContext[AgendaDeps],
     segment_id: str,
-    new_type: str,
+    type: str,
 ) -> dict:
     """Unilateral: rename ONE segment's type/title (e.g. 'Prepared Speech' -> 'Ice Breaker').
     Keeps id, duration, position, role_taker, and buffers unchanged."""
-    return _tools.apply_set_type(ctx, segment_id=segment_id, new_type=new_type)
+    return _tools.apply_set_type(ctx, segment_id=segment_id, type=type)
 
 
 @agent.tool
 def set_duration(
     ctx: RunContext[AgendaDeps],
     segment_id: str,
-    new_duration_min: int,
+    duration_min: int,
 ) -> dict:
     """Unilateral: set the duration (in minutes) of ONE segment.
     Downstream segment start times recompute automatically."""
-    return _tools.apply_set_duration(ctx, segment_id=segment_id, new_duration_min=new_duration_min)
+    return _tools.apply_set_duration(ctx, segment_id=segment_id, duration_min=duration_min)
 
 
 @agent.tool
@@ -185,3 +212,29 @@ def validate_agenda(ctx: RunContext[AgendaDeps]) -> list[dict]:
     SOFT issues (DURATION_OVERFLOW, DURATION_UNDERFLOW) should be surfaced to
     the user in your summary reply, not silently corrected."""
     return [i.model_dump() for i in run_validators(ctx.deps.agenda)]
+
+
+@agent.tool
+async def revert_last_turn(ctx: RunContext[AgendaDeps]) -> dict:
+    """SOFT REVERT: undo the most recent edit turn. Walks past chit-chat
+    turns silently. Use when the user says '撤销' / 'revert' / 'undo last
+    change' / '取消上一步' / similar. Chat history preserved.
+
+    Refuses if (a) no prior edits, or (b) the most recent meaningful turn
+    was itself a revert (ping-pong guard — refusal directs you to use
+    revert_to_turn with an explicit `after_seq` restore point). Do NOT
+    manually reverse edits via set_role/set_duration/etc."""
+    return await _tools.apply_revert_last_turn(ctx)
+
+
+@agent.tool
+async def revert_to_turn(ctx: RunContext[AgendaDeps], after_seq: int) -> dict:
+    """SOFT REVERT to a specific restore point. `after_seq` semantics:
+
+        after_seq = 0  → initial state (before any turns)
+        after_seq = N  → state AFTER turn N completed
+
+    Pass the seq the user picked VERBATIM. Do NOT subtract or transform.
+    If the refusal from revert_last_turn listed 'seq 2: state AFTER X' and
+    the user says 'seq 2', call revert_to_turn(after_seq=2)."""
+    return await _tools.apply_revert_to_turn(ctx, after_seq=after_seq)

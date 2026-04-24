@@ -1,4 +1,4 @@
-from app.agent.models import Agenda, Meta, Segment
+from app.meeting_agent.models import Agenda, Meta, Segment
 
 
 def test_agenda_roundtrip():

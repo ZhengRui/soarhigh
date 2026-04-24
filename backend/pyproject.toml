@@ -42,3 +42,6 @@ line-ending = "lf"
 [tool.pytest.ini_options]
 markers = ["live: requires live LLM provider; run with -m live"]
 asyncio_mode = "auto"
+# Skip live-marked tests by default. Opt in with `-m live` when you want
+# to actually hit the provider — e.g. after changing the API key or model.
+addopts = "-m 'not live'"

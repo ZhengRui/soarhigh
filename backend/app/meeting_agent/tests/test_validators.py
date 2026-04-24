@@ -1,5 +1,5 @@
-from app.agent.models import Agenda, Meta, Segment
-from app.agent.validators import run_validators
+from app.meeting_agent.models import Agenda, Meta, Segment
+from app.meeting_agent.validators import run_validators
 
 
 def make(start="19:15", end="21:30", segs=()):

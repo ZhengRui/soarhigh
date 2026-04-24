@@ -4,12 +4,14 @@ from dataclasses import dataclass
 import pytest
 from pydantic_ai import ModelRetry
 
-from app.agent.models import Agenda, AgendaDeps, Meta, Segment
-from app.agent.timing import recompute_start_times
-from app.agent.tools import (
+from app.meeting_agent.models import Agenda, AgendaDeps, Meta, Segment
+from app.meeting_agent.timing import recompute_start_times
+from app.meeting_agent.tools import (
     apply_add_segment,
     apply_move_segment,
     apply_remove_segment,
+    apply_revert_last_turn,
+    apply_revert_to_turn,
     apply_set_buffer,
     apply_set_duration,
     apply_set_meta,
@@ -69,9 +71,9 @@ def make_deps_3():
 def test_set_role_mutates_target_segment():
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
-    result = apply_set_role(ctx, segment_id="s2", new_role_taker="Joyce Feng")
+    result = apply_set_role(ctx, segment_id="s2", role_taker="Joyce Feng")
     assert result["segment_id"] == "s2"
-    assert result["new_role_taker"] == "Joyce Feng"
+    assert result["role_taker"] == "Joyce Feng"
     assert deps.agenda.segments[1].role_taker == "Joyce Feng"
     # other segments untouched
     assert deps.agenda.segments[0].role_taker == "Liz"
@@ -87,9 +89,9 @@ def test_set_type_changes_only_type():
     original_duration = deps.agenda.segments[1].duration
     original_role = deps.agenda.segments[1].role_taker
 
-    result = apply_set_type(ctx, segment_id="s2", new_type="Ice Breaker")
+    result = apply_set_type(ctx, segment_id="s2", type="Ice Breaker")
 
-    assert result == {"segment_id": "s2", "new_type": "Ice Breaker"}
+    assert result == {"segment_id": "s2", "type": "Ice Breaker"}
     assert deps.agenda.segments[1].type == "Ice Breaker"
     # Nothing else on this segment changed.
     assert deps.agenda.segments[1].start_time == original_start
@@ -107,9 +109,9 @@ def test_set_duration_happy_path_recomputes_downstream():
     ctx = FakeCtx(deps=deps)
     # s1 was 5 min starting 19:15. Bump to 10 -> s2 shifts from 19:20 to 19:25,
     # and s3 shifts from 19:30 to 19:35.
-    result = apply_set_duration(ctx, segment_id="s1", new_duration_min=10)
+    result = apply_set_duration(ctx, segment_id="s1", duration_min=10)
 
-    assert result == {"segment_id": "s1", "new_duration_min": 10}
+    assert result == {"segment_id": "s1", "duration_min": 10}
     assert deps.agenda.segments[0].duration == 10
     assert deps.agenda.segments[0].start_time == "19:15"
     assert deps.agenda.segments[1].start_time == "19:25"
@@ -120,7 +122,7 @@ def test_set_duration_zero_raises_model_retry():
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
     with pytest.raises(ModelRetry, match="duration must be positive"):
-        apply_set_duration(ctx, segment_id="s1", new_duration_min=0)
+        apply_set_duration(ctx, segment_id="s1", duration_min=0)
     # No mutation
     assert deps.agenda.segments[0].duration == 3
 
@@ -129,7 +131,7 @@ def test_set_duration_negative_raises_model_retry():
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
     with pytest.raises(ModelRetry, match="duration must be positive"):
-        apply_set_duration(ctx, segment_id="s1", new_duration_min=-5)
+        apply_set_duration(ctx, segment_id="s1", duration_min=-5)
     assert deps.agenda.segments[0].duration == 3
 
 
@@ -685,3 +687,431 @@ def test_swap_time_unknown_id_raises():
     with pytest.raises(ModelRetry, match="unknown segment"):
         apply_swap_time(ctx, segment_id_a="ghost", segment_id_b="s2")
     assert [s.id for s in deps.agenda.segments] == ["s1", "s2", "s3"]
+
+
+# ---------------------------------------------------------------------------
+# apply_revert_last_turn
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_revert_last_turn_restores_agenda_before_of_latest_turn(monkeypatch):
+    """Seeds an InMemory store with one turn whose agenda_before differs from
+    the current in-memory agenda. The tool should replace ctx.deps.agenda
+    wholesale so it matches the stored snapshot."""
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+
+    fake_store = InMemorySessionStore()
+    # The "before" state we want to restore: 1 segment, specific role.
+    before_snapshot = {
+        "meta": {"start_time": "19:15"},
+        "segments": [
+            {
+                "id": "s1",
+                "type": "SAA",
+                "start_time": "19:30",
+                "duration": 3,
+                "role_taker": "Original",
+                "buffer_before": 0,
+            },
+        ],
+    }
+    await fake_store.save_turn(
+        "sess-rev",
+        user_id="u",
+        turn=TurnRecord(
+            seq=1,
+            user_message="change SAA to Modified",
+            assistant_text="ok",
+            tool_trace=[{"id": "t1", "name": "set_role", "args": {}, "status": "ok", "result": {}}],
+            agenda_before=before_snapshot,
+            agenda_after={"meta": {"start_time": "19:15"}, "segments": []},  # irrelevant
+            history_cursor=[],
+        ),
+    )
+    monkeypatch.setattr(store_module, "session_store", fake_store)
+
+    # Current in-memory agenda is different from agenda_before — after revert
+    # it should match `before_snapshot` exactly.
+    deps = AgendaDeps(
+        session_id="sess-rev",
+        agenda=Agenda(
+            meta=Meta(start_time="19:15"),
+            segments=[
+                Segment(id="s1", type="SAA", start_time="19:30", duration=3, role_taker="Modified"),
+                Segment(id="s2", type="Extra", start_time="19:33", duration=5, role_taker=""),
+            ],
+        ),
+    )
+    ctx = FakeCtx(deps=deps)
+
+    result = await apply_revert_last_turn(ctx)
+
+    assert result["undone_seq"] == 1
+    assert result["restored_after_seq"] == 0  # undid turn 1 → now at initial point
+    assert result["n_segments"] == 1
+    # Metadata the agent will paraphrase — names make the semantic clear:
+    # the instruction that got UNDONE, not the current state.
+    assert result["undone_user_message"] == "change SAA to Modified"
+    assert result["undone_tool_names"] == ["set_role"]
+    # ctx.deps.agenda now matches before_snapshot exactly.
+    assert len(ctx.deps.agenda.segments) == 1
+    assert ctx.deps.agenda.segments[0].role_taker == "Original"
+    assert ctx.deps.agenda.segments[0].id == "s1"
+
+
+@pytest.mark.asyncio
+async def test_revert_last_turn_skips_chit_chat_turns(monkeypatch):
+    """When the most recent turn is chit-chat (no edit tools — e.g. a
+    describe/question turn), revert_last_turn should walk back past it and
+    undo the most recent actual EDIT turn. Matches user intuition: '撤销' is
+    always about reversing state changes, not reversing descriptions."""
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+
+    fake_store = InMemorySessionStore()
+    # Turn 1: real edit. agenda_before has ONE specific segment we can check.
+    edit_before = {
+        "meta": {},
+        "segments": [
+            {
+                "id": "s1",
+                "type": "OriginalType",
+                "start_time": "19:30",
+                "duration": 3,
+                "role_taker": "",
+                "buffer_before": 0,
+            }
+        ],
+    }
+    await fake_store.save_turn(
+        "sess",
+        user_id="u",
+        turn=TurnRecord(
+            seq=1,
+            user_message="add a segment",
+            assistant_text="ok",
+            tool_trace=[{"id": "t1", "name": "add_segment", "args": {}, "status": "ok", "result": {}}],
+            agenda_before=edit_before,
+            agenda_after={"meta": {}, "segments": []},
+            history_cursor=[],
+        ),
+    )
+    # Turn 2: chit-chat — user just asked for a summary. No tool calls.
+    await fake_store.save_turn(
+        "sess",
+        user_id="u",
+        turn=TurnRecord(
+            seq=2,
+            user_message="教一下刚才的操作",
+            assistant_text="you added a segment",
+            tool_trace=[],
+            agenda_before={"meta": {}, "segments": []},
+            agenda_after={"meta": {}, "segments": []},
+            history_cursor=[],
+        ),
+    )
+    monkeypatch.setattr(store_module, "session_store", fake_store)
+
+    deps = AgendaDeps(session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
+    ctx = FakeCtx(deps=deps)
+    result = await apply_revert_last_turn(ctx)
+
+    # Should target turn 1 (the edit), NOT turn 2 (chit-chat).
+    assert result["undone_seq"] == 1
+    assert result["undone_user_message"] == "add a segment"
+    assert result["undone_tool_names"] == ["add_segment"]
+    # Agenda matches edit_before — the chit-chat turn was transparently skipped.
+    assert len(deps.agenda.segments) == 1
+    assert deps.agenda.segments[0].type == "OriginalType"
+
+
+@pytest.mark.asyncio
+async def test_revert_last_turn_refuses_when_only_chit_chat(monkeypatch):
+    """A session with only describe/question turns has no edits to undo.
+    The tool must refuse rather than silently no-op, so the agent can tell
+    the user instead of falsely claiming to have reverted."""
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+
+    fake_store = InMemorySessionStore()
+    await fake_store.save_turn(
+        "sess",
+        user_id="u",
+        turn=TurnRecord(
+            seq=1,
+            user_message="hi",
+            assistant_text="hello!",
+            tool_trace=[],
+            agenda_before={"meta": {}, "segments": []},
+            agenda_after={"meta": {}, "segments": []},
+            history_cursor=[],
+        ),
+    )
+    monkeypatch.setattr(store_module, "session_store", fake_store)
+
+    deps = AgendaDeps(session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="no edits"):
+        await apply_revert_last_turn(ctx)
+
+
+@pytest.mark.asyncio
+async def test_revert_last_turn_refuses_when_previous_turn_was_revert(monkeypatch):
+    """Consecutive-revert guard: if the previous turn was itself a revert,
+    revert_last_turn must refuse to prevent ping-pong. The refusal message
+    should include a list of recent non-revert edit turns for the agent to
+    present to the user."""
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+
+    fake_store = InMemorySessionStore()
+    # Turn 1: a real edit.
+    await fake_store.save_turn(
+        "sess",
+        user_id="u",
+        turn=TurnRecord(
+            seq=1,
+            user_message="把 SAA 改成 Joyce",
+            assistant_text="ok",
+            tool_trace=[{"id": "t1", "name": "set_role", "args": {}, "status": "ok", "result": {}}],
+            agenda_before={"meta": {}, "segments": []},
+            agenda_after={"meta": {}, "segments": []},
+            history_cursor=[],
+        ),
+    )
+    # Turn 2: a previous revert. This is what makes the new call consecutive.
+    await fake_store.save_turn(
+        "sess",
+        user_id="u",
+        turn=TurnRecord(
+            seq=2,
+            user_message="撤销一下",
+            assistant_text="已撤销",
+            tool_trace=[{"id": "t2", "name": "revert_last_turn", "args": {}, "status": "ok", "result": {}}],
+            agenda_before={"meta": {}, "segments": []},
+            agenda_after={"meta": {}, "segments": []},
+            history_cursor=[],
+        ),
+    )
+    monkeypatch.setattr(store_module, "session_store", fake_store)
+
+    deps = AgendaDeps(session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
+    ctx = FakeCtx(deps=deps)
+
+    with pytest.raises(ModelRetry) as exc:
+        await apply_revert_last_turn(ctx)
+    msg = str(exc.value)
+    # The refusal must explain the reason and suggest the alternative tool.
+    assert "Consecutive revert blocked" in msg
+    assert "revert_to_turn" in msg
+    # Direction phrasing is "state AFTER [edit]" per the user-preferred
+    # framing (easier to visualize than "state BEFORE [op]").
+    assert "state AFTER" in msg
+    assert "VERBATIM" in msg  # agent must pass the user's seq unchanged
+    # Restore points: seq 0 (initial) is always offered; each edit turn is
+    # listed with its description.
+    assert "seq 0" in msg
+    assert "initial state" in msg
+    assert "seq 1" in msg
+    assert "把 SAA 改成 Joyce" in msg
+
+
+@pytest.mark.asyncio
+async def test_revert_to_turn_applies_agenda_after_of_target(monkeypatch):
+    """revert_to_turn(after_seq=N) restores agenda_after of turn N (the state
+    that existed right after turn N completed). 'AFTER' semantics — the seq
+    the user picks maps directly to the parameter."""
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+
+    fake_store = InMemorySessionStore()
+    # Seed three turns. Each one's agenda_after has a distinct segment type
+    # so we can verify the RIGHT turn's after-state got restored.
+    for seq in range(1, 4):
+        await fake_store.save_turn(
+            "s",
+            user_id="u",
+            turn=TurnRecord(
+                seq=seq,
+                user_message=f"turn {seq}",
+                assistant_text=f"reply {seq}",
+                tool_trace=[{"id": f"t{seq}", "name": "set_role", "args": {}, "status": "ok", "result": {}}],
+                agenda_before={"meta": {}, "segments": []},  # irrelevant for this test
+                agenda_after={
+                    "meta": {"start_time": "19:00"},
+                    "segments": [
+                        {
+                            "id": f"s{seq}",
+                            "type": f"state_after_{seq}",
+                            "start_time": "19:30",
+                            "duration": 5,
+                            "role_taker": "",
+                            "buffer_before": 0,
+                        }
+                    ],
+                },
+                history_cursor=[],
+            ),
+        )
+    monkeypatch.setattr(store_module, "session_store", fake_store)
+
+    deps = AgendaDeps(
+        session_id="s",
+        agenda=Agenda(meta=Meta(), segments=[Segment(id="other", type="X", start_time="20:00", duration=5)]),
+    )
+    ctx = FakeCtx(deps=deps)
+
+    result = await apply_revert_to_turn(ctx, after_seq=2)
+
+    assert result["restored_after_seq"] == 2
+    # Agenda now matches agenda_after of turn 2.
+    assert len(deps.agenda.segments) == 1
+    assert deps.agenda.segments[0].type == "state_after_2"
+    # No turns deleted — soft revert.
+    tail, _ = await fake_store.load("s")
+    assert tail == 3
+
+
+@pytest.mark.asyncio
+async def test_revert_to_turn_after_seq_0_restores_initial_state(monkeypatch):
+    """after_seq=0 is the 'initial state' restore point — agenda_before of
+    turn 1 (what existed before any edits)."""
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+
+    fake_store = InMemorySessionStore()
+    initial = {"meta": {"start_time": "19:00"}, "segments": []}
+    await fake_store.save_turn(
+        "s",
+        user_id="u",
+        turn=TurnRecord(
+            seq=1,
+            user_message="first edit",
+            assistant_text="ok",
+            tool_trace=[{"id": "t1", "name": "add_segment", "args": {}, "status": "ok", "result": {}}],
+            agenda_before=initial,
+            agenda_after={
+                "meta": {"start_time": "19:00"},
+                "segments": [
+                    {
+                        "id": "x",
+                        "type": "X",
+                        "start_time": "19:30",
+                        "duration": 5,
+                        "role_taker": "",
+                        "buffer_before": 0,
+                    }
+                ],
+            },
+            history_cursor=[],
+        ),
+    )
+    monkeypatch.setattr(store_module, "session_store", fake_store)
+
+    deps = AgendaDeps(
+        session_id="s",
+        agenda=Agenda(meta=Meta(), segments=[Segment(id="junk", type="Junk", start_time="20:00", duration=5)]),
+    )
+    ctx = FakeCtx(deps=deps)
+    result = await apply_revert_to_turn(ctx, after_seq=0)
+
+    assert result["restored_after_seq"] == 0
+    assert len(deps.agenda.segments) == 0  # initial state has no segments
+
+
+@pytest.mark.asyncio
+async def test_revert_to_turn_unknown_seq_refuses(monkeypatch):
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore
+
+    monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
+    ctx = FakeCtx(deps=AgendaDeps(session_id="empty", agenda=Agenda(meta=Meta(), segments=[])))
+    with pytest.raises(ModelRetry, match="not found"):
+        await apply_revert_to_turn(ctx, after_seq=5)
+
+
+@pytest.mark.asyncio
+async def test_revert_to_turn_negative_seq_refuses(monkeypatch):
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore
+
+    monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
+    ctx = FakeCtx(deps=AgendaDeps(session_id="x", agenda=Agenda(meta=Meta(), segments=[])))
+    with pytest.raises(ModelRetry, match=">= 0"):
+        await apply_revert_to_turn(ctx, after_seq=-1)
+
+
+@pytest.mark.asyncio
+async def test_revert_to_turn_0_on_empty_session_refuses(monkeypatch):
+    """after_seq=0 on a never-saved session should refuse — there's no
+    turn 1's agenda_before to load."""
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore
+
+    monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
+    ctx = FakeCtx(deps=AgendaDeps(session_id="none", agenda=Agenda(meta=Meta(), segments=[])))
+    with pytest.raises(ModelRetry, match="no turns"):
+        await apply_revert_to_turn(ctx, after_seq=0)
+
+
+@pytest.mark.asyncio
+async def test_revert_last_turn_refuses_when_session_empty(monkeypatch):
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore
+
+    monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
+
+    deps = AgendaDeps(
+        session_id="never-saved",
+        agenda=Agenda(meta=Meta(), segments=[]),
+    )
+    ctx = FakeCtx(deps=deps)
+
+    with pytest.raises(ModelRetry, match="no prior turns"):
+        await apply_revert_last_turn(ctx)
+
+
+@pytest.mark.asyncio
+async def test_revert_last_turn_mutates_in_place_not_reassigns(monkeypatch):
+    """Regression guard: the agent framework holds a reference to
+    ctx.deps.agenda and reads it after the tool returns. If we reassigned
+    ctx.deps.agenda = X instead of mutating, the framework would still see
+    the old object. Verify the same Agenda instance is updated in place."""
+    from app.meeting_agent import store as store_module
+    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+
+    fake_store = InMemorySessionStore()
+    # Must be an EDIT turn (not chit-chat) or the tool refuses — the in-place
+    # invariant only matters on the success path.
+    await fake_store.save_turn(
+        "sess",
+        user_id="u",
+        turn=TurnRecord(
+            seq=1,
+            user_message="remove everything",
+            assistant_text="ok",
+            tool_trace=[{"id": "t1", "name": "remove_segment", "args": {}, "status": "ok", "result": {}}],
+            agenda_before={"meta": {}, "segments": []},
+            agenda_after={"meta": {}, "segments": []},
+            history_cursor=[],
+        ),
+    )
+    monkeypatch.setattr(store_module, "session_store", fake_store)
+
+    deps = AgendaDeps(
+        session_id="sess",
+        agenda=Agenda(
+            meta=Meta(),
+            segments=[Segment(id="s1", type="X", start_time="19:30", duration=5)],
+        ),
+    )
+    original_agenda_id = id(deps.agenda)
+    ctx = FakeCtx(deps=deps)
+
+    await apply_revert_last_turn(ctx)
+
+    # Same python object, emptied contents.
+    assert id(deps.agenda) == original_agenda_id
+    assert deps.agenda.segments == []

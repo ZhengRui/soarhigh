@@ -14,8 +14,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.agent.models import Agenda
-from app.agent.timing import _format_hhmm
+from app.meeting_agent.models import Agenda
+from app.meeting_agent.timing import _format_hhmm
 
 
 class Issue(BaseModel):

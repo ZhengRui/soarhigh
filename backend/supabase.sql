@@ -601,10 +601,12 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- agenda snapshots so a session can be resumed, reverted, or served from
 -- multiple channels (web, Telegram, Hermes).
 
--- agent_sessions: one row per chat session. session_id is a client-generated
--- string (e.g. "new:a1b2c3d4", "edit:<meeting_id>:<uuid>", "tg:<chat_id>")
--- so different channels can coexist.
-CREATE TABLE agent_sessions (
+-- meeting_agent_sessions: one row per chat session with the meeting-planning
+-- agent. session_id is a client-generated string (e.g. "new:a1b2c3d4",
+-- "edit:<meeting_id>:<uuid>", "tg:<chat_id>") so different channels can
+-- coexist. Named meeting_agent_* to leave room for future agents (e.g.
+-- post_agent_*, vote_agent_*) with their own per-turn shapes.
+CREATE TABLE meeting_agent_sessions (
     session_id   TEXT PRIMARY KEY,
     user_id      UUID REFERENCES auth.users(id),
     tail_seq     INT NOT NULL DEFAULT 0,
@@ -612,13 +614,13 @@ CREATE TABLE agent_sessions (
     updated_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
--- agent_turns: append-only log of user turns within a session. Each row
--- captures the agenda snapshot BEFORE the turn ran and AFTER, plus the
+-- meeting_agent_turns: append-only log of user turns within a session. Each
+-- row captures the agenda snapshot BEFORE the turn ran and AFTER, plus the
 -- Pydantic AI ModelMessage[] cursor so the next turn can resume with the
 -- right conversation context. Deleting rows at or after seq N is the
 -- "hard revert" path for the UI ↺ icon.
-CREATE TABLE agent_turns (
-    session_id      TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
+CREATE TABLE meeting_agent_turns (
+    session_id      TEXT NOT NULL REFERENCES meeting_agent_sessions(session_id) ON DELETE CASCADE,
     seq             INT  NOT NULL,
     user_message    TEXT NOT NULL,
     assistant_text  TEXT,
@@ -630,19 +632,20 @@ CREATE TABLE agent_turns (
     PRIMARY KEY (session_id, seq)
 );
 
-CREATE INDEX idx_agent_turns_session_created ON agent_turns(session_id, created_at);
+CREATE INDEX idx_meeting_agent_turns_session_created
+    ON meeting_agent_turns(session_id, created_at);
 
 -- Row-level security: a user can only read/write their own sessions.
-ALTER TABLE agent_sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE agent_turns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE meeting_agent_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE meeting_agent_turns    ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY agent_sessions_owner ON agent_sessions
+CREATE POLICY meeting_agent_sessions_owner ON meeting_agent_sessions
     FOR ALL USING (user_id = auth.uid());
 
-CREATE POLICY agent_turns_owner ON agent_turns
+CREATE POLICY meeting_agent_turns_owner ON meeting_agent_turns
     FOR ALL USING (
         session_id IN (
-            SELECT session_id FROM agent_sessions WHERE user_id = auth.uid()
+            SELECT session_id FROM meeting_agent_sessions WHERE user_id = auth.uid()
         )
     );
 

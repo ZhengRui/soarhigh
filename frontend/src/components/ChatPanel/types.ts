@@ -25,7 +25,13 @@ export type ChatMessage = {
     status: ToolCallStatus;
   }>;
   seq?: number;
+  // Legacy: inline error on the bubble. Kept as a fallback for messages that
+  // errored before we started routing errors to the top banner. New errors
+  // use the top-of-panel banner instead.
   error?: string;
+  // True when the user aborted the turn mid-stream via the Stop button.
+  // Displayed as a small "[已取消]" footer.
+  cancelled?: boolean;
 };
 
 export type AgentTurnEvent =
@@ -51,4 +57,8 @@ export type AgentTurnEvent =
   | {
       type: 'error';
       data: { reason: string; recoverable: boolean; message: string };
-    };
+    }
+  // Synthetic event emitted by useMeetingAgentTurn when the user aborts.
+  // Backend never sends this; it's a client-side signal so onEvent can
+  // mark the bubble + reset loading state in the same update path.
+  | { type: 'cancelled'; data: Record<string, never> };

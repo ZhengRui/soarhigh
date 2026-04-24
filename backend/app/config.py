@@ -21,8 +21,10 @@ CORS_ORIGINS = config("CORS_ORIGINS", cast=parse_cors_origins, default="*")
 
 OPENAI_API_KEY = config("OPENAI_API_KEY", cast=str)
 
-# Agent Configuration (Pydantic AI)
-AGENT_MODEL = config("AGENT_MODEL", cast=str, default="google-gla:gemini-3.1-flash-lite-preview")
+# Meeting Agent (Pydantic AI). Prefixed meeting_* for consistency with the
+# meeting_agent module / meeting_agent_sessions table — future agents
+# (blog, vote) can add their own MODEL env vars without collision.
+MEETING_AGENT_MODEL = config("MEETING_AGENT_MODEL", cast=str, default="google-gla:gemini-3.1-flash-lite-preview")
 # Accept either name; google-genai SDK itself checks both.
 GOOGLE_API_KEY = config("GOOGLE_API_KEY", cast=str, default="") or config("GEMINI_API_KEY", cast=str, default="")
 

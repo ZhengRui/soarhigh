@@ -7,7 +7,7 @@ stays consistent. Buffers are gaps BETWEEN adjacent segments — they live as
 `buffer_before` on the following segment.
 """
 
-from app.agent.models import Agenda
+from app.meeting_agent.models import Agenda
 
 
 def recompute_start_times(agenda: Agenda) -> None:

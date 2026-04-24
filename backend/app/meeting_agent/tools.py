@@ -5,8 +5,8 @@ import uuid
 
 from pydantic_ai import ModelRetry
 
-from app.agent.models import Segment
-from app.agent.timing import recompute_start_times
+from app.meeting_agent.models import Agenda, Segment
+from app.meeting_agent.timing import recompute_start_times
 
 _ALLOWED_META_FIELDS = {
     "type",
@@ -27,28 +27,28 @@ _ALLOWED_META_FIELDS = {
 _ALLOWED_MEETING_TYPES = {"Regular", "Workshop", "Custom"}
 
 
-def apply_set_role(ctx, segment_id: str, new_role_taker: str) -> dict:
+def apply_set_role(ctx, segment_id: str, role_taker: str) -> dict:
     """Unilateral: set the role taker for ONE segment."""
     seg = _find_segment(ctx.deps.agenda, segment_id)
-    seg.role_taker = new_role_taker
-    return {"segment_id": segment_id, "new_role_taker": new_role_taker}
+    seg.role_taker = role_taker
+    return {"segment_id": segment_id, "role_taker": role_taker}
 
 
-def apply_set_type(ctx, segment_id: str, new_type: str) -> dict:
+def apply_set_type(ctx, segment_id: str, type: str) -> dict:
     """Unilateral: rename ONE segment's type. Does not affect timing."""
     seg = _find_segment(ctx.deps.agenda, segment_id)
-    seg.type = new_type
-    return {"segment_id": segment_id, "new_type": new_type}
+    seg.type = type
+    return {"segment_id": segment_id, "type": type}
 
 
-def apply_set_duration(ctx, segment_id: str, new_duration_min: int) -> dict:
+def apply_set_duration(ctx, segment_id: str, duration_min: int) -> dict:
     """Unilateral: set ONE segment's duration, then cascade downstream times."""
-    if new_duration_min <= 0:
-        raise ModelRetry(f"duration must be positive; got {new_duration_min}")
+    if duration_min <= 0:
+        raise ModelRetry(f"duration must be positive; got {duration_min}")
     seg = _find_segment(ctx.deps.agenda, segment_id)
-    seg.duration = new_duration_min
+    seg.duration = duration_min
     recompute_start_times(ctx.deps.agenda)
-    return {"segment_id": segment_id, "new_duration_min": new_duration_min}
+    return {"segment_id": segment_id, "duration_min": duration_min}
 
 
 def apply_set_buffer(ctx, segment_id: str, buffer_min: int) -> dict:
@@ -321,6 +321,178 @@ def apply_shift_segment_time(ctx, segment_id: str, delta_min: int) -> dict:
         "delta_min": delta_min,
         "new_buffer_before": seg.buffer_before,
         "direction": direction,
+    }
+
+
+_REVERT_TOOL_NAMES = {"revert_last_turn", "revert_to_turn"}
+_EDIT_TOOL_NAMES = {
+    "set_role",
+    "set_type",
+    "set_duration",
+    "set_buffer",
+    "set_meta",
+    "add_segment",
+    "remove_segment",
+    "move_segment",
+    "swap_roles",
+    "swap_time",
+    "shift_segment_time",
+}
+
+
+def _classify_turn(tool_names: set[str]) -> str:
+    """revert / edit / chit-chat. validate_agenda alone counts as chit-chat
+    (no state mutation)."""
+    if tool_names & _REVERT_TOOL_NAMES:
+        return "revert"
+    if tool_names & _EDIT_TOOL_NAMES:
+        return "edit"
+    return "chit-chat"
+
+
+async def _walk_back_to_meaningful_turn(store, session_id: str, from_seq: int):
+    """Walk backward from `from_seq`, skipping chit-chat turns. Return
+    (seq, turn, kind, tool_names) for the first edit-or-revert turn found,
+    or None if the session has no meaningful turns."""
+    for seq in range(from_seq, 0, -1):
+        t = await store.load_turn(session_id, seq)
+        if t is None:
+            continue
+        names = {nm for nm in (x.get("name", "") for x in (t.tool_trace or [])) if nm}
+        kind = _classify_turn(names)
+        if kind != "chit-chat":
+            return (seq, t, kind, names)
+    return None
+
+
+async def _load_recent_edit_turns_for_refusal(store, session_id: str, before_seq: int, limit: int = 5) -> list[dict]:
+    """Collect up to `limit` edit turns (skipping revert and chit-chat) to
+    surface in the consecutive-revert refusal."""
+    out: list[dict] = []
+    seq = before_seq - 1
+    while seq >= 1 and len(out) < limit:
+        t = await store.load_turn(session_id, seq)
+        if t is not None:
+            names = {nm for nm in (x.get("name", "") for x in (t.tool_trace or [])) if nm}
+            if _classify_turn(names) == "edit":
+                out.append({"seq": seq, "user_message": t.user_message, "tool_names": sorted(names)})
+        seq -= 1
+    return out
+
+
+async def apply_revert_last_turn(ctx) -> dict:
+    """Soft revert: undo the most recent edit turn. Walks backward past
+    chit-chat turns (describe/question turns with no edit tools), so 'undo'
+    always targets an actual state change. Chat history preserved — this
+    call is itself a new turn.
+
+    The restored state equals `agenda_after` of the turn *before* the undone
+    edit (i.e., the state the user saw right before they typed the message
+    that triggered the undone edit). In restore-point terms:
+    `restored_after_seq = undone_seq - 1`; 0 means the initial state
+    (no turns applied).
+
+    Refuses if:
+    - No meaningful turns yet (only chit-chat, or empty session)
+    - The most recent meaningful turn was itself a revert (consecutive-revert
+      guard; refusal surfaces restore points so agent can ask user to pick
+      an explicit target via revert_to_turn)
+
+    Return contract: `undone_user_message` is the INSTRUCTION for the
+    now-undone turn, NOT a description of the current state. The current
+    state is BEFORE that instruction ran."""
+    from app.meeting_agent import store as _store_module
+
+    store = _store_module.session_store
+    session_id = ctx.deps.session_id
+    tail_seq, _ = await store.load(session_id)
+    if tail_seq == 0:
+        raise ModelRetry("no prior turns in this session; nothing to revert")
+
+    meaningful = await _walk_back_to_meaningful_turn(store, session_id, tail_seq)
+    if meaningful is None:
+        raise ModelRetry("no edits made in this session yet; nothing to revert")
+
+    target_seq, target_turn, kind, names = meaningful
+
+    if kind == "revert":
+        recent = await _load_recent_edit_turns_for_refusal(store, session_id, before_seq=target_seq)
+        # Present each edit turn as a named restore point. The user picks a
+        # seq; the agent passes it VERBATIM to revert_to_turn(after_seq=N).
+        # Include seq 0 (initial state) as an explicit option.
+        lines = ["  - seq 0: initial state (no edits yet; blank agenda)"]
+        for r in recent:
+            lines.append(
+                f"  - seq {r['seq']}: state AFTER {r['user_message']!r} was applied "
+                f"(tools: {', '.join(r['tool_names'])})"
+            )
+        restore_points = "\n".join(lines)
+        raise ModelRetry(
+            "Consecutive revert blocked: the most recent meaningful turn was "
+            "already a revert; calling revert_last_turn again would redo it "
+            "(ping-pong). Ask the user which restore point they want, then "
+            "call revert_to_turn(after_seq=N) with the seq number they "
+            "picked — pass it VERBATIM, do NOT subtract or transform. The web "
+            "UI also offers a direct ↺ icon on any earlier chat bubble.\n\n"
+            "Available restore points (each restores the agenda to that "
+            "state):\n"
+            f"{restore_points}"
+        )
+
+    # Normal revert: apply agenda_before of the target edit turn (same as
+    # agenda_after of target_seq - 1, i.e. restore_point = target_seq - 1).
+    reverted = Agenda.model_validate(target_turn.agenda_before)
+    ctx.deps.agenda.meta = reverted.meta
+    ctx.deps.agenda.segments = reverted.segments
+
+    return {
+        "undone_seq": target_seq,
+        "undone_user_message": target_turn.user_message,
+        "undone_tool_names": sorted(n for n in names if n in _EDIT_TOOL_NAMES),
+        "restored_after_seq": target_seq - 1,
+        "n_segments": len(reverted.segments),
+    }
+
+
+async def apply_revert_to_turn(ctx, after_seq: int) -> dict:
+    """Restore the agenda to a specific restore point. `after_seq` semantics:
+
+      after_seq = 0 → initial state (before any turns)
+      after_seq = N (N>=1) → state AFTER turn N completed
+
+    This is the ONLY direction semantic we expose to the model. When user
+    says 'revert to seq N', pass N directly as after_seq. Do not subtract
+    or transform.
+
+    Chat history is preserved (this call is itself a new turn)."""
+    if after_seq < 0:
+        raise ModelRetry(f"after_seq must be >= 0; got {after_seq}")
+
+    from app.meeting_agent import store as _store_module
+
+    store = _store_module.session_store
+    session_id = ctx.deps.session_id
+
+    if after_seq == 0:
+        # Initial state = agenda_before of turn 1. If turn 1 doesn't exist,
+        # there's nothing to revert — refuse.
+        first = await store.load_turn(session_id, 1)
+        if first is None:
+            raise ModelRetry("session has no turns; already at initial state")
+        state = first.agenda_before
+    else:
+        target = await store.load_turn(session_id, after_seq)
+        if target is None:
+            raise ModelRetry(f"turn {after_seq} not found in this session; cannot revert to it")
+        state = target.agenda_after
+
+    reverted = Agenda.model_validate(state)
+    ctx.deps.agenda.meta = reverted.meta
+    ctx.deps.agenda.segments = reverted.segments
+
+    return {
+        "restored_after_seq": after_seq,
+        "n_segments": len(reverted.segments),
     }
 
 

@@ -3,9 +3,9 @@ import os
 
 import pytest
 
-from app.agent.agent import USAGE_LIMITS, agent
-from app.agent.models import Agenda, AgendaDeps, Meta, Segment
-from app.agent.prompts import SNAPSHOT_TEMPLATE
+from app.meeting_agent.agent import USAGE_LIMITS, agent
+from app.meeting_agent.models import Agenda, AgendaDeps, Meta, Segment
+from app.meeting_agent.prompts import SNAPSHOT_TEMPLATE
 
 
 @pytest.mark.live
@@ -21,7 +21,7 @@ def test_agent_fires_set_role_for_simple_edit():
     )
     deps = AgendaDeps(agenda=agenda, session_id="smoke")
 
-    # Mirror what the real /agent/turn route does: prepend the snapshot so the
+    # Mirror what the real /meeting-agent/turn route does: prepend the snapshot so the
     # model can reference segment ids verbatim instead of hallucinating them.
     prompt = SNAPSHOT_TEMPLATE.format(
         snapshot_json=json.dumps(agenda.model_dump(), ensure_ascii=False, indent=2),

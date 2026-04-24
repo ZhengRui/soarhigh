@@ -6,11 +6,15 @@ import {
   ArrowUp,
   Check,
   Loader2,
+  RotateCcw,
   Square,
   Wrench,
 } from 'lucide-react';
 import { ChatMarkdown } from './ChatMarkdown';
-import { useAgentTurn } from './useAgentTurn';
+import { ChatError, ErrorBanner } from './ErrorBanner';
+import { ThinkingBlock } from './ThinkingBlock';
+import { useMeetingAgentRevert } from './useMeetingAgentRevert';
+import { useMeetingAgentTurn } from './useMeetingAgentTurn';
 import { AgendaSnapshot, AgentTurnEvent, ChatMessage } from './types';
 
 function formatToolArgs(args: Record<string, unknown>): string {
@@ -46,6 +50,10 @@ export function ChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<ChatError | null>(null);
+  // Holds the last user message actually sent. Needed so the Retry button
+  // can re-submit without the user retyping. Reset on any new send.
+  const lastSentRef = useRef<string>('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -79,6 +87,19 @@ export function ChatPanel({
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (!last || last.role !== 'assistant') return prev;
+
+        // If the turn errored before producing ANY output (no text, no
+        // thinking, no tool calls), drop the empty assistant bubble. The
+        // error banner at the top of the panel already communicates the
+        // failure; the empty "…" placeholder is just noise.
+        if (ev.type === 'error') {
+          const isEmpty =
+            !last.content &&
+            !last.thinking &&
+            !(last.toolCalls && last.toolCalls.length);
+          return isEmpty ? prev.slice(0, -1) : prev;
+        }
+
         const next = [...prev];
         const msg = { ...last };
         if (ev.type === 'thinking')
@@ -106,46 +127,120 @@ export function ChatPanel({
         }
         if (ev.type === 'done') {
           msg.seq = ev.data.seq;
+          // Also tag the paired USER message (the one right before this
+          // assistant bubble) with the same seq. That's what the ↺ icon
+          // targets: reverting via a user bubble rewinds to BEFORE that
+          // turn ran, which matches the user's mental model.
+          const prev = next[next.length - 2];
+          if (prev && prev.role === 'user') {
+            next[next.length - 2] = { ...prev, seq: ev.data.seq };
+          }
         }
-        if (ev.type === 'error') {
-          msg.error = ev.data.message;
+        if (ev.type === 'cancelled') {
+          msg.cancelled = true;
         }
         next[next.length - 1] = msg;
         return next;
       });
-      if (ev.type === 'done' || ev.type === 'error') setLoading(false);
+
+      // Errors surface as a top-of-panel banner, not inline on the bubble —
+      // easier to spot, and the banner carries the Retry affordance.
+      if (ev.type === 'error') {
+        setError({
+          reason: ev.data.reason,
+          recoverable: ev.data.recoverable,
+          message: ev.data.message,
+        });
+      }
+      if (ev.type === 'done' || ev.type === 'error' || ev.type === 'cancelled')
+        setLoading(false);
     },
     [onAgendaAfter]
   );
 
-  const { send, stop } = useAgentTurn({ onEvent });
+  const { send, stop } = useMeetingAgentTurn({ onEvent });
+  const revert = useMeetingAgentRevert();
 
-  const submit = async () => {
+  const handleRevert = useCallback(
+    async (targetSeq: number, userContent: string) => {
+      if (loading) return;
+      try {
+        const { agenda } = await revert(sessionKey, targetSeq);
+        // Drop any messages whose seq is >= targetSeq. Messages without a
+        // seq (currently streaming, or the user's just-typed message that
+        // hasn't completed yet) are also dropped if they trail the cut line.
+        setMessages((prev) => {
+          const cutIdx = prev.findIndex(
+            (m) => m.seq !== undefined && m.seq >= targetSeq
+          );
+          return cutIdx === -1 ? prev : prev.slice(0, cutIdx);
+        });
+        onAgendaAfter(agenda);
+        // Repopulate the textarea with the reverted message so the user can
+        // tweak and resend without retyping — same UX as chat-agenda.
+        setInput(userContent);
+        textareaRef.current?.focus();
+      } catch (e) {
+        // Non-fatal: surface to console so the UI doesn't freeze. The
+        // backend may return 404 if the turn was already deleted (e.g.
+        // duplicate click while the first revert is in flight).
+        console.error('revert failed', e);
+      }
+    },
+    [loading, revert, sessionKey, onAgendaAfter]
+  );
+
+  const sendMessage = useCallback(
+    async (message: string) => {
+      const userMsg: ChatMessage = {
+        id: uuid(),
+        role: 'user',
+        content: message,
+      };
+      const asstMsg: ChatMessage = {
+        id: uuid(),
+        role: 'assistant',
+        content: '',
+        toolCalls: [],
+      };
+      setMessages((m) => [...m, userMsg, asstMsg]);
+      lastSentRef.current = message;
+      setError(null); // clear any prior banner — we're making a new attempt
+      setLoading(true);
+      try {
+        await send({
+          session_id: sessionKey,
+          user_message: message,
+          agenda_snapshot: agendaSnapshot,
+        });
+      } catch {
+        setLoading(false);
+      }
+    },
+    [send, sessionKey, agendaSnapshot]
+  );
+
+  const submit = () => {
     if (!input.trim() || loading) return;
-    const userMsg: ChatMessage = { id: uuid(), role: 'user', content: input };
-    const asstMsg: ChatMessage = {
-      id: uuid(),
-      role: 'assistant',
-      content: '',
-      toolCalls: [],
-    };
-    setMessages((m) => [...m, userMsg, asstMsg]);
     const message = input;
     setInput('');
-    setLoading(true);
-    try {
-      await send({
-        session_id: sessionKey,
-        user_message: message,
-        agenda_snapshot: agendaSnapshot,
-      });
-    } catch {
-      setLoading(false);
-    }
+    void sendMessage(message);
   };
+
+  const handleRetry = useCallback(() => {
+    if (!lastSentRef.current || loading) return;
+    void sendMessage(lastSentRef.current);
+  }, [loading, sendMessage]);
 
   return (
     <div className='flex flex-col h-full min-h-0 bg-white'>
+      {error && (
+        <ErrorBanner
+          error={error}
+          onRetry={error.recoverable ? handleRetry : undefined}
+          onDismiss={() => setError(null)}
+        />
+      )}
       <div
         ref={scrollRef}
         className='flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3'
@@ -162,8 +257,22 @@ export function ChatPanel({
         {messages.map((m) => (
           <div
             key={m.id}
-            className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            className={`flex items-center gap-1.5 group ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
+            {m.role === 'user' && m.seq !== undefined && (
+              <button
+                type='button'
+                onClick={() => handleRevert(m.seq!, m.content)}
+                disabled={loading}
+                title='Revert to the state before this turn'
+                className='shrink-0 h-6 w-6 flex items-center justify-center rounded-full
+                           text-gray-400 hover:text-gray-700 hover:bg-gray-100
+                           disabled:opacity-30 disabled:cursor-not-allowed
+                           opacity-0 group-hover:opacity-100 transition-opacity'
+              >
+                <RotateCcw className='w-3.5 h-3.5' />
+              </button>
+            )}
             <div
               className={`max-w-[85%] px-3 py-2 rounded-lg text-sm text-left ${
                 m.role === 'user'
@@ -171,6 +280,22 @@ export function ChatPanel({
                   : 'bg-gray-100 text-gray-900'
               }`}
             >
+              {m.role === 'assistant' && m.thinking && (
+                <ThinkingBlock
+                  content={m.thinking}
+                  // If content hasn't started AND no tools have completed,
+                  // thinking is likely still streaming (Gemini emits thinking
+                  // before either). Rough heuristic — a perfect signal would
+                  // require a thinking_end SSE event.
+                  streaming={
+                    !m.content &&
+                    !(
+                      m.toolCalls &&
+                      m.toolCalls.some((t) => t.status !== 'pending')
+                    )
+                  }
+                />
+              )}
               {m.role === 'assistant' &&
                 m.toolCalls &&
                 m.toolCalls.length > 0 && (
@@ -221,6 +346,11 @@ export function ChatPanel({
                 ) : null
               ) : (
                 <div className='whitespace-pre-wrap'>{m.content}</div>
+              )}
+              {m.cancelled && (
+                <div className='text-gray-400 italic text-[11px] mt-1'>
+                  [Request cancelled]
+                </div>
               )}
               {m.error && (
                 <div className='text-red-600 text-xs mt-1'>{m.error}</div>
