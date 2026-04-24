@@ -7,9 +7,10 @@ import { useAgentTurn } from './useAgentTurn';
 import { AgendaSnapshot, AgentTurnEvent, ChatMessage } from './types';
 
 function formatToolArgs(args: Record<string, unknown>): string {
-  // key=value so the display is unambiguous even when the model emits the
-  // keys in different orders across calls (JSON key order is model-dependent).
+  // key=value AND alphabetical key order so the display stays consistent
+  // across calls regardless of which order the model emitted the keys in.
   return Object.entries(args)
+    .sort(([a], [b]) => a.localeCompare(b))
     .map(([k, v]) => {
       let val: string;
       if (typeof v === 'string') val = JSON.stringify(v);
