@@ -179,6 +179,24 @@ def test_set_meta_type_updates_meeting_type():
     assert deps.agenda.meta.type == "Workshop"
 
 
+def test_set_meta_type_rejects_invalid_value():
+    deps = make_deps()
+    original_type = deps.agenda.meta.type
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="Meeting type must be one of"):
+        apply_set_meta(ctx, field="type", value="Special Event")
+    # Assert nothing was mutated on refusal.
+    assert deps.agenda.meta.type == original_type
+
+
+def test_set_meta_type_accepts_regular_workshop_custom():
+    for t in ("Regular", "Workshop", "Custom"):
+        deps = make_deps()
+        ctx = FakeCtx(deps=deps)
+        apply_set_meta(ctx, field="type", value=t)
+        assert deps.agenda.meta.type == t
+
+
 def test_set_meta_start_time_cascades_segment_times():
     deps = make_deps_3()
     ctx = FakeCtx(deps=deps)

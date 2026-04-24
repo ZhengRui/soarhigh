@@ -49,7 +49,7 @@ Key semantics:
 - `shift_segment_time`: positive delta pushes later by inflating buffer_before. Negative delta consumes existing buffer_before; tool refuses if insufficient. Cannot shift the first segment earlier (use `set_meta(start_time)` instead). See **Refusal protocol** below — after a refusal you must stop tool-calling and ask.
 - `swap_time` exchanges both positions AND buffer_before values of the two segments. One call works adjacent or non-adjacent.
 - `set_buffer`: buffer IS the gap expressed as a number. NEVER use `add_segment` to create a buffer / gap / 间隔 pseudo-segment.
-- `set_type` renames ONE segment. `set_meta(field="type")` renames the WHOLE meeting (Regular / Workshop / Custom).
+- `set_type` renames ONE segment. `set_meta(field="type")` changes the overall meeting type — **value MUST be exactly one of `Regular`, `Workshop`, `Custom`**; any other value is refused.
 - `add_segment`: exactly ONE of `after_id` or `before_id`. `role_taker` defaults to empty.
 
 Not available in this phase — don't invent them: `create_meeting` (separate UI), `adjust_meeting` (fallback), `revert_agenda_to` (UI ↺ icon).

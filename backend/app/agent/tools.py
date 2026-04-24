@@ -19,6 +19,13 @@ _ALLOWED_META_FIELDS = {
     "introduction",
 }
 
+# The frontend's <select> for Meeting Type only renders these three options.
+# Any other value sets the form state but the dropdown silently falls back to
+# Regular, giving a misleading success. Also the canonical `meetings.type`
+# CHECK constraint rejects anything outside its own allow-list, so a
+# mis-typed value here would fail at Save time anyway.
+_ALLOWED_MEETING_TYPES = {"Regular", "Workshop", "Custom"}
+
 
 def apply_set_role(ctx, segment_id: str, new_role_taker: str) -> dict:
     """Unilateral: set the role taker for ONE segment."""
@@ -58,7 +65,8 @@ def apply_set_meta(ctx, field: str, value: str) -> dict:
     """Set one meeting-level meta field. Cascades times if start_time changes."""
     if field not in _ALLOWED_META_FIELDS:
         raise ModelRetry(
-            f"Unknown meta field: {field}. Allowed: theme, location, date, " f"start_time, no, manager, introduction"
+            f"Unknown meta field: {field}. Allowed: type, theme, location, date, "
+            f"start_time, no, manager, introduction"
         )
 
     meta = ctx.deps.agenda.meta
@@ -71,6 +79,12 @@ def apply_set_meta(ctx, field: str, value: str) -> dict:
                 meta.no = int(value)
             except (TypeError, ValueError):
                 raise ModelRetry(f"Meeting number must be an integer; got '{value}'") from None
+    elif field == "type":
+        if value not in _ALLOWED_MEETING_TYPES:
+            raise ModelRetry(
+                f"Meeting type must be one of: {', '.join(sorted(_ALLOWED_MEETING_TYPES))}. " f"Got: '{value}'."
+            )
+        meta.type = value
     else:
         setattr(meta, field, value if value else None)
 
