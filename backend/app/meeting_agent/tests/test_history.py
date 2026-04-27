@@ -111,6 +111,8 @@ def _wrap_with_snapshot(user_text: str, snapshot_segments: int = 2) -> str:
         next_seq=1,
         tail_seq=0,
         user_message=user_text,
+        attachment_block="",
+        language_hint="",
     )
 
 

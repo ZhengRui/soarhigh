@@ -125,15 +125,24 @@ def _try_parse_hhmm(hhmm: str | None) -> int | None:
 
 
 def _check_duration_overflow(agenda: Agenda) -> list[Issue]:
-    """Agenda computed end must not exceed meta.end_time."""
+    """Agenda's last segment must not end past meta.end_time.
+
+    Anchored on the LAST segment's actual `start_time + duration`, NOT on
+    `meta.start_time + sum(durations)`. Reason: club convention puts a
+    "Guests Registration" / "Guests Self Introduction" warmup segment ~15 min
+    BEFORE meta.start_time (e.g. seg[0] at 19:15 while meta.start_time = 19:30).
+    Using meta.start_time as the anchor double-counts that pre-meeting window
+    and produces a false-positive overflow even when the schedule fits."""
     meta = agenda.meta
-    start_min = _try_parse_hhmm(meta.start_time)
     end_min = _try_parse_hhmm(meta.end_time)
-    if start_min is None or end_min is None:
+    if end_min is None or not agenda.segments:
         return []
 
-    agenda_min = _agenda_total_minutes(agenda)
-    computed_end = start_min + agenda_min
+    last_seg = agenda.segments[-1]
+    last_start_min = _try_parse_hhmm(last_seg.start_time)
+    if last_start_min is None:
+        return []
+    computed_end = last_start_min + max(last_seg.duration or 0, 0)
 
     if computed_end > end_min:
         overflow_min = computed_end - end_min
@@ -143,7 +152,7 @@ def _check_duration_overflow(agenda: Agenda) -> list[Issue]:
                 severity="soft",
                 message=(
                     f"Agenda runs {overflow_min} min past the meeting "
-                    f"end_time ({meta.end_time}). Total: "
+                    f"end_time ({meta.end_time}). Last segment ends at "
                     f"{_format_hhmm(computed_end)}."
                 ),
                 segment_ids=[],

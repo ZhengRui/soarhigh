@@ -303,6 +303,26 @@ def get_meetings(
     }
 
 
+def get_meeting_id_by_no(no: int, user_id: Optional[str] = None) -> Optional[str]:
+    """Resolve a meeting's display number to its row UUID.
+
+    Cheap single-row query — one `.eq("no", no)` followed by `.limit(1)`.
+    Used by the agent's clone / preview paths to avoid scanning the bulk
+    `get_meetings` page (which builds a huge `.in_(meeting_ids)` URL when
+    re-fetching segments and overflows PostgREST / cloudflare URL-length
+    limits under concurrent calls).
+
+    Returns None if no meeting with that `no` is visible to this caller
+    (published-only when `user_id is None`)."""
+    query = supabase.table("meetings").select("id").eq("no", no)
+    if user_id is None:
+        query = query.eq("status", "published")
+    result = query.limit(1).execute()
+    if not result.data:
+        return None
+    return result.data[0]["id"]
+
+
 def get_meeting_by_id(meeting_id: str, user_id: Optional[str] = None) -> Optional[Dict]:
     """
     Get a specific meeting by ID.

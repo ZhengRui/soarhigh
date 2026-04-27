@@ -215,6 +215,86 @@ def validate_agenda(ctx: RunContext[AgendaDeps]) -> list[dict]:
 
 
 @agent.tool
+async def create_from_text(ctx: RunContext[AgendaDeps], raw_text: str) -> dict:
+    """WHOLESALE REPLACE the entire agenda by parsing a pasted WeChat-style
+    registration message. Call only when the user clearly wants to create a
+    new agenda from the pasted text. Pass the pasted text verbatim."""
+    return await _tools.apply_create_from_text(ctx, raw_text=raw_text)
+
+
+@agent.tool
+async def lookup_meeting(ctx: RunContext[AgendaDeps], query: str) -> list[dict]:
+    """READ-ONLY. Find historical meetings by number ('45' / '#45') or
+    descriptor ('上次 workshop' / '最近一次 regular'). Returns lightweight cards
+    only (no, type, date, theme, manager_name, segment_count) — for the full
+    segment list of a single meeting use `preview_meeting(no)`. Use lookup
+    results to ask for plain-text confirmation before clone_from_meeting."""
+    return await _tools.apply_lookup_meeting(ctx, query=query)
+
+
+@agent.tool
+async def show_current_agenda(ctx: RunContext[AgendaDeps]) -> dict:
+    """READ-ONLY. Show the user the CURRENT draft agenda in the same folded
+    meta + agenda table format used after creation / editing — with
+    deterministic (member)/(guest) badges computed by the route. Use when
+    the user asks to see / preview / inspect the current draft (e.g. "show
+    me the agenda", "把当前议程列一下", "what's the current schedule"). Reply
+    with ONE short sentence; the route appends the tables. Does NOT modify
+    anything."""
+    return await _tools.apply_show_current_agenda(ctx)
+
+
+@agent.tool
+async def preview_meeting(ctx: RunContext[AgendaDeps], no: int) -> dict:
+    """READ-ONLY. Get the full structure of a single historical meeting:
+    meta + ordered segment list (type / start_time / duration / role_taker).
+    Does NOT modify the current agenda. Use when the user wants to see what
+    a historical meeting looks like before deciding to clone it (e.g. "show me
+    #425 agenda" / "把那两次会议的议程列一下"). The route appends folded meta +
+    agenda tables for the preview automatically — do NOT render them yourself
+    in your reply text; just acknowledge with one short sentence."""
+    return await _tools.apply_preview_meeting(ctx, no=no)
+
+
+@agent.tool
+async def clone_from_meeting(ctx: RunContext[AgendaDeps], no: int) -> dict:
+    """WHOLESALE REPLACE the current agenda by cloning meeting #no's structure.
+    Cleared on clone: no, theme, manager, date, introduction, role_takers.
+    The tool refuses unless recent lookup_meeting surfaced this no AND the
+    current user message is an explicit confirmation."""
+    return await _tools.apply_clone_from_meeting(ctx, no=no)
+
+
+@agent.tool
+async def create_from_image(ctx: RunContext[AgendaDeps]) -> dict:
+    """WHOLESALE REPLACE the entire agenda by parsing an attached agenda image.
+    Call only when the prompt includes an [Attachment] block and the user asks
+    to create from it. Image bytes are read from deps."""
+    return await _tools.apply_create_from_image(ctx)
+
+
+@agent.tool
+async def create_from_template(ctx: RunContext[AgendaDeps], template: str) -> dict:
+    """WHOLESALE REPLACE the current agenda with a stock template — deterministic,
+    no LLM call. Use when the user asks to create a meeting from scratch with
+    NO source material (no registration text, no image, no historical meeting
+    number) — i.e. they explicitly want a blank standard template.
+
+    Supported templates:
+      - "regular_2ps" — Regular meeting, 2 prepared speeches, 22 segments,
+        warmup at 19:15, official start 19:30. Aliases: "regular", "regular 2 ps".
+      - "custom" — blank single-segment Custom meeting; user builds up via
+        subsequent edits. Aliases: "custom_blank", "blank".
+
+    Regular/Workshop templates populate structure + a few default role takers
+    (warmup="All", Opening / Awards / Closing default to current president
+    "Amy Fang"). Custom is intentionally bare — no warmup, no defaults. The
+    user fills theme / manager / date / location and remaining roles via
+    subsequent chat edits in either case."""
+    return await _tools.apply_create_from_template(ctx, template=template)
+
+
+@agent.tool
 async def revert_last_turn(ctx: RunContext[AgendaDeps]) -> dict:
     """SOFT REVERT: undo the most recent edit turn. Walks past chit-chat
     turns silently. Use when the user says '撤销' / 'revert' / 'undo last

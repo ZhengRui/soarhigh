@@ -1,3 +1,7 @@
+from app.meeting_agent.prompts import CLUB_MEMBERS as _CLUB_MEMBERS
+
+_CLUB_MEMBERS_BULLETS = "\n".join(f"- {name}" for name in _CLUB_MEMBERS)
+
 parse_meeting_agenda_image_system_prompt = """Read and parse an image of a Toastmasters meeting agenda. \
 Extract information for each session/segment of the meeting along with relevant details and provide the \
 output in a structured format.
@@ -52,7 +56,8 @@ as this segment's title, and ignore the pathway.
 - If any details are missing or unreadable, leave the field as `null` or an empty string.
 """
 
-plan_meeting_from_text_developer_prompt = """
+plan_meeting_from_text_developer_prompt = (
+    """
 I am trying to create an agenda for an around 2 hours toastmasters meeting. A toastmasters meeting is usually composed \
 of different segments, and most segment has a role and requires a person to take the role. I will list out the common \
 segments and you will help me generate an meeting agenda.
@@ -63,7 +68,10 @@ segments and you will help me generate an meeting agenda.
 prepared speech segment.
 
 ## Segments (ordered by time)
-- Guests Registration: required, at the first 15 mins of the meeting.
+- Members and Guests Registration, Warm Up: REQUIRED for Regular and Workshop meetings as the FIRST segment. \
+Always 15 minutes starting at 19:15 (the official meeting begins at 19:30; this is a warmup window for everyone \
+to arrive and check in). Use the EXACT type label "Members and Guests Registration, Warm Up" and role_taker "All". \
+Include this segment even if the source text does not explicitly mention it.
 - SAA (or Meeting Rules Introduction): required, usually 2 mins, formally announce the begin of the meeting.
 - Opening Remarks: required, usually 2 mins, brief introduction of toastmasters and the club.
 - TOM (or Toastmaster of Meeting Introduction): required, usually 2 mins, brief introduction of meeting agenda
@@ -92,23 +100,9 @@ and deliver a 2 mins impromptu response
 - Closing Remarks: required 1 min
 
 ## Club members
-- Rui Zheng
-- Joyce Feng
-- Leta Li
-- Frank Zeng
-- Max Long
-- Julia Cao
-- Jessica Peng
-- Amy Fang
-- Jenny Li
-- Alice Song
-- Jean Li
-- Helen Chen
-- John Lin
-- Catherine Yang
-- Liz Huang
-- Shelly Qu
-- Vicky Yang
+"""
+    + _CLUB_MEMBERS_BULLETS
+    + """
 
 ## Example
 
@@ -172,7 +166,7 @@ help treat nearly all diseases. How can we and our parents age peacefully and gr
 us at our meeting to discuss this vital topic!\n\n【The true costs of ageing】 https://www.bilibili.com/video/BV1iLpaeaE4k",
   "segments": [
     {
-      "type": "Guests Registration",
+      "type": "Members and Guests Registration, Warm Up",
       "start_time": "19:15",
       "duration": "15",
       "role_taker": "All"
@@ -368,7 +362,7 @@ make me feel like I'm being bossed around. Join us this Wednesday to share your 
 communication gaps between generations.",
   "segments": [
     {
-      "type": "Guests Registration",
+      "type": "Members and Guests Registration, Warm Up",
       "start_time": "19:15",
       "duration": "15",
       "role_taker": "All"
@@ -503,6 +497,7 @@ communication gaps between generations.",
 }
 ```
 """
+)
 
 plan_meeting_from_text_user_prompt = """
 ## Question
@@ -516,15 +511,30 @@ Given the following input, generate the structured agenda for me
 1. If the name match the first or the full name of a club member, then it is from our club. e.g. "Rui" refers to the \
 club member "Rui Zheng", "Ray" and "Rui Zhang" both refer to a guest. In your output, please use full name if it \
 matches to a member.
-2. Between segments there can be a 1 min buffer, e.g. previous segment starts at 20:10 and duration is 2 min, the \
-next segment can start at 20:12 or 20:13. Use this buffering mechanism to adjust time to fill in the whole 2 hours \
-time window.
+2. Between segments use NO buffer time. Every segment starts the moment the previous one ends \
+(e.g. previous starts at 20:10, duration 2 min → next starts at 20:12 exactly, NOT 20:13). The user will add \
+buffer/gap time manually after the draft is created — do not pre-emptively insert any. IMPORTANT: a buffer would \
+be expressed ONLY by pushing the NEXT real segment's start_time later. NEVER output a segment whose type is \
+"buffer" / "Buffer" / "间隔" / "gap" — buffers are not segments, they are time gaps between segments.
 3. Above segments are ordered by time, you can add or remove some segments according to how many people registered but \
 DO NOT change their orders.
-4. Role taker for Opening Remarks, Awards, and Closing Remarks are always the president of the club Libra Lee.
+4. Role taker for Opening Remarks, Awards, and Closing Remarks defaults to the current club president Amy Fang. If \
+the registration text explicitly names someone for the role, use that name instead of the default. Note: "Opening \
+Remarks" is sometimes labelled "Club Intro" in the registration text — treat them as the same segment.
 5. Role taker for Voting Section is always the TOM (Toastmaster of Meeting Introduction).
 6. Photographer is not required, so don't add a segment for photographer.
 7. Only start Prepared Speech Evaluation after all Prepared Speeches are done.
+8. For Regular and Workshop meetings the FIRST segment in the output MUST be the warmup window — \
+type EXACTLY `"Members and Guests Registration, Warm Up"`, `start_time` `"19:15"`, `duration` `15`, \
+`role_taker` `"All"`. Include it even when the source text does not mention registration. Do NOT replace \
+it with `"Guests Registration"`, `"Guests Self Introduction"`, or any other label. Custom meetings have no \
+such convention — skip it for Custom.
+9. Meeting number (`no`): registration text may encode it in many forms — `SOARHIGH 387th meeting`, `~ 451st`, \
+`#451`, `第 451 次`, `Allpeople Gather 451`, `meeting 451`, etc. Treat any ordinal or bare integer that follows the \
+club / event name as the meeting number and output it as an integer. Only output `null` for `no` if the text \
+genuinely contains no number anywhere.
+10. Other meeting-level fields: do not invent theme, manager, date, time, or location. If the source text does not \
+provide one, output an empty string so the caller can ask the user to fill it in.
 
 
 #### Output

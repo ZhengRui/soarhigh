@@ -1,13 +1,19 @@
 import re
 from dataclasses import dataclass
+from unittest.mock import patch
 
 import pytest
 from pydantic_ai import ModelRetry
 
 from app.meeting_agent.models import Agenda, AgendaDeps, Meta, Segment
+from app.meeting_agent.store import InMemorySessionStore, TurnRecord
 from app.meeting_agent.timing import recompute_start_times
 from app.meeting_agent.tools import (
     apply_add_segment,
+    apply_clone_from_meeting,
+    apply_create_from_image,
+    apply_create_from_text,
+    apply_lookup_meeting,
     apply_move_segment,
     apply_remove_segment,
     apply_revert_last_turn,
@@ -66,6 +72,756 @@ def make_deps_3():
         ],
     )
     return AgendaDeps(session_id="t", agenda=agenda)
+
+
+def _fake_meeting_with_segments(segment_count: int = 3):
+    from app.models.meeting import Attendee, Meeting
+    from app.models.meeting import Segment as MeetingSegment
+
+    segments = []
+    for i in range(segment_count):
+        start_min = 30 + i * 3
+        segments.append(
+            MeetingSegment(
+                id=f"legacy-{i}",
+                type=["SAA", "TOM", "Closing Remarks"][i] if i < 3 else "Custom",
+                start_time=f"19:{start_min:02d}",
+                end_time=f"19:{start_min + 2:02d}",
+                duration="2",
+                role_taker=Attendee(
+                    id=None,
+                    name=["Joyce Feng", "Rui Zheng", "Amy Fang"][i] if i < 3 else "",
+                    member_id="",
+                ),
+                title="",
+                content="",
+                related_segment_ids="",
+            )
+        )
+    return Meeting(
+        id=None,
+        no=391,
+        type="Regular",
+        theme="MockTheme",
+        manager=Attendee(id=None, name="Rui Zheng", member_id=""),
+        date="2026-04-30",
+        start_time="19:30",
+        end_time="21:30",
+        location="L",
+        introduction="",
+        status="draft",
+        awards=[],
+        segments=segments,
+    )
+
+
+def _fake_db_meetings():
+    return [
+        {
+            "id": "u1",
+            "no": 389,
+            "type": "Regular",
+            "theme": "T3",
+            "date": "2026-04-15",
+            "manager": {"name": "Joyce Feng"},
+            "segments": [{}] * 18,
+        },
+        {
+            "id": "u2",
+            "no": 388,
+            "type": "Workshop",
+            "theme": "T2",
+            "date": "2026-04-08",
+            "manager": {"name": "Rui Zheng"},
+            "segments": [{}] * 16,
+        },
+        {
+            "id": "u3",
+            "no": 387,
+            "type": "Regular",
+            "theme": "T1",
+            "date": "2026-04-01",
+            "manager": {"name": "Leta Li"},
+            "segments": [{}] * 17,
+        },
+    ]
+
+
+async def _seed_lookup_turn(store: InMemorySessionStore, session_id: str, no: int):
+    await store.save_turn(
+        session_id,
+        user_id=None,
+        turn=TurnRecord(
+            seq=1,
+            user_message=f"复制 #{no}",
+            assistant_text="Found it. 确认从这期克隆吗?",
+            tool_trace=[
+                {
+                    "id": "tc1",
+                    "name": "lookup_meeting",
+                    "args": {"query": str(no)},
+                    "status": "ok",
+                    "result": [
+                        {
+                            "no": no,
+                            "type": "Regular",
+                            "date": "2024-11-05",
+                            "theme": "Old",
+                            "manager_name": "X",
+                            "segment_count": 2,
+                        }
+                    ],
+                }
+            ],
+            agenda_before={"meta": {}, "segments": []},
+            agenda_after={"meta": {}, "segments": []},
+            history_cursor=[],
+        ),
+    )
+
+
+def _full_meeting_dict_for_clone():
+    return {
+        "id": "u1",
+        "no": 387,
+        "type": "Regular",
+        "theme": "Old Theme",
+        "manager": {"id": None, "name": "Old Manager", "member_id": "x"},
+        "date": "2024-11-05",
+        "start_time": "19:15",
+        "end_time": "21:30",
+        "location": "Loc Stable",
+        "introduction": "Old intro",
+        "status": "published",
+        "awards": [],
+        "segments": [
+            {
+                "id": "1",
+                "type": "SAA",
+                "start_time": "19:30",
+                "end_time": "19:33",
+                "duration": "3",
+                "role_taker": {"id": None, "name": "Joyce Feng", "member_id": "j"},
+                "title": "",
+                "content": "",
+                "related_segment_ids": "",
+            },
+            {
+                "id": "2",
+                "type": "TOM",
+                "start_time": "19:33",
+                "end_time": "19:35",
+                "duration": "2",
+                "role_taker": {"id": None, "name": "Rui Zheng", "member_id": "r"},
+                "title": "",
+                "content": "",
+                "related_segment_ids": "",
+            },
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_create_from_text_replaces_agenda():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.meeting_agent.tools.plan_meeting_from_text", return_value=_fake_meeting_with_segments()):
+        result = await apply_create_from_text(
+            ctx,
+            raw_text=(
+                "SOARHIGH 391st meeting: MockTheme\n"
+                "✍ Theme: MockTheme\n"
+                "📅 Date: 2026-04-30\n"
+                "⏰ Time: 19:30 - 21:30\n"
+                "📍 Location: L\n"
+                "👧MM: Rui Zheng\n"
+            ),
+        )
+
+    assert len(deps.agenda.segments) == 3
+    assert deps.agenda.meta.no == 391
+    assert deps.agenda.meta.theme == "MockTheme"
+    assert deps.agenda.meta.manager == "Rui Zheng"
+    assert deps.agenda.segments[0].id == "s1"
+    assert result["created"] is True
+    assert result["segment_count"] == 3
+    assert result["meeting_summary"]["no"] == 391
+    assert result["meeting_summary"]["manager"] == "Rui Zheng"
+    assert result["missing_required_fields"] == []
+    assert "validation_issues" in result
+
+
+def test_strip_membership_suffix():
+    """Defense-in-depth: any role_taker / manager arg coming in with a
+    "(member)" / "(guest)" suffix (echoed from a past table) gets stripped
+    so the underlying field never carries the annotation."""
+    from app.meeting_agent.tools import _strip_membership_suffix
+
+    assert _strip_membership_suffix("Joyce Feng (member)") == "Joyce Feng"
+    assert _strip_membership_suffix("Lucas (guest)") == "Lucas"
+    assert _strip_membership_suffix("All (All)") == "All"
+    assert _strip_membership_suffix("  Joyce Feng (member)  ") == "Joyce Feng"
+    # Case-insensitive + full-width parens.
+    assert _strip_membership_suffix("Liz Huang (Member)") == "Liz Huang"
+    assert _strip_membership_suffix("张三（成员）") == "张三（成员）"  # noqa: RUF001 — CJK 成员 not in the regex; left intact
+    assert _strip_membership_suffix("Joyce Feng（member）") == "Joyce Feng"  # noqa: RUF001 — fullwidth parens
+    # Pass-through cases.
+    assert _strip_membership_suffix("Joyce Feng") == "Joyce Feng"
+    assert _strip_membership_suffix("") == ""
+    assert _strip_membership_suffix(None) == ""
+    # Don't mistake a parenthesized substring inside the name.
+    assert _strip_membership_suffix("Foo (Trainer)") == "Foo (Trainer)"
+
+
+@pytest.mark.asyncio
+async def test_apply_set_role_strips_membership_suffix_from_arg():
+    """Regression: model has been observed copying the annotated display
+    string ('Joyce Feng (member)') into a tool arg. The tool must strip
+    it so the agenda data stays clean."""
+    from app.meeting_agent.tools import apply_set_role
+
+    deps = make_deps()
+    deps.agenda.segments[0].id = "s1"
+    ctx = FakeCtx(deps=deps)
+    result = apply_set_role(ctx, segment_id="s1", role_taker="Joyce Feng (member)")
+    assert deps.agenda.segments[0].role_taker == "Joyce Feng"
+    assert result["role_taker"] == "Joyce Feng"
+
+
+def test_apply_add_segment_strips_membership_suffix_from_arg():
+    from app.meeting_agent.tools import apply_add_segment
+
+    deps = make_deps()
+    deps.agenda.segments[0].id = "s1"
+    ctx = FakeCtx(deps=deps)
+    apply_add_segment(
+        ctx,
+        type="Lucky Draw",
+        duration_min=5,
+        after_id="s1",
+        role_taker="Lucas (guest)",
+    )
+    new_seg = deps.agenda.segments[1]
+    assert new_seg.role_taker == "Lucas"
+
+
+def test_apply_set_meta_strips_membership_suffix_from_manager():
+    from app.meeting_agent.tools import apply_set_meta
+
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    apply_set_meta(ctx, field="manager", value="Vicky Yang (member)")
+    assert deps.agenda.meta.manager == "Vicky Yang"
+
+
+@pytest.mark.asyncio
+async def test_apply_preview_meeting_returns_full_segments_without_mutating_agenda():
+    """preview_meeting must surface the historical meeting's full segment list
+    so the model can show it to the user before they commit to clone — and
+    must NOT touch the current agenda state (it's read-only)."""
+    from app.meeting_agent.tools import apply_preview_meeting
+
+    deps = make_deps()
+    original_segments = list(deps.agenda.segments)
+    original_meta = deps.agenda.meta.model_copy()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=_full_meeting_dict_for_clone()):
+        result = await apply_preview_meeting(ctx, no=387)
+
+    assert result["no"] == 387
+    assert result["type"] == "Regular"
+    assert result["theme"] == "Old Theme"
+    assert result["manager"] == "Old Manager"
+    assert result["start_time"] == "19:15"
+    # Full segment list with the four model-facing fields per row.
+    assert len(result["segments"]) == 2
+    assert result["segments"][0] == {
+        "type": "SAA",
+        "start_time": "19:30",
+        "duration": 3,
+        "role_taker": "Joyce Feng",
+    }
+    assert result["segments"][1]["role_taker"] == "Rui Zheng"
+    # Current agenda untouched.
+    assert deps.agenda.segments == original_segments
+    assert deps.agenda.meta == original_meta
+
+
+@pytest.mark.asyncio
+async def test_apply_preview_meeting_unknown_no_raises_modelretry():
+    from app.meeting_agent.tools import apply_preview_meeting
+
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=None):
+        with pytest.raises(ModelRetry, match="not found"):
+            await apply_preview_meeting(ctx, no=9999)
+
+
+def test_db_get_meeting_by_no_uses_two_targeted_queries():
+    """Regression: the lookup must NOT scan the bulk `_db_meetings_recent` page.
+    That path builds a `.in_(500 meeting_ids)` URL (~18 KB) which under
+    concurrent calls (e.g. 3 parallel preview_meeting on the same turn)
+    overflows PostgREST / cloudflare URL-length limits and returns 400
+    "JSON could not be generated" — also caps segments at 1000 rows so
+    late-time segments disappear. Replace with two cheap targeted queries:
+    `get_meeting_id_by_no` then `get_meeting_by_id`."""
+    from app.meeting_agent.tools import _db_get_meeting_by_no
+
+    full_complete = {
+        "id": "uuid-425",
+        "no": 425,
+        "type": "Workshop",
+        "manager": {"id": None, "name": "Joyce", "member_id": ""},
+        "segments": [
+            {"id": "1", "type": "SAA", "start_time": "19:30", "duration": "2"},
+            {"id": "2", "type": "Workshop", "start_time": "20:08", "duration": "29"},
+            {"id": "3", "type": "Awards", "start_time": "21:11", "duration": "3"},
+            {"id": "4", "type": "Closing Remarks", "start_time": "21:14", "duration": "1"},
+        ],
+        "start_time": "19:15",
+        "end_time": "21:30",
+    }
+    with (
+        patch("app.meeting_agent.tools.get_meeting_id_by_no", return_value="uuid-425") as mock_id,
+        patch("app.meeting_agent.tools.get_meeting_by_id", return_value=full_complete) as mock_full,
+        patch("app.meeting_agent.tools._db_meetings_recent") as mock_bulk,
+    ):
+        result = _db_get_meeting_by_no(425)
+
+    mock_id.assert_called_once_with(425)
+    mock_full.assert_called_once_with("uuid-425", user_id=None)
+    # The bulk-recent path must NOT be touched anymore.
+    mock_bulk.assert_not_called()
+    assert len(result["segments"]) == 4
+    assert result["segments"][-1]["type"] == "Closing Remarks"
+
+
+def test_db_get_meeting_by_no_serializes_concurrent_callers():
+    """supabase-py wraps a SYNC httpx client which is NOT thread-safe.
+    When several tool calls in one turn (e.g. parallel `preview_meeting`)
+    drive concurrent worker-thread DB queries, the shared httpx state
+    corrupts and the upstream returns `RemoteProtocolError: Server
+    disconnected`. The agent-side helper must hold a module-level lock
+    so concurrent callers fall through one at a time."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.meeting_agent.tools import _db_get_meeting_by_no
+
+    in_flight = 0
+    max_in_flight = 0
+    barrier = threading.Lock()
+
+    def _slow_id(no, user_id=None):
+        nonlocal in_flight, max_in_flight
+        with barrier:
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+        # Simulate the real query taking measurable time so any racing
+        # threads have a chance to overlap if the lock is missing.
+        threading.Event().wait(0.05)
+        with barrier:
+            in_flight -= 1
+        return f"uuid-{no}"
+
+    def _slow_full(meeting_id, user_id=None):
+        nonlocal in_flight, max_in_flight
+        with barrier:
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+        threading.Event().wait(0.05)
+        with barrier:
+            in_flight -= 1
+        return {"id": meeting_id, "no": int(meeting_id.split("-")[1]), "segments": []}
+
+    with (
+        patch("app.meeting_agent.tools.get_meeting_id_by_no", side_effect=_slow_id),
+        patch("app.meeting_agent.tools.get_meeting_by_id", side_effect=_slow_full),
+    ):
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(_db_get_meeting_by_no, [446, 425, 413, 387]))
+
+    # Lock guarantees at most one DB-helper invocation runs at a time.
+    assert max_in_flight == 1, f"expected serialized DB access, observed {max_in_flight} concurrent"
+    # All four calls returned correct results.
+    assert [r["no"] for r in results] == [446, 425, 413, 387]
+
+
+def test_db_get_meeting_by_no_returns_none_when_id_lookup_misses():
+    """Unknown `no` → None (caller raises ModelRetry). No second query fired."""
+    from app.meeting_agent.tools import _db_get_meeting_by_no
+
+    with (
+        patch("app.meeting_agent.tools.get_meeting_id_by_no", return_value=None),
+        patch("app.meeting_agent.tools.get_meeting_by_id") as mock_full,
+    ):
+        assert _db_get_meeting_by_no(9999) is None
+    mock_full.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_create_from_template_regular_2ps_replaces_agenda():
+    """The deterministic template path: no LLM call, all 22 segments laid out
+    back-to-back from the 19:15 warmup. Validates the structure surfaces in
+    the standard tool-result shape so the model treats it identically to the
+    other creation paths."""
+    from app.meeting_agent.tools import apply_create_from_template
+
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    result = await apply_create_from_template(ctx, template="regular_2ps")
+
+    assert result["created"] is True
+    assert result["segment_count"] == 22
+    # First segment: 19:15 warmup with role_taker "All".
+    assert deps.agenda.segments[0].start_time == "19:15"
+    assert deps.agenda.segments[0].duration == 15
+    assert "Warm Up" in deps.agenda.segments[0].type
+    assert deps.agenda.segments[0].role_taker == "All"
+    # Second segment: SAA at 19:30 (back-to-back from warmup end).
+    assert deps.agenda.segments[1].start_time == "19:30"
+    # Last segment: Closing Remarks at 21:14, default president Amy Fang.
+    last = deps.agenda.segments[-1]
+    assert "Closing Remarks" in last.type
+    assert last.role_taker == "Amy Fang"
+    # Meeting type is set; meta.start_time = 19:30 (official); end_time left
+    # blank so the user fills it (or accepts the implicit 21:15 from the agenda).
+    assert deps.agenda.meta.type == "Regular"
+    assert deps.agenda.meta.start_time == "19:30"
+    # All buffer_before are 0 — back-to-back layout per user preference.
+    assert all(seg.buffer_before == 0 for seg in deps.agenda.segments)
+
+
+@pytest.mark.asyncio
+async def test_apply_create_from_template_custom_single_segment():
+    """The Custom template gives the user a blank slate with ONE placeholder
+    segment — no warmup, no canonical structure (Custom meetings have no
+    fixed convention; warmup-at-19:15 is Regular/Workshop only)."""
+    from app.meeting_agent.tools import apply_create_from_template
+
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    result = await apply_create_from_template(ctx, template="custom")
+
+    assert result["created"] is True
+    assert result["segment_count"] == 1
+    # Type is Custom, NOT Regular — the form's type-dropdown should reflect this.
+    assert deps.agenda.meta.type == "Custom"
+    assert deps.agenda.meta.start_time == "19:30"
+    # Exactly ONE placeholder segment, positioned at the 19:15 / 15-min slot
+    # (matches the standard pre-meeting warmup window so users have a sensible
+    # anchor to start customizing from).
+    assert len(deps.agenda.segments) == 1
+    assert deps.agenda.segments[0].id == "s1"
+    assert deps.agenda.segments[0].start_time == "19:15"
+    assert deps.agenda.segments[0].duration == 15
+    # Type is the generic placeholder, NOT the canonical Regular/Workshop
+    # "Members and Guests Registration, Warm Up" label — Custom has no fixed
+    # convention; user customizes via set_type.
+    assert "Warm Up" not in deps.agenda.segments[0].type
+
+
+@pytest.mark.asyncio
+async def test_apply_create_from_template_aliases():
+    """Template name lookup is case-insensitive and accepts common aliases the
+    model is likely to forward verbatim from the user."""
+    from app.meeting_agent.tools import apply_create_from_template
+
+    for name in ("regular", "Regular_2_PS", "  Regular  ", "regular 2 ps", "2ps"):
+        deps = make_deps()
+        ctx = FakeCtx(deps=deps)
+        result = await apply_create_from_template(ctx, template=name)
+        assert result["segment_count"] == 22, f"alias {name!r} did not resolve to regular_2ps"
+
+    # Custom template aliases resolve to the single-segment blank.
+    for name in ("custom", "Custom_Blank", "BLANK"):
+        deps = make_deps()
+        ctx = FakeCtx(deps=deps)
+        result = await apply_create_from_template(ctx, template=name)
+        assert result["segment_count"] == 1, f"alias {name!r} did not resolve to custom"
+        assert deps.agenda.meta.type == "Custom"
+
+
+@pytest.mark.asyncio
+async def test_apply_create_from_template_unknown_raises_modelretry():
+    from app.meeting_agent.tools import apply_create_from_template
+
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="Unknown template"):
+        await apply_create_from_template(ctx, template="nonexistent")
+
+
+def test_segments_summary_does_not_leak_membership_to_model():
+    """Membership annotation is a pure render-layer concern handled by
+    `_format_role_display` (route addendum) and the frontend form. The
+    tool result the LLM sees must NEVER contain `(member)` / `(guest)` —
+    if the model can see the annotated form, it has been observed to copy
+    it back into a tool argument (e.g. add_segment role_taker), corrupting
+    the agenda data."""
+    from app.meeting_agent.models import Agenda, Meta, Segment
+    from app.meeting_agent.tools import _segments_summary
+
+    agenda = Agenda(
+        meta=Meta(),
+        segments=[
+            Segment(id="s1", type="SAA", start_time="19:30", duration=2, role_taker="Liz Huang"),
+            Segment(id="s2", type="Opening Remarks", start_time="19:32", duration=2, role_taker="Lucas"),
+            Segment(id="s3", type="Table Topic Session", start_time="19:34", duration=20, role_taker="All"),
+        ],
+    )
+    out = _segments_summary(agenda)
+    for row in out:
+        assert "role_taker_display" not in row, (
+            "role_taker_display must NOT be in segments tool result; "
+            "membership annotation lives in render layer only"
+        )
+        # Plain bare names — exactly what the model should pass back as args.
+        assert "(member)" not in row["role_taker"]
+        assert "(guest)" not in row["role_taker"]
+    assert out[0]["role_taker"] == "Liz Huang"
+    assert out[1]["role_taker"] == "Lucas"
+    assert out[2]["role_taker"] == "All"
+
+
+def test_format_role_display_helper_for_render_layer():
+    """`_format_role_display` is the deterministic helper the route addendum
+    uses to render the segment table. Lives in tools.py because it shares the
+    CLUB_MEMBERS source-of-truth import; never exported into a tool result."""
+    from app.meeting_agent.tools import _format_role_display
+
+    assert _format_role_display("Liz Huang") == "Liz Huang (member)"
+    assert _format_role_display("amy fang") == "amy fang (member)"  # case-insensitive
+    assert _format_role_display("Lucas") == "Lucas (guest)"
+    assert _format_role_display("All") == "All"
+    assert _format_role_display("") == "—"
+
+
+@pytest.mark.asyncio
+async def test_apply_create_from_text_preserves_planner_start_times():
+    """The tool trusts the planner's start_times verbatim. Back-to-back
+    layout and the 19:15 warmup are enforced via the developer prompt
+    (Notes 2 and 8 in app/utils/prompts.py), NOT via tool-side recompute —
+    re-anchoring on meta.start_time would overwrite the planner's pre-meeting
+    warmup positioning."""
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    # _fake_meeting_with_segments lays out segments at 19:30 / 19:33 / 19:36.
+    # The tool must NOT shift them; whatever the planner returned is what we keep.
+    with patch("app.meeting_agent.tools.plan_meeting_from_text", return_value=_fake_meeting_with_segments()):
+        await apply_create_from_text(
+            ctx,
+            raw_text=(
+                "SOARHIGH 391st meeting: MockTheme\n"
+                "✍ Theme: MockTheme\n"
+                "📅 Date: 2026-04-30\n"
+                "⏰ Time: 19:30 - 21:30\n"
+                "📍 Location: L\n"
+                "👧MM: Rui Zheng\n"
+            ),
+        )
+
+    assert deps.agenda.segments[0].start_time == "19:30"
+    assert deps.agenda.segments[1].start_time == "19:33"
+    assert deps.agenda.segments[2].start_time == "19:36"
+
+
+@pytest.mark.asyncio
+async def test_apply_create_from_text_reports_missing_required_fields_from_source():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.meeting_agent.tools.plan_meeting_from_text", return_value=_fake_meeting_with_segments()):
+        result = await apply_create_from_text(
+            ctx,
+            raw_text=(
+                "SOARHIGH 391st meeting: MockTheme\n"
+                "✍ Theme: MockTheme\n"
+                "📅 Date: 2026-04-30\n"
+                "⏰ Time: 19:30 - 21:30\n"
+                "📍 Location: L\n"
+                "SAA: Joyce\n"
+            ),
+        )
+
+    assert deps.agenda.meta.manager is None
+    assert result["meeting_summary"]["manager"] is None
+    assert {"field": "manager", "label": "Meeting Manager"} in result["missing_required_fields"]
+
+
+@pytest.mark.asyncio
+async def test_apply_create_from_text_propagates_value_error_as_modelretry():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.meeting_agent.tools.plan_meeting_from_text", side_effect=ValueError("OpenAI rate limit")):
+        with pytest.raises(ModelRetry, match="rate limit"):
+            await apply_create_from_text(ctx, raw_text="bad")
+
+
+@pytest.mark.asyncio
+async def test_lookup_by_digit_returns_single_match():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.meeting_agent.tools._db_meetings_recent", return_value=_fake_db_meetings()):
+        result = await apply_lookup_meeting(ctx, query="388")
+    assert len(result) == 1
+    assert result[0]["no"] == 388
+    assert result[0]["type"] == "Workshop"
+
+
+@pytest.mark.asyncio
+async def test_lookup_by_descriptor_filters_by_type_recent_first():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.meeting_agent.tools._db_meetings_recent", return_value=_fake_db_meetings()):
+        result = await apply_lookup_meeting(ctx, query="最近一次 workshop")
+    assert len(result) == 1
+    assert result[0]["no"] == 388
+
+
+@pytest.mark.asyncio
+async def test_lookup_descriptor_returns_top_5_recent_when_no_filter():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.meeting_agent.tools._db_meetings_recent", return_value=_fake_db_meetings()):
+        result = await apply_lookup_meeting(ctx, query="上次")
+    assert result[0]["no"] == 389
+
+
+@pytest.mark.asyncio
+async def test_lookup_unknown_digit_returns_empty():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.meeting_agent.tools._db_meetings_recent", return_value=_fake_db_meetings()):
+        result = await apply_lookup_meeting(ctx, query="999")
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_clone_from_meeting_clears_specified_fields(monkeypatch):
+    store = InMemorySessionStore()
+    from app.meeting_agent import store as store_module
+
+    monkeypatch.setattr(store_module, "session_store", store)
+    deps = make_deps()
+    deps.session_id = "clone-happy"
+    deps.current_user_message = "确认"
+    ctx = FakeCtx(deps=deps)
+    await _seed_lookup_turn(store, deps.session_id, 387)
+
+    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=_full_meeting_dict_for_clone()):
+        result = await apply_clone_from_meeting(ctx, no=387)
+
+    assert deps.agenda.meta.no is None
+    assert deps.agenda.meta.theme in (None, "")
+    assert deps.agenda.meta.manager in (None, "")
+    assert deps.agenda.meta.date in (None, "")
+    assert deps.agenda.meta.introduction in (None, "")
+    assert deps.agenda.meta.type == "Regular"
+    assert deps.agenda.meta.start_time == "19:15"
+    assert deps.agenda.meta.location == "Loc Stable"
+    assert [s.role_taker for s in deps.agenda.segments] == ["", ""]
+    assert [s.id for s in deps.agenda.segments] == ["s1", "s2"]
+    assert result["cloned_from_no"] == 387
+    assert result["segment_count"] == 2
+    assert "validation_issues" in result
+
+
+@pytest.mark.asyncio
+async def test_clone_refuses_without_prior_lookup(monkeypatch):
+    store = InMemorySessionStore()
+    from app.meeting_agent import store as store_module
+
+    monkeypatch.setattr(store_module, "session_store", store)
+    deps = make_deps()
+    deps.session_id = "clone-no-lookup"
+    deps.current_user_message = "确认"
+    ctx = FakeCtx(deps=deps)
+
+    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=_full_meeting_dict_for_clone()):
+        with pytest.raises(ModelRetry, match="lookup_meeting"):
+            await apply_clone_from_meeting(ctx, no=387)
+    assert deps.agenda.meta.start_time == "19:15"
+    assert len(deps.agenda.segments) == 2
+
+
+@pytest.mark.asyncio
+async def test_clone_refuses_when_lookup_was_for_a_different_no(monkeypatch):
+    store = InMemorySessionStore()
+    from app.meeting_agent import store as store_module
+
+    monkeypatch.setattr(store_module, "session_store", store)
+    deps = make_deps()
+    deps.session_id = "clone-wrong-no"
+    deps.current_user_message = "确认"
+    ctx = FakeCtx(deps=deps)
+    await _seed_lookup_turn(store, deps.session_id, 999)
+
+    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=_full_meeting_dict_for_clone()):
+        with pytest.raises(ModelRetry, match="lookup_meeting"):
+            await apply_clone_from_meeting(ctx, no=387)
+
+
+@pytest.mark.asyncio
+async def test_clone_refuses_without_explicit_confirmation(monkeypatch):
+    store = InMemorySessionStore()
+    from app.meeting_agent import store as store_module
+
+    monkeypatch.setattr(store_module, "session_store", store)
+    deps = make_deps()
+    deps.session_id = "clone-no-confirm"
+    deps.current_user_message = "不是这个"
+    ctx = FakeCtx(deps=deps)
+    await _seed_lookup_turn(store, deps.session_id, 387)
+
+    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=_full_meeting_dict_for_clone()):
+        with pytest.raises(ModelRetry, match="explicit confirmation"):
+            await apply_clone_from_meeting(ctx, no=387)
+
+
+@pytest.mark.asyncio
+async def test_clone_from_meeting_unknown_no_raises_modelretry(monkeypatch):
+    store = InMemorySessionStore()
+    from app.meeting_agent import store as store_module
+
+    monkeypatch.setattr(store_module, "session_store", store)
+    deps = make_deps()
+    deps.session_id = "clone-unknown"
+    deps.current_user_message = "确认"
+    ctx = FakeCtx(deps=deps)
+    await _seed_lookup_turn(store, deps.session_id, 9999)
+
+    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=None):
+        with pytest.raises(ModelRetry, match="not found"):
+            await apply_clone_from_meeting(ctx, no=9999)
+
+
+@pytest.mark.asyncio
+async def test_create_from_image_uses_deps_image_bytes():
+    deps = make_deps()
+    deps.image_data = b"fake-bytes"
+    deps.image_content_type = "image/png"
+    ctx = FakeCtx(deps=deps)
+
+    with patch(
+        "app.meeting_agent.tools.parse_meeting_agenda_image",
+        return_value=_fake_meeting_with_segments(),
+    ) as mock:
+        result = await apply_create_from_image(ctx)
+        mock.assert_called_once_with(b"fake-bytes", "image/png")
+
+    assert len(deps.agenda.segments) == 3
+    assert result["created"] is True
+    assert deps.image_data is None
+    assert deps.image_content_type is None
+
+
+@pytest.mark.asyncio
+async def test_create_from_image_refuses_when_no_image_attached():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="no image"):
+        await apply_create_from_image(ctx)
 
 
 def test_set_role_mutates_target_segment():

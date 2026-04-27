@@ -15,6 +15,7 @@ export function useMeetingAgentTurn({
       session_id: string;
       user_message: string;
       agenda_snapshot: AgendaSnapshot;
+      image?: File | null;
     }) => {
       controllerRef.current?.abort();
       const controller = new AbortController();
@@ -23,13 +24,23 @@ export function useMeetingAgentTurn({
       const token =
         typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
+      const fd = new FormData();
+      fd.append(
+        'payload',
+        JSON.stringify({
+          session_id: args.session_id,
+          user_message: args.user_message,
+          agenda_snapshot: args.agenda_snapshot,
+        })
+      );
+      if (args.image) fd.append('image', args.image);
+
       const res = await fetch(`${apiEndpoint}/meeting-agent/turn`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify(args),
+        body: fd,
         signal: controller.signal,
       });
       if (!res.ok || !res.body) throw new Error(`Bad response: ${res.status}`);

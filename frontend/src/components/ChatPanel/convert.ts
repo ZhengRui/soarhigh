@@ -77,8 +77,14 @@ export function applyAgendaSnapshot(
   const membersByName = new Map(
     members.map((m) => [m.full_name.toLowerCase(), m])
   );
-  const resolveAttendee = (name: string): AttendeeIF | undefined => {
+  const resolveAttendee = (
+    name: string,
+    fallback?: AttendeeIF
+  ): AttendeeIF | undefined => {
     if (!name) return undefined;
+    if (fallback?.name.toLowerCase() === name.toLowerCase()) {
+      return fallback;
+    }
     const match = membersByName.get(name.toLowerCase());
     if (match) {
       return { id: match.uid, name: match.full_name, member_id: match.uid };
@@ -95,6 +101,15 @@ export function applyAgendaSnapshot(
     return { name, member_id: '' };
   };
 
+  const normalizeNo = (value: unknown): number | undefined => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+      const parsed = parseInt(value, 10);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+  };
+
   const nextSegments: BaseSegment[] = snapshot.segments.map((s) => {
     const existing = prev.segments.find((p) => p.id === s.id);
     if (existing) {
@@ -107,7 +122,7 @@ export function applyAgendaSnapshot(
       cloned.type = s.type;
       cloned.start_time = s.start_time;
       cloned.duration = String(s.duration);
-      cloned.role_taker = resolveAttendee(s.role_taker);
+      cloned.role_taker = resolveAttendee(s.role_taker, existing.role_taker);
       return cloned;
     }
     // New segment inserted by the agent (via add_segment). No prototype template
@@ -124,6 +139,12 @@ export function applyAgendaSnapshot(
 
   return {
     ...prev,
+    no:
+      snapshot.meta.no === null
+        ? undefined
+        : snapshot.meta.no === undefined
+          ? prev.no
+          : normalizeNo(snapshot.meta.no),
     type:
       typeof snapshot.meta.type === 'string' ? snapshot.meta.type : prev.type,
     theme:
@@ -148,10 +169,12 @@ export function applyAgendaSnapshot(
       typeof snapshot.meta.introduction === 'string'
         ? snapshot.meta.introduction
         : prev.introduction,
-    // Don't round-trip meta.manager through the snapshot — it's a name-only
-    // flatten and we'd lose the member_id. Manager changes via chat are not a
-    // common case; if the agent sets it, it'll come as a name string on the
-    // next snapshot anyway.
+    manager:
+      snapshot.meta.manager === null
+        ? undefined
+        : typeof snapshot.meta.manager === 'string'
+          ? resolveAttendee(snapshot.meta.manager, prev.manager)
+          : prev.manager,
     segments: nextSegments,
   };
 }

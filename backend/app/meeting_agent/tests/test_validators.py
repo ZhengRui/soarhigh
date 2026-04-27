@@ -1,14 +1,15 @@
 from app.meeting_agent.models import Agenda, Meta, Segment
+from app.meeting_agent.timing import recompute_start_times
 from app.meeting_agent.validators import run_validators
 
 
 def make(start="19:15", end="21:30", segs=()):
     """Build an Agenda from a list of (id, type, duration, buffer_before) tuples.
 
-    start_time defaults to "00:00" on each Segment — we don't rely on it for
-    validator logic, which uses durations/buffers directly.
-    """
-    return Agenda(
+    Calls recompute_start_times so segment start_times reflect what production
+    agendas always carry (every mutating tool runs the same recompute). Tests
+    that need a deliberately stale layout can construct the Agenda directly."""
+    agenda = Agenda(
         meta=Meta(start_time=start, end_time=end),
         segments=[
             Segment(
@@ -21,6 +22,8 @@ def make(start="19:15", end="21:30", segs=()):
             for sid, typ, dur, buf in segs
         ],
     )
+    recompute_start_times(agenda)
+    return agenda
 
 
 # --- empty / clean ---------------------------------------------------------
@@ -232,6 +235,25 @@ def test_no_overflow_no_issue():
         segs=[
             ("s1", "SAA", 60, 0),
             ("s2", "TOM", 75, 0),
+        ],
+    )
+    issues = run_validators(agenda)
+    codes = {i.code for i in issues}
+    assert "DURATION_OVERFLOW" not in codes
+
+
+def test_overflow_does_not_double_count_pre_meeting_warmup():
+    """Regression: club agendas put a 15-min Guests Registration warmup at
+    19:15 even though meta.start_time is 19:30 (the official meeting start).
+    The validator must anchor on the LAST segment's end, not on
+    `meta.start_time + sum(durations)` — otherwise the 15-min pre-meeting
+    window double-counts and produces a false-positive overflow."""
+    agenda = Agenda(
+        meta=Meta(start_time="19:30", end_time="21:30"),
+        segments=[
+            Segment(id="s1", type="Guests Registration", start_time="19:15", duration=15),
+            Segment(id="s2", type="SAA", start_time="19:30", duration=2),
+            Segment(id="s3", type="Closing Remarks", start_time="21:29", duration=1),
         ],
     )
     issues = run_validators(agenda)

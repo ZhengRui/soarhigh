@@ -4,8 +4,9 @@ import json
 import logging
 from typing import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -30,6 +31,12 @@ from .auth import get_current_user
 
 log = logging.getLogger(__name__)
 meeting_agent_router = r = APIRouter(prefix="/meeting-agent")
+
+_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_CREATE_TOOL_NAMES = {"create_from_text", "create_from_image", "clone_from_meeting"}
+_PREVIEW_TOOL_NAMES = {"preview_meeting"}
+_SHOW_CURRENT_TOOL_NAMES = {"show_current_agenda"}
 
 
 def _sse(event: str, data: dict) -> bytes:
@@ -61,8 +68,307 @@ def _extract_error_info(e: Exception) -> tuple[str, bool]:
     return (str(e), True)
 
 
+def _detect_user_language(text: str) -> str:
+    """Heuristic language tag for the model's reply language hint.
+
+    Per-turn detection is deterministic and overrides whatever language the
+    bilingual examples in ROUTER_SYSTEM_PROMPT or earlier session turns might
+    have biased the model toward. Counts CJK ideographs vs Latin letters in
+    the user's CURRENT message; ties / both-zero default to English.
+
+    Returns the BCP-47-style language tag the model is instructed to obey
+    (e.g. 'en' or 'zh'). Extend the heuristic when other languages matter."""
+    if not text:
+        return "en"
+    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
+    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+    if cjk == 0 and latin == 0:
+        return "en"
+    return "zh" if cjk > latin else "en"
+
+
+def _display_cell(value) -> str:
+    if value is None:
+        return "TBD"
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else "TBD"
+    return str(value)
+
+
+def _format_missing_labels(missing) -> str:
+    labels: list[str] = []
+    if isinstance(missing, list):
+        for item in missing:
+            if isinstance(item, dict):
+                label = item.get("label") or item.get("field")
+            else:
+                label = item
+            if label:
+                labels.append(str(label))
+    return ", ".join(labels)
+
+
+_META_TOOL_NAMES = {"set_meta"}
+_SEGMENT_TOOL_NAMES = {
+    "set_role",
+    "set_type",
+    "set_duration",
+    "set_buffer",
+    "add_segment",
+    "remove_segment",
+    "move_segment",
+    "swap_roles",
+    "swap_time",
+    "shift_segment_time",
+}
+_REVERT_TOOL_NAMES = {"revert_last_turn", "revert_to_turn"}
+
+
+def _classify_agenda_changes(tool_trace: list[dict]) -> tuple[bool, bool, bool]:
+    """Returns (meta_changed, segment_changed, wholesale).
+
+    Wholesale (creation / clone / revert) means both meta and segments may
+    have changed; treat as a full replace for table-rendering purposes."""
+    meta_changed = False
+    segment_changed = False
+    wholesale = False
+    for trace in tool_trace:
+        if trace.get("status") != "ok":
+            continue
+        name = trace.get("name", "")
+        if name in _CREATE_TOOL_NAMES or name in _REVERT_TOOL_NAMES:
+            wholesale = True
+        elif name in _META_TOOL_NAMES:
+            meta_changed = True
+        elif name in _SEGMENT_TOOL_NAMES:
+            segment_changed = True
+    return meta_changed, segment_changed, wholesale
+
+
+def _render_meta_table(agenda) -> str:
+    meta = agenda.meta
+    time_value = f"{_display_cell(meta.start_time)} - {_display_cell(meta.end_time)}"
+    rows = [
+        ("Meeting No.", _display_cell(meta.no)),
+        ("Type", _display_cell(meta.type)),
+        ("Theme", _display_cell(meta.theme)),
+        ("Meeting Manager", _display_cell(meta.manager)),
+        ("Date", _display_cell(meta.date)),
+        ("Time", time_value),
+        ("Location", _display_cell(meta.location)),
+    ]
+    lines = ["| Field | Value |", "|---|---|"]
+    lines.extend(f"| {label} | {value} |" for label, value in rows)
+    return "\n".join(lines)
+
+
+def _render_segment_table(agenda) -> str:
+    # Lazy import: tools.py imports route-adjacent symbols indirectly, so
+    # importing at module load can race; doing it here keeps the boundary clean.
+    from app.meeting_agent.tools import _format_role_display
+
+    if not agenda.segments:
+        return "_(no segments)_"
+    # Column order matches the form UI's vertical layout (time, duration,
+    # then type) — Duration before Type so the eye scans "when / how long /
+    # what" left-to-right, the same shape models naturally produce when
+    # asked for a schedule overview.
+    lines = ["| Time | Duration | Type | Role taker |", "|---|---|---|---|"]
+    for seg in agenda.segments:
+        # Annotated display ("Lucas (guest)" / "Liz Huang (member)" / "All" /
+        # "—") computed deterministically against CLUB_MEMBERS, so the table
+        # is consistent with the creation flow's table — and stays correct
+        # regardless of what the model decided per row.
+        role = _format_role_display(seg.role_taker)
+        lines.append(f"| {seg.start_time} | {seg.duration} | {seg.type} | {role} |")
+    return "\n".join(lines)
+
+
+def _fold(summary: str, body: str) -> str:
+    """Wrap in <details> so the table folds by default in markdown renderers
+    that pass inline HTML through (the web chat panel uses @uiw/react-md-editor
+    which does). Chat clients without HTML support — e.g. Telegram — will see
+    the body inline; the tags are minor noise but the data stays visible."""
+    return f"<details>\n<summary>{summary}</summary>\n\n{body}\n\n</details>"
+
+
+def _wholesale_suffix(tool_trace: list[dict]) -> str:
+    """The missing-fields nudge that historically followed the creation table.
+    Reads `missing_required_fields` from the most recent successful create/clone
+    tool result. Empty string when no creation tool fired or no fields missing."""
+    for trace in reversed(tool_trace):
+        if trace.get("name") not in _CREATE_TOOL_NAMES or trace.get("status") != "ok":
+            continue
+        result = trace.get("result")
+        if not isinstance(result, dict):
+            continue
+        missing_labels = _format_missing_labels(result.get("missing_required_fields"))
+        if missing_labels:
+            return f"\n\nStill need: {missing_labels}. Please provide these so I can update the draft."
+        return "\n\nPlease confirm the draft above; tell me which field or role to adjust if anything is off."
+    return ""
+
+
+def _all_preview_payloads(tool_trace: list[dict]) -> list[dict]:
+    """Every successful `preview_meeting` result in this turn, in call order.
+
+    The agent can run multiple `preview_meeting` calls in parallel within a
+    single turn (e.g. user asks "show me #446, #425, and #413"). We render
+    every result, not just the last — otherwise earlier previews vanish."""
+    payloads: list[dict] = []
+    for trace in tool_trace:
+        if trace.get("name") not in _PREVIEW_TOOL_NAMES or trace.get("status") != "ok":
+            continue
+        result = trace.get("result")
+        if isinstance(result, dict):
+            payloads.append(result)
+    return payloads
+
+
+def _render_preview_meta_table(preview: dict) -> str:
+    time_value = f"{_display_cell(preview.get('start_time'))} - {_display_cell(preview.get('end_time'))}"
+    rows = [
+        ("Meeting No.", _display_cell(preview.get("no"))),
+        ("Type", _display_cell(preview.get("type"))),
+        ("Theme", _display_cell(preview.get("theme"))),
+        ("Meeting Manager", _display_cell(preview.get("manager"))),
+        ("Date", _display_cell(preview.get("date"))),
+        ("Time", time_value),
+        ("Location", _display_cell(preview.get("location"))),
+    ]
+    lines = ["| Field | Value |", "|---|---|"]
+    lines.extend(f"| {label} | {value} |" for label, value in rows)
+    return "\n".join(lines)
+
+
+def _render_preview_segment_table(preview: dict) -> str:
+    # Lazy import — same boundary trick as _render_segment_table.
+    from app.meeting_agent.tools import _format_role_display
+
+    segments = preview.get("segments") or []
+    if not segments:
+        return "_(no segments)_"
+    # Column order kept in sync with _render_segment_table.
+    lines = ["| Time | Duration | Type | Role taker |", "|---|---|---|---|"]
+    for seg in segments:
+        role = _format_role_display(seg.get("role_taker") or "")
+        lines.append(f"| {seg.get('start_time', '')} | {seg.get('duration', '')} | {seg.get('type', '')} | {role} |")
+    return "\n".join(lines)
+
+
+def _render_preview_addendum(previews: list[dict]) -> str:
+    """Folded meta + segment tables for one or more `preview_meeting` results.
+
+    Each preview produces its own pair of folds so a multi-preview turn
+    (e.g. "show me #446, #425, #413") yields all three meetings stacked.
+    Labels explicitly say "preview of #N" so users know we're showing a
+    historical meeting, NOT replacing their current agenda."""
+    parts: list[str] = []
+    for preview in previews:
+        no = preview.get("no") or "?"
+        parts.append(_fold(f"📌 Meeting #{no} Meta (preview)", _render_preview_meta_table(preview)))
+        parts.append(_fold(f"📋 Meeting #{no} Agenda (preview)", _render_preview_segment_table(preview)))
+    return "\n\n" + "\n\n".join(parts)
+
+
+def _build_agenda_addendum(tool_trace: list[dict], agenda, assistant_text_so_far: str) -> str:
+    """Append meta and/or segment table(s) based on what the turn did.
+
+    - Wholesale mutation (create / clone / revert): both tables + missing-fields
+      nudge. ALWAYS fires regardless of model output — the route is the single
+      source of truth for membership-annotated tables; if the model regressed
+      and emitted its own (likely unannotated) table, we tolerate the cosmetic
+      duplication rather than ship a table without the deterministic `(member)`
+      / `(guest)` badges.
+    - Meta-only edit: meta table only. Skipped if model emitted a meta-table
+      marker (rare; current prompt tells fine-grained replies to be one sentence).
+    - Segment-only edit: segment table only. Same skip rule.
+    - No mutation but a successful `preview_meeting` ran this turn: render the
+      preview's meta + segment tables (labeled "preview of #N" so users don't
+      mistake them for the current agenda).
+    - Otherwise (chit-chat, refusal, observation-only): empty.
+
+    Tables are wrapped in <details> so they fold by default."""
+    meta_changed, segment_changed, wholesale = _classify_agenda_changes(tool_trace)
+
+    if meta_changed or segment_changed or wholesale:
+        # Only suppress on duplicate detection for non-wholesale paths. Wholesale
+        # always fires (see docstring).
+        if not wholesale and _already_has_summary_table(assistant_text_so_far):
+            return ""
+
+        parts: list[str] = []
+        if wholesale or meta_changed:
+            parts.append(_fold("📌 Meeting Meta", _render_meta_table(agenda)))
+        if wholesale or segment_changed:
+            parts.append(_fold("📋 Agenda", _render_segment_table(agenda)))
+        body = "\n\n".join(parts)
+
+        suffix = _wholesale_suffix(tool_trace) if wholesale else ""
+        return "\n\n" + body + suffix
+
+    previews = _all_preview_payloads(tool_trace)
+    if previews:
+        return _render_preview_addendum(previews)
+
+    if _show_current_was_called(tool_trace):
+        # Read-only request to display the current draft. Same folded layout
+        # as the post-mutation render, no missing-fields nudge (this isn't
+        # a creation event), no "(preview of #N)" label since it IS the user's
+        # current agenda.
+        parts = [
+            _fold("📌 Meeting Meta", _render_meta_table(agenda)),
+            _fold("📋 Agenda", _render_segment_table(agenda)),
+        ]
+        return "\n\n" + "\n\n".join(parts)
+
+    return ""
+
+
+def _show_current_was_called(tool_trace: list[dict]) -> bool:
+    return any(trace.get("name") in _SHOW_CURRENT_TOOL_NAMES and trace.get("status") == "ok" for trace in tool_trace)
+
+
+def _already_has_summary_table(text: str) -> bool:
+    # Detector recognizes both English and Chinese table headers so the
+    # deterministic addendum doesn't double up on whatever the model emitted.
+    return any(
+        marker in text
+        for marker in (
+            "| Meeting No.",
+            "| Field | Value",
+            "| Time | Type",
+            "| 信息 |",
+            "| 项目 |",
+            "| 会议编号 |",
+        )
+    )
+
+
 @r.post("/turn")
-async def agent_turn(req: MeetingAgentTurnRequest, user=Depends(get_current_user)):
+async def agent_turn(
+    payload: str = Form(...),
+    image: UploadFile | None = File(None),
+    user=Depends(get_current_user),
+):
+    try:
+        req = MeetingAgentTurnRequest.model_validate_json(payload)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors()) from e
+
+    image_bytes: bytes | None = None
+    image_ct: str | None = None
+    if image is not None:
+        image_ct = image.content_type or "application/octet-stream"
+        if image_ct not in _ALLOWED_IMAGE_TYPES:
+            raise HTTPException(status_code=400, detail="image must be jpg, png, or webp")
+        image_bytes = await image.read()
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="image must not be empty")
+        if len(image_bytes) > _MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="image must be smaller than 5 MB")
+
     async def event_stream() -> AsyncIterator[bytes]:
         try:
             tail_seq, history_json = await session_store.load(req.session_id)
@@ -76,13 +382,26 @@ async def agent_turn(req: MeetingAgentTurnRequest, user=Depends(get_current_user
             deps = AgendaDeps(
                 agenda=copy.deepcopy(req.agenda_snapshot),
                 session_id=req.session_id,
+                current_user_message=req.user_message,
+                image_data=image_bytes,
+                image_content_type=image_ct,
             )
+
+            attachment_block = ""
+            if image_bytes:
+                attachment_block = (
+                    "\n[Attachment]\n" "image_attached: true\n" f"content_type: {image_ct or 'image/jpeg'}\n"
+                )
+
+            language_hint = f"[Reply language] {_detect_user_language(req.user_message)}\n"
 
             prompt = SNAPSHOT_TEMPLATE.format(
                 snapshot_json=json.dumps(req.agenda_snapshot.model_dump(), ensure_ascii=False, indent=2),
                 next_seq=next_seq,
                 tail_seq=tail_seq,
                 user_message=req.user_message,
+                attachment_block=attachment_block,
+                language_hint=language_hint,
             )
 
             tool_call_args: dict[str, dict] = {}
@@ -165,6 +484,12 @@ async def agent_turn(req: MeetingAgentTurnRequest, user=Depends(get_current_user
 
             final_result = run.result
             final_text = final_result.output if final_result else ""
+            assistant_text_so_far = "".join(assistant_text_chunks)
+            agenda_addendum = _build_agenda_addendum(tool_trace, deps.agenda, assistant_text_so_far)
+            if agenda_addendum:
+                assistant_text_chunks.append(agenda_addendum)
+                final_text = f"{final_text or ''}{agenda_addendum}"
+                yield _sse("assistant_text", {"chunk": agenda_addendum})
             # mode="json" serializes datetimes (Pydantic AI ModelMessage.timestamp)
             # to ISO strings so the result is valid JSONB input for supabase-py,
             # which json.dumps the payload internally.

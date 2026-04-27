@@ -32,5 +32,8 @@ class Agenda(BaseModel):
 class AgendaDeps(BaseModel):
     agenda: Agenda
     session_id: str
+    current_user_message: str = ""
+    image_data: Optional[bytes] = None
+    image_content_type: Optional[str] = None
 
     model_config = {"arbitrary_types_allowed": True}

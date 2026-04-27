@@ -1,14 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowUp,
   Check,
   Loader2,
+  Paperclip,
   RotateCcw,
   Square,
   Wrench,
+  X,
 } from 'lucide-react';
 import { ChatMarkdown } from './ChatMarkdown';
 import { ChatError, ErrorBanner } from './ErrorBanner';
@@ -51,11 +53,24 @@ export function ChatPanel({
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ChatError | null>(null);
+  const [pendingImage, setPendingImage] = useState<File | null>(null);
   // Holds the last user message actually sent. Needed so the Retry button
   // can re-submit without the user retyping. Reset on any new send.
   const lastSentRef = useRef<string>('');
+  const lastImageRef = useRef<File | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingImageUrl = useMemo(
+    () => (pendingImage ? URL.createObjectURL(pendingImage) : null),
+    [pendingImage]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (pendingImageUrl) URL.revokeObjectURL(pendingImageUrl);
+    };
+  }, [pendingImageUrl]);
 
   useEffect(() => {
     // Auto-scroll to bottom on any message change
@@ -191,11 +206,11 @@ export function ChatPanel({
   );
 
   const sendMessage = useCallback(
-    async (message: string) => {
+    async (message: string, image?: File | null) => {
       const userMsg: ChatMessage = {
         id: uuid(),
         role: 'user',
-        content: message,
+        content: message || '[Image attached]',
       };
       const asstMsg: ChatMessage = {
         id: uuid(),
@@ -205,6 +220,7 @@ export function ChatPanel({
       };
       setMessages((m) => [...m, userMsg, asstMsg]);
       lastSentRef.current = message;
+      lastImageRef.current = image || null;
       setError(null); // clear any prior banner — we're making a new attempt
       setLoading(true);
       try {
@@ -212,6 +228,7 @@ export function ChatPanel({
           session_id: sessionKey,
           user_message: message,
           agenda_snapshot: agendaSnapshot,
+          image,
         });
       } catch {
         setLoading(false);
@@ -221,16 +238,36 @@ export function ChatPanel({
   );
 
   const submit = () => {
-    if (!input.trim() || loading) return;
+    if ((!input.trim() && !pendingImage) || loading) return;
     const message = input;
+    const image = pendingImage;
     setInput('');
-    void sendMessage(message);
+    setPendingImage(null);
+    void sendMessage(message, image);
   };
 
   const handleRetry = useCallback(() => {
-    if (!lastSentRef.current || loading) return;
-    void sendMessage(lastSentRef.current);
+    if ((!lastSentRef.current && !lastImageRef.current) || loading) return;
+    void sendMessage(lastSentRef.current, lastImageRef.current);
   }, [loading, sendMessage]);
+
+  const handleAttach = () => fileInputRef.current?.click();
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
+      alert('Only jpg / png / webp accepted');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Image must be < 5 MB');
+      e.target.value = '';
+      return;
+    }
+    setPendingImage(file);
+    e.target.value = '';
+  };
 
   return (
     <div className='flex flex-col h-full min-h-0 bg-white'>
@@ -360,11 +397,47 @@ export function ChatPanel({
         ))}
       </div>
       <div className='border-t border-gray-200 p-3 bg-white'>
+        {pendingImage && pendingImageUrl && (
+          <div className='mb-2 flex items-center gap-2 px-2 py-1 rounded-md bg-gray-100 text-xs text-gray-700'>
+            <div
+              aria-label='attached image preview'
+              className='h-8 w-8 shrink-0 rounded bg-cover bg-center'
+              style={{ backgroundImage: `url(${pendingImageUrl})` }}
+            />
+            <span className='truncate flex-1 min-w-0'>{pendingImage.name}</span>
+            <button
+              type='button'
+              onClick={() => setPendingImage(null)}
+              aria-label='Remove image'
+              className='shrink-0 h-6 w-6 flex items-center justify-center rounded-full hover:bg-gray-200'
+            >
+              <X className='w-3.5 h-3.5' />
+            </button>
+          </div>
+        )}
         <div
           className='flex items-end gap-1.5 rounded-2xl border border-gray-200
                      bg-gray-50 pl-4 pr-1 py-1
                      focus-within:border-gray-300 focus-within:bg-white transition-colors'
         >
+          <input
+            ref={fileInputRef}
+            type='file'
+            accept='image/jpeg,image/png,image/webp'
+            className='hidden'
+            onChange={handleFileChange}
+          />
+          <button
+            type='button'
+            onClick={handleAttach}
+            aria-label='Attach image'
+            disabled={loading}
+            className='shrink-0 flex items-center justify-center h-8 w-8 rounded-full
+                       text-gray-500 hover:text-gray-800 hover:bg-gray-100
+                       disabled:opacity-40 disabled:cursor-not-allowed transition-colors'
+          >
+            <Paperclip className='w-4 h-4' />
+          </button>
           <textarea
             ref={textareaRef}
             rows={1}
@@ -398,7 +471,7 @@ export function ChatPanel({
               type='button'
               onClick={submit}
               aria-label='Send'
-              disabled={!input.trim()}
+              disabled={!input.trim() && !pendingImage}
               className='shrink-0 flex items-center justify-center h-8 w-8 rounded-full
                          bg-indigo-600 text-white hover:bg-indigo-700
                          disabled:bg-gray-200 disabled:text-gray-400

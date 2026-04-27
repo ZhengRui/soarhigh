@@ -25,6 +25,11 @@ OPENAI_API_KEY = config("OPENAI_API_KEY", cast=str)
 # meeting_agent module / meeting_agent_sessions table — future agents
 # (blog, vote) can add their own MODEL env vars without collision.
 MEETING_AGENT_MODEL = config("MEETING_AGENT_MODEL", cast=str, default="google-gla:gemini-3.1-flash-lite-preview")
+# Inner OpenAI model for converting pasted registration text into a structured
+# Meeting. Kept separate from MEETING_AGENT_MODEL so we can compare planner
+# quality/latency independently of the outer Pydantic AI router.
+MEETING_TEXT_PLANNER_MODEL = config("MEETING_TEXT_PLANNER_MODEL", cast=str, default="o4-mini")
+MEETING_TEXT_PLANNER_REASONING_EFFORT = config("MEETING_TEXT_PLANNER_REASONING_EFFORT", cast=str, default="low")
 # Accept either name; google-genai SDK itself checks both.
 GOOGLE_API_KEY = config("GOOGLE_API_KEY", cast=str, default="") or config("GEMINI_API_KEY", cast=str, default="")
 

@@ -6,7 +6,11 @@ from openai.lib._parsing._completions import type_to_response_format_param
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import ValidationError
 
-from ..config import OPENAI_API_KEY
+from ..config import (
+    MEETING_TEXT_PLANNER_MODEL,
+    MEETING_TEXT_PLANNER_REASONING_EFFORT,
+    OPENAI_API_KEY,
+)
 from ..db.core import get_members
 from ..models.meeting import (
     Attendee,
@@ -22,6 +26,17 @@ from .prompts import (
 )
 
 default_location = "华美居装饰家居城B区809 (1号线宝体站)"
+
+
+def _supports_reasoning(model: str) -> bool:
+    model_id = model.split(":", 1)[-1].lower()
+    return model_id.startswith(("o1", "o3", "o4", "gpt-5"))
+
+
+def _text_planner_reasoning(model: str) -> dict[str, str] | None:
+    if not _supports_reasoning(model):
+        return None
+    return {"effort": MEETING_TEXT_PLANNER_REASONING_EFFORT}
 
 
 def convert_parsed_meeting_to_meeting(parsed_meeting: MeetingParsedFromImage | MeetingPlannedFromText) -> Meeting:
@@ -207,24 +222,28 @@ def plan_meeting_from_text(text: str) -> Meeting:
             if retry_count > 0:
                 print(f"Retry {retry_count}/{max_retries}")
 
-            # Create a response using the Responses API
-            response = client.responses.create(
-                model="o3-mini",
-                input=[
+            response_kwargs = {
+                "model": MEETING_TEXT_PLANNER_MODEL,
+                "input": [
                     {"role": "system", "content": plan_meeting_from_text_developer_prompt},
                     {"role": "user", "content": formatted_user_prompt},
                 ],
-                text={
+                "text": {
                     "format": {
                         "type": "json_schema",
                         "name": json_schema["json_schema"]["name"],  # type: ignore
                         "schema": json_schema["json_schema"]["schema"],  # type: ignore
                     }
                 },
-                reasoning={"effort": "low"},
-                store=True,
-                timeout=60,
-            )
+                "store": True,
+                "timeout": 60,
+            }
+            reasoning = _text_planner_reasoning(MEETING_TEXT_PLANNER_MODEL)
+            if reasoning is not None:
+                response_kwargs["reasoning"] = reasoning
+
+            # Create a response using the Responses API
+            response = client.responses.create(**response_kwargs)  # type: ignore[call-overload]
             # Parse the JSON response into a MeetingPlannedFromText object
             parsed_meeting = MeetingPlannedFromText.model_validate_json(response.output_text)
 

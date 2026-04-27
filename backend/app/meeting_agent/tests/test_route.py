@@ -1,13 +1,17 @@
 import json
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import ToolDefinition
 
+from app.api.routes.meeting_agent import _already_has_summary_table
 from app.api.serv import app
 from app.meeting_agent import agent as agent_module
 from app.meeting_agent.store import InMemorySessionStore
+from app.models.meeting import Attendee, Meeting
+from app.models.meeting import Segment as MeetingSegment
 
 
 class ForcedArgsTestModel(TestModel):
@@ -44,6 +48,40 @@ def _parse_sse(byte_chunks):
     return events
 
 
+def _turn_form(body: dict) -> dict:
+    return {"payload": json.dumps(body)}
+
+
+def _fake_planned_meeting() -> Meeting:
+    return Meeting(
+        id=None,
+        no=999,
+        type="Regular",
+        theme="Route Summary",
+        manager=Attendee(id=None, name="Rui Zheng", member_id=""),
+        date="2026-05-06",
+        start_time="19:15",
+        end_time="21:30",
+        location="华美居装饰家居城B区809",
+        introduction="",
+        status="draft",
+        awards=[],
+        segments=[
+            MeetingSegment(
+                id="legacy",
+                type="Meeting Rules Introduction (SAA)",
+                start_time="19:30",
+                end_time="19:32",
+                duration="2",
+                role_taker=Attendee(id=None, name="Joyce Feng", member_id=""),
+                title="",
+                content="",
+                related_segment_ids="",
+            )
+        ],
+    )
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -76,7 +114,7 @@ def test_turn_happy_path_streams_done(client, mock_auth_dep):
         forced_args={"set_role": {"segment_id": "s1", "role_taker": "Test"}},
     )
     with agent_module.agent.override(model=test_model):
-        with client.stream("POST", "/meeting-agent/turn", json=body) as r:
+        with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
             assert r.status_code == 200
             events = _parse_sse(r.iter_bytes())
 
@@ -133,7 +171,7 @@ async def test_turn_persists_history_cursor_as_json_safe_payload(client, mock_au
         forced_args={"set_role": {"segment_id": "s1", "role_taker": "Test"}},
     )
     with agent_module.agent.override(model=test_model):
-        with client.stream("POST", "/meeting-agent/turn", json=body) as r:
+        with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
             assert r.status_code == 200
             # Drain the stream so the route's post-run save_turn() executes.
             for _ in r.iter_bytes():
@@ -162,8 +200,371 @@ def test_turn_requires_auth(client):
             "segments": [],
         },
     }
-    r = client.post("/meeting-agent/turn", json=body)
+    r = client.post("/meeting-agent/turn", data=_turn_form(body))
     assert r.status_code in (401, 403), f"expected 401/403, got {r.status_code}: {r.text}"
+
+
+def test_turn_accepts_multipart_image(client, mock_auth_dep):
+    body = {
+        "session_id": "img-t1",
+        "user_message": "用这张图创建",
+        "agenda_snapshot": {
+            "meta": {"start_time": "19:15"},
+            "segments": [
+                {
+                    "id": "s1",
+                    "type": "SAA",
+                    "start_time": "19:30",
+                    "duration": 3,
+                    "role_taker": "Liz",
+                    "buffer_before": 0,
+                }
+            ],
+        },
+    }
+    test_model = ForcedArgsTestModel(
+        call_tools=["set_role"],
+        forced_args={"set_role": {"segment_id": "s1", "role_taker": "Test"}},
+    )
+    with agent_module.agent.override(model=test_model):
+        with client.stream(
+            "POST",
+            "/meeting-agent/turn",
+            data=_turn_form(body),
+            files={"image": ("agenda.png", b"fake-image", "image/png")},
+        ) as r:
+            assert r.status_code == 200
+            events = _parse_sse(r.iter_bytes())
+
+    assert events[-1]["event"] == "done"
+
+
+def test_turn_appends_creation_summary_table(client, mock_auth_dep):
+    raw_text = (
+        "SOARHIGH 999th meeting: Route Summary\n"
+        "✍ Theme: Route Summary\n"
+        "📅 Date: 2026-05-06\n"
+        "⏰ Time: 19:30 - 21:30\n"
+        "📍 Location: 华美居装饰家居城B区809\n"
+        "👧MM: Rui Zheng\n"
+        "SAA: Joyce\n"
+    )
+    body = {
+        "session_id": "create-summary",
+        "user_message": f"请根据下面文本创建会议草稿\n\n{raw_text}",
+        "agenda_snapshot": {
+            "meta": {"start_time": "19:15"},
+            "segments": [],
+        },
+    }
+    test_model = ForcedArgsTestModel(
+        call_tools=["create_from_text"],
+        forced_args={"create_from_text": {"raw_text": raw_text}},
+    )
+    with patch("app.meeting_agent.tools.plan_meeting_from_text", return_value=_fake_planned_meeting()):
+        with agent_module.agent.override(model=test_model):
+            with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
+                assert r.status_code == 200
+                events = _parse_sse(r.iter_bytes())
+
+    assistant_text = "".join(e["data"]["chunk"] for e in events if e["event"] == "assistant_text")
+    # Both tables present (creation is wholesale).
+    assert "| Field | Value |" in assistant_text
+    assert "| Meeting No. | 999 |" in assistant_text
+    assert "| Meeting Manager | Rui Zheng |" in assistant_text
+    assert "| Time | Duration | Type | Role taker |" in assistant_text
+    # Tables are wrapped in <details> for default-collapsed display.
+    assert "<details>" in assistant_text
+    assert "<summary>📌 Meeting Meta</summary>" in assistant_text
+    assert "<summary>📋 Agenda</summary>" in assistant_text
+    assert "Please confirm the draft above" in assistant_text
+    assert events[-1]["event"] == "done"
+    assert "| Field | Value |" in events[-1]["data"]["final_text"]
+
+
+def test_summary_table_detection_accepts_model_generated_chinese_table():
+    assert _already_has_summary_table("| 项目 | 内容 |\n|---|---|\n| 会议编号 | 999 |")
+    assert _already_has_summary_table("| 信息 | 当前值 |\n|---|---|")
+    assert not _already_has_summary_table("已创建草稿, 请确认。")
+
+
+def test_segment_edit_appends_segment_table_only(client, mock_auth_dep):
+    """Fine-grained segment edit (set_role) → segment table only, no meta table."""
+    body = {
+        "session_id": "edit-segment-only",
+        "user_message": "change SAA to Joyce",
+        "agenda_snapshot": {
+            "meta": {"start_time": "19:30", "end_time": "21:30"},
+            "segments": [
+                {"id": "s1", "type": "SAA", "start_time": "19:30", "duration": 3, "role_taker": "Liz"},
+            ],
+        },
+    }
+    test_model = ForcedArgsTestModel(
+        call_tools=["set_role"],
+        forced_args={"set_role": {"segment_id": "s1", "role_taker": "Joyce Feng"}},
+    )
+    with agent_module.agent.override(model=test_model):
+        with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
+            assert r.status_code == 200
+            events = _parse_sse(r.iter_bytes())
+
+    text = "".join(e["data"]["chunk"] for e in events if e["event"] == "assistant_text")
+    # Folded segment table present.
+    assert "<summary>📋 Agenda</summary>" in text
+    assert "| Time | Duration | Type | Role taker |" in text
+    # Meta table NOT present (no meta change happened).
+    assert "<summary>📌 Meeting Meta</summary>" not in text
+    assert "| Field | Value |" not in text
+
+
+def test_meta_edit_appends_meta_table_only(client, mock_auth_dep):
+    """Fine-grained meta edit (set_meta) → meta table only, no segment table."""
+    body = {
+        "session_id": "edit-meta-only",
+        "user_message": "change theme to Resilience",
+        "agenda_snapshot": {
+            "meta": {"theme": "Old", "start_time": "19:30", "end_time": "21:30"},
+            "segments": [
+                {"id": "s1", "type": "SAA", "start_time": "19:30", "duration": 3, "role_taker": "Liz"},
+            ],
+        },
+    }
+    test_model = ForcedArgsTestModel(
+        call_tools=["set_meta"],
+        forced_args={"set_meta": {"field": "theme", "value": "Resilience"}},
+    )
+    with agent_module.agent.override(model=test_model):
+        with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
+            assert r.status_code == 200
+            events = _parse_sse(r.iter_bytes())
+
+    text = "".join(e["data"]["chunk"] for e in events if e["event"] == "assistant_text")
+    # Meta table present, folded.
+    assert "<summary>📌 Meeting Meta</summary>" in text
+    assert "| Theme | Resilience |" in text
+    # Segment table NOT present.
+    assert "<summary>📋 Agenda</summary>" not in text
+
+
+def test_preview_meeting_appends_folded_preview_tables(client, mock_auth_dep):
+    """preview_meeting is read-only — no agenda mutation — but the user still
+    gets the same folded meta + agenda tables (with membership annotations)
+    as the create / edit paths, labeled "preview of #N" so they don't think
+    we replaced their current agenda."""
+    body = {
+        "session_id": "preview-1",
+        "user_message": "show me #425 agenda",
+        "agenda_snapshot": {
+            "meta": {"start_time": "19:30"},
+            "segments": [
+                {"id": "s1", "type": "SAA", "start_time": "19:30", "duration": 3, "role_taker": "Liz"},
+            ],
+        },
+    }
+    fake_full_meeting = {
+        "id": "uuid-425",
+        "no": 425,
+        "type": "Workshop",
+        "manager": {"id": None, "name": "Joyce Feng", "member_id": ""},
+        "theme": "Emojis",
+        "date": "2025-05-21",
+        "start_time": "19:15",
+        "end_time": "21:30",
+        "location": "Loc",
+        "segments": [
+            {
+                "id": "1",
+                "type": "Members and Guests Registration, Warm Up",
+                "start_time": "19:15",
+                "duration": "15",
+                "role_taker": {"id": None, "name": "All", "member_id": ""},
+            },
+            {
+                "id": "2",
+                "type": "Workshop",
+                "start_time": "20:08",
+                "duration": "29",
+                "role_taker": {"id": None, "name": "Lucas", "member_id": ""},  # not in CLUB_MEMBERS
+            },
+            {
+                "id": "3",
+                "type": "Closing Remarks",
+                "start_time": "21:14",
+                "duration": "1",
+                "role_taker": {"id": None, "name": "Amy Fang", "member_id": "m1"},
+            },
+        ],
+    }
+    test_model = ForcedArgsTestModel(
+        call_tools=["preview_meeting"],
+        forced_args={"preview_meeting": {"no": 425}},
+    )
+    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=fake_full_meeting):
+        with agent_module.agent.override(model=test_model):
+            with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
+                assert r.status_code == 200
+                events = _parse_sse(r.iter_bytes())
+
+    text = "".join(e["data"]["chunk"] for e in events if e["event"] == "assistant_text")
+    # Both preview tables present, folded, labeled with the meeting number.
+    assert "<summary>📌 Meeting #425 Meta (preview)</summary>" in text
+    assert "<summary>📋 Meeting #425 Agenda (preview)</summary>" in text
+    # Meta table populated from the preview result, not the current agenda.
+    assert "| Meeting No. | 425 |" in text
+    assert "| Theme | Emojis |" in text
+    assert "| Meeting Manager | Joyce Feng |" in text
+    # Segment table includes ALL rows (including the late-time Closing Remarks
+    # — guards the recent fix where late segments were truncated by the bulk
+    # `_db_meetings_recent` 1000-row cap).
+    assert "21:14" in text
+    assert "Closing Remarks" in text
+    # Membership annotation comes from the route's _format_role_display.
+    assert "Lucas (guest)" in text
+    assert "Amy Fang (member)" in text
+    # The route did NOT also emit a "current agenda" addendum since
+    # preview_meeting doesn't mutate the agenda.
+    assert "<summary>📋 Agenda</summary>" not in text
+
+
+def test_build_agenda_addendum_renders_every_preview_in_one_turn():
+    """When multiple `preview_meeting` calls fire in one turn (parallel tool
+    calls — e.g. "show me #446, #425, #413"), the route must render the
+    meta + agenda fold pair for EACH preview, in call order. The previous
+    `_latest_preview_payload` helper only kept the last and silently
+    dropped earlier ones."""
+    from app.api.routes.meeting_agent import _build_agenda_addendum
+    from app.meeting_agent.models import Agenda, Meta
+
+    tool_trace = [
+        {
+            "name": "preview_meeting",
+            "status": "ok",
+            "result": {
+                "no": 446,
+                "type": "Workshop",
+                "theme": "Career, Growth, Choice",
+                "manager": "Joyce Feng",
+                "date": "2025-04-09",
+                "start_time": "19:15",
+                "end_time": "21:30",
+                "location": "Loc",
+                "segments": [
+                    {"start_time": "19:30", "type": "SAA", "duration": 2, "role_taker": "Liz Huang"},
+                ],
+            },
+        },
+        {
+            "name": "preview_meeting",
+            "status": "ok",
+            "result": {
+                "no": 425,
+                "type": "Workshop",
+                "theme": "Emojis",
+                "manager": "Lucas",
+                "date": "2025-01-22",
+                "start_time": "19:15",
+                "end_time": "21:30",
+                "location": "Loc",
+                "segments": [
+                    {"start_time": "20:08", "type": "Workshop", "duration": 29, "role_taker": "Lucas"},
+                ],
+            },
+        },
+    ]
+    addendum = _build_agenda_addendum(tool_trace, Agenda(meta=Meta(), segments=[]), assistant_text_so_far="")
+
+    # Both meetings get their own pair of folds.
+    assert "<summary>📌 Meeting #446 Meta (preview)</summary>" in addendum
+    assert "<summary>📋 Meeting #446 Agenda (preview)</summary>" in addendum
+    assert "<summary>📌 Meeting #425 Meta (preview)</summary>" in addendum
+    assert "<summary>📋 Meeting #425 Agenda (preview)</summary>" in addendum
+    # Each meeting's data is in its own block.
+    assert "| Meeting No. | 446 |" in addendum
+    assert "| Meeting No. | 425 |" in addendum
+    assert "Liz Huang (member)" in addendum
+    # Lucas isn't in CLUB_MEMBERS — guest annotation comes from the route's helper.
+    assert "Lucas (guest)" in addendum
+    # Order preserved: call order, not reverse.
+    assert addendum.index("Meeting #446 Meta") < addendum.index("Meeting #425 Meta")
+
+
+def test_show_current_agenda_appends_folded_tables_for_current_draft(client, mock_auth_dep):
+    """`show_current_agenda` is read-only — no mutation — but the user gets
+    the same folded meta + agenda tables (with membership annotations) as
+    after a create / edit. The summary labels are the plain "Meeting Meta"
+    / "Agenda" headers (not "preview of #N") because this IS the current
+    draft, not a historical lookup."""
+    body = {
+        "session_id": "show-current-1",
+        "user_message": "show me the current agenda",
+        "agenda_snapshot": {
+            "meta": {
+                "no": 451,
+                "type": "Regular",
+                "theme": "Lying Flat",
+                "manager": "Vicky Yang",
+                "start_time": "19:30",
+                "end_time": "21:30",
+            },
+            "segments": [
+                {"id": "s1", "type": "SAA", "start_time": "19:30", "duration": 2, "role_taker": "Liz Huang"},
+                {"id": "s2", "type": "Opening Remarks", "start_time": "19:32", "duration": 2, "role_taker": "Lucas"},
+            ],
+        },
+    }
+    test_model = ForcedArgsTestModel(
+        call_tools=["show_current_agenda"],
+        forced_args={"show_current_agenda": {}},
+    )
+    with agent_module.agent.override(model=test_model):
+        with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
+            assert r.status_code == 200
+            events = _parse_sse(r.iter_bytes())
+
+    text = "".join(e["data"]["chunk"] for e in events if e["event"] == "assistant_text")
+    # Plain summaries — NOT the "preview of #N" labels used by preview_meeting.
+    assert "<summary>📌 Meeting Meta</summary>" in text
+    assert "<summary>📋 Agenda</summary>" in text
+    # Meta drawn from the snapshot.
+    assert "| Meeting No. | 451 |" in text
+    assert "| Theme | Lying Flat |" in text
+    # Segment table includes the membership annotations from the route.
+    assert "Liz Huang (member)" in text
+    assert "Lucas (guest)" in text
+
+
+def test_chitchat_does_not_append_any_table(client, mock_auth_dep):
+    """No tools fired → no addendum."""
+    body = {
+        "session_id": "chitchat-1",
+        "user_message": "hi",
+        "agenda_snapshot": {
+            "meta": {"start_time": "19:30"},
+            "segments": [],
+        },
+    }
+    # TestModel without call_tools just emits text and finishes.
+    test_model = ForcedArgsTestModel(call_tools=[], forced_args={})
+    with agent_module.agent.override(model=test_model):
+        with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
+            assert r.status_code == 200
+            events = _parse_sse(r.iter_bytes())
+
+    text = "".join(e["data"]["chunk"] for e in events if e["event"] == "assistant_text")
+    assert "<details>" not in text
+    assert "| Field | Value |" not in text
+    assert "| Time | Type" not in text
+
+
+def test_turn_rejects_unsupported_image_type(client, mock_auth_dep):
+    body = {"session_id": "img-bad", "user_message": "create", "agenda_snapshot": {"meta": {}, "segments": []}}
+    r = client.post(
+        "/meeting-agent/turn",
+        data=_turn_form(body),
+        files={"image": ("agenda.gif", b"fake-image", "image/gif")},
+    )
+    assert r.status_code == 400
 
 
 # ---------------------------------------------------------------------------
