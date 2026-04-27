@@ -12,6 +12,31 @@ def test_router_prompt_documents_clone_protocol():
     assert "confirmation" in prompt.lower()
 
 
+def test_router_prompt_clone_path_documents_all_lookup_axes():
+    """The clone-protocol section's `lookup_meeting(...)` signature must
+    list every supported filter axis. Pre-fix the section was stale —
+    only `no?, name_substring?, type_filter?, limit?` — so the model
+    reading the clone path saw a narrower API than the real tool, which
+    can steer it away from theme/intro/date filters in clone-by-
+    description queries."""
+    prompt = ROUTER_SYSTEM_PROMPT
+    # Find the clone-path bullet line.
+    clone_lines = [line for line in prompt.splitlines() if line.startswith("- `lookup_meeting(")]
+    assert clone_lines, "clone-path bullet for lookup_meeting not found in prompt"
+    clone_sig = clone_lines[0]
+    for axis in (
+        "no?",
+        "name_substring?",
+        "theme_substring?",
+        "introduction_substring?",
+        "type_filter?",
+        "date_from?",
+        "date_to?",
+        "limit?",
+    ):
+        assert axis in clone_sig, f"clone-path signature missing {axis!r}: {clone_sig!r}"
+
+
 def test_router_prompt_documents_create_from_image():
     prompt = ROUTER_SYSTEM_PROMPT
     assert "create_from_image" in prompt
@@ -92,6 +117,7 @@ def test_snapshot_template_supports_optional_attachment_block():
         user_message="hi",
         attachment_block="\n[Attachment]\nimage_attached: true\n",
         language_hint="",
+        today="2026-04-27",
     )
     assert "[Attachment]" in formatted
     assert "image_attached: true" in formatted
@@ -105,6 +131,7 @@ def test_snapshot_template_empty_attachment_block_renders_clean():
         user_message="hi",
         attachment_block="",
         language_hint="",
+        today="2026-04-27",
     )
     assert "[Attachment]" not in formatted
 
@@ -117,6 +144,7 @@ def test_snapshot_template_language_hint_renders():
         user_message="hi",
         attachment_block="",
         language_hint="[Reply language] zh\n",
+        today="2026-04-27",
     )
     assert "[Reply language] zh" in formatted
 

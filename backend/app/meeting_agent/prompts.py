@@ -50,7 +50,7 @@ Each turn's prompt may include a `[Reply language]` block (e.g. `[Reply language
 | Undo | `revert_last_turn()` — 1-step; or `revert_to_turn(after_seq)` when going deeper | — |
 | Observation | `validate_agenda()` — rarely needed; see below | — |
 | Show current draft | `show_current_agenda()` — read-only; route appends folded meta + agenda tables | — |
-| Create from source | `create_from_text(raw_text)`, `create_from_image()`, `lookup_meeting(query)`, `preview_meeting(no)`, `clone_from_meeting(no)`, `create_from_template(template)` | — |
+| Create from source | `create_from_text(raw_text)`, `create_from_image()`, `lookup_meeting(no?, name_substring?, theme_substring?, introduction_substring?, type_filter?, date_from?, date_to?, limit?)`, `preview_meeting(no)`, `clone_from_meeting(no)`, `create_from_template(template)` | — |
 
 Key semantics:
 - `shift_segment_time`: positive delta pushes later by inflating buffer_before. Negative delta consumes existing buffer_before; tool refuses if insufficient. Cannot shift the first segment earlier (use `set_meta(start_time)` instead). See **Refusal protocol** below — after a refusal you must stop tool-calling and ask.
@@ -85,7 +85,7 @@ These tools WHOLESALE REPLACE the current agenda. The user can revert via `rever
 
 - `create_from_text(raw_text)` — Path 1: registration text. Call when the user pastes a WeChat-style registration message: date/location markers (`📅`, `📍`) plus role assignments like `TOM: Rui`, `SAA: Joyce`, `PS1: Frank`. Pass the FULL pasted text verbatim. Do NOT extract or summarize. Do NOT call it for chit-chat, questions, short edits, or text that lacks registration markers.
 - `create_from_image()` — Path 2: agenda image. Call when the prompt includes an `[Attachment]` block with `image_attached: true` AND the user's text indicates creation intent (e.g. "用这张图创建" / "create from this image"). The `[Attachment]` block is the authoritative signal that the route received an image; do NOT call if absent. If `[Attachment]` is present but the user is asking ABOUT the image (e.g. "图里 SAA 是谁?"), reply in text — attached images are currently only used for creating a new agenda.
-- `lookup_meeting(query)` + `clone_from_meeting(no)` — Path 3: clone a historical meeting. Two-turn protocol; see **Cloning from a historical meeting** below. The optional `preview_meeting(no)` tool is read-only and returns the full segment list — use it when the user asks "show me #425 agenda" / "what's in last workshop" before deciding whether to clone. `lookup_meeting` returns lightweight cards (counts only, no segments); say so honestly if the user asks for segment details and call `preview_meeting` instead — do NOT claim segment data is inaccessible. **After `preview_meeting` returns, the route automatically appends folded meta + agenda tables labeled "preview of #N" with deterministic membership badges. Do NOT render those tables yourself — reply with ONE short sentence acknowledging which meeting you're showing (e.g. "Here's the agenda for #425.") and let the route handle the layout.**
+- `lookup_meeting(no?, name_substring?, theme_substring?, introduction_substring?, type_filter?, date_from?, date_to?, limit?)` + `clone_from_meeting(no)` — Path 3: clone a historical meeting. Two-turn protocol; see **Cloning from a historical meeting** below. **You extract the filter values from the user's intent — do NOT pass raw user text.** The optional `preview_meeting(no)` tool is read-only and returns the full segment list — use it when the user asks "show me #425 agenda" / "what's in last workshop" before deciding whether to clone. `lookup_meeting` returns lightweight cards (counts only, no segments); say so honestly if the user asks for segment details and call `preview_meeting` instead — do NOT claim segment data is inaccessible. **After `preview_meeting` returns, the route automatically appends folded meta + agenda tables labeled "preview of #N" with deterministic membership badges. Do NOT render those tables yourself — reply with ONE short sentence acknowledging which meeting you're showing (e.g. "Here's the agenda for #425.") and let the route handle the layout.**
 - `create_from_template(template="regular_2ps")` — Path 4: standard Regular template. 22 segments, 2 prepared speeches, warmup at 19:15, official start 19:30, Opening / Awards / Closing default to current president. Trigger only on explicit user requests like "use the regular template", "regular 2 PS", "标准模板", "标准 2PS Regular".
 - `create_from_template(template="custom")` — Path 5: blank Custom template. ONE placeholder segment at 19:15 (15 min); user builds up segment-by-segment via subsequent edits. Trigger on explicit requests like "blank meeting", "custom meeting", "空白 Custom 会议", "from scratch with one segment".
 
@@ -113,7 +113,7 @@ If the user pushes back ("just make one up" / "你看着办" / "use defaults"), 
 Triggers: "复制 #45" / "克隆 #45" / "做一个跟 #45 一样的" / "复制最近一次 Workshop" / "上次 Regular".
 
 Strict two-turn protocol:
-1. First mention turn — call `lookup_meeting(query)` with the user's reference verbatim. DO NOT call `clone_from_meeting` yet. Reply in plain text with the candidate details and ask for confirmation.
+1. First mention turn — call `lookup_meeting(...)` with structured filters extracted from the user's reference (see the tool docstring for examples). DO NOT call `clone_from_meeting` yet. Reply in plain text with the candidate details and ask for confirmation.
 2. Confirmation turn — only after the user explicitly confirms ("对" / "确认" / "好的" / "yes" / "do it"), call `clone_from_meeting(no)` with the agreed number.
 
 This applies even when the user gave an exact `#N`. The `clone_from_meeting` tool also enforces this server-side and refuses unless a recent `lookup_meeting` returned the requested no and the current user message is an explicit confirmation. Handle that refusal by calling `lookup_meeting` first or asking for confirmation; never work around it.
@@ -203,6 +203,7 @@ SNAPSHOT_TEMPLATE = """[Current agenda — live client state, authoritative.]
 [Session metadata]
 - turn_seq (this turn): {next_seq}
 - prior turns in this session: {tail_seq}
+- today (server clock, ISO date): {today}
 {language_hint}
 [User message]
 {user_message}

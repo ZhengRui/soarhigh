@@ -2,7 +2,9 @@ import asyncio
 import copy
 import json
 import logging
+from datetime import datetime
 from typing import AsyncIterator
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -193,6 +195,33 @@ def _fold(summary: str, body: str) -> str:
     return f"<details>\n<summary>{summary}</summary>\n\n{body}\n\n</details>"
 
 
+def _render_intro_block(text: str) -> str:
+    """Wrap intro paragraph(s) in a Markdown fenced code block so the
+    content is visually separated from the fold's summary line and from
+    surrounding prose — without a fence, intros run together with the
+    title and look like the agent's own commentary.
+
+    The fence length is chosen to exceed any backtick run in the text
+    (CommonMark accepts variable-length fences) so an intro that
+    happens to contain its own ``` won't close the outer block early.
+
+    A single-line intro is padded with a trailing blank line so the
+    rendered code block has at least two visual rows — without the
+    pad a one-liner like 'ai is moving at astonishing speed' renders
+    as a cramped, single-row strip."""
+    longest_run = 0
+    current = 0
+    for ch in text:
+        if ch == "`":
+            current += 1
+            longest_run = max(longest_run, current)
+        else:
+            current = 0
+    fence = "`" * max(3, longest_run + 1)
+    body = text if "\n" in text else text + "\n"
+    return f"{fence}\n{body}\n{fence}"
+
+
 def _wholesale_suffix(tool_trace: list[dict]) -> str:
     """The missing-fields nudge that historically followed the creation table.
     Reads `missing_required_fields` from the most recent successful create/clone
@@ -258,16 +287,22 @@ def _render_preview_segment_table(preview: dict) -> str:
 
 
 def _render_preview_addendum(previews: list[dict]) -> str:
-    """Folded meta + segment tables for one or more `preview_meeting` results.
+    """Folded meta / introduction / segment blocks for one or more
+    `preview_meeting` results.
 
-    Each preview produces its own pair of folds so a multi-preview turn
-    (e.g. "show me #446, #425, #413") yields all three meetings stacked.
-    Labels explicitly say "preview of #N" so users know we're showing a
-    historical meeting, NOT replacing their current agenda."""
+    Each preview produces its own block group so a multi-preview turn
+    (e.g. "show me #446, #425, #413") yields three meetings stacked.
+    Labels explicitly say "preview of #N" so users know we're showing
+    a historical meeting, NOT replacing their current agenda. The
+    Introduction fold is omitted entirely when the meeting has no
+    intro text — empty section would just be visual noise."""
     parts: list[str] = []
     for preview in previews:
         no = preview.get("no") or "?"
         parts.append(_fold(f"📌 Meeting #{no} Meta (preview)", _render_preview_meta_table(preview)))
+        intro_text = (preview.get("introduction") or "").strip()
+        if intro_text:
+            parts.append(_fold(f"📝 Meeting #{no} Introduction (preview)", _render_intro_block(intro_text)))
         parts.append(_fold(f"📋 Meeting #{no} Agenda (preview)", _render_preview_segment_table(preview)))
     return "\n\n" + "\n\n".join(parts)
 
@@ -301,6 +336,12 @@ def _build_agenda_addendum(tool_trace: list[dict], agenda, assistant_text_so_far
         parts: list[str] = []
         if wholesale or meta_changed:
             parts.append(_fold("📌 Meeting Meta", _render_meta_table(agenda)))
+            # Introduction fold rides with the Meta fold (same axis: meeting-
+            # level info). Omit when intro is empty — no point rendering an
+            # empty section.
+            intro_text = (agenda.meta.introduction or "").strip()
+            if intro_text:
+                parts.append(_fold("📝 Introduction", _render_intro_block(intro_text)))
         if wholesale or segment_changed:
             parts.append(_fold("📋 Agenda", _render_segment_table(agenda)))
         body = "\n\n".join(parts)
@@ -317,10 +358,11 @@ def _build_agenda_addendum(tool_trace: list[dict], agenda, assistant_text_so_far
         # as the post-mutation render, no missing-fields nudge (this isn't
         # a creation event), no "(preview of #N)" label since it IS the user's
         # current agenda.
-        parts = [
-            _fold("📌 Meeting Meta", _render_meta_table(agenda)),
-            _fold("📋 Agenda", _render_segment_table(agenda)),
-        ]
+        parts = [_fold("📌 Meeting Meta", _render_meta_table(agenda))]
+        intro_text = (agenda.meta.introduction or "").strip()
+        if intro_text:
+            parts.append(_fold("📝 Introduction", _render_intro_block(intro_text)))
+        parts.append(_fold("📋 Agenda", _render_segment_table(agenda)))
         return "\n\n" + "\n\n".join(parts)
 
     return ""
@@ -395,6 +437,12 @@ async def agent_turn(
 
             language_hint = f"[Reply language] {_detect_user_language(req.user_message)}\n"
 
+            # Resolve "today" in the club's local timezone (Asia/Shanghai).
+            # SoarHigh is a Shenzhen club and the meetings table stores dates
+            # in local Shanghai time; using UTC here would drift the model's
+            # "今年/上个月/今天" resolution by up to 8 hours during morning
+            # hours when UTC is still on the previous day.
+            today_iso = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
             prompt = SNAPSHOT_TEMPLATE.format(
                 snapshot_json=json.dumps(req.agenda_snapshot.model_dump(), ensure_ascii=False, indent=2),
                 next_seq=next_seq,
@@ -402,6 +450,7 @@ async def agent_turn(
                 user_message=req.user_message,
                 attachment_block=attachment_block,
                 language_hint=language_hint,
+                today=today_iso,
             )
 
             tool_call_args: dict[str, dict] = {}

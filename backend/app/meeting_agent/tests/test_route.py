@@ -372,6 +372,7 @@ def test_preview_meeting_appends_folded_preview_tables(client, mock_auth_dep):
         "start_time": "19:15",
         "end_time": "21:30",
         "location": "Loc",
+        "introduction": "Emojis are tiny pictures that pack big meaning.",
         "segments": [
             {
                 "id": "1",
@@ -400,15 +401,18 @@ def test_preview_meeting_appends_folded_preview_tables(client, mock_auth_dep):
         call_tools=["preview_meeting"],
         forced_args={"preview_meeting": {"no": 425}},
     )
-    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=fake_full_meeting):
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=fake_full_meeting):
         with agent_module.agent.override(model=test_model):
             with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
                 assert r.status_code == 200
                 events = _parse_sse(r.iter_bytes())
 
     text = "".join(e["data"]["chunk"] for e in events if e["event"] == "assistant_text")
-    # Both preview tables present, folded, labeled with the meeting number.
+    # Both preview tables present, folded, labeled with the meeting number,
+    # plus the new Introduction fold (since the meeting has intro text).
     assert "<summary>📌 Meeting #425 Meta (preview)</summary>" in text
+    assert "<summary>📝 Meeting #425 Introduction (preview)</summary>" in text
+    assert "Emojis are tiny pictures that pack big meaning." in text
     assert "<summary>📋 Meeting #425 Agenda (preview)</summary>" in text
     # Meta table populated from the preview result, not the current agenda.
     assert "| Meeting No. | 425 |" in text
@@ -487,6 +491,160 @@ def test_build_agenda_addendum_renders_every_preview_in_one_turn():
     assert "Lucas (guest)" in addendum
     # Order preserved: call order, not reverse.
     assert addendum.index("Meeting #446 Meta") < addendum.index("Meeting #425 Meta")
+    # Neither meeting carries an introduction in this fixture, so no
+    # Introduction fold should appear (empty fold would be visual noise).
+    assert "Introduction" not in addendum
+
+
+def test_preview_addendum_intro_fold_omitted_when_intro_empty():
+    """Preview render skips the Introduction fold entirely when the
+    historical meeting has no intro text. We don't ship an empty
+    section; cleaner UX to drop it."""
+    from app.api.routes.meeting_agent import _build_agenda_addendum
+    from app.meeting_agent.models import Agenda, Meta
+
+    tool_trace = [
+        {
+            "name": "preview_meeting",
+            "status": "ok",
+            "result": {
+                "no": 999,
+                "type": "Regular",
+                "theme": "X",
+                "manager": "M",
+                "date": "2026-01-01",
+                "introduction": "",  # empty
+                "segments": [],
+            },
+        },
+    ]
+    addendum = _build_agenda_addendum(tool_trace, Agenda(meta=Meta(), segments=[]), assistant_text_so_far="")
+    assert "<summary>📌 Meeting #999 Meta (preview)</summary>" in addendum
+    assert "<summary>📋 Meeting #999 Agenda (preview)</summary>" in addendum
+    assert "Introduction" not in addendum
+
+
+def test_render_intro_block_wraps_in_triple_backtick_fence():
+    """Intros render inside a code fence so they're visually separated
+    from the fold title — without a fence, the intro runs together with
+    the summary line and reads like the agent's commentary."""
+    from app.api.routes.meeting_agent import _render_intro_block
+
+    body = _render_intro_block("Hello world")
+    lines = body.splitlines()
+    # Opening fence, content line, padding blank line (one-liner gets
+    # padded so the rendered block isn't a cramped single row), closing fence.
+    assert lines[0] == "```"
+    assert lines[1] == "Hello world"
+    assert lines[2] == ""
+    assert lines[3] == "```"
+
+
+def test_render_intro_block_single_line_padded_to_two_rows():
+    """Single-line intros get a trailing blank line so the rendered
+    code block has at least two visual rows. Without padding, short
+    intros like 'ai is moving fast' render as a cramped one-row strip."""
+    from app.api.routes.meeting_agent import _render_intro_block
+
+    body = _render_intro_block("ai is moving at astonishing speed")
+    inner_lines = body.splitlines()[1:-1]  # everything between the fences
+    assert len(inner_lines) >= 2
+    assert inner_lines[0] == "ai is moving at astonishing speed"
+    assert inner_lines[1] == ""
+
+
+def test_render_intro_block_multi_line_intro_not_padded_further():
+    """Multi-line intros already have visual height; no extra blank
+    line appended (would just create dead whitespace at the bottom)."""
+    from app.api.routes.meeting_agent import _render_intro_block
+
+    body = _render_intro_block("Line one\nLine two\nLine three")
+    inner_lines = body.splitlines()[1:-1]
+    assert inner_lines == ["Line one", "Line two", "Line three"]
+
+
+def test_render_intro_block_fence_grows_to_outlast_inner_backticks():
+    """If the intro itself contains a triple-backtick run (e.g. someone
+    pasted a code sample), the outer fence has to be longer than the
+    longest inner run so it doesn't close prematurely."""
+    from app.api.routes.meeting_agent import _render_intro_block
+
+    intro_with_fence = "Use ``` for code blocks like this."
+    body = _render_intro_block(intro_with_fence)
+    # Outer fence must be at least 4 backticks (1 longer than the
+    # longest inner run of 3).
+    first_line = body.splitlines()[0]
+    assert first_line == "````"
+    last_line = body.splitlines()[-1]
+    assert last_line == "````"
+
+
+def test_preview_addendum_intro_fold_present_when_intro_text_present():
+    from app.api.routes.meeting_agent import _build_agenda_addendum
+    from app.meeting_agent.models import Agenda, Meta
+
+    tool_trace = [
+        {
+            "name": "preview_meeting",
+            "status": "ok",
+            "result": {
+                "no": 449,
+                "type": "Regular",
+                "theme": "Authenticity in Connection",
+                "manager": "Liz Huang",
+                "date": "2026-04-08",
+                "introduction": "Discussing how we move beyond performative connection.",
+                "segments": [],
+            },
+        },
+    ]
+    addendum = _build_agenda_addendum(tool_trace, Agenda(meta=Meta(), segments=[]), assistant_text_so_far="")
+    assert "<summary>📝 Meeting #449 Introduction (preview)</summary>" in addendum
+    # Intro body is wrapped in a fenced code block so it's visually
+    # separated from the fold's summary line.
+    # Single-line intro padded with a blank row inside the fence so the
+    # rendered block is at least two rows tall.
+    assert "```\nDiscussing how we move beyond performative connection.\n\n```" in addendum
+    # Order: Meta → Intro → Agenda within one preview block.
+    meta_idx = addendum.index("Meeting #449 Meta")
+    intro_idx = addendum.index("Meeting #449 Introduction")
+    agenda_idx = addendum.index("Meeting #449 Agenda")
+    assert meta_idx < intro_idx < agenda_idx
+
+
+def test_build_agenda_addendum_intro_fold_omitted_for_segment_only_edits():
+    """A pure segment edit (set_role / set_duration) renders ONLY the
+    Agenda fold. Bringing the intro fold along would clutter the reply
+    on every per-segment fix; intro rides with the Meta axis."""
+    from app.api.routes.meeting_agent import _build_agenda_addendum
+    from app.meeting_agent.models import Agenda, Meta, Segment
+
+    agenda = Agenda(
+        meta=Meta(introduction="A meaningful description that should NOT show up here."),
+        segments=[Segment(id="s1", type="SAA", start_time="19:30", duration=2, role_taker="Liz")],
+    )
+    tool_trace = [{"name": "set_role", "status": "ok"}]
+    addendum = _build_agenda_addendum(tool_trace, agenda, assistant_text_so_far="")
+    assert "<summary>📋 Agenda</summary>" in addendum
+    assert "Introduction" not in addendum
+
+
+def test_build_agenda_addendum_intro_fold_rides_with_meta_changes():
+    """When Meta is rendered (wholesale or meta-edit), the Introduction
+    fold rides along — same axis (meeting-level info)."""
+    from app.api.routes.meeting_agent import _build_agenda_addendum
+    from app.meeting_agent.models import Agenda, Meta
+
+    agenda = Agenda(
+        meta=Meta(no=500, theme="X", introduction="Why this meeting matters."),
+        segments=[],
+    )
+    tool_trace = [{"name": "set_meta", "status": "ok"}]
+    addendum = _build_agenda_addendum(tool_trace, agenda, assistant_text_so_far="")
+    assert "<summary>📌 Meeting Meta</summary>" in addendum
+    assert "<summary>📝 Introduction</summary>" in addendum
+    # Wrapped in a fence + padded to 2-row minimum for visual block weight.
+    assert "```\nWhy this meeting matters.\n\n```" in addendum
 
 
 def test_show_current_agenda_appends_folded_tables_for_current_draft(client, mock_auth_dep):
@@ -506,6 +664,7 @@ def test_show_current_agenda_appends_folded_tables_for_current_draft(client, moc
                 "manager": "Vicky Yang",
                 "start_time": "19:30",
                 "end_time": "21:30",
+                "introduction": "Why are young people choosing to lie flat?",
             },
             "segments": [
                 {"id": "s1", "type": "SAA", "start_time": "19:30", "duration": 2, "role_taker": "Liz Huang"},
@@ -524,7 +683,10 @@ def test_show_current_agenda_appends_folded_tables_for_current_draft(client, moc
 
     text = "".join(e["data"]["chunk"] for e in events if e["event"] == "assistant_text")
     # Plain summaries — NOT the "preview of #N" labels used by preview_meeting.
+    # Includes the new Introduction fold (snapshot has intro text).
     assert "<summary>📌 Meeting Meta</summary>" in text
+    assert "<summary>📝 Introduction</summary>" in text
+    assert "Why are young people choosing to lie flat?" in text
     assert "<summary>📋 Agenda</summary>" in text
     # Meta drawn from the snapshot.
     assert "| Meeting No. | 451 |" in text

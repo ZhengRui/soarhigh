@@ -113,6 +113,7 @@ def _wrap_with_snapshot(user_text: str, snapshot_segments: int = 2) -> str:
         user_message=user_text,
         attachment_block="",
         language_hint="",
+        today="2026-04-27",
     )
 
 

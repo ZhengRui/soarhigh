@@ -37,6 +37,7 @@ def test_agent_fires_set_role_for_simple_edit():
         user_message="Change the SAA role taker to Joyce",
         attachment_block="",
         language_hint="",
+        today="2026-04-27",
     )
     agent.run_sync(prompt, deps=deps, usage_limits=USAGE_LIMITS)
 

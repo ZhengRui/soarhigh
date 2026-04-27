@@ -3,19 +3,19 @@ so they can be unit-tested with a plain dataclass context."""
 
 import asyncio
 import re
-import threading
 import uuid
+from datetime import date
 from typing import Any
 
 from pydantic_ai import ModelRetry
 
-from app.db.core import get_meeting_by_id, get_meeting_id_by_no, get_meetings
 from app.meeting_agent.models import Agenda, Segment
 from app.meeting_agent.normalize import meeting_to_agenda
 from app.meeting_agent.prompts import CLUB_MEMBERS
 from app.meeting_agent.timing import recompute_start_times
 from app.meeting_agent.validators import run_validators
 from app.models.meeting import Meeting
+from app.services import meeting_lookup
 from app.utils.meeting import parse_meeting_agenda_image, plan_meeting_from_text
 
 _ALLOWED_META_FIELDS = {
@@ -701,35 +701,6 @@ async def apply_create_from_template(ctx, template: str) -> dict:
     }
 
 
-# Supabase's Python client wraps a SYNC httpx client which is NOT thread-safe;
-# concurrent calls from worker threads (e.g. several `preview_meeting` tools
-# firing in parallel via `asyncio.to_thread`) corrupt the HTTP/2 stream state
-# and surface as `httpx.RemoteProtocolError: Server disconnected`. Serialize
-# every agent-side DB query through this lock so parallel tool calls fall back
-# to sequential — adds ~few hundred ms per extra call but is fully reliable.
-_DB_LOCK = threading.Lock()
-
-
-def _db_meetings_recent(limit: int = 50) -> list[dict]:
-    """Thin sync wrapper so tests can patch the DB fetch."""
-    with _DB_LOCK:
-        page = get_meetings(user_id=None, status=None, page=1, page_size=limit)
-    return page.get("items", [])
-
-
-def _lookup_to_card(meeting: dict) -> dict:
-    manager = meeting.get("manager") or {}
-    manager_name = manager.get("name") if isinstance(manager, dict) else (manager or "")
-    return {
-        "no": meeting.get("no"),
-        "type": meeting.get("type", ""),
-        "date": meeting.get("date", ""),
-        "theme": meeting.get("theme", ""),
-        "manager_name": manager_name or "",
-        "segment_count": len(meeting.get("segments") or []),
-    }
-
-
 async def apply_show_current_agenda(ctx) -> dict:
     """Read-only echo of the current draft agenda. The tool itself returns the
     same `meeting_summary` + `segments` shape as the creation tools so the model
@@ -744,24 +715,6 @@ async def apply_show_current_agenda(ctx) -> dict:
     }
 
 
-def _preview_segment(src: dict) -> dict:
-    """Project a DB segment row into the agent's preview shape — same fields
-    we surface for the current agenda's `segments` summary so the model can
-    treat preview output and current-agenda output uniformly."""
-    role = src.get("role_taker") or {}
-    role_name = role.get("name") if isinstance(role, dict) else (role or "")
-    try:
-        duration = int(src.get("duration") or 0)
-    except (TypeError, ValueError):
-        duration = 0
-    return {
-        "type": src.get("type", ""),
-        "start_time": src.get("start_time", ""),
-        "duration": duration,
-        "role_taker": role_name or "",
-    }
-
-
 async def apply_preview_meeting(ctx, no: int) -> dict:
     """Read-only fetch of a single historical meeting's full structure —
     meta + ordered segments — without modifying the current agenda.
@@ -773,78 +726,132 @@ async def apply_preview_meeting(ctx, no: int) -> dict:
     tool's payload — see `_render_preview_addendum` in the route — so the
     LLM-facing tool docstring (in `agent.py`) instructs the model NOT to
     re-emit them. Keep this developer-facing comment in sync with that."""
-    meeting_dict = await asyncio.to_thread(_db_get_meeting_by_no, no)
+    meeting_dict = await asyncio.to_thread(meeting_lookup.fetch_meeting_full, no)
     if meeting_dict is None:
         raise ModelRetry(f"Meeting #{no} not found in recent history.")
-
-    manager = meeting_dict.get("manager") or {}
-    manager_name = manager.get("name") if isinstance(manager, dict) else (manager or "")
-    return {
-        "no": meeting_dict.get("no"),
-        "type": meeting_dict.get("type", ""),
-        "theme": meeting_dict.get("theme", ""),
-        "date": meeting_dict.get("date", ""),
-        "manager": manager_name or "",
-        "start_time": meeting_dict.get("start_time", ""),
-        "end_time": meeting_dict.get("end_time", ""),
-        "location": meeting_dict.get("location", ""),
-        "segments": [_preview_segment(s) for s in (meeting_dict.get("segments") or [])],
-    }
+    return meeting_lookup.meeting_to_preview(meeting_dict)
 
 
-async def apply_lookup_meeting(ctx, query: str) -> list[dict]:
-    """Find historical meetings by number or descriptor. Returns up to 5 cards."""
-    q = (query or "").strip()
-    if not q:
-        return []
+def _parse_iso_date_or_raise(label: str, value: str) -> date:
+    """Validate that `value` is a real ISO YYYY-MM-DD calendar date.
 
-    digits = "".join(ch for ch in q if ch.isdigit())
-    if digits and len(digits) <= 4:
-        target = int(digits)
-        items = await asyncio.to_thread(_db_meetings_recent, 200)
-        return [_lookup_to_card(m) for m in items if m.get("no") == target][:1]
-
-    items = await asyncio.to_thread(_db_meetings_recent, 50)
-    type_filter = None
-    ql = q.lower()
-    if "workshop" in ql or "工作坊" in ql:
-        type_filter = "Workshop"
-    elif "regular" in ql or "常规" in ql:
-        type_filter = "Regular"
-    elif "custom" in ql:
-        type_filter = "Custom"
-
-    if type_filter:
-        items = [m for m in items if m.get("type") == type_filter]
-
-    return [_lookup_to_card(m) for m in items[:5]]
+    A bare regex (`^\\d{4}-\\d{2}-\\d{2}$`) accepts impossible dates like
+    '2025-13-01' or '2025-02-31'. Those would then be compared
+    lexicographically inside the resolver and silently mis-filter
+    (e.g. '2025-13-01' > '2025-12-31' is True). `date.fromisoformat`
+    rejects them outright so the model gets a useful retry message."""
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ModelRetry(
+            f"{label} must be a real ISO calendar date (YYYY-MM-DD, " f"e.g. '2025-10-01'); got {value!r}."
+        ) from None
 
 
-def _db_get_meeting_by_no(no: int) -> dict | None:
-    """Resolve a meeting by its display number to a fully-hydrated dict.
+async def _get_or_fetch_pool(deps: Any) -> list[dict]:
+    """Lazy-fetch the candidate-meetings pool once per turn and cache it
+    on `deps`. The asyncio.Lock is bound to the current event loop on
+    first use (cannot be created at deps construction time because the
+    loop may not exist yet there).
 
-    Two cheap targeted queries:
-    1. `get_meeting_id_by_no(no)` — single-row lookup `meetings.eq("no", no)`.
-    2. `get_meeting_by_id(id)` — per-meeting fetch with all segments.
+    Multiple parallel `lookup_meeting` calls within one turn — the
+    typical pattern for cross-language theme + intro fan-out — share
+    one Supabase fetch instead of each hitting the DB through `DB_LOCK`
+    sequentially."""
+    if deps.meeting_pool_lock is None:
+        deps.meeting_pool_lock = asyncio.Lock()
+    async with deps.meeting_pool_lock:
+        if deps.meeting_pool_cache is None:
+            deps.meeting_pool_cache = await asyncio.to_thread(
+                meeting_lookup.db_meetings_recent, meeting_lookup._POOL_SIZE
+            )
+    return deps.meeting_pool_cache
 
-    Avoids the bulk `_db_meetings_recent(500)` scan which uses
-    `.in_(500 meeting_ids)`: that URL alone is ~18 KB and overflows
-    PostgREST / cloudflare URL-length limits when several preview /
-    clone calls fire concurrently in one turn (parallel tool calls
-    have hit 400 'JSON could not be generated' / cloudflare bad-request
-    pages in production). It also missed late-time segments via a
-    PostgREST 1000-row cap — `get_meeting_by_id` is unaffected by both."""
-    with _DB_LOCK:
-        meeting_id = get_meeting_id_by_no(no)
-        if meeting_id is None:
-            return None
-        return get_meeting_by_id(meeting_id, user_id=None)
+
+async def apply_lookup_meeting(
+    ctx,
+    no: int | None = None,
+    name_substring: str | None = None,
+    theme_substring: str | None = None,
+    introduction_substring: str | None = None,
+    type_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 5,
+) -> dict:
+    """Find historical meetings by structured filter. Thin wrapper that
+    builds a `MeetingFilters` from the LLM-supplied args and delegates
+    to `app.services.meeting_lookup.resolve_meetings`. The model is
+    expected to extract the filter values itself (see the registered
+    tool docstring in agent.py); no free-text parsing happens here.
+
+    Returns the resolver's full result envelope ({cards, total_matches,
+    pool_size, limit_clamped}) so the LLM can disclose to the user when
+    its result was clamped — proactive disclosure beats the user having
+    to ask 'why didn't you show me X' on a follow-up turn."""
+    if type_filter is not None and type_filter not in {"Regular", "Workshop", "Custom"}:
+        raise ModelRetry(f"type_filter must be one of: Regular, Workshop, Custom. Got: {type_filter!r}.")
+    parsed_from = _parse_iso_date_or_raise("date_from", date_from) if date_from else None
+    parsed_to = _parse_iso_date_or_raise("date_to", date_to) if date_to else None
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        raise ModelRetry(f"date_from ({date_from}) must not be after date_to ({date_to}).")
+    if limit < 1:
+        raise ModelRetry(f"limit must be >= 1; got {limit}")
+    if limit > meeting_lookup._POOL_SIZE:
+        raise ModelRetry(
+            f"limit must be <= {meeting_lookup._POOL_SIZE} (the candidate pool size). "
+            f"For deeper history use no= for an exact lookup."
+        )
+    filters = meeting_lookup.MeetingFilters(
+        no=no,
+        name_substring=(name_substring or None),
+        theme_substring=(theme_substring or None),
+        introduction_substring=(introduction_substring or None),
+        type_filter=type_filter,  # type: ignore[arg-type]
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+    if filters == meeting_lookup.MeetingFilters(limit=limit):
+        # No real filter axis set — refuse rather than return the recent
+        # top-N. The model should have extracted *something* from the user
+        # intent. Most common cause: model thought substring matching was
+        # inadequate for a topic keyword and tried to give up; the right
+        # move is to pass the keyword anyway and let the result speak.
+        raise ModelRetry(
+            "lookup_meeting was called with no filter axes (only limit). "
+            "If the user mentioned a manager name, pass it as `name_substring`. "
+            "If the user mentioned a topic keyword (e.g. '教育', 'AI', "
+            "'aging', 'storytelling'), pass it as `theme_substring` and/or "
+            "`introduction_substring` — substring matching is the supported "
+            "mechanism even if you suspect no field contains that exact word; "
+            "an empty result is a valid answer. If the user mentioned a "
+            "meeting type, pass `type_filter`. If you genuinely can't "
+            "extract any filter, do NOT call this tool — ask the user for "
+            "clarification in text."
+        )
+    # Exact-no path skips the pool entirely; everything else shares the
+    # per-turn pool cache so parallel calls don't redundantly hit Supabase.
+    if filters.no is not None:
+        return await asyncio.to_thread(meeting_lookup.resolve_meetings, filters)
+    pool = await _get_or_fetch_pool(ctx.deps)
+    return await asyncio.to_thread(meeting_lookup.resolve_meetings, filters, pool=pool)
 
 
 _CLONE_LOOKUP_LOOKBACK_TURNS = 3
 
 
 def _tool_result_cards(result: Any) -> list[dict]:
+    """Extract the lookup_meeting cards from a stored tool_trace result.
+    Accepts both the current envelope shape ({cards, total_matches, ...})
+    and the legacy bare-list shape from older turns persisted before the
+    envelope rollout — the clone gate looks back 3 turns and may see
+    either across a session that spans the change."""
+    if isinstance(result, dict):
+        cards = result.get("cards")
+        if isinstance(cards, list):
+            return [c for c in cards if isinstance(c, dict)]
+        return []
     if isinstance(result, list):
         return [c for c in result if isinstance(c, dict)]
     return []
@@ -908,7 +915,7 @@ async def apply_clone_from_meeting(ctx, no: int) -> dict:
             "Ask the user to confirm the looked-up meeting before cloning."
         )
 
-    meeting_dict = await asyncio.to_thread(_db_get_meeting_by_no, no)
+    meeting_dict = await asyncio.to_thread(meeting_lookup.fetch_meeting_full, no)
     if meeting_dict is None:
         raise ModelRetry(f"Meeting #{no} not found in recent history.")
 

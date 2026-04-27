@@ -1,3 +1,4 @@
+import asyncio
 import re
 from dataclasses import dataclass
 from unittest.mock import patch
@@ -159,7 +160,7 @@ async def _seed_lookup_turn(store: InMemorySessionStore, session_id: str, no: in
                 {
                     "id": "tc1",
                     "name": "lookup_meeting",
-                    "args": {"query": str(no)},
+                    "args": {"no": no},
                     "status": "ok",
                     "result": [
                         {
@@ -325,7 +326,7 @@ async def test_apply_preview_meeting_returns_full_segments_without_mutating_agen
     original_segments = list(deps.agenda.segments)
     original_meta = deps.agenda.meta.model_copy()
     ctx = FakeCtx(deps=deps)
-    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=_full_meeting_dict_for_clone()):
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=_full_meeting_dict_for_clone()):
         result = await apply_preview_meeting(ctx, no=387)
 
     assert result["no"] == 387
@@ -353,7 +354,7 @@ async def test_apply_preview_meeting_unknown_no_raises_modelretry():
 
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
-    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=None):
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=None):
         with pytest.raises(ModelRetry, match="not found"):
             await apply_preview_meeting(ctx, no=9999)
 
@@ -366,7 +367,7 @@ def test_db_get_meeting_by_no_uses_two_targeted_queries():
     "JSON could not be generated" — also caps segments at 1000 rows so
     late-time segments disappear. Replace with two cheap targeted queries:
     `get_meeting_id_by_no` then `get_meeting_by_id`."""
-    from app.meeting_agent.tools import _db_get_meeting_by_no
+    from app.services.meeting_lookup import fetch_meeting_full
 
     full_complete = {
         "id": "uuid-425",
@@ -383,11 +384,11 @@ def test_db_get_meeting_by_no_uses_two_targeted_queries():
         "end_time": "21:30",
     }
     with (
-        patch("app.meeting_agent.tools.get_meeting_id_by_no", return_value="uuid-425") as mock_id,
-        patch("app.meeting_agent.tools.get_meeting_by_id", return_value=full_complete) as mock_full,
-        patch("app.meeting_agent.tools._db_meetings_recent") as mock_bulk,
+        patch("app.services.meeting_lookup.get_meeting_id_by_no", return_value="uuid-425") as mock_id,
+        patch("app.services.meeting_lookup.get_meeting_by_id", return_value=full_complete) as mock_full,
+        patch("app.services.meeting_lookup.db_meetings_recent") as mock_bulk,
     ):
-        result = _db_get_meeting_by_no(425)
+        result = fetch_meeting_full(425)
 
     mock_id.assert_called_once_with(425)
     mock_full.assert_called_once_with("uuid-425", user_id=None)
@@ -407,7 +408,7 @@ def test_db_get_meeting_by_no_serializes_concurrent_callers():
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
-    from app.meeting_agent.tools import _db_get_meeting_by_no
+    from app.services.meeting_lookup import fetch_meeting_full
 
     in_flight = 0
     max_in_flight = 0
@@ -436,11 +437,11 @@ def test_db_get_meeting_by_no_serializes_concurrent_callers():
         return {"id": meeting_id, "no": int(meeting_id.split("-")[1]), "segments": []}
 
     with (
-        patch("app.meeting_agent.tools.get_meeting_id_by_no", side_effect=_slow_id),
-        patch("app.meeting_agent.tools.get_meeting_by_id", side_effect=_slow_full),
+        patch("app.services.meeting_lookup.get_meeting_id_by_no", side_effect=_slow_id),
+        patch("app.services.meeting_lookup.get_meeting_by_id", side_effect=_slow_full),
     ):
         with ThreadPoolExecutor(max_workers=4) as pool:
-            results = list(pool.map(_db_get_meeting_by_no, [446, 425, 413, 387]))
+            results = list(pool.map(fetch_meeting_full, [446, 425, 413, 387]))
 
     # Lock guarantees at most one DB-helper invocation runs at a time.
     assert max_in_flight == 1, f"expected serialized DB access, observed {max_in_flight} concurrent"
@@ -450,13 +451,13 @@ def test_db_get_meeting_by_no_serializes_concurrent_callers():
 
 def test_db_get_meeting_by_no_returns_none_when_id_lookup_misses():
     """Unknown `no` → None (caller raises ModelRetry). No second query fired."""
-    from app.meeting_agent.tools import _db_get_meeting_by_no
+    from app.services.meeting_lookup import fetch_meeting_full
 
     with (
-        patch("app.meeting_agent.tools.get_meeting_id_by_no", return_value=None),
-        patch("app.meeting_agent.tools.get_meeting_by_id") as mock_full,
+        patch("app.services.meeting_lookup.get_meeting_id_by_no", return_value=None),
+        patch("app.services.meeting_lookup.get_meeting_by_id") as mock_full,
     ):
-        assert _db_get_meeting_by_no(9999) is None
+        assert fetch_meeting_full(9999) is None
     mock_full.assert_not_called()
 
 
@@ -705,42 +706,322 @@ async def test_apply_create_from_text_propagates_value_error_as_modelretry():
 
 
 @pytest.mark.asyncio
-async def test_lookup_by_digit_returns_single_match():
+async def test_lookup_by_no_takes_exact_no_path():
+    """LLM-supplied `no=` takes the exact-no fast path → fetch_meeting_full
+    targeted query. Bypasses the recent-pool scan to avoid the PostgREST
+    URL-length / row-cap issues that bit the bulk path in production."""
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
-    with patch("app.meeting_agent.tools._db_meetings_recent", return_value=_fake_db_meetings()):
-        result = await apply_lookup_meeting(ctx, query="388")
-    assert len(result) == 1
-    assert result[0]["no"] == 388
-    assert result[0]["type"] == "Workshop"
+    fake_388 = next(m for m in _fake_db_meetings() if m["no"] == 388)
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=fake_388):
+        result = await apply_lookup_meeting(ctx, no=388)
+    assert len(result["cards"]) == 1
+    assert result["cards"][0]["no"] == 388
+    assert result["cards"][0]["type"] == "Workshop"
 
 
 @pytest.mark.asyncio
-async def test_lookup_by_descriptor_filters_by_type_recent_first():
+async def test_lookup_by_type_filter_returns_only_that_type():
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
-    with patch("app.meeting_agent.tools._db_meetings_recent", return_value=_fake_db_meetings()):
-        result = await apply_lookup_meeting(ctx, query="最近一次 workshop")
-    assert len(result) == 1
-    assert result[0]["no"] == 388
+    with patch("app.services.meeting_lookup.db_meetings_recent", return_value=_fake_db_meetings()):
+        result = await apply_lookup_meeting(ctx, type_filter="Workshop", limit=1)
+    assert len(result["cards"]) == 1
+    assert result["cards"][0]["no"] == 388
 
 
 @pytest.mark.asyncio
-async def test_lookup_descriptor_returns_top_5_recent_when_no_filter():
+async def test_lookup_by_name_substring_matches_manager_only():
+    """`name_substring` matches manager.name ONLY. Theme matches go
+    through `theme_substring`; intro through `introduction_substring`.
+    The split lets the model search each field independently and
+    disclose which group surfaced each meeting."""
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
-    with patch("app.meeting_agent.tools._db_meetings_recent", return_value=_fake_db_meetings()):
-        result = await apply_lookup_meeting(ctx, query="上次")
-    assert result[0]["no"] == 389
+    with patch("app.services.meeting_lookup.db_meetings_recent", return_value=_fake_db_meetings()):
+        result = await apply_lookup_meeting(ctx, name_substring="Joyce")
+    assert len(result["cards"]) == 1
+    assert result["cards"][0]["manager_name"] == "Joyce Feng"
 
 
 @pytest.mark.asyncio
-async def test_lookup_unknown_digit_returns_empty():
+async def test_lookup_by_theme_substring_matches_theme_field():
+    """Theme search is its own axis — `theme_substring='T2'` must NOT
+    require any other axis to be set."""
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
-    with patch("app.meeting_agent.tools._db_meetings_recent", return_value=_fake_db_meetings()):
-        result = await apply_lookup_meeting(ctx, query="999")
-    assert result == []
+    with patch("app.services.meeting_lookup.db_meetings_recent", return_value=_fake_db_meetings()):
+        result = await apply_lookup_meeting(ctx, theme_substring="T2")
+    assert len(result["cards"]) == 1
+    assert result["cards"][0]["no"] == 388
+
+
+@pytest.mark.asyncio
+async def test_lookup_by_introduction_substring_matches_intro_field():
+    pool = [
+        {
+            "id": "u1",
+            "no": 500,
+            "type": "Regular",
+            "theme": "X",
+            "introduction": "This meeting features a deep dive into leadership.",
+            "date": "2026-04-01",
+            "manager": {"name": "M"},
+            "segments": [],
+        },
+    ]
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.services.meeting_lookup.db_meetings_recent", return_value=pool):
+        result = await apply_lookup_meeting(ctx, introduction_substring="leadership")
+    assert len(result["cards"]) == 1
+    assert result["cards"][0]["no"] == 500
+
+
+@pytest.mark.asyncio
+async def test_lookup_pool_fetched_once_across_parallel_calls():
+    """Cross-language theme + intro fan-out can produce 4 parallel
+    lookup_meeting calls within one turn. They MUST share a single
+    Supabase fetch via the per-turn cache on AgendaDeps — otherwise
+    DB_LOCK serializes them and the whole turn pays N times the latency.
+
+    Pinned because the cache is the only thing keeping the latency
+    of a fan-out turn acceptable. Regression here means a 4-call turn
+    silently grows from ~1 fetch to ~4 fetches."""
+    pool = _fake_db_meetings()
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch(
+        "app.services.meeting_lookup.db_meetings_recent",
+        return_value=pool,
+    ) as mock_pool:
+        # Four parallel lookups — what a cross-language theme+intro
+        # fan-out generates for a Chinese topic keyword.
+        results = await asyncio.gather(
+            apply_lookup_meeting(ctx, theme_substring="T1"),
+            apply_lookup_meeting(ctx, theme_substring="T2"),
+            apply_lookup_meeting(ctx, introduction_substring="anything"),
+            apply_lookup_meeting(ctx, name_substring="Joyce"),
+        )
+    # Only one Supabase fetch despite four resolver calls.
+    assert mock_pool.call_count == 1
+    # All four resolves succeeded (envelope shape preserved).
+    for r in results:
+        assert "cards" in r and "total_matches" in r
+
+
+@pytest.mark.asyncio
+async def test_lookup_pool_cache_isolated_per_deps_instance():
+    """Each turn builds a fresh AgendaDeps; the cache must NOT persist
+    across deps boundaries (would surface stale data after meeting
+    creation/edit between turns)."""
+    pool_v1 = [
+        {
+            "id": "u1",
+            "no": 500,
+            "type": "Regular",
+            "theme": "Old",
+            "date": "2026-04-01",
+            "manager": {"name": "M"},
+            "segments": [],
+        },
+    ]
+    pool_v2 = [
+        {
+            "id": "u1",
+            "no": 500,
+            "type": "Regular",
+            "theme": "Old",
+            "date": "2026-04-01",
+            "manager": {"name": "M"},
+            "segments": [],
+        },
+        {
+            "id": "u2",
+            "no": 501,
+            "type": "Regular",
+            "theme": "New",
+            "date": "2026-04-08",
+            "manager": {"name": "M"},
+            "segments": [],
+        },
+    ]
+    # First turn (deps_a) sees only #500.
+    deps_a = make_deps()
+    ctx_a = FakeCtx(deps=deps_a)
+    with patch("app.services.meeting_lookup.db_meetings_recent", return_value=pool_v1):
+        r1 = await apply_lookup_meeting(ctx_a, theme_substring="Old")
+    assert [c["no"] for c in r1["cards"]] == [500]
+    # Second turn — fresh deps — should see updated pool, not cached v1.
+    deps_b = make_deps()
+    ctx_b = FakeCtx(deps=deps_b)
+    with patch("app.services.meeting_lookup.db_meetings_recent", return_value=pool_v2):
+        r2 = await apply_lookup_meeting(ctx_b, theme_substring="New")
+    assert [c["no"] for c in r2["cards"]] == [501]
+
+
+@pytest.mark.asyncio
+async def test_lookup_unknown_no_returns_empty_envelope():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=None):
+        result = await apply_lookup_meeting(ctx, no=9999)
+    assert result["cards"] == []
+    assert result["total_matches"] == 0
+    assert result["limit_clamped"] is False
+
+
+@pytest.mark.asyncio
+async def test_lookup_envelope_carries_total_matches_and_clamp_flag():
+    """When more matches exist than `limit`, the tool result must surface
+    `total_matches` and `limit_clamped=True` so the model can disclose
+    'showing 1 of 2' to the user proactively rather than hiding it."""
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    # _fake_db_meetings has two Regular meetings; with limit=1 we expect a
+    # clamp signal.
+    with patch("app.services.meeting_lookup.db_meetings_recent", return_value=_fake_db_meetings()):
+        result = await apply_lookup_meeting(ctx, type_filter="Regular", limit=1)
+    assert len(result["cards"]) == 1
+    assert result["total_matches"] == 2
+    assert result["limit_clamped"] is True
+
+
+@pytest.mark.asyncio
+async def test_lookup_rejects_limit_above_pool_size():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="limit must be <="):
+        await apply_lookup_meeting(ctx, type_filter="Workshop", limit=999)
+
+
+@pytest.mark.asyncio
+async def test_lookup_rejects_non_iso_date():
+    """date_from/date_to must be strict ISO YYYY-MM-DD. The model has been
+    observed to pass things like '2025/10' or 'October 2025' under casual
+    instruction — fail loudly so it retries with the right format rather
+    than silently filtering on garbage."""
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="ISO calendar date"):
+        await apply_lookup_meeting(ctx, type_filter="Regular", date_from="2025/10")
+    with pytest.raises(ModelRetry, match="ISO calendar date"):
+        await apply_lookup_meeting(ctx, type_filter="Regular", date_to="October 2025")
+
+
+@pytest.mark.asyncio
+async def test_lookup_rejects_impossible_calendar_dates():
+    """Regression: a regex-only check (`^\\d{4}-\\d{2}-\\d{2}$`) accepts
+    impossible dates like '2025-13-01' (month 13) or '2025-02-31'
+    (Feb 31). Those would then compare lexicographically inside the
+    resolver and silently mis-filter (e.g. '2025-13-01' > '2025-12-31'
+    is True). Switched to date.fromisoformat which rejects them."""
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    for bogus in ("2025-13-01", "2025-02-31", "2025-00-15", "2025-04-32"):
+        with pytest.raises(ModelRetry, match="ISO calendar date"):
+            await apply_lookup_meeting(ctx, type_filter="Regular", date_from=bogus)
+
+
+@pytest.mark.asyncio
+async def test_lookup_rejects_inverted_date_range():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="must not be after"):
+        await apply_lookup_meeting(ctx, type_filter="Regular", date_from="2025-12-31", date_to="2025-01-01")
+
+
+@pytest.mark.asyncio
+async def test_lookup_with_only_date_filter_is_a_valid_call():
+    """A bare date-range filter (no name / no / type) is still a meaningful
+    intent — '10月份的会议' / 'meetings this week'. Don't trip the
+    'no filter axes' refusal."""
+    pool = [
+        {
+            "id": "u1",
+            "no": 500,
+            "type": "Regular",
+            "theme": "T",
+            "date": "2025-10-15",
+            "manager": {"name": "M"},
+            "segments": [{}],
+        },
+    ]
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.services.meeting_lookup.db_meetings_recent", return_value=pool):
+        result = await apply_lookup_meeting(ctx, date_from="2025-10-01", date_to="2025-10-31")
+    assert len(result["cards"]) == 1
+    assert result["cards"][0]["no"] == 500
+
+
+@pytest.mark.asyncio
+async def test_lookup_with_no_filter_axes_refuses():
+    """Calling lookup_meeting() with all filters None should refuse via
+    ModelRetry — empty calls almost always mean the model didn't extract
+    intent from the user message and is fishing for a default. We'd rather
+    have the model ask for clarification than return the recent top-5.
+
+    The refusal message also has to TELL the model what to do (extract a
+    topic keyword, pass it as name_substring) — observed regression where
+    the model received the bare refusal and apologized to the user
+    instead of retrying with the obvious keyword from the user message."""
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry) as exc_info:
+        await apply_lookup_meeting(ctx)
+    msg = str(exc_info.value)
+    # Refusal must guide the model rather than just blocking. Message
+    # must point the model at name_substring AND theme/intro substring
+    # axes so it knows where to put person names vs. topic keywords.
+    assert "name_substring" in msg
+    assert "theme_substring" in msg
+    assert "introduction_substring" in msg
+    assert "empty result is a valid answer" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_lookup_chinese_theme_keyword_substring():
+    """User asks '会议主题有关教育的是哪几期' → model calls
+    lookup_meeting(theme_substring='教育'). Substring matches against
+    Chinese theme strings literally — no special CJK handling required.
+    Pinned to prevent the bug where the model was refusing to call the
+    tool with a Chinese theme keyword."""
+    chinese_themed = [
+        {
+            "id": "u1",
+            "no": 442,
+            "type": "Regular",
+            "theme": "终身学习与教育的未来",
+            "date": "2026-04-01",
+            "manager": {"name": "Rui Zheng"},
+            "segments": [{}] * 18,
+        },
+        {
+            "id": "u2",
+            "no": 441,
+            "type": "Workshop",
+            "theme": "Aging Gracefully",
+            "date": "2026-03-25",
+            "manager": {"name": "Joyce Feng"},
+            "segments": [{}] * 16,
+        },
+    ]
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with patch("app.services.meeting_lookup.db_meetings_recent", return_value=chinese_themed):
+        result = await apply_lookup_meeting(ctx, theme_substring="教育")
+    assert len(result["cards"]) == 1
+    assert result["cards"][0]["no"] == 442
+    assert "教育" in result["cards"][0]["theme"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_rejects_unknown_type_filter():
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="type_filter must be one of"):
+        await apply_lookup_meeting(ctx, type_filter="Banquet")
 
 
 @pytest.mark.asyncio
@@ -755,7 +1036,7 @@ async def test_clone_from_meeting_clears_specified_fields(monkeypatch):
     ctx = FakeCtx(deps=deps)
     await _seed_lookup_turn(store, deps.session_id, 387)
 
-    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=_full_meeting_dict_for_clone()):
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=_full_meeting_dict_for_clone()):
         result = await apply_clone_from_meeting(ctx, no=387)
 
     assert deps.agenda.meta.no is None
@@ -784,7 +1065,7 @@ async def test_clone_refuses_without_prior_lookup(monkeypatch):
     deps.current_user_message = "确认"
     ctx = FakeCtx(deps=deps)
 
-    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=_full_meeting_dict_for_clone()):
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=_full_meeting_dict_for_clone()):
         with pytest.raises(ModelRetry, match="lookup_meeting"):
             await apply_clone_from_meeting(ctx, no=387)
     assert deps.agenda.meta.start_time == "19:15"
@@ -803,7 +1084,7 @@ async def test_clone_refuses_when_lookup_was_for_a_different_no(monkeypatch):
     ctx = FakeCtx(deps=deps)
     await _seed_lookup_turn(store, deps.session_id, 999)
 
-    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=_full_meeting_dict_for_clone()):
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=_full_meeting_dict_for_clone()):
         with pytest.raises(ModelRetry, match="lookup_meeting"):
             await apply_clone_from_meeting(ctx, no=387)
 
@@ -820,7 +1101,7 @@ async def test_clone_refuses_without_explicit_confirmation(monkeypatch):
     ctx = FakeCtx(deps=deps)
     await _seed_lookup_turn(store, deps.session_id, 387)
 
-    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=_full_meeting_dict_for_clone()):
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=_full_meeting_dict_for_clone()):
         with pytest.raises(ModelRetry, match="explicit confirmation"):
             await apply_clone_from_meeting(ctx, no=387)
 
@@ -837,7 +1118,7 @@ async def test_clone_from_meeting_unknown_no_raises_modelretry(monkeypatch):
     ctx = FakeCtx(deps=deps)
     await _seed_lookup_turn(store, deps.session_id, 9999)
 
-    with patch("app.meeting_agent.tools._db_get_meeting_by_no", return_value=None):
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=None):
         with pytest.raises(ModelRetry, match="not found"):
             await apply_clone_from_meeting(ctx, no=9999)
 

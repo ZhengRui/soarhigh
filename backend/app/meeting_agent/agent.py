@@ -223,13 +223,211 @@ async def create_from_text(ctx: RunContext[AgendaDeps], raw_text: str) -> dict:
 
 
 @agent.tool
-async def lookup_meeting(ctx: RunContext[AgendaDeps], query: str) -> list[dict]:
-    """READ-ONLY. Find historical meetings by number ('45' / '#45') or
-    descriptor ('上次 workshop' / '最近一次 regular'). Returns lightweight cards
-    only (no, type, date, theme, manager_name, segment_count) — for the full
-    segment list of a single meeting use `preview_meeting(no)`. Use lookup
-    results to ask for plain-text confirmation before clone_from_meeting."""
-    return await _tools.apply_lookup_meeting(ctx, query=query)
+async def lookup_meeting(
+    ctx: RunContext[AgendaDeps],
+    no: int | None = None,
+    name_substring: str | None = None,
+    theme_substring: str | None = None,
+    introduction_substring: str | None = None,
+    type_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 5,
+) -> dict:
+    """READ-ONLY. Find historical meetings by structured filter. You — the
+    model — extract the filter values from the user's intent. Do NOT pass
+    the user's raw text in any field; pass the resolved values.
+
+    Filter axes (all optional; combine as AND):
+
+      `no`             — exact meeting number when the user names one
+                         ('451' / '#451' / 'Meeting No: 451' / '第 451 期').
+                         When set, other filters except `type_filter` are
+                         redundant.
+      Three SEPARATE substring axes — pick the one(s) that match the
+      user's intent. All are case-insensitive literal substring; no
+      semantic similarity, no cross-script translation, no fuzzy matching.
+
+      `name_substring`         — match `manager.name` ONLY. Use when the
+                                 user references the *meeting manager*
+                                 ('Joyce 主持的', 'managed by Frank').
+                                 Does NOT match theme or introduction —
+                                 those are separate axes.
+      `theme_substring`        — match `theme` (the meeting title/topic
+                                 line) ONLY. Use for title-shaped
+                                 references ('Emojis 那次', '主题里有 X').
+      `introduction_substring` — match `introduction` (the descriptive
+                                 paragraph below the title) ONLY. Use
+                                 when user references intro content
+                                 ('introduction 提到 leadership 的',
+                                 'description mentioning AI'). When
+                                 this filter is used, returned cards
+                                 INCLUDE the full `introduction` field
+                                 so you can quote the matched portion
+                                 in your reply. **Quote the relevant
+                                 sentence(s) verbatim from the card's
+                                 `introduction` text — do NOT paraphrase
+                                 or summarize from the theme. If a
+                                 card lacks the `introduction` field
+                                 (because the call didn't use this
+                                 axis) and the user asks about intro
+                                 content, call `preview_meeting(no)`
+                                 to fetch the real text rather than
+                                 fabricating from the theme.**
+
+      **Search-strategy convention** — when the user gives a topic
+      keyword without specifying *which* field to search, fan out to
+      BOTH theme AND introduction in parallel calls and disclose which
+      group surfaced each match in your reply. When the user is explicit
+      ('主题有关 X' = theme only; 'introduction 提到 X' = intro only),
+      use a single call.
+
+      **Cross-language fan-out** — club themes/intros are predominantly
+      English ('Aging Gracefully', 'Next-Gen Education', 'Emojis Across
+      Cultures'...) but users may type Chinese topic keywords. When
+      script mismatch is plausible, also fire parallel calls with the
+      translated keyword. Manager names are stored as English/pinyin —
+      cross-language is rarely worth the cost for `name_substring`.
+
+      **Reply disclosure** — when you fan out across multiple axes,
+      group the results and label them: '主题命中: #X, #Y. Introduction
+      提到: #Z.' Empty groups omitted. This tells the user *why* each
+      meeting surfaced — useful when an introduction-match is
+      tangential vs. a theme-match is on-topic.
+
+      Examples (user → call(s)):
+        '上次 Joyce 主持的'
+          → lookup_meeting(name_substring='Joyce', limit=1)
+        '主题有关教育的是哪几期'  (explicit '主题')
+          → parallel: lookup_meeting(theme_substring='教育')
+                    + lookup_meeting(theme_substring='education')
+        '讲教育的会议' (no field hint → search theme + intro)
+          → 4-way parallel:
+              lookup_meeting(theme_substring='教育')
+              lookup_meeting(theme_substring='education')
+              lookup_meeting(introduction_substring='教育')
+              lookup_meeting(introduction_substring='education')
+        'introduction 提到 leadership 的'  (explicit intro)
+          → lookup_meeting(introduction_substring='leadership')
+        'Emojis 那次 workshop'
+          → lookup_meeting(theme_substring='Emojis', type_filter='Workshop')
+        'Joyce 主持的关于教育的'  (manager AND topic, single call AND)
+          → lookup_meeting(name_substring='Joyce', theme_substring='教育')
+            (plus an optional parallel call swapping in 'education' for
+             cross-language coverage on the theme side)
+
+      Do NOT pass connectives or noise ('的', 'managed', 'about',
+      'meeting', 'last', '有关', '主题') — they will not match.
+      `type_filter`    — restrict to one of: 'Regular', 'Workshop', 'Custom'.
+                         Use ONLY when the user explicitly names a type
+                         ('上次 workshop', 'recent regular meetings',
+                         'Custom 那次'). **Default is to leave this UNSET
+                         (omit the parameter) so all meeting types match.**
+                         Do NOT default to 'Regular' just because Regular
+                         is the most common type — that hides results from
+                         the user. Examples:
+                           '主题是 X 的会议'            → omit type_filter
+                                                          (search all types)
+                           '主题是 X 的 workshop'        → type_filter='Workshop'
+                           'Joyce 主持的会议'           → omit type_filter
+                           'Joyce 主持的 regular 会议'   → type_filter='Regular'
+      `date_from`      — ISO YYYY-MM-DD inclusive. Filter to meetings on
+                         or after this date. Pair with `date_to` for a
+                         closed range, or use alone for "since X".
+      `date_to`        — ISO YYYY-MM-DD inclusive. Filter to meetings on
+                         or before this date.
+
+                         **Resolve relative time phrases yourself** using
+                         the `today` line in [Session metadata]. Examples
+                         (assuming today=2026-04-27):
+                           '10月份的会议' / 'October meetings'
+                             → date_from='2025-10-01', date_to='2025-10-31'
+                             (when ambiguous which year, prefer the most
+                             recent past October — users almost always
+                             mean the recent one, not future)
+                           '上个月'   → first/last day of previous month
+                           '今年'     → '2026-01-01' to '2026-12-31'
+                           '去年'     → '2025-01-01' to '2025-12-31'
+                           'Q3 2025' → '2025-07-01' to '2025-09-30'
+                           '最近 3 个月' → date_from = today - 90d, no date_to
+                         If the user provides a specific date, pass it as
+                         both date_from and date_to (single-day range).
+      `limit`          — max cards returned (default 5; max 200, the
+                         candidate pool size). Pick a limit appropriate
+                         to the user's intent:
+                           '上次' / '最近一次' / 'last' / 'most recent'   → 1
+                           '最近三次' / 'recent 3'                          → 3
+                           bare 'recent' / unspecified                     → 5
+                           '所有' / 'all' / '哪几次' / '哪几期' / 'which'   → 50 (or higher)
+                         When in doubt for an enumeration query ('哪几期',
+                         'which meetings', 'list all of X'), prefer a
+                         HIGHER limit (50) so the model sees enough rows;
+                         the result envelope tells you when more matches
+                         exist and you can disclose accordingly.
+
+    **Always provide at least one filter axis** (`no`, `name_substring`,
+    `theme_substring`, `introduction_substring`, `type_filter`, or a date
+    range). A bare `lookup_meeting(limit=N)` is refused — if you can't
+    extract any filter from the user's intent, ask the user for
+    clarification in plain text instead of calling the tool.
+
+    **Result envelope.** The tool returns:
+        {
+          "cards": [...up to `limit` cards, most recent first...],
+          "total_matches": <int>,    # total in the candidate pool
+          "pool_size": <int>,        # candidate pool size (200 for
+                                     # descriptor scans, 1 for exact-no)
+          "limit_clamped": <bool>,   # True iff total_matches > len(cards)
+        }
+    When `limit_clamped` is true, **disclose this in your reply**: tell
+    the user how many you're showing vs. how many match in total
+    ("showing 5 of 7 Custom meetings" / "为您列出最近 5 期, 共匹配到 7 期").
+    If the user says "show me all" / "全部", call again with a higher
+    `limit` rather than asking. Do NOT silently truncate without saying.
+
+    Examples (user → call, assuming today=2026-04-27):
+      'show me #451'                       → lookup_meeting(no=451)
+      'Joyce 上次主持的'                     → lookup_meeting(name_substring='Joyce', limit=1)
+                                              (NO type_filter — user didn't say 'workshop'/'regular'/'custom')
+      '最近三次 Joyce 做 meeting manager 的' → lookup_meeting(name_substring='Joyce', limit=3)
+                                              (NO type_filter)
+      'Emojis 那次'                         → lookup_meeting(theme_substring='Emojis')
+                                              (NO type_filter — searches across all types)
+      '会议主题有关教育的是哪几期'             → parallel theme_substring='教育' + 'education'
+                                              (NO type_filter on either call)
+      '上次 workshop'                       → lookup_meeting(type_filter='Workshop', limit=1)
+                                              (user said 'workshop')
+      'Emojis 那次 workshop'                → lookup_meeting(theme_substring='Emojis', type_filter='Workshop')
+                                              (user said 'workshop')
+      '讲 AI 的 workshop 有哪几次'           → parallel theme + intro substring='AI', type_filter='Workshop'
+      '10月份第一次例会的主题是什么'           → lookup_meeting(type_filter='Regular',
+                                                              date_from='2025-10-01',
+                                                              date_to='2025-10-31',
+                                                              limit=50)
+      '今年的 workshop 一共几次'              → lookup_meeting(type_filter='Workshop',
+                                                              date_from='2026-01-01',
+                                                              date_to='2026-12-31',
+                                                              limit=50)
+      'Joyce 在去年主持过几次'                → lookup_meeting(name_substring='Joyce',
+                                                              date_from='2025-01-01',
+                                                              date_to='2025-12-31',
+                                                              limit=50)
+
+    Returns lightweight cards (no, type, date, theme, manager_name,
+    segment_count). For full segment data on a single meeting use
+    `preview_meeting(no)`. Use lookup results to ask for plain-text
+    confirmation before `clone_from_meeting`."""
+    return await _tools.apply_lookup_meeting(
+        ctx,
+        no=no,
+        name_substring=name_substring,
+        theme_substring=theme_substring,
+        introduction_substring=introduction_substring,
+        type_filter=type_filter,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
 
 
 @agent.tool
