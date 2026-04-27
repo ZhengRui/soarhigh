@@ -485,10 +485,12 @@ async def test_apply_create_from_template_regular_2ps_replaces_agenda():
     last = deps.agenda.segments[-1]
     assert "Closing Remarks" in last.type
     assert last.role_taker == "Amy Fang"
-    # Meeting type is set; meta.start_time = 19:30 (official); end_time left
-    # blank so the user fills it (or accepts the implicit 21:15 from the agenda).
+    # Meeting type is set; meta.start_time matches the first segment (19:15)
+    # so a later set_duration / add_segment doesn't re-anchor the warmup
+    # forward by 15 min via recompute_start_times. end_time is left blank
+    # so the user fills it (or accepts the implicit 21:15 from the agenda).
     assert deps.agenda.meta.type == "Regular"
-    assert deps.agenda.meta.start_time == "19:30"
+    assert deps.agenda.meta.start_time == "19:15"
     # All buffer_before are 0 — back-to-back layout per user preference.
     assert all(seg.buffer_before == 0 for seg in deps.agenda.segments)
 
@@ -508,7 +510,9 @@ async def test_apply_create_from_template_custom_single_segment():
     assert result["segment_count"] == 1
     # Type is Custom, NOT Regular — the form's type-dropdown should reflect this.
     assert deps.agenda.meta.type == "Custom"
-    assert deps.agenda.meta.start_time == "19:30"
+    # meta.start_time matches the placeholder segment (19:15) so subsequent
+    # structural edits don't re-anchor it forward via recompute_start_times.
+    assert deps.agenda.meta.start_time == "19:15"
     # Exactly ONE placeholder segment, positioned at the 19:15 / 15-min slot
     # (matches the standard pre-meeting warmup window so users have a sensible
     # anchor to start customizing from).
@@ -541,6 +545,48 @@ async def test_apply_create_from_template_aliases():
         result = await apply_create_from_template(ctx, template=name)
         assert result["segment_count"] == 1, f"alias {name!r} did not resolve to custom"
         assert deps.agenda.meta.type == "Custom"
+
+
+@pytest.mark.asyncio
+async def test_template_warmup_survives_subsequent_structural_edit():
+    """Regression: Regular template's 19:15 warmup must not shift forward
+    when the user makes a structural edit that triggers recompute_start_times.
+    Pre-fix, meta.start_time was 19:30 while seg[0].start_time was 19:15;
+    set_duration / set_buffer / add_segment / etc. would re-anchor at 19:30
+    and slide every segment forward by 15 minutes."""
+    from app.meeting_agent.tools import apply_create_from_template, apply_set_duration
+
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    await apply_create_from_template(ctx, template="regular_2ps")
+    assert deps.agenda.segments[0].start_time == "19:15"
+
+    # Trigger a structural edit on a downstream segment — this calls
+    # recompute_start_times which re-anchors from meta.start_time.
+    saa = deps.agenda.segments[1]
+    apply_set_duration(ctx, segment_id=saa.id, duration_min=5)
+
+    # Warmup must STILL be at 19:15.
+    assert (
+        deps.agenda.segments[0].start_time == "19:15"
+    ), "Warmup shifted off 19:15 after a structural edit — meta.start_time anchor mismatch"
+
+
+@pytest.mark.asyncio
+async def test_custom_template_segment_survives_subsequent_structural_edit():
+    """Regression for Custom template: same anchor-mismatch foot-gun as the
+    Regular template but with a single placeholder segment."""
+    from app.meeting_agent.tools import apply_create_from_template, apply_set_duration
+
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    await apply_create_from_template(ctx, template="custom")
+    assert deps.agenda.segments[0].start_time == "19:15"
+
+    seg = deps.agenda.segments[0]
+    apply_set_duration(ctx, segment_id=seg.id, duration_min=20)
+
+    assert deps.agenda.segments[0].start_time == "19:15"
 
 
 @pytest.mark.asyncio
@@ -975,6 +1021,22 @@ def test_set_meta_unknown_field_raises_model_retry():
         apply_set_meta(ctx, field="bogus", value="x")
     # No side-effects
     assert deps.agenda.meta.theme is None
+
+
+def test_set_meta_end_time_is_editable():
+    """end_time has to be editable via set_meta — it's listed in
+    _REQUIRED_MEETING_FIELDS, so the agent will surface it as missing
+    and must have a way to fix it. Pre-fix it was rejected as 'Unknown
+    meta field' even though set_meta's docstring claimed it was 'derived'."""
+    deps = make_deps()
+    ctx = FakeCtx(deps=deps)
+    result = apply_set_meta(ctx, field="end_time", value="21:30")
+    assert result == {"field": "end_time", "value": "21:30"}
+    assert deps.agenda.meta.end_time == "21:30"
+    # Empty value clears it (consistent with how other optional string
+    # fields collapse to None on blank input).
+    apply_set_meta(ctx, field="end_time", value="")
+    assert deps.agenda.meta.end_time is None
 
 
 def test_set_meta_no_non_integer_raises_model_retry():

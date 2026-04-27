@@ -24,6 +24,7 @@ _ALLOWED_META_FIELDS = {
     "location",
     "date",
     "start_time",
+    "end_time",
     "no",
     "manager",
     "introduction",
@@ -157,7 +158,7 @@ def apply_set_meta(ctx, field: str, value: str) -> dict:
     if field not in _ALLOWED_META_FIELDS:
         raise ModelRetry(
             f"Unknown meta field: {field}. Allowed: type, theme, location, date, "
-            f"start_time, no, manager, introduction"
+            f"start_time, end_time, no, manager, introduction"
         )
     if field == "manager":
         # Same chokepoint as role_taker: strip any "(member)/(guest)" annotation
@@ -596,7 +597,12 @@ def _build_template_regular_2ps() -> Agenda:
     """Hardcoded Regular meeting with 2 prepared speeches.
 
     Segments are back-to-back from 19:15 (warmup) to 21:15 (closing).
-    meta.start_time is 19:30 (the official meeting start, after warmup);
+    meta.start_time is 19:15 — same as the first segment — so a later
+    structural edit (set_duration / set_buffer / add_segment / etc.)
+    that triggers `recompute_start_times` re-anchors at 19:15 and
+    preserves the warmup position. Treating "official meeting starts
+    at 19:30" as a separate concept from meta.start_time was a footgun:
+    the recompute helper only knows one anchor.
     meta.end_time is intentionally None so the validator skips overflow /
     underflow checks until the user fills it in (the agenda's actual end
     is 21:15, but typical SoarHigh slots end at 21:30 — let the user
@@ -605,7 +611,7 @@ def _build_template_regular_2ps() -> Agenda:
 
     meta = _Meta(
         type="Regular",
-        start_time="19:30",
+        start_time="19:15",
     )
     segments = [
         Segment(
@@ -630,13 +636,14 @@ def _build_template_custom() -> Agenda:
     it up segment-by-segment via subsequent chat edits (set_type, add_segment,
     set_role, etc.). The placeholder is positioned at 19:15 with a 15-min
     duration so it aligns with the standard pre-meeting warmup window — the
-    user can rename / resize / re-anchor as needed. meta.start_time is set to
-    the typical 19:30 club slot; everything else is left blank."""
+    user can rename / resize / re-anchor as needed. meta.start_time matches
+    the first segment (19:15) so `recompute_start_times` preserves the
+    placeholder's clock position after subsequent structural edits."""
     from app.meeting_agent.models import Meta as _Meta
 
     meta = _Meta(
         type="Custom",
-        start_time="19:30",
+        start_time="19:15",
     )
     segments = [
         Segment(
@@ -762,9 +769,10 @@ async def apply_preview_meeting(ctx, no: int) -> dict:
     Bridges the gap between `lookup_meeting` (lightweight cards, no segments)
     and `clone_from_meeting` (destructive replace). Use this when the user
     wants to inspect what a meeting looks like before deciding whether to
-    clone it. The route does NOT auto-render an agenda table for this tool,
-    so present the segments yourself in a Markdown table if the user asked
-    to see them — the data is unambiguously yours to read here."""
+    clone it. The route auto-renders folded meta + agenda tables for this
+    tool's payload — see `_render_preview_addendum` in the route — so the
+    LLM-facing tool docstring (in `agent.py`) instructs the model NOT to
+    re-emit them. Keep this developer-facing comment in sync with that."""
     meeting_dict = await asyncio.to_thread(_db_get_meeting_by_no, no)
     if meeting_dict is None:
         raise ModelRetry(f"Meeting #{no} not found in recent history.")

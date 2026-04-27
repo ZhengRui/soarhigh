@@ -107,7 +107,7 @@ def set_meta(
     value: str,
 ) -> dict:
     """Change a meeting-level field. Supported: type, theme, location, date, start_time,
-    no, manager, introduction. end_time is derived and cannot be set directly."""
+    end_time, no, manager, introduction."""
     return _tools.apply_set_meta(ctx, field=field, value=value)
 
 

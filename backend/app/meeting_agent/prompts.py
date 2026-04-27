@@ -46,7 +46,7 @@ Each turn's prompt may include a `[Reply language]` block (e.g. `[Reply language
 | Duration | `set_duration(segment_id, duration_min)` | — |
 | Buffer before | `set_buffer(segment_id, buffer_min)` | — |
 | Add / remove | `add_segment(type, duration_min, after_id \\| before_id, role_taker?)` / `remove_segment(segment_id)` | — |
-| Meeting meta | `set_meta(field, value)` — fields: type, theme, location, date, start_time, no, manager, introduction | — |
+| Meeting meta | `set_meta(field, value)` — fields: type, theme, location, date, start_time, end_time, no, manager, introduction | — |
 | Undo | `revert_last_turn()` — 1-step; or `revert_to_turn(after_seq)` when going deeper | — |
 | Observation | `validate_agenda()` — rarely needed; see below | — |
 | Show current draft | `show_current_agenda()` — read-only; route appends folded meta + agenda tables | — |
