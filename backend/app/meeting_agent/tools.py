@@ -4,19 +4,77 @@ so they can be unit-tested with a plain dataclass context."""
 import asyncio
 import re
 import uuid
-from datetime import date
 from typing import Any
 
 from pydantic_ai import ModelRetry
 
 from app.meeting_agent.models import Agenda, Segment
 from app.meeting_agent.normalize import meeting_to_agenda
-from app.meeting_agent.prompts import CLUB_MEMBERS
+from app.meeting_agent.segment_ids import resolve as _resolve_segment_id
+from app.meeting_agent.segment_ids import shorten as _shorten_id
 from app.meeting_agent.timing import recompute_start_times
 from app.meeting_agent.validators import run_validators
-from app.models.meeting import Meeting
+from app.models.meeting import Attendee, Meeting
 from app.services import meeting_lookup
 from app.utils.meeting import parse_meeting_agenda_image, plan_meeting_from_text
+
+
+def _resolve_role_taker(
+    agenda: Agenda,
+    members_directory: list[dict],
+    role_name: str,
+) -> Attendee | None:
+    """Resolve a bare-name role_taker arg into a structured Attendee.
+
+    Tools like `set_role` / `add_segment` keep a string signature so the LLM
+    contract stays simple. Internally Phase B requires the structured form
+    so the route addendum can render the (member)/(guest) badge from the
+    authoritative `member_id`. Resolution order:
+
+      1. Empty / blank → None (segment has no role taker).
+      2. Full-name match against an existing role_taker in the same agenda
+         (case-insensitive) → reuse that Attendee, inheriting the DB-resolved
+         `member_id` from the frontend snapshot. Common case: "Joyce 也来做
+         Timer 吧" when Joyce is already TOM in this agenda.
+      3. Full-name match in `members_directory` (the live members list eager-
+         fetched by the route at turn boundary) → Attendee carrying the real
+         DB `member_id`.
+      4. **Unique first-name match in `members_directory`** ("Libra" →
+         "Libra Lee" when only one club member has that first name). Mirrors
+         the frontend's `resolveAttendee` heuristic so the chat addendum
+         badge agrees with the form's badge. Without this, a model that
+         passes a first name despite the prompt's "use full name" rule
+         (observed on Chinese turns like "设置成Libra吧") would render
+         `(guest)` here while the form renders `(member)`. The Attendee
+         stores the directory's full name, not the model's first-name input
+         — so subsequent turns see the canonical name.
+      5. No match anywhere → guest Attendee with empty member_id. The
+         frontend's `applyAgendaSnapshot` still runs `resolveAttendee` as a
+         final defense.
+    """
+    name = (role_name or "").strip()
+    if not name:
+        return None
+    lower = name.lower()
+    for seg in agenda.segments:
+        rt = seg.role_taker
+        if rt is not None and rt.name.lower() == lower:
+            return rt.model_copy()
+    for member in members_directory or ():
+        full_name = (member.get("full_name") or "").strip()
+        if full_name.lower() == lower:
+            uid = member.get("id") or ""
+            return Attendee(id=uid or None, name=full_name, member_id=uid)
+    first_name_matches = [
+        m for m in (members_directory or ()) if (m.get("full_name") or "").strip().split(" ", 1)[0].lower() == lower
+    ]
+    if len(first_name_matches) == 1:
+        m = first_name_matches[0]
+        uid = m.get("id") or ""
+        full_name = (m.get("full_name") or "").strip()
+        return Attendee(id=uid or None, name=full_name, member_id=uid)
+    return Attendee(id=None, name=name, member_id="")
+
 
 _ALLOWED_META_FIELDS = {
     "type",
@@ -121,36 +179,147 @@ def _strip_membership_suffix(name: str | None) -> str:
 def apply_set_role(ctx, segment_id: str, role_taker: str) -> dict:
     """Unilateral: set the role taker for ONE segment."""
     role_taker = _strip_membership_suffix(role_taker)
-    seg = _find_segment(ctx.deps.agenda, segment_id)
-    seg.role_taker = role_taker
-    return {"segment_id": segment_id, "role_taker": role_taker}
+    real_id = _resolve_segment_id(ctx.deps.agenda, segment_id)
+    seg = _find_segment(ctx.deps.agenda, real_id)
+    seg.role_taker = _resolve_role_taker(ctx.deps.agenda, ctx.deps.members_directory, role_taker)
+    # Surface the CANONICAL name to the model. When `_resolve_role_taker`
+    # canonicalizes a first-name slip ("Libra" → "Libra Lee"), the LLM-
+    # facing tool result must reflect that — otherwise the model's reply
+    # text quotes the non-canonical input ("Updated to Libra"), drifting
+    # from the prompt's "use full name" rule and from what subsequent
+    # turns will see in the live agenda snapshot.
+    canonical = seg.role_taker.name if seg.role_taker else ""
+    return {"segment_id": _shorten_id(real_id), "role_taker": canonical}
 
 
 def apply_set_type(ctx, segment_id: str, type: str) -> dict:
     """Unilateral: rename ONE segment's type. Does not affect timing."""
-    seg = _find_segment(ctx.deps.agenda, segment_id)
+    real_id = _resolve_segment_id(ctx.deps.agenda, segment_id)
+    seg = _find_segment(ctx.deps.agenda, real_id)
     seg.type = type
-    return {"segment_id": segment_id, "type": type}
+    return {"segment_id": _shorten_id(real_id), "type": type}
+
+
+# Mirrors the FE's `*_config.editable` flags in
+# `frontend/src/utils/defaultSegments.ts`. Fixed standard types do NOT carry
+# per-segment title/content — the on-screen heading IS the type label, and
+# the form has no inputs for those fields. Editing them via the agent would
+# write data the user can't see or modify.
+_FIXED_STANDARD_TYPES = frozenset(
+    {
+        "Members and Guests Registration, Warm up",
+        "Meeting Rules Introduction (SAA)",
+        "Opening Remarks (President)",
+        "TOM (Toastmaster of Meeting) Introduction",
+        "Timer",
+        "Hark Master",
+        "Grammarian",
+        "Guests Self Introduction (30s per guest)",
+        "TTM (Table Topic Master) Opening",
+        "Table Topic Session",
+        "Tea Break & Group Photos",
+        "Table Topic Evaluation",
+        "Timer's Report",
+        "Grammarian's Report",
+        "Hark Master Pop Quiz Time",
+        "General Evaluation",
+        "Voting Section (TOM)",
+        "Voting Section",
+        "Awards (President)",
+        "Awards",
+        "Moment of Truth",
+        "Closing Remarks (President)",
+    }
+)
+
+
+def _is_prepared_speech(t: str) -> bool:
+    return t.startswith("Prepared Speech") and "Evaluation" not in t
+
+
+def _is_prepared_speech_eval(t: str) -> bool:
+    return t.startswith("Prepared Speech") and "Evaluation" in t
+
+
+def _can_edit_title(t: str) -> bool:
+    """Title editable on Prepared Speech (any number) and any non-fixed
+    custom-style type (Workshop / Ice Breaker / etc.). Locked on every fixed
+    standard type and on Prepared Speech Evaluation rows."""
+    if _is_prepared_speech_eval(t):
+        return False
+    return _is_prepared_speech(t) or t not in _FIXED_STANDARD_TYPES
+
+
+def _can_edit_content(t: str) -> bool:
+    """Content editable on Prepared Speech (pathway notes), Table Topic
+    Session (WOT), and any non-fixed custom-style type. Locked on every
+    other fixed standard type and on Prepared Speech Evaluation rows."""
+    if _is_prepared_speech_eval(t):
+        return False
+    if t == "Table Topic Session":
+        return True
+    if _is_prepared_speech(t):
+        return True
+    return t not in _FIXED_STANDARD_TYPES
+
+
+def apply_set_title(ctx, segment_id: str, title: str) -> dict:
+    """Unilateral: set the title (e.g. speech title) of ONE segment.
+
+    Distinct from `set_type` which renames the segment's category label.
+    Title is editable for Prepared Speech and Custom-style segments;
+    refused for fixed standard types and Prepared Speech Evaluation."""
+    real_id = _resolve_segment_id(ctx.deps.agenda, segment_id)
+    seg = _find_segment(ctx.deps.agenda, real_id)
+    if not _can_edit_title(seg.type):
+        raise ModelRetry(
+            f"Title is not editable for a '{seg.type}' segment. Title applies "
+            f"to Prepared Speech and Custom-style segments only. To rename the "
+            f"segment's category label use set_type; this tool is for the "
+            f"per-segment title (e.g. a speech title)."
+        )
+    seg.title = title
+    return {"segment_id": _shorten_id(real_id), "title": title}
+
+
+def apply_set_content(ctx, segment_id: str, content: str) -> dict:
+    """Unilateral: set the content / notes / WOT of ONE segment.
+
+    Per-type meaning: Table Topic Session → WOT (Word of Today);
+    Prepared Speech → pathway notes; Custom-style segments → freeform notes.
+    Refused for fixed standard types and Prepared Speech Evaluation rows."""
+    real_id = _resolve_segment_id(ctx.deps.agenda, segment_id)
+    seg = _find_segment(ctx.deps.agenda, real_id)
+    if not _can_edit_content(seg.type):
+        raise ModelRetry(
+            f"Content is not editable for a '{seg.type}' segment. Content "
+            f"applies to Table Topic Session (WOT), Prepared Speech (pathway), "
+            f"and Custom-style segments only."
+        )
+    seg.content = content
+    return {"segment_id": _shorten_id(real_id), "content": content}
 
 
 def apply_set_duration(ctx, segment_id: str, duration_min: int) -> dict:
     """Unilateral: set ONE segment's duration, then cascade downstream times."""
     if duration_min <= 0:
         raise ModelRetry(f"duration must be positive; got {duration_min}")
-    seg = _find_segment(ctx.deps.agenda, segment_id)
+    real_id = _resolve_segment_id(ctx.deps.agenda, segment_id)
+    seg = _find_segment(ctx.deps.agenda, real_id)
     seg.duration = duration_min
     recompute_start_times(ctx.deps.agenda)
-    return {"segment_id": segment_id, "duration_min": duration_min}
+    return {"segment_id": _shorten_id(real_id), "duration_min": duration_min}
 
 
 def apply_set_buffer(ctx, segment_id: str, buffer_min: int) -> dict:
     """Unilateral: set the buffer_before for ONE segment, then cascade."""
     if buffer_min < 0:
         raise ModelRetry(f"buffer_min must be >= 0; got {buffer_min}")
-    seg = _find_segment(ctx.deps.agenda, segment_id)
+    real_id = _resolve_segment_id(ctx.deps.agenda, segment_id)
+    seg = _find_segment(ctx.deps.agenda, real_id)
     seg.buffer_before = buffer_min
     recompute_start_times(ctx.deps.agenda)
-    return {"segment_id": segment_id, "buffer_min": buffer_min}
+    return {"segment_id": _shorten_id(real_id), "buffer_min": buffer_min}
 
 
 def apply_set_meta(ctx, field: str, value: str) -> dict:
@@ -208,24 +377,30 @@ def apply_add_segment(
     if type.strip() == "":
         raise ModelRetry("type must be a non-empty string")
 
-    anchor_id = after_id if after_id is not None else before_id
     agenda = ctx.deps.agenda
+    # Exactly one of after_id / before_id is non-None per the check above.
+    raw_anchor: str = after_id if after_id is not None else before_id  # type: ignore[assignment]
+    real_anchor = _resolve_segment_id(agenda, raw_anchor)
 
-    anchor_idx = None
-    for i, seg in enumerate(agenda.segments):
-        if seg.id == anchor_id:
-            anchor_idx = i
-            break
-    if anchor_idx is None:
-        raise ModelRetry(f"unknown anchor segment: {anchor_id}")
+    anchor_idx = next(
+        (i for i, seg in enumerate(agenda.segments) if seg.id == real_anchor),
+        None,
+    )
+    if anchor_idx is None:  # pragma: no cover — resolver already raised
+        raise ModelRetry(f"unknown anchor segment: {raw_anchor}")
 
-    new_id = uuid.uuid4().hex[:5]
+    # Allocate a full UUID; the LLM-facing tool result is shortened below
+    # via `_shorten_id`. Pre-Phase-4 this used a 5-char hex slice which
+    # was *not* a real UUID, just a short random hex — workable in
+    # isolation but inconsistent with every other segment id in the
+    # agenda once we switched to UUIDs everywhere.
+    new_id = str(uuid.uuid4())
     new_seg = Segment(
         id=new_id,
         type=type,
         start_time="00:00",
         duration=duration_min,
-        role_taker=role_taker,
+        role_taker=_resolve_role_taker(agenda, ctx.deps.members_directory, role_taker),
         buffer_before=0,
     )
 
@@ -233,11 +408,13 @@ def apply_add_segment(
     agenda.segments.insert(insertion_index, new_seg)
     recompute_start_times(agenda)
 
+    # Surface canonical name (see apply_set_role for rationale).
+    canonical = new_seg.role_taker.name if new_seg.role_taker else ""
     return {
-        "new_segment_id": new_id,
+        "new_segment_id": _shorten_id(new_id),
         "type": type,
         "duration_min": duration_min,
-        "role_taker": role_taker,
+        "role_taker": canonical,
         "inserted_at_index": insertion_index,
     }
 
@@ -245,17 +422,17 @@ def apply_add_segment(
 def apply_remove_segment(ctx, segment_id: str) -> dict:
     """Remove a segment by id. Downstream times recompute."""
     agenda = ctx.deps.agenda
-    target_idx = None
-    for i, seg in enumerate(agenda.segments):
-        if seg.id == segment_id:
-            target_idx = i
-            break
-    if target_idx is None:
+    real_id = _resolve_segment_id(agenda, segment_id)
+    target_idx = next(
+        (i for i, seg in enumerate(agenda.segments) if seg.id == real_id),
+        None,
+    )
+    if target_idx is None:  # pragma: no cover — resolver already raised
         raise ModelRetry(f"unknown segment: {segment_id}")
 
     agenda.segments.pop(target_idx)
     recompute_start_times(agenda)
-    return {"removed_segment_id": segment_id}
+    return {"removed_segment_id": _shorten_id(real_id)}
 
 
 def apply_move_segment(
@@ -269,69 +446,65 @@ def apply_move_segment(
     if (after_id is None) == (before_id is None):
         raise ModelRetry("provide exactly one of after_id or before_id")
 
-    anchor_id = after_id if after_id is not None else before_id
-    if segment_id == anchor_id:
+    agenda = ctx.deps.agenda
+    real_seg_id = _resolve_segment_id(agenda, segment_id)
+    # Exactly one of after_id / before_id is non-None per the check above.
+    raw_anchor: str = after_id if after_id is not None else before_id  # type: ignore[assignment]
+    real_anchor = _resolve_segment_id(agenda, raw_anchor)
+    if real_seg_id == real_anchor:
         raise ModelRetry("cannot move a segment relative to itself")
 
-    agenda = ctx.deps.agenda
-
-    seg_idx = None
-    for i, seg in enumerate(agenda.segments):
-        if seg.id == segment_id:
-            seg_idx = i
-            break
-    if seg_idx is None:
+    seg_idx = next(
+        (i for i, seg in enumerate(agenda.segments) if seg.id == real_seg_id),
+        None,
+    )
+    if seg_idx is None:  # pragma: no cover
         raise ModelRetry(f"unknown segment: {segment_id}")
 
-    anchor_idx = None
-    for i, seg in enumerate(agenda.segments):
-        if seg.id == anchor_id:
-            anchor_idx = i
-            break
-    if anchor_idx is None:
-        raise ModelRetry(f"unknown anchor segment: {anchor_id}")
+    anchor_idx = next(
+        (i for i, seg in enumerate(agenda.segments) if seg.id == real_anchor),
+        None,
+    )
+    if anchor_idx is None:  # pragma: no cover
+        raise ModelRetry(f"unknown anchor segment: {raw_anchor}")
 
     moving = agenda.segments.pop(seg_idx)
 
     # Re-find the anchor index since popping may have shifted it. Anchor is
     # guaranteed to still exist here: we established segment_id != anchor_id
     # above, so the pop removed a different segment.
-    new_anchor_idx = next(i for i, seg in enumerate(agenda.segments) if seg.id == anchor_id)
+    new_anchor_idx = next(i for i, seg in enumerate(agenda.segments) if seg.id == real_anchor)
 
     new_idx = new_anchor_idx + 1 if after_id is not None else new_anchor_idx
     agenda.segments.insert(new_idx, moving)
     recompute_start_times(agenda)
 
-    return {"segment_id": segment_id, "new_index": new_idx}
+    return {"segment_id": _shorten_id(real_seg_id), "new_index": new_idx}
 
 
 def apply_swap_roles(ctx, segment_id_a: str, segment_id_b: str) -> dict:
     """Bilateral: atomically exchange the role_taker between TWO segments.
     Positions, durations, buffers, and start_times are unchanged."""
-    if segment_id_a == segment_id_b:
+    agenda = ctx.deps.agenda
+    real_a = _resolve_segment_id(agenda, segment_id_a)
+    real_b = _resolve_segment_id(agenda, segment_id_b)
+    if real_a == real_b:
         raise ModelRetry("cannot swap a segment with itself")
 
-    agenda = ctx.deps.agenda
-
-    seg_a = None
-    seg_b = None
-    for seg in agenda.segments:
-        if seg.id == segment_id_a:
-            seg_a = seg
-        elif seg.id == segment_id_b:
-            seg_b = seg
-    if seg_a is None:
-        raise ModelRetry(f"unknown segment: {segment_id_a}")
-    if seg_b is None:
-        raise ModelRetry(f"unknown segment: {segment_id_b}")
+    seg_a = next(seg for seg in agenda.segments if seg.id == real_a)
+    seg_b = next(seg for seg in agenda.segments if seg.id == real_b)
 
     seg_a.role_taker, seg_b.role_taker = seg_b.role_taker, seg_a.role_taker
 
+    # Tool result emits bare-name strings — keeping the model-facing contract
+    # uniform across set_role / swap_roles / preview / show_current_agenda.
+    # The structured Attendee survives in `agenda.segments[*].role_taker`
+    # for render-time membership lookup.
     return {
-        "segment_id_a": segment_id_a,
-        "segment_id_b": segment_id_b,
-        "role_taker_a": seg_a.role_taker,
-        "role_taker_b": seg_b.role_taker,
+        "segment_id_a": _shorten_id(real_a),
+        "segment_id_b": _shorten_id(real_b),
+        "role_taker_a": seg_a.role_taker.name if seg_a.role_taker else "",
+        "role_taker_b": seg_b.role_taker.name if seg_b.role_taker else "",
     }
 
 
@@ -339,22 +512,14 @@ def apply_swap_time(ctx, segment_id_a: str, segment_id_b: str) -> dict:
     """Bilateral: exchange the sequence positions of TWO segments. Also swaps
     buffer_before values because a buffer is a gap at a POSITION — it belongs
     to the slot, not the segment. Downstream times recompute."""
-    if segment_id_a == segment_id_b:
+    agenda = ctx.deps.agenda
+    real_a = _resolve_segment_id(agenda, segment_id_a)
+    real_b = _resolve_segment_id(agenda, segment_id_b)
+    if real_a == real_b:
         raise ModelRetry("cannot swap a segment with itself")
 
-    agenda = ctx.deps.agenda
-
-    idx_a = None
-    idx_b = None
-    for i, seg in enumerate(agenda.segments):
-        if seg.id == segment_id_a:
-            idx_a = i
-        elif seg.id == segment_id_b:
-            idx_b = i
-    if idx_a is None:
-        raise ModelRetry(f"unknown segment: {segment_id_a}")
-    if idx_b is None:
-        raise ModelRetry(f"unknown segment: {segment_id_b}")
+    idx_a = next(i for i, seg in enumerate(agenda.segments) if seg.id == real_a)
+    idx_b = next(i for i, seg in enumerate(agenda.segments) if seg.id == real_b)
 
     seg_a = agenda.segments[idx_a]
     seg_b = agenda.segments[idx_b]
@@ -370,8 +535,8 @@ def apply_swap_time(ctx, segment_id_a: str, segment_id_b: str) -> dict:
 
     # After swap: a is at idx_b, b is at idx_a.
     return {
-        "segment_id_a": segment_id_a,
-        "segment_id_b": segment_id_b,
+        "segment_id_a": _shorten_id(real_a),
+        "segment_id_b": _shorten_id(real_b),
         "new_index_a": idx_b,
         "new_index_b": idx_a,
     }
@@ -383,17 +548,17 @@ def apply_shift_segment_time(ctx, segment_id: str, delta_min: int) -> dict:
     the existing gap (pulls earlier) — refuses if gap is insufficient or
     segment is first."""
     agenda = ctx.deps.agenda
-
-    seg_idx = None
-    for i, seg in enumerate(agenda.segments):
-        if seg.id == segment_id:
-            seg_idx = i
-            break
-    if seg_idx is None:
+    real_id = _resolve_segment_id(agenda, segment_id)
+    short = _shorten_id(real_id)
+    seg_idx = next(
+        (i for i, seg in enumerate(agenda.segments) if seg.id == real_id),
+        None,
+    )
+    if seg_idx is None:  # pragma: no cover
         raise ModelRetry(f"unknown segment: {segment_id}")
 
     if delta_min == 0:
-        return {"segment_id": segment_id, "delta_min": 0}
+        return {"segment_id": short, "delta_min": 0}
 
     seg = agenda.segments[seg_idx]
 
@@ -405,8 +570,7 @@ def apply_shift_segment_time(ctx, segment_id: str, delta_min: int) -> dict:
         available = seg.buffer_before or 0
         if abs(delta_min) > available:
             raise ModelRetry(
-                f"only {available} min gap available before segment {segment_id}; "
-                f"cannot pull back {abs(delta_min)} min"
+                f"only {available} min gap available before segment {short}; " f"cannot pull back {abs(delta_min)} min"
             )
 
     seg.buffer_before = (seg.buffer_before or 0) + delta_min
@@ -414,7 +578,7 @@ def apply_shift_segment_time(ctx, segment_id: str, delta_min: int) -> dict:
 
     direction = "later" if delta_min > 0 else "earlier"
     return {
-        "segment_id": segment_id,
+        "segment_id": short,
         "delta_min": delta_min,
         "new_buffer_before": seg.buffer_before,
         "direction": direction,
@@ -448,38 +612,6 @@ def _meeting_summary(agenda: Agenda) -> dict:
     }
 
 
-def _membership_label(role_taker: str) -> str | None:
-    """Resolve a role_taker string to "member" / "guest" / None.
-
-    None for "All" / empty (group roles like Table Topic Session). Exact
-    full-name match against CLUB_MEMBERS (case-insensitive) → "member";
-    any other non-empty name → "guest". Centralizing this here keeps the
-    chat reply consistent with the form's badge logic without relying on
-    the model to scan the CLUB_MEMBERS section of its system prompt for
-    every row in the segment table — a check that has been observed to
-    misfire (e.g. labeling Lucas as a member when he is a guest)."""
-    name = (role_taker or "").strip()
-    if not name or name.lower() == "all":
-        return None
-    name_lower = name.lower()
-    for member in CLUB_MEMBERS:
-        if member.lower() == name_lower:
-            return "member"
-    return "guest"
-
-
-def _format_role_display(role_taker: str) -> str:
-    """Pre-baked display string for the segment table's Role taker column.
-
-    Contains the membership annotation so the model can emit it verbatim
-    instead of recomputing per row. Empty / falsy roles render as a dash
-    so the column never goes blank."""
-    membership = _membership_label(role_taker)
-    if membership is None:
-        return role_taker if role_taker else "—"
-    return f"{role_taker} ({membership})"
-
-
 def _segments_summary(agenda: Agenda) -> list[dict]:
     """Compact list of every segment, in order — for the model's reply table.
 
@@ -490,20 +622,34 @@ def _segments_summary(agenda: Agenda) -> list[dict]:
 
     Intentionally omits any (member)/(guest) annotation. Membership is a pure
     render-layer concern — the route addendum (`_render_segment_table`) and
-    the frontend form compute it deterministically from CLUB_MEMBERS. Keeping
+    the frontend form compute it deterministically from `member_id`. Keeping
     it out of the tool result means the model never sees the annotated form
-    and therefore can never copy it back into a tool argument."""
-    return [
-        {
-            "id": seg.id,
-            "start_time": seg.start_time,
-            "type": seg.type,
-            "duration": seg.duration,
-            "role_taker": seg.role_taker,
-            "buffer_before": seg.buffer_before,
-        }
-        for seg in agenda.segments
-    ]
+    and therefore can never copy it back into a tool argument.
+
+    `role_taker` stays a bare-name string for LLM contract uniformity. The
+    structured Attendee's `member_id` rides as a `role_taker_member_id`
+    sidecar — same shape Phase A introduced for preview projections."""
+    out: list[dict] = []
+    real_ids = [seg.id for seg in agenda.segments]
+    # Disambiguate prefixes against the full agenda so the model-facing
+    # `id` is unique even in the rare case two real UUIDs share `[:5]`.
+    from app.meeting_agent.segment_ids import shorten_unique
+
+    short_map = shorten_unique(real_ids)
+    for seg in agenda.segments:
+        rt = seg.role_taker
+        out.append(
+            {
+                "id": short_map.get(seg.id, _shorten_id(seg.id)),
+                "start_time": seg.start_time,
+                "type": seg.type,
+                "duration": seg.duration,
+                "role_taker": rt.name if rt else "",
+                "role_taker_member_id": rt.member_id if rt else "",
+                "buffer_before": seg.buffer_before,
+            }
+        )
+    return out
 
 
 def _missing_required_fields(agenda: Agenda) -> list[dict]:
@@ -568,9 +714,14 @@ async def apply_create_from_text(ctx, raw_text: str) -> dict:
 # Closing Remarks); user re-assigns via subsequent chat edits.
 _REGULAR_2PS_SEGMENTS: tuple[tuple[str, str, int, str], ...] = (
     # (type, start_time, duration_min, role_taker)
-    ("Members and Guests Registration, Warm Up", "19:15", 15, "All"),
+    # Type strings must match the canonical labels emitted by the frontend's
+    # `DEFAULT_SEGMENTS_REGULAR_MEETING` (frontend/src/utils/defaultSegments.ts);
+    # otherwise `instantiateSegmentByType` falls back to CustomSegment and the
+    # form renders these rows as generic custom cards instead of the proper
+    # specialized segments.
+    ("Members and Guests Registration, Warm up", "19:15", 15, "All"),
     ("Meeting Rules Introduction (SAA)", "19:30", 2, ""),
-    ("Opening Remarks", "19:32", 2, "Amy Fang"),
+    ("Opening Remarks (President)", "19:32", 2, ""),
     ("TOM (Toastmaster of Meeting) Introduction", "19:34", 2, ""),
     ("Timer", "19:36", 2, ""),
     ("Hark Master", "19:38", 1, ""),
@@ -584,16 +735,16 @@ _REGULAR_2PS_SEGMENTS: tuple[tuple[str, str, int, str], ...] = (
     ("Prepared Speech Evaluation", "20:41", 3, ""),
     ("Prepared Speech Evaluation", "20:44", 3, ""),
     ("Timer's Report", "20:47", 2, ""),
-    ("Hark Master Pop Quiz", "20:49", 5, ""),
+    ("Hark Master Pop Quiz Time", "20:49", 5, ""),
     ("General Evaluation", "20:54", 8, ""),
-    ("Voting Section", "21:02", 2, ""),
+    ("Voting Section (TOM)", "21:02", 2, ""),
     ("Moment of Truth", "21:04", 7, ""),
-    ("Awards", "21:11", 3, "Amy Fang"),
-    ("Closing Remarks", "21:14", 1, "Amy Fang"),
+    ("Awards (President)", "21:11", 3, ""),
+    ("Closing Remarks (President)", "21:14", 1, "Amy Fang"),
 )
 
 
-def _build_template_regular_2ps() -> Agenda:
+def _build_template_regular_2ps(members_directory: list[dict]) -> Agenda:
     """Hardcoded Regular meeting with 2 prepared speeches.
 
     Segments are back-to-back from 19:15 (warmup) to 21:15 (closing).
@@ -606,28 +757,38 @@ def _build_template_regular_2ps() -> Agenda:
     meta.end_time is intentionally None so the validator skips overflow /
     underflow checks until the user fills it in (the agenda's actual end
     is 21:15, but typical SoarHigh slots end at 21:30 — let the user
-    decide rather than picking one for them)."""
+    decide rather than picking one for them).
+
+    `members_directory` is the live members list eager-fetched at turn
+    boundary by the route. Static defaults like "Amy Fang" (the current
+    president) are resolved through `_resolve_role_taker` so they carry a
+    real DB `member_id` — without this, the chat addendum would render
+    those default-presider rows as `(guest)` until the frontend re-resolved
+    on the next snapshot."""
     from app.meeting_agent.models import Meta as _Meta
 
     meta = _Meta(
         type="Regular",
         start_time="19:15",
     )
+    empty_agenda = Agenda(meta=_Meta(), segments=[])
     segments = [
         Segment(
-            id=f"s{i + 1}",
+            # Real UUID per segment — see normalize.py for why we no longer
+            # use positional `s{i+1}` ids.
+            id=str(uuid.uuid4()),
             type=seg_type,
             start_time=start,
             duration=duration,
-            role_taker=role,
+            role_taker=_resolve_role_taker(empty_agenda, members_directory, role),
             buffer_before=0,
         )
-        for i, (seg_type, start, duration, role) in enumerate(_REGULAR_2PS_SEGMENTS)
+        for _i, (seg_type, start, duration, role) in enumerate(_REGULAR_2PS_SEGMENTS)
     ]
     return Agenda(meta=meta, segments=segments)
 
 
-def _build_template_custom() -> Agenda:
+def _build_template_custom(members_directory: list[dict]) -> Agenda:
     """Minimal single-segment Custom meeting starter.
 
     Custom meetings have no fixed structural convention — no required
@@ -638,7 +799,12 @@ def _build_template_custom() -> Agenda:
     duration so it aligns with the standard pre-meeting warmup window — the
     user can rename / resize / re-anchor as needed. meta.start_time matches
     the first segment (19:15) so `recompute_start_times` preserves the
-    placeholder's clock position after subsequent structural edits."""
+    placeholder's clock position after subsequent structural edits.
+
+    `members_directory` is unused by this template (the only segment has no
+    role taker) but is accepted so both template builders share one signature
+    in `_TEMPLATE_BUILDERS`."""
+    del members_directory
     from app.meeting_agent.models import Meta as _Meta
 
     meta = _Meta(
@@ -647,11 +813,11 @@ def _build_template_custom() -> Agenda:
     )
     segments = [
         Segment(
-            id="s1",
+            id=str(uuid.uuid4()),
             type="Segment 1",
             start_time="19:15",
             duration=15,
-            role_taker="",
+            role_taker=None,
             buffer_before=0,
         )
     ]
@@ -688,7 +854,7 @@ async def apply_create_from_template(ctx, template: str) -> dict:
         raise ModelRetry(
             f"Unknown template: {template!r}. Supported names: " f"{', '.join(sorted(_TEMPLATE_BUILDERS.keys()))}"
         )
-    new_agenda = builder()
+    new_agenda = builder(ctx.deps.members_directory)
     ctx.deps.agenda.meta = new_agenda.meta
     ctx.deps.agenda.segments = new_agenda.segments
     return {
@@ -715,127 +881,14 @@ async def apply_show_current_agenda(ctx) -> dict:
     }
 
 
-async def apply_preview_meeting(ctx, no: int) -> dict:
-    """Read-only fetch of a single historical meeting's full structure —
-    meta + ordered segments — without modifying the current agenda.
-
-    Bridges the gap between `lookup_meeting` (lightweight cards, no segments)
-    and `clone_from_meeting` (destructive replace). Use this when the user
-    wants to inspect what a meeting looks like before deciding whether to
-    clone it. The route auto-renders folded meta + agenda tables for this
-    tool's payload — see `_render_preview_addendum` in the route — so the
-    LLM-facing tool docstring (in `agent.py`) instructs the model NOT to
-    re-emit them. Keep this developer-facing comment in sync with that."""
-    meeting_dict = await asyncio.to_thread(meeting_lookup.fetch_meeting_full, no)
-    if meeting_dict is None:
-        raise ModelRetry(f"Meeting #{no} not found in recent history.")
-    return meeting_lookup.meeting_to_preview(meeting_dict)
-
-
-def _parse_iso_date_or_raise(label: str, value: str) -> date:
-    """Validate that `value` is a real ISO YYYY-MM-DD calendar date.
-
-    A bare regex (`^\\d{4}-\\d{2}-\\d{2}$`) accepts impossible dates like
-    '2025-13-01' or '2025-02-31'. Those would then be compared
-    lexicographically inside the resolver and silently mis-filter
-    (e.g. '2025-13-01' > '2025-12-31' is True). `date.fromisoformat`
-    rejects them outright so the model gets a useful retry message."""
-    try:
-        return date.fromisoformat(value)
-    except ValueError:
-        raise ModelRetry(
-            f"{label} must be a real ISO calendar date (YYYY-MM-DD, " f"e.g. '2025-10-01'); got {value!r}."
-        ) from None
-
-
-async def _get_or_fetch_pool(deps: Any) -> list[dict]:
-    """Lazy-fetch the candidate-meetings pool once per turn and cache it
-    on `deps`. The asyncio.Lock is bound to the current event loop on
-    first use (cannot be created at deps construction time because the
-    loop may not exist yet there).
-
-    Multiple parallel `lookup_meeting` calls within one turn — the
-    typical pattern for cross-language theme + intro fan-out — share
-    one Supabase fetch instead of each hitting the DB through `DB_LOCK`
-    sequentially."""
-    if deps.meeting_pool_lock is None:
-        deps.meeting_pool_lock = asyncio.Lock()
-    async with deps.meeting_pool_lock:
-        if deps.meeting_pool_cache is None:
-            deps.meeting_pool_cache = await asyncio.to_thread(
-                meeting_lookup.db_meetings_recent, meeting_lookup._POOL_SIZE
-            )
-    return deps.meeting_pool_cache
-
-
-async def apply_lookup_meeting(
-    ctx,
-    no: int | None = None,
-    name_substring: str | None = None,
-    theme_substring: str | None = None,
-    introduction_substring: str | None = None,
-    type_filter: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    limit: int = 5,
-) -> dict:
-    """Find historical meetings by structured filter. Thin wrapper that
-    builds a `MeetingFilters` from the LLM-supplied args and delegates
-    to `app.services.meeting_lookup.resolve_meetings`. The model is
-    expected to extract the filter values itself (see the registered
-    tool docstring in agent.py); no free-text parsing happens here.
-
-    Returns the resolver's full result envelope ({cards, total_matches,
-    pool_size, limit_clamped}) so the LLM can disclose to the user when
-    its result was clamped — proactive disclosure beats the user having
-    to ask 'why didn't you show me X' on a follow-up turn."""
-    if type_filter is not None and type_filter not in {"Regular", "Workshop", "Custom"}:
-        raise ModelRetry(f"type_filter must be one of: Regular, Workshop, Custom. Got: {type_filter!r}.")
-    parsed_from = _parse_iso_date_or_raise("date_from", date_from) if date_from else None
-    parsed_to = _parse_iso_date_or_raise("date_to", date_to) if date_to else None
-    if parsed_from and parsed_to and parsed_from > parsed_to:
-        raise ModelRetry(f"date_from ({date_from}) must not be after date_to ({date_to}).")
-    if limit < 1:
-        raise ModelRetry(f"limit must be >= 1; got {limit}")
-    if limit > meeting_lookup._POOL_SIZE:
-        raise ModelRetry(
-            f"limit must be <= {meeting_lookup._POOL_SIZE} (the candidate pool size). "
-            f"For deeper history use no= for an exact lookup."
-        )
-    filters = meeting_lookup.MeetingFilters(
-        no=no,
-        name_substring=(name_substring or None),
-        theme_substring=(theme_substring or None),
-        introduction_substring=(introduction_substring or None),
-        type_filter=type_filter,  # type: ignore[arg-type]
-        date_from=date_from,
-        date_to=date_to,
-        limit=limit,
-    )
-    if filters == meeting_lookup.MeetingFilters(limit=limit):
-        # No real filter axis set — refuse rather than return the recent
-        # top-N. The model should have extracted *something* from the user
-        # intent. Most common cause: model thought substring matching was
-        # inadequate for a topic keyword and tried to give up; the right
-        # move is to pass the keyword anyway and let the result speak.
-        raise ModelRetry(
-            "lookup_meeting was called with no filter axes (only limit). "
-            "If the user mentioned a manager name, pass it as `name_substring`. "
-            "If the user mentioned a topic keyword (e.g. '教育', 'AI', "
-            "'aging', 'storytelling'), pass it as `theme_substring` and/or "
-            "`introduction_substring` — substring matching is the supported "
-            "mechanism even if you suspect no field contains that exact word; "
-            "an empty result is a valid answer. If the user mentioned a "
-            "meeting type, pass `type_filter`. If you genuinely can't "
-            "extract any filter, do NOT call this tool — ask the user for "
-            "clarification in text."
-        )
-    # Exact-no path skips the pool entirely; everything else shares the
-    # per-turn pool cache so parallel calls don't redundantly hit Supabase.
-    if filters.no is not None:
-        return await asyncio.to_thread(meeting_lookup.resolve_meetings, filters)
-    pool = await _get_or_fetch_pool(ctx.deps)
-    return await asyncio.to_thread(meeting_lookup.resolve_meetings, filters, pool=pool)
+# Re-export the shared agent-tool wrappers so existing meeting-agent
+# imports (`from app.meeting_agent.tools import apply_lookup_meeting`)
+# keep working without churning callers. The actual logic lives in
+# `app.services.meeting_lookup` so the statistics agent (and any future
+# specialist) shares one validation path, one envelope shape, one
+# pool-cache definition. See feedback_mirror_existing_patterns.md.
+apply_lookup_meeting = meeting_lookup.apply_lookup_meeting
+apply_preview_meeting = meeting_lookup.apply_preview_meeting
 
 
 _CLONE_LOOKUP_LOOKBACK_TURNS = 3
@@ -926,7 +979,15 @@ async def apply_clone_from_meeting(ctx, no: int) -> dict:
     cloned.meta.date = None
     cloned.meta.introduction = None
     for seg in cloned.segments:
-        seg.role_taker = ""
+        seg.role_taker = None
+        # Per-meeting user content does not transfer on clone — only the
+        # structural skeleton (type / start_time / duration / buffer_before)
+        # does. Speech titles, workshop notes, WOT, and eval-to-speech links
+        # belong to the source meeting; carrying them over surfaces stale
+        # data the user has to manually wipe before the new draft is usable.
+        seg.title = ""
+        seg.content = ""
+        seg.related_segment_ids = ""
 
     ctx.deps.agenda.meta = cloned.meta
     ctx.deps.agenda.segments = cloned.segments

@@ -1,4 +1,4 @@
-from app.meeting_agent.prompts import CLUB_MEMBERS as _CLUB_MEMBERS
+from app.services.member_directory import CLUB_MEMBERS as _CLUB_MEMBERS
 
 _CLUB_MEMBERS_BULLETS = "\n".join(f"- {name}" for name in _CLUB_MEMBERS)
 

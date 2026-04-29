@@ -28,12 +28,36 @@ Three layers:
 
 from __future__ import annotations
 
+import asyncio
 import re
 import threading
 from dataclasses import dataclass
-from typing import Literal
+from datetime import date
+from typing import Any, Literal
+
+from pydantic_ai import ModelRetry
 
 from app.db.core import get_meeting_by_id, get_meeting_id_by_no, get_meetings
+
+
+def parse_iso_date_or_raise(label: str, value: str) -> date:
+    """Validate that `value` is a real ISO YYYY-MM-DD calendar date.
+
+    A bare regex (`^\\d{4}-\\d{2}-\\d{2}$`) accepts impossible dates like
+    '2025-13-01' or '2025-02-31'. Those would compare lexicographically
+    inside the resolver and silently mis-filter (e.g. '2025-13-01' >
+    '2025-12-31' is True). `date.fromisoformat` rejects them outright so
+    the model gets a useful retry message.
+
+    Shared between `meeting_lookup` (date_from / date_to in agent tools)
+    and `meeting_stats` (analytics tool date filters)."""
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ModelRetry(
+            f"{label} must be a real ISO calendar date (YYYY-MM-DD, " f"e.g. '2025-10-01'); got {value!r}."
+        ) from None
+
 
 # Supabase-py wraps a sync httpx client whose HTTP/2 stream state corrupts
 # under concurrent access — surfaces as `httpx.RemoteProtocolError: Server
@@ -151,20 +175,38 @@ def meeting_to_card(meeting: dict, *, include_introduction: bool = False) -> dic
 
 
 def _segment_to_preview(seg: dict) -> dict:
-    """Project a DB segment row into the preview shape (matches the agent's
-    own `segments` summary so model output stays uniform across creation,
-    edit, and preview tool results)."""
+    """Project a DB segment row into the preview shape.
+
+    `role_taker` stays a bare string so the model-facing tool result keeps
+    a uniform shape across creation, edit, and preview paths (the LLM never
+    needs to reason about membership). The DB-authoritative `member_id`
+    rides as a sidecar field `role_taker_member_id` that the preview
+    renderer uses to decide the (member)/(guest) badge — see
+    `meeting_preview_markdown.format_role_display`. Without this sidecar,
+    the renderer would have to guess membership from the static
+    `CLUB_MEMBERS` list, overriding DB truth (the meeting #403 'Libra Lee
+    (guest)' bug)."""
     role = seg.get("role_taker") or {}
-    role_name = role.get("name") if isinstance(role, dict) else (role or "")
+    if isinstance(role, dict):
+        role_name = role.get("name") or ""
+        role_member_id = role.get("member_id") or ""
+    else:
+        role_name = role or ""
+        role_member_id = ""
     try:
         duration = int(seg.get("duration") or 0)
     except (TypeError, ValueError):
         duration = 0
     return {
+        "id": seg.get("id", ""),
         "type": seg.get("type", ""),
         "start_time": seg.get("start_time", ""),
         "duration": duration,
-        "role_taker": role_name or "",
+        "role_taker": role_name,
+        "role_taker_member_id": role_member_id,
+        "title": seg.get("title") or "",
+        "content": seg.get("content") or "",
+        "related_segment_ids": seg.get("related_segment_ids") or "",
     }
 
 
@@ -346,10 +388,13 @@ def _matches_filters(meeting: dict, filters: MeetingFilters) -> bool:
         if filters.name_substring.lower() not in _meeting_manager_name(meeting).lower():
             return False
     if filters.theme_substring:
-        if filters.theme_substring.lower() not in (meeting.get("theme") or "").lower():
+        if not _field_matches_substring(meeting.get("theme") or "", filters.theme_substring):
             return False
     if filters.introduction_substring:
-        if filters.introduction_substring.lower() not in (meeting.get("introduction") or "").lower():
+        if not _field_matches_substring(
+            meeting.get("introduction") or "",
+            filters.introduction_substring,
+        ):
             return False
     if filters.date_from or filters.date_to:
         # ISO date strings sort lexicographically. Missing meeting.date
@@ -363,6 +408,31 @@ def _matches_filters(meeting: dict, filters: MeetingFilters) -> bool:
         if filters.date_to and meeting_date > filters.date_to:
             return False
     return True
+
+
+def _field_matches_substring(value: str, needle: str) -> bool:
+    """Case-insensitive field match with token boundaries for short ASCII.
+
+    Literal substring matching is useful for natural meeting titles, but
+    short English acronyms like "AI" should not match inside unrelated
+    words such as "Gain". For two- or three-character alphanumeric ASCII
+    needles, require non-alphanumeric boundaries on both sides; longer
+    terms keep the original substring behavior.
+    """
+    haystack = value or ""
+    query = (needle or "").strip()
+    if not query:
+        return True
+    if re.fullmatch(r"[A-Za-z0-9]{2,3}", query):
+        return (
+            re.search(
+                rf"(?<![A-Za-z0-9]){re.escape(query)}(?![A-Za-z0-9])",
+                haystack,
+                re.IGNORECASE,
+            )
+            is not None
+        )
+    return query.lower() in haystack.lower()
 
 
 _POOL_SIZE = 200
@@ -438,3 +508,112 @@ def resolve_from_query(query: str) -> dict:
     if filters == MeetingFilters():
         return {"cards": [], "total_matches": 0, "pool_size": 0, "limit_clamped": False}
     return resolve_meetings(filters)
+
+
+# ---------- Agent-facing tool wrappers (shared by every agent) ----------
+#
+# The meeting agent and the statistics agent both register a `lookup_meeting`
+# and a `preview_meeting` tool. Both registrations delegate to the helpers
+# here so there is exactly one definition of arg-validation, one pool-cache
+# helper, and one set of envelope-shape rules. Both agents' deps types
+# (`AgendaDeps`, `StatsDeps`) carry the per-turn pool cache fields
+# (`meeting_pool_cache`, `meeting_pool_lock`) — the helpers duck-type on
+# those attributes.
+
+
+async def get_or_fetch_pool(deps: Any) -> list[dict]:
+    """Lazy-fetch the candidate-meetings pool once per turn and cache it
+    on `deps`. The asyncio.Lock is bound to the current event loop on
+    first use (cannot be created at deps construction time because the
+    loop may not exist yet there).
+
+    Multiple parallel `lookup_meeting` calls within one turn — the
+    typical pattern for cross-language theme + intro fan-out — share
+    one Supabase fetch instead of each hitting the DB through `DB_LOCK`
+    sequentially."""
+    if deps.meeting_pool_lock is None:
+        deps.meeting_pool_lock = asyncio.Lock()
+    async with deps.meeting_pool_lock:
+        if deps.meeting_pool_cache is None:
+            deps.meeting_pool_cache = await asyncio.to_thread(db_meetings_recent, _POOL_SIZE)
+    return deps.meeting_pool_cache
+
+
+async def apply_lookup_meeting(
+    ctx,
+    no: int | None = None,
+    name_substring: str | None = None,
+    theme_substring: str | None = None,
+    introduction_substring: str | None = None,
+    type_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 5,
+) -> dict:
+    """Find historical meetings by structured filter. Builds a
+    `MeetingFilters` from the LLM-supplied args and delegates to
+    `resolve_meetings`. The model is expected to extract the filter
+    values itself (see the registered tool docstring); no free-text
+    parsing happens here.
+
+    Returns the resolver's full result envelope ({cards, total_matches,
+    pool_size, limit_clamped}) so the LLM can disclose to the user when
+    its result was clamped."""
+    if type_filter is not None and type_filter not in {"Regular", "Workshop", "Custom"}:
+        raise ModelRetry(f"type_filter must be one of: Regular, Workshop, Custom. Got: {type_filter!r}.")
+    parsed_from = parse_iso_date_or_raise("date_from", date_from) if date_from else None
+    parsed_to = parse_iso_date_or_raise("date_to", date_to) if date_to else None
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        raise ModelRetry(f"date_from ({date_from}) must not be after date_to ({date_to}).")
+    if limit < 1:
+        raise ModelRetry(f"limit must be >= 1; got {limit}")
+    if limit > _POOL_SIZE:
+        raise ModelRetry(
+            f"limit must be <= {_POOL_SIZE} (the candidate pool size). "
+            f"For deeper history use no= for an exact lookup."
+        )
+    filters = MeetingFilters(
+        no=no,
+        name_substring=(name_substring or None),
+        theme_substring=(theme_substring or None),
+        introduction_substring=(introduction_substring or None),
+        type_filter=type_filter,  # type: ignore[arg-type]
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+    )
+    if filters == MeetingFilters(limit=limit):
+        # No real filter axis set — refuse rather than return the recent
+        # top-N. The model should have extracted *something* from the
+        # user intent. Most common cause: model thought substring matching
+        # was inadequate for a topic keyword and tried to give up; the
+        # right move is to pass the keyword anyway and let the result speak.
+        raise ModelRetry(
+            "lookup_meeting was called with no filter axes (only limit). "
+            "If the user mentioned a manager name, pass it as `name_substring`. "
+            "If the user mentioned a topic keyword (e.g. '教育', 'AI', "
+            "'aging', 'storytelling'), pass it as `theme_substring` and/or "
+            "`introduction_substring` — substring matching is the supported "
+            "mechanism even if you suspect no field contains that exact word; "
+            "an empty result is a valid answer. If the user mentioned a "
+            "meeting type, pass `type_filter`. If you genuinely can't "
+            "extract any filter, do NOT call this tool — ask the user for "
+            "clarification in text."
+        )
+    # Exact-no path skips the pool entirely; everything else shares the
+    # per-turn pool cache so parallel calls don't redundantly hit Supabase.
+    if filters.no is not None:
+        return await asyncio.to_thread(resolve_meetings, filters)
+    pool = await get_or_fetch_pool(ctx.deps)
+    return await asyncio.to_thread(resolve_meetings, filters, pool=pool)
+
+
+async def apply_preview_meeting(ctx, no: int) -> dict:
+    """Read-only fetch of a single historical meeting's full structure —
+    meta + introduction + ordered segments. The route auto-renders
+    folded meta + intro + agenda tables for this tool's payload (see
+    `_render_preview_addendum` in the route)."""
+    meeting_dict = await asyncio.to_thread(fetch_meeting_full, no)
+    if meeting_dict is None:
+        raise ModelRetry(f"Meeting #{no} not found in recent history.")
+    return meeting_to_preview(meeting_dict)

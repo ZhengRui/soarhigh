@@ -387,6 +387,9 @@ def test_preview_meeting_appends_folded_preview_tables(client, mock_auth_dep):
                 "start_time": "20:08",
                 "duration": "29",
                 "role_taker": {"id": None, "name": "Lucas", "member_id": ""},  # not in CLUB_MEMBERS
+                "title": "Emoji | Storytelling",
+                "content": "Workshop pathway notes\nSecond line",
+                "related_segment_ids": "",
             },
             {
                 "id": "3",
@@ -394,6 +397,7 @@ def test_preview_meeting_appends_folded_preview_tables(client, mock_auth_dep):
                 "start_time": "21:14",
                 "duration": "1",
                 "role_taker": {"id": None, "name": "Amy Fang", "member_id": "m1"},
+                "related_segment_ids": "2,missing",
             },
         ],
     }
@@ -410,10 +414,10 @@ def test_preview_meeting_appends_folded_preview_tables(client, mock_auth_dep):
     text = "".join(e["data"]["chunk"] for e in events if e["event"] == "assistant_text")
     # Both preview tables present, folded, labeled with the meeting number,
     # plus the new Introduction fold (since the meeting has intro text).
-    assert "<summary>📌 Meeting #425 Meta (preview)</summary>" in text
-    assert "<summary>📝 Meeting #425 Introduction (preview)</summary>" in text
+    assert "<summary>📌 Meeting #425 Meta</summary>" in text
+    assert "<summary>📝 Meeting #425 Introduction</summary>" in text
     assert "Emojis are tiny pictures that pack big meaning." in text
-    assert "<summary>📋 Meeting #425 Agenda (preview)</summary>" in text
+    assert "<summary>📋 Meeting #425 Agenda</summary>" in text
     # Meta table populated from the preview result, not the current agenda.
     assert "| Meeting No. | 425 |" in text
     assert "| Theme | Emojis |" in text
@@ -423,6 +427,10 @@ def test_preview_meeting_appends_folded_preview_tables(client, mock_auth_dep):
     # `_db_meetings_recent` 1000-row cap).
     assert "21:14" in text
     assert "Closing Remarks" in text
+    assert "| Time | Duration | Type | Role taker | Details |" in text
+    assert "Title: Emoji \\| Storytelling" in text
+    assert "Content: Workshop pathway notes<br>Second line" in text
+    assert "Related: Workshop" in text
     # Membership annotation comes from the route's _format_role_display.
     assert "Lucas (guest)" in text
     assert "Amy Fang (member)" in text
@@ -479,10 +487,10 @@ def test_build_agenda_addendum_renders_every_preview_in_one_turn():
     addendum = _build_agenda_addendum(tool_trace, Agenda(meta=Meta(), segments=[]), assistant_text_so_far="")
 
     # Both meetings get their own pair of folds.
-    assert "<summary>📌 Meeting #446 Meta (preview)</summary>" in addendum
-    assert "<summary>📋 Meeting #446 Agenda (preview)</summary>" in addendum
-    assert "<summary>📌 Meeting #425 Meta (preview)</summary>" in addendum
-    assert "<summary>📋 Meeting #425 Agenda (preview)</summary>" in addendum
+    assert "<summary>📌 Meeting #446 Meta</summary>" in addendum
+    assert "<summary>📋 Meeting #446 Agenda</summary>" in addendum
+    assert "<summary>📌 Meeting #425 Meta</summary>" in addendum
+    assert "<summary>📋 Meeting #425 Agenda</summary>" in addendum
     # Each meeting's data is in its own block.
     assert "| Meeting No. | 446 |" in addendum
     assert "| Meeting No. | 425 |" in addendum
@@ -519,8 +527,8 @@ def test_preview_addendum_intro_fold_omitted_when_intro_empty():
         },
     ]
     addendum = _build_agenda_addendum(tool_trace, Agenda(meta=Meta(), segments=[]), assistant_text_so_far="")
-    assert "<summary>📌 Meeting #999 Meta (preview)</summary>" in addendum
-    assert "<summary>📋 Meeting #999 Agenda (preview)</summary>" in addendum
+    assert "<summary>📌 Meeting #999 Meta</summary>" in addendum
+    assert "<summary>📋 Meeting #999 Agenda</summary>" in addendum
     assert "Introduction" not in addendum
 
 
@@ -599,7 +607,7 @@ def test_preview_addendum_intro_fold_present_when_intro_text_present():
         },
     ]
     addendum = _build_agenda_addendum(tool_trace, Agenda(meta=Meta(), segments=[]), assistant_text_so_far="")
-    assert "<summary>📝 Meeting #449 Introduction (preview)</summary>" in addendum
+    assert "<summary>📝 Meeting #449 Introduction</summary>" in addendum
     # Intro body is wrapped in a fenced code block so it's visually
     # separated from the fold's summary line.
     # Single-line intro padded with a blank row inside the fence so the
@@ -621,12 +629,33 @@ def test_build_agenda_addendum_intro_fold_omitted_for_segment_only_edits():
 
     agenda = Agenda(
         meta=Meta(introduction="A meaningful description that should NOT show up here."),
-        segments=[Segment(id="s1", type="SAA", start_time="19:30", duration=2, role_taker="Liz")],
+        segments=[
+            Segment(
+                id="s1",
+                type="Prepared Speech",
+                start_time="19:30",
+                duration=2,
+                role_taker="Liz",
+                title="Current | title",
+                content="Current\ncontent",
+            ),
+            Segment(
+                id="s2",
+                type="Prepared Speech Evaluation",
+                start_time="19:32",
+                duration=3,
+                related_segment_ids="s1,missing",
+            ),
+        ],
     )
     tool_trace = [{"name": "set_role", "status": "ok"}]
     addendum = _build_agenda_addendum(tool_trace, agenda, assistant_text_so_far="")
     assert "<summary>📋 Agenda</summary>" in addendum
     assert "Introduction" not in addendum
+    assert "| Time | Duration | Type | Role taker | Details |" in addendum
+    assert "Title: Current \\| title" in addendum
+    assert "Content: Current<br>content" in addendum
+    assert "Related: Prepared Speech" in addendum
 
 
 def test_build_agenda_addendum_intro_fold_rides_with_meta_changes():
@@ -666,9 +695,25 @@ def test_show_current_agenda_appends_folded_tables_for_current_draft(client, moc
                 "end_time": "21:30",
                 "introduction": "Why are young people choosing to lie flat?",
             },
+            # Phase B: agenda_snapshot carries structured `role_taker` so
+            # the route addendum can render the (member)/(guest) badge from
+            # the DB-authoritative `member_id`. Liz is a club member with a
+            # real member_id; Lucas is a guest with empty member_id.
             "segments": [
-                {"id": "s1", "type": "SAA", "start_time": "19:30", "duration": 2, "role_taker": "Liz Huang"},
-                {"id": "s2", "type": "Opening Remarks", "start_time": "19:32", "duration": 2, "role_taker": "Lucas"},
+                {
+                    "id": "s1",
+                    "type": "SAA",
+                    "start_time": "19:30",
+                    "duration": 2,
+                    "role_taker": {"id": "att-liz", "name": "Liz Huang", "member_id": "m-liz"},
+                },
+                {
+                    "id": "s2",
+                    "type": "Opening Remarks",
+                    "start_time": "19:32",
+                    "duration": 2,
+                    "role_taker": {"id": None, "name": "Lucas", "member_id": ""},
+                },
             ],
         },
     }

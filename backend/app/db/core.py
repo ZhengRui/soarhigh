@@ -7,6 +7,62 @@ from ..models.wechat_user import WeChatUser
 from .supabase import create_user_client, supabase
 
 
+def _split_related_segment_ids(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _remap_related_segment_ids(value: str | None, id_map: dict[str, str], valid_ids: set[str]) -> str:
+    """Rewrite comma-separated segment references through an id map.
+
+    Segment ids in the form can be temporary ids like `s14`. Persistence uses
+    UUID primary keys, so references must be translated at the same boundary.
+    Unknown ids are dropped because `related_segment_ids` is an intra-meeting
+    relationship; persisting a reference that is not in the saved meeting would
+    create a dangling UI tag.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for old_id in _split_related_segment_ids(value):
+        new_id = id_map.get(old_id, old_id)
+        if new_id not in valid_ids or new_id in seen:
+            continue
+        out.append(new_id)
+        seen.add(new_id)
+    return ",".join(out)
+
+
+def _assign_segment_ids_and_remap_related_ids(segments_data: list[dict], existing_ids: set[str] | None = None) -> None:
+    """Assign UUID ids to new segments and remap related ids in-place.
+
+    Existing meeting segments keep their DB ids. Any segment id not present in
+    `existing_ids` is treated as a draft/temp id and replaced with a fresh UUID,
+    even if the incoming id already looks UUID-shaped. This keeps persistence
+    server-authoritative and gives us a complete old->new map for relationships.
+    """
+    existing_ids = existing_ids or set()
+    id_map: dict[str, str] = {}
+
+    for segment in segments_data:
+        old_id = str(segment.get("id") or "")
+        if old_id and old_id in existing_ids:
+            new_id = old_id
+        else:
+            new_id = str(uuid.uuid4())
+            segment["id"] = new_id
+        if old_id:
+            id_map[old_id] = new_id
+
+    valid_ids = {str(segment.get("id")) for segment in segments_data if segment.get("id")}
+    for segment in segments_data:
+        segment["related_segment_ids"] = _remap_related_segment_ids(
+            segment.get("related_segment_ids"),
+            id_map,
+            valid_ids,
+        )
+
+
 def get_members():
     return supabase.table("members").select("id, username, full_name").execute().data
 
@@ -129,7 +185,8 @@ def create_meeting(meeting_data: Dict) -> Dict:
 
     # Insert segments if provided
     if segments_data:
-        segments_db = create_segments(segments_data, meeting_id)
+        _assign_segment_ids_and_remap_related_ids(segments_data)
+        segments_db = create_segments(segments_data, meeting_id, preserve_ids=True)
 
         for s, s_db in zip(segments_data, segments_db):
             s["id"] = s_db["id"]
@@ -468,9 +525,10 @@ def update_meeting(meeting_id: str, meeting_data: Dict, user_id: str) -> Optiona
         supabase.table("meetings").update(diff).eq("id", meeting_id).execute()
 
     segments_data = meeting_data.get("segments", [])
+    existing_ids = set([segment["id"] for segment in existing_segments])
+    _assign_segment_ids_and_remap_related_ids(segments_data, existing_ids)
 
     ids = set([segment["id"] for segment in segments_data])
-    existing_ids = set([segment["id"] for segment in existing_segments])
     existing_by_ids = {segment["id"]: segment for segment in existing_segments}
 
     ids_to_delete = list(existing_ids - ids)
@@ -672,7 +730,7 @@ def save_meeting_awards(meeting_id: str, awards_data: List[Dict], user_id: str) 
     return new_awards
 
 
-def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:
+def create_segments(segments_data: List[Dict], meeting_id: str, preserve_ids: bool = False) -> List[Dict]:
     """
     Create segments for a meeting.
 
@@ -683,7 +741,9 @@ def create_segments(segments_data: List[Dict], meeting_id: str) -> List[Dict]:
     Returns:
         List of dictionaries containing the created segments data
     """
-    segments_to_insert = [prepare_segment_data(segment, meeting_id) for segment in segments_data]
+    segments_to_insert = [
+        prepare_segment_data(segment, meeting_id, ignore_id=not preserve_ids) for segment in segments_data
+    ]
 
     if segments_to_insert:
         result = supabase.table("segments").insert(segments_to_insert).execute()

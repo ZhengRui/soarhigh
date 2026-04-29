@@ -27,8 +27,14 @@ from ...meeting_agent.agent import USAGE_LIMITS, agent
 from ...meeting_agent.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
 from ...meeting_agent.models import AgendaDeps
 from ...meeting_agent.prompts import SNAPSHOT_TEMPLATE
+from ...meeting_agent.segment_ids import shorten_agenda_dump
 from ...meeting_agent.store import TurnRecord, session_store
 from ...models.meeting_agent import MeetingAgentRevertRequest, MeetingAgentTurnRequest
+from ...services.meeting_preview_markdown import (
+    format_role_display,
+    format_segment_detail_cell,
+    render_preview_addendum,
+)
 from .auth import get_current_user
 
 log = logging.getLogger(__name__)
@@ -36,7 +42,7 @@ meeting_agent_router = r = APIRouter(prefix="/meeting-agent")
 
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024
 _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
-_CREATE_TOOL_NAMES = {"create_from_text", "create_from_image", "clone_from_meeting"}
+_CREATE_TOOL_NAMES = {"create_from_text", "create_from_image", "clone_from_meeting", "create_from_template"}
 _PREVIEW_TOOL_NAMES = {"preview_meeting"}
 _SHOW_CURRENT_TOOL_NAMES = {"show_current_agenda"}
 
@@ -115,6 +121,8 @@ _META_TOOL_NAMES = {"set_meta"}
 _SEGMENT_TOOL_NAMES = {
     "set_role",
     "set_type",
+    "set_title",
+    "set_content",
     "set_duration",
     "set_buffer",
     "add_segment",
@@ -166,24 +174,26 @@ def _render_meta_table(agenda) -> str:
 
 
 def _render_segment_table(agenda) -> str:
-    # Lazy import: tools.py imports route-adjacent symbols indirectly, so
-    # importing at module load can race; doing it here keeps the boundary clean.
-    from app.meeting_agent.tools import _format_role_display
-
     if not agenda.segments:
         return "_(no segments)_"
     # Column order matches the form UI's vertical layout (time, duration,
     # then type) — Duration before Type so the eye scans "when / how long /
     # what" left-to-right, the same shape models naturally produce when
     # asked for a schedule overview.
-    lines = ["| Time | Duration | Type | Role taker |", "|---|---|---|---|"]
+    segments_by_id = {seg.id: seg for seg in agenda.segments if seg.id}
+    lines = ["| Time | Duration | Type | Role taker | Details |", "|---|---|---|---|---|"]
     for seg in agenda.segments:
-        # Annotated display ("Lucas (guest)" / "Liz Huang (member)" / "All" /
-        # "—") computed deterministically against CLUB_MEMBERS, so the table
-        # is consistent with the creation flow's table — and stays correct
-        # regardless of what the model decided per row.
-        role = _format_role_display(seg.role_taker)
-        lines.append(f"| {seg.start_time} | {seg.duration} | {seg.type} | {role} |")
+        # Phase B: `seg.role_taker` is a structured `Attendee | None`. Pass
+        # both name and DB-authoritative `member_id` so `format_role_display`
+        # picks the (member)/(guest) badge from DB truth, not from the static
+        # CLUB_MEMBERS list.
+        rt = seg.role_taker
+        role = format_role_display(
+            rt.name if rt else "",
+            member_id=rt.member_id if rt else "",
+        )
+        details = format_segment_detail_cell(seg, segments_by_id)
+        lines.append(f"| {seg.start_time} | {seg.duration} | {seg.type} | {role} | {details} |")
     return "\n".join(lines)
 
 
@@ -255,58 +265,6 @@ def _all_preview_payloads(tool_trace: list[dict]) -> list[dict]:
     return payloads
 
 
-def _render_preview_meta_table(preview: dict) -> str:
-    time_value = f"{_display_cell(preview.get('start_time'))} - {_display_cell(preview.get('end_time'))}"
-    rows = [
-        ("Meeting No.", _display_cell(preview.get("no"))),
-        ("Type", _display_cell(preview.get("type"))),
-        ("Theme", _display_cell(preview.get("theme"))),
-        ("Meeting Manager", _display_cell(preview.get("manager"))),
-        ("Date", _display_cell(preview.get("date"))),
-        ("Time", time_value),
-        ("Location", _display_cell(preview.get("location"))),
-    ]
-    lines = ["| Field | Value |", "|---|---|"]
-    lines.extend(f"| {label} | {value} |" for label, value in rows)
-    return "\n".join(lines)
-
-
-def _render_preview_segment_table(preview: dict) -> str:
-    # Lazy import — same boundary trick as _render_segment_table.
-    from app.meeting_agent.tools import _format_role_display
-
-    segments = preview.get("segments") or []
-    if not segments:
-        return "_(no segments)_"
-    # Column order kept in sync with _render_segment_table.
-    lines = ["| Time | Duration | Type | Role taker |", "|---|---|---|---|"]
-    for seg in segments:
-        role = _format_role_display(seg.get("role_taker") or "")
-        lines.append(f"| {seg.get('start_time', '')} | {seg.get('duration', '')} | {seg.get('type', '')} | {role} |")
-    return "\n".join(lines)
-
-
-def _render_preview_addendum(previews: list[dict]) -> str:
-    """Folded meta / introduction / segment blocks for one or more
-    `preview_meeting` results.
-
-    Each preview produces its own block group so a multi-preview turn
-    (e.g. "show me #446, #425, #413") yields three meetings stacked.
-    Labels explicitly say "preview of #N" so users know we're showing
-    a historical meeting, NOT replacing their current agenda. The
-    Introduction fold is omitted entirely when the meeting has no
-    intro text — empty section would just be visual noise."""
-    parts: list[str] = []
-    for preview in previews:
-        no = preview.get("no") or "?"
-        parts.append(_fold(f"📌 Meeting #{no} Meta (preview)", _render_preview_meta_table(preview)))
-        intro_text = (preview.get("introduction") or "").strip()
-        if intro_text:
-            parts.append(_fold(f"📝 Meeting #{no} Introduction (preview)", _render_intro_block(intro_text)))
-        parts.append(_fold(f"📋 Meeting #{no} Agenda (preview)", _render_preview_segment_table(preview)))
-    return "\n\n" + "\n\n".join(parts)
-
-
 def _build_agenda_addendum(tool_trace: list[dict], agenda, assistant_text_so_far: str) -> str:
     """Append meta and/or segment table(s) based on what the turn did.
 
@@ -351,7 +309,7 @@ def _build_agenda_addendum(tool_trace: list[dict], agenda, assistant_text_so_far
 
     previews = _all_preview_payloads(tool_trace)
     if previews:
-        return _render_preview_addendum(previews)
+        return render_preview_addendum(previews)
 
     if _show_current_was_called(tool_trace):
         # Read-only request to display the current draft. Same folded layout
@@ -421,12 +379,20 @@ async def agent_turn(
             # here; they remain in session_store (so the UI can still show the
             # full conversation), only the portion fed to the LLM is trimmed.
             history = truncate_to_last_turns(full_history)
+            # Eager-fetch the live members directory once per turn. The agent
+            # tools (`set_role`, `add_segment`) consult this to resolve a
+            # bare-name LLM arg ("Joyce Feng") to a structured `Attendee`
+            # carrying the real DB `member_id`. ~20 rows; one cheap query.
+            from app.db.core import get_members
+
+            members_directory = await asyncio.to_thread(get_members) or []
             deps = AgendaDeps(
                 agenda=copy.deepcopy(req.agenda_snapshot),
                 session_id=req.session_id,
                 current_user_message=req.user_message,
                 image_data=image_bytes,
                 image_content_type=image_ct,
+                members_directory=members_directory,
             )
 
             attachment_block = ""
@@ -443,8 +409,14 @@ async def agent_turn(
             # "今年/上个月/今天" resolution by up to 8 hours during morning
             # hours when UTC is still on the previous day.
             today_iso = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+            # Shorten segment ids to 5-char UUID prefixes for the model. Wire
+            # format on both the request and `agenda_after` keeps full UUIDs;
+            # the shortening applies ONLY to the prompt JSON the model reads.
+            # See `meeting_agent/segment_ids.py` for the bug class this
+            # closes vs. the prior `s1..sN` per-turn alias scheme.
+            short_dump = shorten_agenda_dump(req.agenda_snapshot.model_dump())
             prompt = SNAPSHOT_TEMPLATE.format(
-                snapshot_json=json.dumps(req.agenda_snapshot.model_dump(), ensure_ascii=False, indent=2),
+                snapshot_json=json.dumps(short_dump, ensure_ascii=False, indent=2),
                 next_seq=next_seq,
                 tail_seq=tail_seq,
                 user_message=req.user_message,

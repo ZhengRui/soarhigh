@@ -1,3 +1,13 @@
+// Phase B: role_taker carries the structured Attendee end-to-end so the
+// backend route can render the (member)/(guest) badge from the DB-authoritative
+// `member_id` instead of guessing against a static name list. Empty / unset
+// roles are sent as `null` (matches the backend's `Optional[Attendee]`).
+export type AgendaSnapshotRoleTaker = {
+  id?: string;
+  name: string;
+  member_id: string;
+} | null;
+
 export type AgendaSnapshot = {
   meta: Record<string, unknown>;
   segments: Array<{
@@ -5,8 +15,14 @@ export type AgendaSnapshot = {
     type: string;
     start_time: string;
     duration: number;
-    role_taker: string;
+    role_taker: AgendaSnapshotRoleTaker;
     buffer_before: number;
+    // Phase 3: preserve segment-level detail across the agent round-trip.
+    // Defaults to "" rather than undefined so the wire shape matches the
+    // backend's `Segment` defaults — easier to compare / diff state.
+    title: string;
+    content: string;
+    related_segment_ids: string;
   }>;
 };
 

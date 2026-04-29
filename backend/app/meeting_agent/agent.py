@@ -72,9 +72,45 @@ def set_type(
     segment_id: str,
     type: str,
 ) -> dict:
-    """Unilateral: rename ONE segment's type/title (e.g. 'Prepared Speech' -> 'Ice Breaker').
-    Keeps id, duration, position, role_taker, and buffers unchanged."""
+    """Unilateral: rename ONE segment's CATEGORY LABEL (e.g. 'Custom segment'
+    -> 'Ice Breaker', 'Prepared Speech' -> 'Prepared Speech 2'). This is the
+    bold heading shown on the segment card — NOT a per-segment title or speech
+    title. For a speech title like 'AI Safety' use set_title. Keeps id,
+    duration, position, role_taker, title, content, and buffers unchanged."""
     return _tools.apply_set_type(ctx, segment_id=segment_id, type=type)
+
+
+@agent.tool
+def set_title(
+    ctx: RunContext[AgendaDeps],
+    segment_id: str,
+    title: str,
+) -> dict:
+    """Set the per-segment TITLE of ONE segment — the speech / workshop /
+    custom-segment title shown beneath the type heading. Editable on
+    Prepared Speech (any number) and Custom-style segments (Workshop, Ice
+    Breaker, or any non-standard type). Refused on fixed standard types
+    (SAA, Timer, Grammarian, Closing Remarks, ...) and on Prepared Speech
+    Evaluation rows.
+
+    Distinct from set_type, which renames the segment's CATEGORY LABEL
+    (the bold heading). Common confusion: '把第一个备稿的题目改成 AI safety'
+    / 'set the first speech title to AI safety' → set_title, NOT set_type."""
+    return _tools.apply_set_title(ctx, segment_id=segment_id, title=title)
+
+
+@agent.tool
+def set_content(
+    ctx: RunContext[AgendaDeps],
+    segment_id: str,
+    content: str,
+) -> dict:
+    """Set the per-segment CONTENT of ONE segment. Per-type meaning:
+    Table Topic Session → WOT (Word of Today, e.g. 'Resilience');
+    Prepared Speech → pathway / notes; Custom-style segments → freeform
+    notes. Refused on fixed standard types and on Prepared Speech
+    Evaluation rows."""
+    return _tools.apply_set_content(ctx, segment_id=segment_id, content=content)
 
 
 @agent.tool
@@ -125,7 +161,18 @@ def add_segment(
     'Workshop') or custom ('Ice Breaker Game'). Downstream start times
     recompute automatically. role_taker defaults to empty; pass a name only
     when the user specifies one. DO NOT use this to add a buffer/gap — see
-    set_buffer instead."""
+    set_buffer instead. DO NOT use this for "Word of Today" / "WOT" /
+    "今日单词" / "今天的单词" — that is the `content` field of the existing
+    Table Topic Session row; use `set_content` on that segment instead.
+
+    STRICT GATE — all three of `type`, `duration_min`, and the position
+    anchor (`after_id` xor `before_id`) MUST come from the user, never
+    from your own guesses or "reasonable defaults". If the user did not
+    state a duration or did not state an anchor, do NOT call this tool —
+    reply in text asking for the missing pieces and STOP. Picking a
+    plausible-looking neighbor from the snapshot to anchor a guessed
+    position counts as inventing. See the `add_segment gatekeeping`
+    section in the system prompt for examples."""
     return _tools.apply_add_segment(
         ctx,
         type=type,

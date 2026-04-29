@@ -20,9 +20,11 @@ from app.meeting_agent.tools import (
     apply_revert_last_turn,
     apply_revert_to_turn,
     apply_set_buffer,
+    apply_set_content,
     apply_set_duration,
     apply_set_meta,
     apply_set_role,
+    apply_set_title,
     apply_set_type,
     apply_shift_segment_time,
     apply_swap_roles,
@@ -239,11 +241,14 @@ async def test_apply_create_from_text_replaces_agenda():
             ),
         )
 
+    import uuid as _uuid
+
     assert len(deps.agenda.segments) == 3
     assert deps.agenda.meta.no == 391
     assert deps.agenda.meta.theme == "MockTheme"
     assert deps.agenda.meta.manager == "Rui Zheng"
-    assert deps.agenda.segments[0].id == "s1"
+    # Phase 4: each segment carries a real UUID id (not s1..sN).
+    _uuid.UUID(deps.agenda.segments[0].id)
     assert result["created"] is True
     assert result["segment_count"] == 3
     assert result["meeting_summary"]["no"] == 391
@@ -285,8 +290,116 @@ async def test_apply_set_role_strips_membership_suffix_from_arg():
     deps.agenda.segments[0].id = "s1"
     ctx = FakeCtx(deps=deps)
     result = apply_set_role(ctx, segment_id="s1", role_taker="Joyce Feng (member)")
-    assert deps.agenda.segments[0].role_taker == "Joyce Feng"
+    assert deps.agenda.segments[0].role_taker.name == "Joyce Feng"
     assert result["role_taker"] == "Joyce Feng"
+
+
+# ---------- set_title / set_content ----------
+
+
+def _agenda_with_typed_segments():
+    """Mixed-type agenda for title/content editability tests."""
+    return AgendaDeps(
+        session_id="t",
+        agenda=Agenda(
+            meta=Meta(start_time="19:15"),
+            segments=[
+                Segment(id="ps", type="Prepared Speech 1", start_time="20:00", duration=7),
+                Segment(
+                    id="pse",
+                    type="Prepared Speech 1 Evaluation",
+                    start_time="20:50",
+                    duration=3,
+                ),
+                Segment(id="tts", type="Table Topic Session", start_time="19:50", duration=18),
+                Segment(id="saa", type="Meeting Rules Introduction (SAA)", start_time="19:30", duration=3),
+                Segment(id="ws", type="Workshop", start_time="20:08", duration=29),
+                Segment(id="cls", type="Closing Remarks (President)", start_time="21:14", duration=1),
+            ],
+        ),
+    )
+
+
+def test_apply_set_title_accepts_prepared_speech():
+    deps = _agenda_with_typed_segments()
+    ctx = FakeCtx(deps=deps)
+    result = apply_set_title(ctx, segment_id="ps", title="AI Safety")
+    assert next(s for s in deps.agenda.segments if s.id == "ps").title == "AI Safety"
+    assert result["title"] == "AI Safety"
+
+
+def test_apply_set_title_accepts_custom_style_segment():
+    """Workshop is a non-fixed type — frontend renders it via the
+    CustomSegment fallback, which has title editable. The agent should
+    accept set_title for any non-standard type."""
+    deps = _agenda_with_typed_segments()
+    ctx = FakeCtx(deps=deps)
+    apply_set_title(ctx, segment_id="ws", title="Storytelling 101")
+    assert next(s for s in deps.agenda.segments if s.id == "ws").title == "Storytelling 101"
+
+
+def test_apply_set_title_refuses_table_topic_session():
+    """Table Topic Session has content (WOT) editable but title is not —
+    matches the FE's TableTopicSessionSegment config."""
+    deps = _agenda_with_typed_segments()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="Title is not editable"):
+        apply_set_title(ctx, segment_id="tts", title="should refuse")
+
+
+def test_apply_set_title_refuses_fixed_standard_types():
+    deps = _agenda_with_typed_segments()
+    ctx = FakeCtx(deps=deps)
+    for segment_id in ("saa", "cls"):
+        with pytest.raises(ModelRetry, match="Title is not editable"):
+            apply_set_title(ctx, segment_id=segment_id, title="x")
+
+
+def test_apply_set_title_refuses_prepared_speech_evaluation():
+    """Prepared Speech Evaluation rows don't carry a per-segment title;
+    the FE's PreparedSpeechEvalSegment leaves title_config at the BaseSegment
+    default (editable=false)."""
+    deps = _agenda_with_typed_segments()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="Title is not editable"):
+        apply_set_title(ctx, segment_id="pse", title="x")
+
+
+def test_apply_set_content_accepts_table_topic_session_for_wot():
+    deps = _agenda_with_typed_segments()
+    ctx = FakeCtx(deps=deps)
+    result = apply_set_content(ctx, segment_id="tts", content="Resilience")
+    assert next(s for s in deps.agenda.segments if s.id == "tts").content == "Resilience"
+    assert result["content"] == "Resilience"
+
+
+def test_apply_set_content_accepts_prepared_speech_for_pathway():
+    deps = _agenda_with_typed_segments()
+    ctx = FakeCtx(deps=deps)
+    apply_set_content(ctx, segment_id="ps", content="Pathway: Visionary Communication")
+    assert next(s for s in deps.agenda.segments if s.id == "ps").content == "Pathway: Visionary Communication"
+
+
+def test_apply_set_content_accepts_custom_style_segment():
+    deps = _agenda_with_typed_segments()
+    ctx = FakeCtx(deps=deps)
+    apply_set_content(ctx, segment_id="ws", content="Workshop notes")
+    assert next(s for s in deps.agenda.segments if s.id == "ws").content == "Workshop notes"
+
+
+def test_apply_set_content_refuses_fixed_standard_types():
+    deps = _agenda_with_typed_segments()
+    ctx = FakeCtx(deps=deps)
+    for segment_id in ("saa", "cls"):
+        with pytest.raises(ModelRetry, match="Content is not editable"):
+            apply_set_content(ctx, segment_id=segment_id, content="x")
+
+
+def test_apply_set_content_refuses_prepared_speech_evaluation():
+    deps = _agenda_with_typed_segments()
+    ctx = FakeCtx(deps=deps)
+    with pytest.raises(ModelRetry, match="Content is not editable"):
+        apply_set_content(ctx, segment_id="pse", content="x")
 
 
 def test_apply_add_segment_strips_membership_suffix_from_arg():
@@ -303,7 +416,7 @@ def test_apply_add_segment_strips_membership_suffix_from_arg():
         role_taker="Lucas (guest)",
     )
     new_seg = deps.agenda.segments[1]
-    assert new_seg.role_taker == "Lucas"
+    assert new_seg.role_taker.name == "Lucas"
 
 
 def test_apply_set_meta_strips_membership_suffix_from_manager():
@@ -334,15 +447,23 @@ async def test_apply_preview_meeting_returns_full_segments_without_mutating_agen
     assert result["theme"] == "Old Theme"
     assert result["manager"] == "Old Manager"
     assert result["start_time"] == "19:15"
-    # Full segment list with the four model-facing fields per row.
+    # Full segment list with model-facing schedule/role fields, detail fields,
+    # plus the `role_taker_member_id` sidecar that the renderer consumes for
+    # DB-authoritative (member)/(guest) badges.
     assert len(result["segments"]) == 2
     assert result["segments"][0] == {
+        "id": "1",
         "type": "SAA",
         "start_time": "19:30",
         "duration": 3,
         "role_taker": "Joyce Feng",
+        "role_taker_member_id": "j",
+        "title": "",
+        "content": "",
+        "related_segment_ids": "",
     }
     assert result["segments"][1]["role_taker"] == "Rui Zheng"
+    assert result["segments"][1]["role_taker_member_id"] == "r"
     # Current agenda untouched.
     assert deps.agenda.segments == original_segments
     assert deps.agenda.meta == original_meta
@@ -478,14 +599,14 @@ async def test_apply_create_from_template_regular_2ps_replaces_agenda():
     # First segment: 19:15 warmup with role_taker "All".
     assert deps.agenda.segments[0].start_time == "19:15"
     assert deps.agenda.segments[0].duration == 15
-    assert "Warm Up" in deps.agenda.segments[0].type
-    assert deps.agenda.segments[0].role_taker == "All"
+    assert "Warm up" in deps.agenda.segments[0].type
+    assert deps.agenda.segments[0].role_taker.name == "All"
     # Second segment: SAA at 19:30 (back-to-back from warmup end).
     assert deps.agenda.segments[1].start_time == "19:30"
     # Last segment: Closing Remarks at 21:14, default president Amy Fang.
     last = deps.agenda.segments[-1]
     assert "Closing Remarks" in last.type
-    assert last.role_taker == "Amy Fang"
+    assert last.role_taker.name == "Amy Fang"
     # Meeting type is set; meta.start_time matches the first segment (19:15)
     # so a later set_duration / add_segment doesn't re-anchor the warmup
     # forward by 15 min via recompute_start_times. end_time is left blank
@@ -518,7 +639,10 @@ async def test_apply_create_from_template_custom_single_segment():
     # (matches the standard pre-meeting warmup window so users have a sensible
     # anchor to start customizing from).
     assert len(deps.agenda.segments) == 1
-    assert deps.agenda.segments[0].id == "s1"
+    # Phase 4: segment id is a real UUID, not the legacy `s1`.
+    import uuid as _uuid
+
+    _uuid.UUID(deps.agenda.segments[0].id)
     assert deps.agenda.segments[0].start_time == "19:15"
     assert deps.agenda.segments[0].duration == 15
     # Type is the generic placeholder, NOT the canonical Regular/Workshop
@@ -630,19 +754,6 @@ def test_segments_summary_does_not_leak_membership_to_model():
     assert out[0]["role_taker"] == "Liz Huang"
     assert out[1]["role_taker"] == "Lucas"
     assert out[2]["role_taker"] == "All"
-
-
-def test_format_role_display_helper_for_render_layer():
-    """`_format_role_display` is the deterministic helper the route addendum
-    uses to render the segment table. Lives in tools.py because it shares the
-    CLUB_MEMBERS source-of-truth import; never exported into a tool result."""
-    from app.meeting_agent.tools import _format_role_display
-
-    assert _format_role_display("Liz Huang") == "Liz Huang (member)"
-    assert _format_role_display("amy fang") == "amy fang (member)"  # case-insensitive
-    assert _format_role_display("Lucas") == "Lucas (guest)"
-    assert _format_role_display("All") == "All"
-    assert _format_role_display("") == "—"
 
 
 @pytest.mark.asyncio
@@ -1047,11 +1158,103 @@ async def test_clone_from_meeting_clears_specified_fields(monkeypatch):
     assert deps.agenda.meta.type == "Regular"
     assert deps.agenda.meta.start_time == "19:15"
     assert deps.agenda.meta.location == "Loc Stable"
-    assert [s.role_taker for s in deps.agenda.segments] == ["", ""]
-    assert [s.id for s in deps.agenda.segments] == ["s1", "s2"]
+    # Phase B: clone resets each segment's role_taker to None (no Attendee).
+    assert [s.role_taker for s in deps.agenda.segments] == [None, None]
+    # Phase 4: cloned segments carry real UUIDs allocated fresh by
+    # `meeting_to_agenda` — they are NOT the source DB ids and NOT `s1..sN`.
+    import uuid as _uuid
+
+    cloned_ids = [s.id for s in deps.agenda.segments]
+    assert len(cloned_ids) == 2
+    assert cloned_ids[0] != cloned_ids[1]
+    for cid in cloned_ids:
+        _uuid.UUID(cid)
     assert result["cloned_from_no"] == 387
     assert result["segment_count"] == 2
     assert "validation_issues" in result
+
+
+@pytest.mark.asyncio
+async def test_clone_from_meeting_clears_segment_detail_fields(monkeypatch):
+    """Cloning preserves only the structural skeleton (type / start_time /
+    duration / buffer_before). Per-meeting user content — speech titles,
+    workshop notes, WOT, and eval-to-speech links — is wiped so the new
+    draft starts clean. An earlier iteration carried these through, but
+    a stale Prepared Speech title from the source meeting surfacing in
+    the new draft is worse than dropping the data the user must re-enter
+    anyway."""
+    from app.models.meeting import Attendee
+    from app.models.meeting import Segment as MeetingSegment
+
+    store = InMemorySessionStore()
+    from app.meeting_agent import store as store_module
+
+    monkeypatch.setattr(store_module, "session_store", store)
+    deps = make_deps()
+    deps.session_id = "clone-detail"
+    deps.current_user_message = "确认"
+    ctx = FakeCtx(deps=deps)
+    await _seed_lookup_turn(store, deps.session_id, 391)
+
+    detailed_meeting = {
+        "id": "u-detail",
+        "no": 391,
+        "type": "Workshop",
+        "theme": "Old",
+        "manager": {"id": None, "name": "Old", "member_id": ""},
+        "date": "2024-12-01",
+        "start_time": "19:15",
+        "end_time": "21:30",
+        "location": "Loc",
+        "introduction": "intro",
+        "status": "published",
+        "awards": [],
+        "segments": [
+            MeetingSegment(
+                id="1",
+                type="Prepared Speech",
+                start_time="20:10",
+                end_time="20:17",
+                duration="7",
+                role_taker=Attendee(id=None, name="Frank Zeng", member_id="m1"),
+                title="The Power of Authentic Communication",
+                content="Detailed speech notes go here.",
+                related_segment_ids="2",
+            ).model_dump(),
+            MeetingSegment(
+                id="2",
+                type="Prepared Speech Evaluation",
+                start_time="20:50",
+                end_time="20:53",
+                duration="3",
+                role_taker=Attendee(id=None, name="Phyllis Hao", member_id="m2"),
+                title="",
+                content="Evaluation pointers",
+                related_segment_ids="1",
+            ).model_dump(),
+        ],
+    }
+
+    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=detailed_meeting):
+        await apply_clone_from_meeting(ctx, no=391)
+
+    s1, s2 = deps.agenda.segments
+    # Role takers reset (Phase B behavior, preserved).
+    assert s1.role_taker is None
+    assert s2.role_taker is None
+    # Detail fields cleared on clone — structure only transfers.
+    assert s1.title == ""
+    assert s1.content == ""
+    assert s1.related_segment_ids == ""
+    assert s2.title == ""
+    assert s2.content == ""
+    assert s2.related_segment_ids == ""
+    # Structural skeleton still transfers.
+    assert s1.type == "Prepared Speech"
+    assert s1.start_time == "20:10"
+    assert s1.duration == 7
+    assert s2.type == "Prepared Speech Evaluation"
+    assert s2.duration == 3
 
 
 @pytest.mark.asyncio
@@ -1157,9 +1360,114 @@ def test_set_role_mutates_target_segment():
     result = apply_set_role(ctx, segment_id="s2", role_taker="Joyce Feng")
     assert result["segment_id"] == "s2"
     assert result["role_taker"] == "Joyce Feng"
-    assert deps.agenda.segments[1].role_taker == "Joyce Feng"
+    assert deps.agenda.segments[1].role_taker.name == "Joyce Feng"
     # other segments untouched
-    assert deps.agenda.segments[0].role_taker == "Liz"
+    assert deps.agenda.segments[0].role_taker.name == "Liz"
+
+
+def test_set_role_resolves_member_id_from_directory():
+    """Phase B closing fix: when the LLM hands `set_role` a name that isn't
+    already in the agenda, the tool consults the members directory eager-
+    fetched at turn boundary and produces an `Attendee` carrying the real
+    DB member_id. Without this, the chat addendum would render `(guest)`
+    for the next render until the frontend re-resolved on the snapshot
+    after — the in-flight glitch from the initial Phase B implementation."""
+    deps = make_deps()
+    deps.members_directory = [
+        {"id": "uuid-joyce", "username": "joyce", "full_name": "Joyce Feng"},
+        {"id": "uuid-rui", "username": "rui", "full_name": "Rui Zheng"},
+    ]
+    ctx = FakeCtx(deps=deps)
+
+    apply_set_role(ctx, segment_id="s2", role_taker="Joyce Feng")
+    rt = deps.agenda.segments[1].role_taker
+    assert rt is not None
+    assert rt.name == "Joyce Feng"
+    assert rt.member_id == "uuid-joyce"
+    assert rt.id == "uuid-joyce"
+
+
+def test_set_role_unknown_name_falls_back_to_guest():
+    """A name that isn't in the agenda OR the members directory falls back
+    to a guest-shaped Attendee with empty member_id. Frontend's safety net
+    (`adoptRoleTaker` → `resolveAttendee`) gets a chance to fix it before
+    the form renders."""
+    deps = make_deps()
+    deps.members_directory = [
+        {"id": "uuid-joyce", "username": "joyce", "full_name": "Joyce Feng"},
+    ]
+    ctx = FakeCtx(deps=deps)
+
+    apply_set_role(ctx, segment_id="s2", role_taker="Some Guest")
+    rt = deps.agenda.segments[1].role_taker
+    assert rt is not None
+    assert rt.name == "Some Guest"
+    assert rt.member_id == ""
+
+
+def test_set_role_resolves_unique_first_name_to_full_name():
+    """Mirrors the frontend's `resolveAttendee` first-name heuristic. The
+    model occasionally passes a first name despite the prompt's 'use full
+    name' rule (seen on Chinese turns like '设置成Libra吧'); without this
+    fallback the chat addendum would render `(guest)` while the form
+    correctly renders `(member)` — exactly the inconsistency the screenshots
+    surfaced. The stored Attendee carries the directory's full_name so
+    subsequent turns and persisted state use the canonical form."""
+    deps = make_deps()
+    deps.members_directory = [
+        {"id": "uuid-libra", "username": "libra", "full_name": "Libra Lee"},
+        {"id": "uuid-rui", "username": "rui", "full_name": "Rui Zheng"},
+    ]
+    ctx = FakeCtx(deps=deps)
+
+    apply_set_role(ctx, segment_id="s2", role_taker="Libra")
+    rt = deps.agenda.segments[1].role_taker
+    assert rt is not None
+    assert rt.name == "Libra Lee"
+    assert rt.member_id == "uuid-libra"
+
+
+def test_set_role_first_name_collision_falls_back_to_guest():
+    """First-name match must be UNIQUE for the heuristic to fire. If two
+    members share a first name, refuse to guess and return guest — matches
+    the frontend's `firstNameMatches.length === 1` guard. The prompt's
+    'multiple first-name matches → ASK before calling' rule is the model's
+    job; the backend just doesn't make things worse by guessing wrong."""
+    deps = make_deps()
+    deps.members_directory = [
+        {"id": "uuid-jenny-li", "username": "jenny", "full_name": "Jenny Li"},
+        {"id": "uuid-jenny-lin", "username": "jennyl", "full_name": "Jenny Lin"},
+    ]
+    ctx = FakeCtx(deps=deps)
+
+    apply_set_role(ctx, segment_id="s2", role_taker="Jenny")
+    rt = deps.agenda.segments[1].role_taker
+    assert rt is not None
+    assert rt.name == "Jenny"  # the input name, no canonicalization
+    assert rt.member_id == ""  # guest fallback
+
+
+def test_set_role_prefers_in_agenda_attendee_over_directory():
+    """If the same person is already on another segment with a real
+    member_id, the in-agenda Attendee wins — preserves the id field even
+    when the directory entry has different metadata. Cheaper than a
+    directory hit and avoids creating a divergent Attendee instance."""
+    from app.models.meeting import Attendee
+
+    deps = make_deps()
+    # Pre-populate s1 with Joyce carrying a specific in-agenda id.
+    deps.agenda.segments[0].role_taker = Attendee(id="att-existing", name="Joyce Feng", member_id="uuid-joyce")
+    deps.members_directory = [
+        # Directory has a different `id` field — agenda lookup should win.
+        {"id": "uuid-joyce", "username": "joyce", "full_name": "Joyce Feng"},
+    ]
+    ctx = FakeCtx(deps=deps)
+
+    apply_set_role(ctx, segment_id="s2", role_taker="Joyce Feng")
+    rt = deps.agenda.segments[1].role_taker
+    assert rt is not None
+    assert rt.id == "att-existing"
+    assert rt.member_id == "uuid-joyce"
 
 
 # --- set_type ---
@@ -1367,7 +1675,9 @@ def test_add_segment_after_anchor_inserts_at_next_index():
     assert result["role_taker"] == ""
     assert result["inserted_at_index"] == 2
     assert len(deps.agenda.segments) == 4
-    assert deps.agenda.segments[2].id == result["new_segment_id"]
+    # Phase 4: new_segment_id is the 5-char UUID prefix; the real id on
+    # the segment object is a full UUID. Match via prefix.
+    assert deps.agenda.segments[2].id.startswith(result["new_segment_id"])
     assert deps.agenda.segments[2].type == "Break"
     assert deps.agenda.segments[2].duration == 4
     # Downstream recompute
@@ -1425,7 +1735,10 @@ def test_add_segment_zero_duration_raises():
 def test_add_segment_unknown_anchor_raises():
     deps = make_deps_3()
     ctx = FakeCtx(deps=deps)
-    with pytest.raises(ModelRetry, match="unknown anchor"):
+    # Phase 4: the segment-id resolver runs first; unknown anchor surfaces
+    # as the resolver's `unknown segment: ghost` rather than a separate
+    # "unknown anchor" path.
+    with pytest.raises(ModelRetry, match="unknown segment"):
         apply_add_segment(ctx, type="X", duration_min=3, after_id="ghost")
     assert len(deps.agenda.segments) == 3
 
@@ -1456,11 +1769,65 @@ def test_add_segment_role_taker_propagates():
         role_taker="Alice",
     )
     assert result["role_taker"] == "Alice"
-    new_seg = next(s for s in deps.agenda.segments if s.id == result["new_segment_id"])
-    assert new_seg.role_taker == "Alice"
+    # Phase 4: result["new_segment_id"] is the 5-char UUID prefix.
+    new_seg = next(s for s in deps.agenda.segments if s.id.startswith(result["new_segment_id"]))
+    assert new_seg.role_taker.name == "Alice"
 
 
 # --- remove_segment ---
+
+
+def test_remove_segment_stale_short_id_after_delete_does_not_target_a_recycled_segment():
+    """Phase 4 regression: the bug fixed by switching from positional
+    `s1..sN` aliases (rebuilt every turn from agenda order) to UUID-prefix
+    short ids (pure function of the real id).
+
+    Setup: 3 real-UUID segments + a freshly added one. Tool call deletes
+    the third segment by its short id. Then a second `remove_segment` with
+    the SAME stale short id (mimicking the LLM's history bias copying the
+    prior turn's tool args) must raise — because no other segment in the
+    current agenda has a UUID starting with that prefix. Pre-Phase-4 the
+    positional alias would have been reassigned to the new segment after
+    the delete, and the second call would have silently deleted the wrong
+    segment.
+    """
+    import uuid
+
+    from app.meeting_agent.tools import _shorten_id
+
+    # Build an agenda with real UUIDs, capturing one we'll target.
+    target_real = str(uuid.uuid4())
+    deps = AgendaDeps(
+        session_id="t",
+        agenda=Agenda(
+            meta=Meta(start_time="19:15"),
+            segments=[
+                Segment(id=str(uuid.uuid4()), type="A", start_time="19:15", duration=2),
+                Segment(id=str(uuid.uuid4()), type="B", start_time="19:17", duration=2),
+                Segment(id=target_real, type="Closing Remarks", start_time="19:19", duration=2),
+            ],
+        ),
+    )
+    target_short = _shorten_id(target_real)
+    ctx = FakeCtx(deps=deps)
+
+    # Add a new segment after the target ("after Closing Remarks").
+    apply_add_segment(ctx, type="New", duration_min=5, after_id=target_short)
+    assert len(deps.agenda.segments) == 4
+
+    # First delete: removes the target by its short id. Succeeds.
+    result = apply_remove_segment(ctx, segment_id=target_short)
+    assert result == {"removed_segment_id": target_short}
+    assert len(deps.agenda.segments) == 3
+
+    # Second delete with the SAME stale short id — must refuse, NOT delete
+    # the new segment that ended up at the same position. The new segment's
+    # real UUID starts with a different 5-char prefix, so the resolver
+    # finds zero matches.
+    with pytest.raises(ModelRetry, match="unknown segment"):
+        apply_remove_segment(ctx, segment_id=target_short)
+    # Length unchanged — no silent wrong-segment delete.
+    assert len(deps.agenda.segments) == 3
 
 
 def test_remove_segment_shrinks_list():
@@ -1542,7 +1909,8 @@ def test_move_segment_unknown_segment_raises():
 def test_move_segment_unknown_anchor_raises():
     deps = make_deps_3()
     ctx = FakeCtx(deps=deps)
-    with pytest.raises(ModelRetry, match="unknown anchor"):
+    # Phase 4: resolver runs first; surfaces as "unknown segment: ghost".
+    with pytest.raises(ModelRetry, match="unknown segment"):
         apply_move_segment(ctx, segment_id="s1", after_id="ghost")
 
 
@@ -1654,8 +2022,8 @@ def test_swap_roles_exchanges_only_role_taker():
         "role_taker_a": "Bob",
         "role_taker_b": "Alice",
     }
-    assert deps.agenda.segments[0].role_taker == "Bob"
-    assert deps.agenda.segments[1].role_taker == "Alice"
+    assert deps.agenda.segments[0].role_taker.name == "Bob"
+    assert deps.agenda.segments[1].role_taker.name == "Alice"
     # Every other field on each segment is unchanged.
     assert deps.agenda.segments[0].type == s1_before["type"]
     assert deps.agenda.segments[0].duration == s1_before["duration"]
@@ -1666,7 +2034,7 @@ def test_swap_roles_exchanges_only_role_taker():
     assert deps.agenda.segments[1].start_time == s2_before["start_time"]
     assert deps.agenda.segments[1].buffer_before == s2_before["buffer_before"]
     # Untouched third segment.
-    assert deps.agenda.segments[2].role_taker == "Joyce"
+    assert deps.agenda.segments[2].role_taker.name == "Joyce"
 
 
 def test_swap_roles_with_same_id_raises():
@@ -1674,7 +2042,7 @@ def test_swap_roles_with_same_id_raises():
     ctx = FakeCtx(deps=deps)
     with pytest.raises(ModelRetry, match="itself"):
         apply_swap_roles(ctx, segment_id_a="s1", segment_id_b="s1")
-    assert deps.agenda.segments[0].role_taker == "Liz"
+    assert deps.agenda.segments[0].role_taker.name == "Liz"
 
 
 def test_swap_roles_unknown_id_a_raises():
@@ -1683,8 +2051,8 @@ def test_swap_roles_unknown_id_a_raises():
     with pytest.raises(ModelRetry, match="unknown segment"):
         apply_swap_roles(ctx, segment_id_a="ghost", segment_id_b="s2")
     # Unchanged.
-    assert deps.agenda.segments[0].role_taker == "Liz"
-    assert deps.agenda.segments[2].role_taker == "Joyce"
+    assert deps.agenda.segments[0].role_taker.name == "Liz"
+    assert deps.agenda.segments[2].role_taker.name == "Joyce"
 
 
 def test_swap_roles_unknown_id_b_raises():
@@ -1692,8 +2060,8 @@ def test_swap_roles_unknown_id_b_raises():
     ctx = FakeCtx(deps=deps)
     with pytest.raises(ModelRetry, match="unknown segment"):
         apply_swap_roles(ctx, segment_id_a="s1", segment_id_b="ghost")
-    assert deps.agenda.segments[0].role_taker == "Liz"
-    assert deps.agenda.segments[2].role_taker == "Joyce"
+    assert deps.agenda.segments[0].role_taker.name == "Liz"
+    assert deps.agenda.segments[2].role_taker.name == "Joyce"
 
 
 def test_swap_roles_does_not_recompute_times():
@@ -1856,7 +2224,7 @@ async def test_revert_last_turn_restores_agenda_before_of_latest_turn(monkeypatc
     assert result["undone_tool_names"] == ["set_role"]
     # ctx.deps.agenda now matches before_snapshot exactly.
     assert len(ctx.deps.agenda.segments) == 1
-    assert ctx.deps.agenda.segments[0].role_taker == "Original"
+    assert ctx.deps.agenda.segments[0].role_taker.name == "Original"
     assert ctx.deps.agenda.segments[0].id == "s1"
 
 

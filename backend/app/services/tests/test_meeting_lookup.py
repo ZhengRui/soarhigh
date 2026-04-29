@@ -125,12 +125,17 @@ def test_meeting_to_preview_projects_meta_and_segments():
         "location": "L",
         "segments": [
             {
+                "id": "seg-1",
                 "type": "SAA",
                 "start_time": "19:30",
                 "duration": "3",
                 "role_taker": {"name": "Liz Huang"},
+                "title": "Opening | setup",
+                "content": "Line one\nLine two",
+                "related_segment_ids": "seg-2",
             },
             {
+                "id": "seg-2",
                 "type": "Workshop",
                 "start_time": "20:00",
                 "duration": 30,
@@ -143,14 +148,70 @@ def test_meeting_to_preview_projects_meta_and_segments():
     assert preview["manager"] == "Joyce"
     assert preview["start_time"] == "19:15"
     assert preview["end_time"] == "21:30"
+    # role_taker stays a bare string (preserves the model-facing tool result
+    # contract); member_id rides as a sidecar field consumed by the renderer.
     assert preview["segments"][0] == {
+        "id": "seg-1",
         "type": "SAA",
         "start_time": "19:30",
         "duration": 3,
         "role_taker": "Liz Huang",
+        "role_taker_member_id": "",
+        "title": "Opening | setup",
+        "content": "Line one\nLine two",
+        "related_segment_ids": "seg-2",
     }
-    # Bare-string role_taker also resolves correctly.
+    # Bare-string role_taker also resolves correctly with empty sidecar.
     assert preview["segments"][1]["role_taker"] == "Rui Zheng"
+    assert preview["segments"][1]["role_taker_member_id"] == ""
+    assert preview["segments"][1]["id"] == "seg-2"
+    assert preview["segments"][1]["title"] == ""
+    assert preview["segments"][1]["content"] == ""
+    assert preview["segments"][1]["related_segment_ids"] == ""
+
+
+def test_meeting_to_preview_preserves_member_id_from_db_role_taker():
+    """The DB hydrates segments with `role_taker = {id, name, member_id}`
+    (see `db.core.get_meeting_by_id`). The preview projection MUST preserve
+    `member_id` so the route's render layer can decide membership from DB
+    truth instead of guessing against the static CLUB_MEMBERS list — that
+    guess is what surfaced the meeting #403 'Libra Lee (guest)' bug."""
+    raw = {
+        "no": 403,
+        "manager": {"name": "M"},
+        "segments": [
+            {
+                "type": "Prepared Speech",
+                "start_time": "20:10",
+                "duration": "7",
+                "role_taker": {
+                    "id": "att-1",
+                    "name": "Libra Lee",
+                    "member_id": "00000000-0000-0000-0000-aaaaaaaaaaaa",
+                },
+            },
+        ],
+    }
+    preview = meeting_to_preview(raw)
+    seg = preview["segments"][0]
+    assert seg["role_taker"] == "Libra Lee"
+    assert seg["role_taker_member_id"] == "00000000-0000-0000-0000-aaaaaaaaaaaa"
+
+
+def test_meeting_to_preview_handles_null_role_taker_segment():
+    """An unfilled role (DB attendee_id = None) hydrates as `role_taker=None`.
+    Project to empty name + empty member_id so the renderer sees a clean
+    structure rather than crashing on `.get` of a None."""
+    raw = {
+        "no": 1,
+        "manager": "M",
+        "segments": [
+            {"type": "Opening Remarks", "start_time": "19:30", "duration": 2, "role_taker": None},
+        ],
+    }
+    preview = meeting_to_preview(raw)
+    assert preview["segments"][0]["role_taker"] == ""
+    assert preview["segments"][0]["role_taker_member_id"] == ""
 
 
 def test_meeting_to_preview_includes_introduction_field():
@@ -456,6 +517,32 @@ def test_resolve_meetings_theme_substring_matches_theme_only():
     with patch("app.services.meeting_lookup.db_meetings_recent", return_value=_meetings_pool()):
         result = resolve_meetings(MeetingFilters(theme_substring="emojis"))
     assert [c["no"] for c in result["cards"]] == [450]
+
+
+def test_resolve_meetings_short_ascii_theme_search_respects_word_boundaries():
+    pool = [
+        {
+            "id": "u1",
+            "no": 500,
+            "type": "Regular",
+            "theme": "How to Gain Positive Energy",
+            "date": "2026-04-01",
+            "manager": {"name": "M"},
+            "segments": [],
+        },
+        {
+            "id": "u2",
+            "no": 499,
+            "type": "Regular",
+            "theme": "AI in Society",
+            "date": "2026-03-25",
+            "manager": {"name": "M"},
+            "segments": [],
+        },
+    ]
+    with patch("app.services.meeting_lookup.db_meetings_recent", return_value=pool):
+        result = resolve_meetings(MeetingFilters(theme_substring="AI"))
+    assert [c["no"] for c in result["cards"]] == [499]
 
 
 def test_resolve_meetings_theme_substring_does_not_match_manager():

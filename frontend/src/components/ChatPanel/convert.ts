@@ -1,5 +1,6 @@
 import { AttendeeIF, MeetingIF, UserIF } from '@/interfaces';
 import { BaseSegment } from '@/utils/defaultSegments';
+import { instantiateSegmentByType } from '@/utils/segments';
 import { AgendaSnapshot } from './types';
 
 type MeetingFormState = Omit<MeetingIF, 'segments'> & {
@@ -16,8 +17,11 @@ function parseHhmmToMinutes(hhmm: string): number {
 
 /**
  * Build the agenda snapshot that the agent sees on each turn.
- * role_taker is flattened to a plain string (the agent works with names, not
- * member records).
+ *
+ * Phase B: `role_taker` ships as the structured `{id?, name, member_id}` (or
+ * `null` when unset), so the backend preserves DB-authoritative `member_id`
+ * end-to-end. The route's render layer no longer has to guess membership
+ * against a static `CLUB_MEMBERS` list — `member_id` IS the answer.
  *
  * buffer_before is derived from the gap between each segment's start_time and
  * the previous segment's end_time. The frontend's BaseSegment doesn't carry a
@@ -51,13 +55,27 @@ export function buildAgendaSnapshot(meeting: MeetingFormState): AgendaSnapshot {
         const gap = curStart - (prevStart + prevDuration);
         buffer_before = Math.max(gap, 0);
       }
+      const role_taker = s.role_taker?.name
+        ? {
+            id: s.role_taker.id,
+            name: s.role_taker.name,
+            member_id: s.role_taker.member_id ?? '',
+          }
+        : null;
       return {
         id: s.id,
         type: s.type,
         start_time: s.start_time,
         duration: parseInt(s.duration, 10) || 0,
-        role_taker: s.role_taker?.name ?? '',
+        role_taker,
         buffer_before,
+        // Phase 3: send segment detail through to the agent. Pre-Phase-3 the
+        // agent never saw these so any tool that mutated a segment (set_role,
+        // set_duration, …) would silently drop the title / content when the
+        // agenda_after came back.
+        title: s.title ?? '',
+        content: s.content ?? '',
+        related_segment_ids: s.related_segment_ids ?? '',
       };
     }),
   };
@@ -66,8 +84,14 @@ export function buildAgendaSnapshot(meeting: MeetingFormState): AgendaSnapshot {
 /**
  * Apply the agent's returned agenda back onto the MeetingForm state.
  *
- * Map name -> AttendeeIF using the members list. Unknown names become guest
- * attendees with empty member_id (the existing agenda flow already allows this).
+ * Phase B: each segment's `role_taker` arrives as a structured Attendee (or
+ * `null`). When the backend already resolved `member_id` (typical: agent kept
+ * a role taker that was on a sibling segment), we use it verbatim. When the
+ * backend produced a fresh Attendee with empty `member_id` (typical: model
+ * said "set Timer to Joyce" and the agenda didn't already have Joyce), the
+ * frontend resolves `member_id` against the live members list — that's the
+ * one place the frontend has more information than the backend, since the
+ * backend doesn't (yet) know about live member UUIDs.
  */
 export function applyAgendaSnapshot(
   prev: MeetingFormState,
@@ -101,6 +125,25 @@ export function applyAgendaSnapshot(
     return { name, member_id: '' };
   };
 
+  // Adopt the snapshot's structured role_taker, falling back to the live
+  // members list only when member_id is empty (i.e. backend couldn't
+  // resolve). Guards against the edge case where a saved AttendeeIF has the
+  // same name but a stale member_id by trusting the snapshot's value.
+  const adoptRoleTaker = (
+    raw: AgendaSnapshot['segments'][number]['role_taker'],
+    fallback?: AttendeeIF
+  ): AttendeeIF | undefined => {
+    if (!raw || !raw.name) return undefined;
+    if (raw.member_id) {
+      return {
+        id: raw.id ?? raw.member_id,
+        name: raw.name,
+        member_id: raw.member_id,
+      };
+    }
+    return resolveAttendee(raw.name, fallback);
+  };
+
   const normalizeNo = (value: unknown): number | undefined => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
     if (typeof value === 'string') {
@@ -122,18 +165,35 @@ export function applyAgendaSnapshot(
       cloned.type = s.type;
       cloned.start_time = s.start_time;
       cloned.duration = String(s.duration);
-      cloned.role_taker = resolveAttendee(s.role_taker, existing.role_taker);
+      cloned.role_taker = adoptRoleTaker(s.role_taker, existing.role_taker);
+      // Phase 3: snapshot is authoritative for segment detail too. The
+      // agent now carries title / content / related_segment_ids through
+      // `meeting_to_agenda` and clone / preview projections, so any change
+      // (or no-change) the agent expressed is what we adopt. Pre-Phase-3
+      // we relied on the prototype clone preserving these — which was
+      // correct only when the agent didn't touch them, and silently lossy
+      // on every wholesale replace (clone / create-from-text).
+      cloned.title = s.title ?? '';
+      cloned.content = s.content ?? '';
+      cloned.related_segment_ids = s.related_segment_ids ?? '';
       return cloned;
     }
-    // New segment inserted by the agent (via add_segment). No prototype template
-    // available; build a plain BaseSegment instance.
-    const fresh = new BaseSegment({
+    // New segment from the agent — wholesale-replace paths (clone /
+    // create_from_text / create_from_image) allocate fresh UUIDs server-side
+    // so every segment lands here, and add_segment also takes this path.
+    // Route to the typed subclass so role_taker_config / title_config /
+    // content_config match the segment kind; falling back to plain
+    // BaseSegment leaves Prepared Speech / Table Topic Session / Custom
+    // rows with the wrong inputs and placeholders.
+    const fresh = instantiateSegmentByType(s.type, {
       id: s.id,
       start_time: s.start_time,
       duration: String(s.duration),
+      related_segment_ids: s.related_segment_ids ?? '',
     });
-    fresh.type = s.type;
-    fresh.role_taker = resolveAttendee(s.role_taker);
+    fresh.role_taker = adoptRoleTaker(s.role_taker);
+    fresh.title = s.title ?? '';
+    fresh.content = s.content ?? '';
     return fresh;
   });
 
@@ -147,10 +207,17 @@ export function applyAgendaSnapshot(
           : normalizeNo(snapshot.meta.no),
     type:
       typeof snapshot.meta.type === 'string' ? snapshot.meta.type : prev.type,
+    // Text meta fields treat `null` as an explicit clear signal — the
+    // backend emits null when the agent runs `set_meta(field="theme", "")`
+    // (apply_set_meta converts empty string to None, which serializes to
+    // null). Without this branch the form silently keeps the previous
+    // value and the user's clear request is dropped.
     theme:
-      typeof snapshot.meta.theme === 'string'
-        ? snapshot.meta.theme
-        : prev.theme,
+      snapshot.meta.theme === null
+        ? ''
+        : typeof snapshot.meta.theme === 'string'
+          ? snapshot.meta.theme
+          : prev.theme,
     date:
       typeof snapshot.meta.date === 'string' ? snapshot.meta.date : prev.date,
     start_time:
@@ -162,13 +229,17 @@ export function applyAgendaSnapshot(
         ? snapshot.meta.end_time
         : prev.end_time,
     location:
-      typeof snapshot.meta.location === 'string'
-        ? snapshot.meta.location
-        : prev.location,
+      snapshot.meta.location === null
+        ? ''
+        : typeof snapshot.meta.location === 'string'
+          ? snapshot.meta.location
+          : prev.location,
     introduction:
-      typeof snapshot.meta.introduction === 'string'
-        ? snapshot.meta.introduction
-        : prev.introduction,
+      snapshot.meta.introduction === null
+        ? ''
+        : typeof snapshot.meta.introduction === 'string'
+          ? snapshot.meta.introduction
+          : prev.introduction,
     manager:
       snapshot.meta.manager === null
         ? undefined

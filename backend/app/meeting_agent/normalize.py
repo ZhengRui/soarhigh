@@ -1,9 +1,10 @@
 """Convert legacy Meeting models into the meeting agent's lean Agenda shape."""
 
+import uuid
 from datetime import datetime, timedelta
 
 from app.meeting_agent.models import Agenda, Meta, Segment
-from app.models.meeting import Meeting
+from app.models.meeting import Attendee, Meeting
 
 
 def _parse_hhmm(t: str | None) -> datetime | None:
@@ -43,7 +44,7 @@ def meeting_to_agenda(meeting: Meeting) -> Agenda:
     out_segments: list[Segment] = []
     prev_end_dt = _parse_hhmm(meeting.start_time)
 
-    for i, src in enumerate(meeting.segments):
+    for src in meeting.segments:
         start_dt = _parse_hhmm(src.start_time)
         buffer_before = _gap_minutes(prev_end_dt, start_dt)
         try:
@@ -51,14 +52,43 @@ def meeting_to_agenda(meeting: Meeting) -> Agenda:
         except (TypeError, ValueError):
             duration = 0
 
+        # Preserve the structured Attendee (id + member_id) so render-time
+        # member/guest classification is DB-authoritative. Previously this
+        # flattened to just `.name`, which forced the route addendum to guess
+        # membership against the static `CLUB_MEMBERS` list — the bug Phase A
+        # fixed for the preview path; Phase B closes the same gap on the
+        # current-draft path.
+        if src.role_taker:
+            role_taker = Attendee(
+                id=src.role_taker.id,
+                name=src.role_taker.name,
+                member_id=src.role_taker.member_id or "",
+            )
+        else:
+            role_taker = None
+
         out_segments.append(
             Segment(
-                id=f"s{i + 1}",
+                # Allocate a fresh real UUID for every segment in the agent's
+                # internal representation. The LLM-facing prompt JSON is
+                # later shortened to the first 5 chars via
+                # `segment_ids.shorten_agenda_dump`. Pre-Phase-4 this
+                # allocated `s{i+1}` which made aliases position-coupled and
+                # let history bias delete the wrong segment after a
+                # delete-and-renumber turn (see segment_ids.py module
+                # docstring for the bug class).
+                id=str(uuid.uuid4()),
                 type=src.type or "",
                 start_time=src.start_time or "",
                 duration=duration,
-                role_taker=src.role_taker.name if src.role_taker else "",
+                role_taker=role_taker,
                 buffer_before=buffer_before,
+                # Phase 3: preserve segment details so a clone / preview /
+                # create-from-* path doesn't silently drop a prepared speech's
+                # title or workshop content.
+                title=src.title or "",
+                content=src.content or "",
+                related_segment_ids=src.related_segment_ids or "",
             )
         )
 

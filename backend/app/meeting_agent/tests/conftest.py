@@ -32,3 +32,18 @@ def _force_in_memory_store(monkeypatch):
 
     monkeypatch.setattr(route_module, "session_store", fake)
     yield fake
+
+
+@pytest.fixture(autouse=True)
+def _fake_members_directory(monkeypatch):
+    """Meeting-agent route tests should not hit Supabase for member lookup."""
+
+    monkeypatch.setattr(
+        "app.db.core.get_members",
+        lambda: [
+            {"id": "m-rui", "username": "rui", "full_name": "Rui Zheng"},
+            {"id": "m-joyce", "username": "joyce", "full_name": "Joyce Feng"},
+            {"id": "m-liz", "username": "liz", "full_name": "Liz Huang"},
+            {"id": "m-amy", "username": "amy", "full_name": "Amy Fang"},
+        ],
+    )

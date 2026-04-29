@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   AlertTriangle,
   ArrowUp,
@@ -61,6 +68,12 @@ export function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // One-shot signal: the next layout-scroll pass must snap to bottom even
+  // if the user had scrolled up. Set by `sendMessage` so the user always
+  // sees their own just-typed message + the assistant's response start.
+  // Streaming chunks that follow keep the standard near-bottom guard so
+  // they don't fight a user who scrolled up mid-response.
+  const forceScrollRef = useRef(false);
   const pendingImageUrl = useMemo(
     () => (pendingImage ? URL.createObjectURL(pendingImage) : null),
     [pendingImage]
@@ -72,17 +85,60 @@ export function ChatPanel({
     };
   }, [pendingImageUrl]);
 
-  useEffect(() => {
-    // Auto-scroll to bottom on any message change
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  // Auto-scroll-to-bottom is split into two effects so the "follow the
+  // assistant as it streams" feel survives the cases where content height
+  // settles AFTER the React commit:
+  //
+  //   * `useLayoutEffect` on `messages` does the immediate snap before the
+  //     browser paints — covers ~all chunks during streaming.
+  //   * `ResizeObserver` on the scroll content catches late layout shifts
+  //     (e.g. the wholesale-create / revert addendum's folded `<details>`
+  //     blocks finalize their summary lines AFTER the markdown commit).
+  //     Without it the bottom of the last message can be clipped because
+  //     `scrollHeight` was a few pixels short when the layout effect ran.
+  //
+  // Both effects guard with a near-bottom check so we don't yank the user
+  // back to the latest message if they intentionally scrolled up to read
+  // earlier history.
+  const NEAR_BOTTOM_PX = 80;
+  const isNearBottom = (el: HTMLElement) =>
+    el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (forceScrollRef.current || isNearBottom(el) || messages.length <= 2) {
+      el.scrollTop = el.scrollHeight;
+      forceScrollRef.current = false;
     }
   }, [messages]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (isNearBottom(el)) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+    ro.observe(el);
+    // Observe the first child as well — the scroll container itself only
+    // reports its own size; the inner content is what actually changes
+    // when markdown / details blocks finish laying out.
+    const inner = el.firstElementChild;
+    if (inner) ro.observe(inner);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     // Auto-grow the textarea to fit its content, capped at ~6 lines.
     const el = textareaRef.current;
     if (!el) return;
+    // Skip while the panel is in a display:none ancestor (the launcher
+    // keeps both Edit and Stats panels mounted and hides the inactive
+    // one). scrollHeight reads 0 in that case and would collapse the
+    // textarea, hiding the placeholder.
+    if (el.offsetParent === null) return;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [input]);
@@ -205,22 +261,33 @@ export function ChatPanel({
     [loading, revert, sessionKey, onAgendaAfter]
   );
 
-  const sendMessage = useCallback(
-    async (message: string, image?: File | null) => {
-      const userMsg: ChatMessage = {
-        id: uuid(),
-        role: 'user',
-        content: message || '[Image attached]',
-      };
+  const runTurn = useCallback(
+    async (message: string, image: File | null, includeUserBubble: boolean) => {
       const asstMsg: ChatMessage = {
         id: uuid(),
         role: 'assistant',
         content: '',
         toolCalls: [],
       };
-      setMessages((m) => [...m, userMsg, asstMsg]);
+      // User just hit Send / Retry — the next layout pass must snap to
+      // bottom even if they were scrolled up reading earlier history.
+      forceScrollRef.current = true;
+      if (includeUserBubble) {
+        const userMsg: ChatMessage = {
+          id: uuid(),
+          role: 'user',
+          content: message || '[Image attached]',
+        };
+        setMessages((m) => [...m, userMsg, asstMsg]);
+      } else {
+        // Retry path: the user bubble is already in `messages` from the
+        // failed first attempt (the empty assistant bubble was dropped by
+        // the error handler, but the user bubble stayed). Re-appending it
+        // would render the message twice.
+        setMessages((m) => [...m, asstMsg]);
+      }
       lastSentRef.current = message;
-      lastImageRef.current = image || null;
+      lastImageRef.current = image;
       setError(null); // clear any prior banner — we're making a new attempt
       setLoading(true);
       try {
@@ -237,6 +304,12 @@ export function ChatPanel({
     [send, sessionKey, agendaSnapshot]
   );
 
+  const sendMessage = useCallback(
+    (message: string, image?: File | null) =>
+      runTurn(message, image || null, true),
+    [runTurn]
+  );
+
   const submit = () => {
     if ((!input.trim() && !pendingImage) || loading) return;
     const message = input;
@@ -248,8 +321,8 @@ export function ChatPanel({
 
   const handleRetry = useCallback(() => {
     if ((!lastSentRef.current && !lastImageRef.current) || loading) return;
-    void sendMessage(lastSentRef.current, lastImageRef.current);
-  }, [loading, sendMessage]);
+    void runTurn(lastSentRef.current, lastImageRef.current, false);
+  }, [loading, runTurn]);
 
   const handleAttach = () => fileInputRef.current?.click();
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {

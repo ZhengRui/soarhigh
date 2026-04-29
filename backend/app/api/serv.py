@@ -9,6 +9,7 @@ from .routes.feedback import feedback_router
 from .routes.meeting import meeting_router
 from .routes.meeting_agent import meeting_agent_router
 from .routes.post import post_router
+from .routes.statistics_agent import statistics_agent_router
 from .routes.stats import stats_router
 from .routes.timing import timing_router
 
@@ -31,6 +32,7 @@ def get_application():
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
     app.include_router(meeting_agent_router, tags=["meeting-agent"])
+    app.include_router(statistics_agent_router, tags=["statistics-agent"])
     app.include_router(auth_router, tags=["auth"])
     app.include_router(checkin_router, tags=["checkin"])
     app.include_router(feedback_router, tags=["feedback"])

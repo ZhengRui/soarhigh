@@ -54,7 +54,16 @@ def test_basic_meta_fields_carry_over():
     assert agenda.meta.introduction == "intro"
 
 
-def test_segment_legacy_fields_dropped():
+def test_segment_preserves_phase3_detail_fields():
+    """Phase 3: title / content / related_segment_ids round-trip through
+    `meeting_to_agenda` so a clone / preview / create-from-* path doesn't
+    silently drop a prepared speech's title or workshop content. Pre-Phase-3
+    these were dropped on the way into the agent's lean `Segment` model;
+    that meant any agent edit (e.g. set_role) would erase them when the
+    agenda_after came back to the frontend.
+
+    `end_time` remains intentionally absent — the agent derives it from
+    `start_time + duration` and doesn't need to store it."""
     agenda = meeting_to_agenda(
         _meeting(
             segments=[
@@ -71,10 +80,26 @@ def test_segment_legacy_fields_dropped():
     seg = agenda.segments[0]
     assert seg.type == "SAA"
     assert seg.duration == 3
-    assert seg.role_taker == "Joyce Feng"
-    assert not hasattr(seg, "title")
-    assert not hasattr(seg, "content")
+    assert seg.role_taker is not None
+    assert seg.role_taker.name == "Joyce Feng"
+    assert seg.role_taker.member_id == "m1"
+    # Detail fields preserved (Phase 3).
+    assert seg.title == "legacy_title"
+    assert seg.content == "legacy_content"
+    assert seg.related_segment_ids == "2,3"
     assert not hasattr(seg, "end_time")
+
+
+def test_segment_detail_fields_default_to_empty_when_source_missing():
+    """When the source segment doesn't carry a title/content, the agent's
+    Segment defaults to empty string — keeps the field present so downstream
+    consumers can rely on the shape without None-checks, and matches the
+    frontend `BaseSegment` default."""
+    agenda = meeting_to_agenda(_meeting(segments=[_segment(id="1", title="", content="", related_segment_ids="")]))
+    seg = agenda.segments[0]
+    assert seg.title == ""
+    assert seg.content == ""
+    assert seg.related_segment_ids == ""
 
 
 def test_buffer_before_derived_from_start_time_gap():
@@ -101,19 +126,34 @@ def test_first_segment_buffer_from_meta_start_time_gap():
     assert agenda.segments[0].buffer_before == 5
 
 
-def test_role_taker_extracted_from_attendee():
+def test_role_taker_preserves_structured_attendee():
+    """Phase B: meeting_to_agenda preserves the DB-authoritative member_id
+    on the structured Attendee so the route addendum can decide member/guest
+    without falling back to the static CLUB_MEMBERS list."""
     agenda = meeting_to_agenda(
-        _meeting(segments=[_segment(role_taker=Attendee(id=None, name="Frank Zeng", member_id="m1"))])
+        _meeting(segments=[_segment(role_taker=Attendee(id="att-1", name="Frank Zeng", member_id="m1"))])
     )
-    assert agenda.segments[0].role_taker == "Frank Zeng"
+    rt = agenda.segments[0].role_taker
+    assert rt is not None
+    assert rt.name == "Frank Zeng"
+    assert rt.member_id == "m1"
 
 
-def test_role_taker_empty_when_attendee_none():
+def test_role_taker_none_when_attendee_missing():
     agenda = meeting_to_agenda(_meeting(segments=[_segment(role_taker=None)]))
-    assert agenda.segments[0].role_taker == ""
+    assert agenda.segments[0].role_taker is None
 
 
-def test_segments_get_fresh_sequential_ids():
+def test_segments_get_fresh_uuid_ids():
+    """Phase 4: meeting_to_agenda allocates a fresh real UUID per segment.
+    Source ids are dropped — the agent's segment ids are independent of the
+    DB / planner output (which often has incomplete or unstable ids), and
+    the LLM-facing prompt JSON shortens these UUIDs to 5-char prefixes via
+    `segment_ids.shorten_agenda_dump`. The pure-derivation prefix scheme
+    closes the alias-reuse bug class the prior `s{i+1}` allocator caused
+    (see segment_ids.py module docstring)."""
+    import uuid
+
     agenda = meeting_to_agenda(
         _meeting(
             segments=[
@@ -122,6 +162,11 @@ def test_segments_get_fresh_sequential_ids():
             ],
         )
     )
-    assert [s.id for s in agenda.segments] == ["s1", "s2"]
-    assert "legacy_99" not in {s.id for s in agenda.segments}
-    assert "legacy_42" not in {s.id for s in agenda.segments}
+    ids = [s.id for s in agenda.segments]
+    assert len(ids) == 2
+    assert ids[0] != ids[1]
+    # Each id parses as a real UUID — not the legacy `s{i+1}` shape.
+    for sid in ids:
+        uuid.UUID(sid)
+    assert "legacy_99" not in ids
+    assert "legacy_42" not in ids
