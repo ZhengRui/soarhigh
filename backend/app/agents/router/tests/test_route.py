@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -11,6 +12,7 @@ from app.agents.meeting import store as meeting_store_module
 from app.agents.meeting.store import InMemorySessionStore
 from app.agents.router import store as router_store_module
 from app.agents.router.store import InMemoryRouterDecisionStore
+from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
 from app.agents.statistics import store as stats_store_module
 from app.agents.statistics.store import InMemoryStatsSessionStore
 from app.api.routes.auth import get_current_user
@@ -86,10 +88,14 @@ def _force_in_memory_stores(monkeypatch):
     meeting_store = InMemorySessionStore()
     stats_store = InMemoryStatsSessionStore()
     router_store = InMemoryRouterDecisionStore()
+    unified_store = InMemoryUnifiedAgentTurnStore()
 
     monkeypatch.setattr(meeting_store_module, "session_store", meeting_store)
     monkeypatch.setattr(stats_store_module, "session_store", stats_store)
     monkeypatch.setattr(router_store_module, "decision_store", router_store)
+    from app.agents.runtime import store as runtime_store_module
+
+    monkeypatch.setattr(runtime_store_module, "agent_turn_store", unified_store)
 
     from app.api.routes import agent as unified_route
     from app.api.routes import meeting_agent as meeting_route
@@ -98,7 +104,8 @@ def _force_in_memory_stores(monkeypatch):
     monkeypatch.setattr(meeting_route, "session_store", meeting_store)
     monkeypatch.setattr(stats_route, "session_store", stats_store)
     monkeypatch.setattr(unified_route, "decision_store", router_store)
-    yield router_store
+    monkeypatch.setattr(unified_route, "agent_turn_store", unified_store)
+    yield {"router": router_store, "unified": unified_store}
 
 
 @pytest.fixture(autouse=True)
@@ -112,7 +119,12 @@ def _fake_members_directory(monkeypatch):
     )
 
 
-def test_unified_route_emits_router_decision_then_dispatches_to_statistics(client, mock_auth_dep):
+def test_unified_route_emits_router_decision_then_dispatches_to_statistics(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+):
+    stores = _force_in_memory_stores
     test_model = TestModel(call_tools=[])
 
     with stats_agent_module.agent.override(model=test_model):
@@ -129,9 +141,20 @@ def test_unified_route_emits_router_decision_then_dispatches_to_statistics(clien
     assert events[0]["data"]["decision"]["route"] == "specialist"
     assert "assistant_text" in [event["event"] for event in events]
     assert events[-1]["event"] == "done"
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-stats", 1))
+    assert unified_turn is not None
+    assert unified_turn.agent_kind == "statistics"
+    assert unified_turn.route == "specialist"
+    assert unified_turn.specialist_seq == events[-1]["data"]["seq"]
+    assert unified_turn.router_decision["agent_kind"] == "statistics"
 
 
-def test_unified_route_emits_router_decision_then_dispatches_to_meeting(client, mock_auth_dep):
+def test_unified_route_emits_router_decision_then_dispatches_to_meeting(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+):
+    stores = _force_in_memory_stores
     test_model = ForcedArgsTestModel(
         call_tools=["set_role"],
         forced_args={"set_role": {"segment_id": "s1", "role_taker": "Joyce Feng"}},
@@ -155,6 +178,14 @@ def test_unified_route_emits_router_decision_then_dispatches_to_meeting(client, 
     tool_end = next(event for event in events if event["event"] == "tool_call_end")
     assert tool_end["data"]["result"] == {"segment_id": "s1", "role_taker": "Joyce Feng"}
     assert "final_agenda" in events[-1]["data"]
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-meeting", 1))
+    assert unified_turn is not None
+    assert unified_turn.agent_kind == "meeting"
+    assert unified_turn.agenda_before is not None
+    assert unified_turn.agenda_before["segments"][0]["id"] == "s1"
+    assert unified_turn.agenda_before["segments"][0]["role_taker"]["name"] == "Liz Huang"
+    assert unified_turn.agenda_after == events[-1]["data"]["final_agenda"]
+    assert unified_turn.tool_trace[0]["name"] == "set_role"
 
 
 @pytest.mark.asyncio
@@ -163,7 +194,8 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     mock_auth_dep,
     _force_in_memory_stores,
 ):
-    router_store: InMemoryRouterDecisionStore = _force_in_memory_stores
+    router_store: InMemoryRouterDecisionStore = _force_in_memory_stores["router"]
+    unified_store: InMemoryUnifiedAgentTurnStore = _force_in_memory_stores["unified"]
 
     with client.stream(
         "POST",
@@ -180,6 +212,12 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     records = await router_store.load_decisions("u-clarify")
     assert len(records) == 1
     assert records[0].decision["route"] == "clarify"
+    unified_turn = await unified_store.load_turn("u-clarify", 1)
+    assert unified_turn is not None
+    assert unified_turn.agent_kind == "router"
+    assert unified_turn.route == "clarify"
+    assert unified_turn.specialist_seq is None
+    assert unified_turn.domain_payload["done"]["router_only"] is True
 
 
 def test_unified_route_requires_auth(client):

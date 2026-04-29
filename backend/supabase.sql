@@ -650,6 +650,56 @@ CREATE POLICY meeting_agent_turns_owner ON meeting_agent_turns
     );
 
 -- =============================================
+-- UNIFIED AGENT (Phase C)
+-- =============================================
+-- User-facing /agent/turn envelope. Specialist stores still own model history
+-- and meeting revert; these rows provide one mixed-agent conversation axis.
+
+CREATE TABLE agent_sessions (
+    session_id   TEXT PRIMARY KEY,
+    user_id      UUID REFERENCES auth.users(id),
+    tail_seq     INT NOT NULL DEFAULT 0,
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE agent_turns (
+    session_id       TEXT NOT NULL REFERENCES agent_sessions(session_id) ON DELETE CASCADE,
+    seq              INT  NOT NULL,
+    agent_kind       TEXT NOT NULL,
+    route            TEXT NOT NULL,
+    user_message     TEXT NOT NULL,
+    assistant_text   TEXT,
+    tool_trace       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    router_decision  JSONB NOT NULL,
+    specialist_seq   INT,
+    agenda_before    JSONB,
+    agenda_after     JSONB,
+    domain_payload   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (session_id, seq)
+);
+
+CREATE INDEX idx_agent_turns_session_created
+    ON agent_turns(session_id, created_at);
+
+CREATE INDEX idx_agent_turns_session_kind_created
+    ON agent_turns(session_id, agent_kind, created_at);
+
+ALTER TABLE agent_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_turns    ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY agent_sessions_owner ON agent_sessions
+    FOR ALL USING (user_id = auth.uid());
+
+CREATE POLICY agent_turns_owner ON agent_turns
+    FOR ALL USING (
+        session_id IN (
+            SELECT session_id FROM agent_sessions WHERE user_id = auth.uid()
+        )
+    );
+
+-- =============================================
 -- POTENTIAL FUTURE CHANGES
 -- =============================================
 
