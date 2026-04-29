@@ -188,6 +188,47 @@ def test_unified_route_emits_router_decision_then_dispatches_to_meeting(
     assert unified_turn.tool_trace[0]["name"] == "set_role"
 
 
+def test_unified_route_handoff_runs_statistics_then_emits_proposal(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+):
+    stores = _force_in_memory_stores
+    test_model = TestModel(call_tools=[])
+
+    with stats_agent_module.agent.override(model=test_model):
+        with client.stream(
+            "POST",
+            "/agent/turn",
+            json={
+                "session_id": "u-handoff",
+                "user_message": "Find someone who has not done TTE recently and assign them to TTE",
+                "agenda_snapshot": _agenda(),
+            },
+        ) as r:
+            assert r.status_code == 200
+            events = _parse_sse(r.iter_bytes())
+
+    assert events[0]["event"] == "router_decision"
+    assert events[0]["data"]["decision"]["route"] == "handoff"
+    assert "handoff_proposal" in [event["event"] for event in events]
+    assert [event["event"] for event in events].count("done") == 1
+    proposal = next(event for event in events if event["event"] == "handoff_proposal")
+    assert proposal["data"]["source_agent"] == "statistics"
+    assert proposal["data"]["target_agent"] == "meeting"
+    assert proposal["data"]["requires_confirmation"] is True
+    assert events[-1]["event"] == "done"
+    assert events[-1]["data"]["router_only"] is True
+    assert events[-1]["data"]["handoff_requires_confirmation"] is True
+
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-handoff", 1))
+    assert unified_turn is not None
+    assert unified_turn.route == "handoff"
+    assert unified_turn.agent_kind == "router"
+    assert unified_turn.agenda_before is not None
+    assert unified_turn.domain_payload["handoff_proposal"]["requires_confirmation"] is True
+
+
 @pytest.mark.asyncio
 async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     client,
@@ -218,6 +259,33 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     assert unified_turn.route == "clarify"
     assert unified_turn.specialist_seq is None
     assert unified_turn.domain_payload["done"]["router_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_unified_route_handoff_without_agenda_clarifies(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+):
+    unified_store: InMemoryUnifiedAgentTurnStore = _force_in_memory_stores["unified"]
+
+    with client.stream(
+        "POST",
+        "/agent/turn",
+        json={
+            "session_id": "u-handoff-missing-agenda",
+            "user_message": "Find someone who has not done TTE recently and assign them to TTE",
+        },
+    ) as r:
+        assert r.status_code == 200
+        events = _parse_sse(r.iter_bytes())
+
+    assert [event["event"] for event in events] == ["router_decision", "assistant_text", "done"]
+    assert events[0]["data"]["decision"]["route"] == "clarify"
+    assert events[-1]["data"]["router_only"] is True
+    unified_turn = await unified_store.load_turn("u-handoff-missing-agenda", 1)
+    assert unified_turn is not None
+    assert unified_turn.route == "clarify"
 
 
 def test_unified_route_requires_auth(client):
