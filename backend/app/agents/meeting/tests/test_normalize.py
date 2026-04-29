@@ -1,6 +1,6 @@
 from typing import Any
 
-from app.meeting_agent.normalize import meeting_to_agenda
+from app.agents.meeting.normalize import meeting_to_agenda
 from app.models.meeting import Attendee, Meeting
 from app.models.meeting import Segment as MeetingSegment
 

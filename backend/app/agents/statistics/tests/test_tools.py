@@ -9,8 +9,8 @@ from unittest.mock import patch
 import pytest
 from pydantic_ai import ModelRetry
 
-from app.statistics_agent import tools as stats_tools
-from app.statistics_agent.models import StatsDeps
+from app.agents.statistics import tools as stats_tools
+from app.agents.statistics.models import StatsDeps
 
 
 @dataclass
@@ -54,7 +54,7 @@ async def test_meeting_attendance_list_wraps_dashboard_rows():
 
     with (
         patch(
-            "app.statistics_agent.tools.get_meeting_attendance_stats",
+            "app.agents.statistics.tools.get_meeting_attendance_stats",
             return_value=attendance_rows,
         ),
         patch(
@@ -122,7 +122,7 @@ async def test_meeting_attendance_list_truncates_after_sorting():
 
     with (
         patch(
-            "app.statistics_agent.tools.get_meeting_attendance_stats",
+            "app.agents.statistics.tools.get_meeting_attendance_stats",
             return_value=attendance_rows,
         ),
         patch(
@@ -185,7 +185,7 @@ async def test_member_role_matrix_groups_dashboard_rows_by_member():
     ]
 
     with patch(
-        "app.statistics_agent.tools.get_member_meeting_stats",
+        "app.agents.statistics.tools.get_member_meeting_stats",
         return_value=role_rows,
     ):
         out = await stats_tools.apply_member_role_matrix(
@@ -255,7 +255,7 @@ async def test_member_role_matrix_member_filter_uses_canonical_resolver():
 
     with (
         patch(
-            "app.statistics_agent.tools.get_member_meeting_stats",
+            "app.agents.statistics.tools.get_member_meeting_stats",
             return_value=role_rows,
         ),
         patch(
@@ -349,7 +349,7 @@ async def test_member_role_matrix_role_group_expands_to_stable_role_keys():
 
     with (
         patch(
-            "app.statistics_agent.tools.get_member_meeting_stats",
+            "app.agents.statistics.tools.get_member_meeting_stats",
             return_value=role_rows,
         ),
         patch(
@@ -456,7 +456,7 @@ async def test_member_role_matrix_hosting_and_facilitator_group_memberships():
 
     with (
         patch(
-            "app.statistics_agent.tools.get_member_meeting_stats",
+            "app.agents.statistics.tools.get_member_meeting_stats",
             return_value=role_rows,
         ),
         patch(
@@ -556,7 +556,7 @@ async def test_member_award_matrix_groups_resolved_and_unresolved_winners():
         },
     ]
 
-    with patch("app.statistics_agent.tools.get_member_award_stats", return_value=award_rows):
+    with patch("app.agents.statistics.tools.get_member_award_stats", return_value=award_rows):
         out = await stats_tools.apply_member_award_matrix(
             ctx,
             date_from="2026-01-01",
@@ -644,7 +644,7 @@ async def test_member_award_matrix_category_filters_accept_standard_keys_and_raw
         },
     ]
 
-    with patch("app.statistics_agent.tools.get_member_award_stats", return_value=award_rows):
+    with patch("app.agents.statistics.tools.get_member_award_stats", return_value=award_rows):
         out = await stats_tools.apply_member_award_matrix(
             ctx,
             category_filters=["BestPS", "Best Joke"],
@@ -707,7 +707,7 @@ async def test_member_award_matrix_member_filter_uses_canonical_resolver():
     ]
 
     with (
-        patch("app.statistics_agent.tools.get_member_award_stats", return_value=award_rows),
+        patch("app.agents.statistics.tools.get_member_award_stats", return_value=award_rows),
         patch(
             "app.services.meeting_stats.resolve_member",
             return_value=type(
@@ -748,7 +748,7 @@ async def test_member_award_matrix_retries_for_unknown_custom_category():
         }
     ]
 
-    with patch("app.statistics_agent.tools.get_member_award_stats", return_value=award_rows):
+    with patch("app.agents.statistics.tools.get_member_award_stats", return_value=award_rows):
         with pytest.raises(ModelRetry, match="Best Joke"):
             await stats_tools.apply_member_award_matrix(
                 ctx,
@@ -760,7 +760,7 @@ async def test_member_award_matrix_retries_for_unknown_custom_category():
 async def test_member_award_matrix_standard_category_with_no_rows_returns_zero():
     ctx = FakeCtx(deps=_deps())
 
-    with patch("app.statistics_agent.tools.get_member_award_stats", return_value=[]):
+    with patch("app.agents.statistics.tools.get_member_award_stats", return_value=[]):
         out = await stats_tools.apply_member_award_matrix(
             ctx,
             category_filters=["BestPS"],
@@ -798,8 +798,8 @@ async def test_stats_agent_lookup_meeting_shares_pool_across_parallel_calls():
     """Cross-language theme + intro fan-out can produce multiple
     `lookup_meeting` calls within one turn. They share the deps cache
     so only one Supabase fetch happens."""
+    from app.agents.statistics.agent import lookup_meeting as agent_tool
     from app.services import meeting_lookup as ml
-    from app.statistics_agent.agent import lookup_meeting as agent_tool
 
     fake_pool = [
         {
@@ -833,7 +833,7 @@ async def test_stats_agent_lookup_meeting_shares_pool_across_parallel_calls():
 @pytest.mark.asyncio
 async def test_stats_agent_does_not_register_mutation_tools():
     """The statistics agent must stay read-only."""
-    from app.statistics_agent.agent import agent
+    from app.agents.statistics.agent import agent
 
     forbidden = {
         "set_role",
@@ -865,7 +865,7 @@ async def test_stats_agent_does_not_register_mutation_tools():
 @pytest.mark.asyncio
 async def test_stats_agent_only_registers_lookup_and_preview_tools():
     """Only agreed tools should be registered."""
-    from app.statistics_agent.agent import agent
+    from app.agents.statistics.agent import agent
 
     registered = {tool_def.name for tool_def in agent._function_toolset.tools.values()}
     assert registered == {

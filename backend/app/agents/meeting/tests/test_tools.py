@@ -6,10 +6,10 @@ from unittest.mock import patch
 import pytest
 from pydantic_ai import ModelRetry
 
-from app.meeting_agent.models import Agenda, AgendaDeps, Meta, Segment
-from app.meeting_agent.store import InMemorySessionStore, TurnRecord
-from app.meeting_agent.timing import recompute_start_times
-from app.meeting_agent.tools import (
+from app.agents.meeting.models import Agenda, AgendaDeps, Meta, Segment
+from app.agents.meeting.store import InMemorySessionStore, TurnRecord
+from app.agents.meeting.timing import recompute_start_times
+from app.agents.meeting.tools import (
     apply_add_segment,
     apply_clone_from_meeting,
     apply_create_from_image,
@@ -228,7 +228,7 @@ def _full_meeting_dict_for_clone():
 async def test_apply_create_from_text_replaces_agenda():
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
-    with patch("app.meeting_agent.tools.plan_meeting_from_text", return_value=_fake_meeting_with_segments()):
+    with patch("app.agents.meeting.tools.plan_meeting_from_text", return_value=_fake_meeting_with_segments()):
         result = await apply_create_from_text(
             ctx,
             raw_text=(
@@ -261,7 +261,7 @@ def test_strip_membership_suffix():
     """Defense-in-depth: any role_taker / manager arg coming in with a
     "(member)" / "(guest)" suffix (echoed from a past table) gets stripped
     so the underlying field never carries the annotation."""
-    from app.meeting_agent.tools import _strip_membership_suffix
+    from app.agents.meeting.tools import _strip_membership_suffix
 
     assert _strip_membership_suffix("Joyce Feng (member)") == "Joyce Feng"
     assert _strip_membership_suffix("Lucas (guest)") == "Lucas"
@@ -284,7 +284,7 @@ async def test_apply_set_role_strips_membership_suffix_from_arg():
     """Regression: model has been observed copying the annotated display
     string ('Joyce Feng (member)') into a tool arg. The tool must strip
     it so the agenda data stays clean."""
-    from app.meeting_agent.tools import apply_set_role
+    from app.agents.meeting.tools import apply_set_role
 
     deps = make_deps()
     deps.agenda.segments[0].id = "s1"
@@ -403,7 +403,7 @@ def test_apply_set_content_refuses_prepared_speech_evaluation():
 
 
 def test_apply_add_segment_strips_membership_suffix_from_arg():
-    from app.meeting_agent.tools import apply_add_segment
+    from app.agents.meeting.tools import apply_add_segment
 
     deps = make_deps()
     deps.agenda.segments[0].id = "s1"
@@ -420,7 +420,7 @@ def test_apply_add_segment_strips_membership_suffix_from_arg():
 
 
 def test_apply_set_meta_strips_membership_suffix_from_manager():
-    from app.meeting_agent.tools import apply_set_meta
+    from app.agents.meeting.tools import apply_set_meta
 
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
@@ -433,7 +433,7 @@ async def test_apply_preview_meeting_returns_full_segments_without_mutating_agen
     """preview_meeting must surface the historical meeting's full segment list
     so the model can show it to the user before they commit to clone — and
     must NOT touch the current agenda state (it's read-only)."""
-    from app.meeting_agent.tools import apply_preview_meeting
+    from app.agents.meeting.tools import apply_preview_meeting
 
     deps = make_deps()
     original_segments = list(deps.agenda.segments)
@@ -471,7 +471,7 @@ async def test_apply_preview_meeting_returns_full_segments_without_mutating_agen
 
 @pytest.mark.asyncio
 async def test_apply_preview_meeting_unknown_no_raises_modelretry():
-    from app.meeting_agent.tools import apply_preview_meeting
+    from app.agents.meeting.tools import apply_preview_meeting
 
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
@@ -588,7 +588,7 @@ async def test_apply_create_from_template_regular_2ps_replaces_agenda():
     back-to-back from the 19:15 warmup. Validates the structure surfaces in
     the standard tool-result shape so the model treats it identically to the
     other creation paths."""
-    from app.meeting_agent.tools import apply_create_from_template
+    from app.agents.meeting.tools import apply_create_from_template
 
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
@@ -622,7 +622,7 @@ async def test_apply_create_from_template_custom_single_segment():
     """The Custom template gives the user a blank slate with ONE placeholder
     segment — no warmup, no canonical structure (Custom meetings have no
     fixed convention; warmup-at-19:15 is Regular/Workshop only)."""
-    from app.meeting_agent.tools import apply_create_from_template
+    from app.agents.meeting.tools import apply_create_from_template
 
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
@@ -655,7 +655,7 @@ async def test_apply_create_from_template_custom_single_segment():
 async def test_apply_create_from_template_aliases():
     """Template name lookup is case-insensitive and accepts common aliases the
     model is likely to forward verbatim from the user."""
-    from app.meeting_agent.tools import apply_create_from_template
+    from app.agents.meeting.tools import apply_create_from_template
 
     for name in ("regular", "Regular_2_PS", "  Regular  ", "regular 2 ps", "2ps"):
         deps = make_deps()
@@ -679,7 +679,7 @@ async def test_template_warmup_survives_subsequent_structural_edit():
     Pre-fix, meta.start_time was 19:30 while seg[0].start_time was 19:15;
     set_duration / set_buffer / add_segment / etc. would re-anchor at 19:30
     and slide every segment forward by 15 minutes."""
-    from app.meeting_agent.tools import apply_create_from_template, apply_set_duration
+    from app.agents.meeting.tools import apply_create_from_template, apply_set_duration
 
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
@@ -701,7 +701,7 @@ async def test_template_warmup_survives_subsequent_structural_edit():
 async def test_custom_template_segment_survives_subsequent_structural_edit():
     """Regression for Custom template: same anchor-mismatch foot-gun as the
     Regular template but with a single placeholder segment."""
-    from app.meeting_agent.tools import apply_create_from_template, apply_set_duration
+    from app.agents.meeting.tools import apply_create_from_template, apply_set_duration
 
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
@@ -716,7 +716,7 @@ async def test_custom_template_segment_survives_subsequent_structural_edit():
 
 @pytest.mark.asyncio
 async def test_apply_create_from_template_unknown_raises_modelretry():
-    from app.meeting_agent.tools import apply_create_from_template
+    from app.agents.meeting.tools import apply_create_from_template
 
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
@@ -731,8 +731,8 @@ def test_segments_summary_does_not_leak_membership_to_model():
     if the model can see the annotated form, it has been observed to copy
     it back into a tool argument (e.g. add_segment role_taker), corrupting
     the agenda data."""
-    from app.meeting_agent.models import Agenda, Meta, Segment
-    from app.meeting_agent.tools import _segments_summary
+    from app.agents.meeting.models import Agenda, Meta, Segment
+    from app.agents.meeting.tools import _segments_summary
 
     agenda = Agenda(
         meta=Meta(),
@@ -767,7 +767,7 @@ async def test_apply_create_from_text_preserves_planner_start_times():
     ctx = FakeCtx(deps=deps)
     # _fake_meeting_with_segments lays out segments at 19:30 / 19:33 / 19:36.
     # The tool must NOT shift them; whatever the planner returned is what we keep.
-    with patch("app.meeting_agent.tools.plan_meeting_from_text", return_value=_fake_meeting_with_segments()):
+    with patch("app.agents.meeting.tools.plan_meeting_from_text", return_value=_fake_meeting_with_segments()):
         await apply_create_from_text(
             ctx,
             raw_text=(
@@ -789,7 +789,7 @@ async def test_apply_create_from_text_preserves_planner_start_times():
 async def test_apply_create_from_text_reports_missing_required_fields_from_source():
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
-    with patch("app.meeting_agent.tools.plan_meeting_from_text", return_value=_fake_meeting_with_segments()):
+    with patch("app.agents.meeting.tools.plan_meeting_from_text", return_value=_fake_meeting_with_segments()):
         result = await apply_create_from_text(
             ctx,
             raw_text=(
@@ -811,7 +811,7 @@ async def test_apply_create_from_text_reports_missing_required_fields_from_sourc
 async def test_apply_create_from_text_propagates_value_error_as_modelretry():
     deps = make_deps()
     ctx = FakeCtx(deps=deps)
-    with patch("app.meeting_agent.tools.plan_meeting_from_text", side_effect=ValueError("OpenAI rate limit")):
+    with patch("app.agents.meeting.tools.plan_meeting_from_text", side_effect=ValueError("OpenAI rate limit")):
         with pytest.raises(ModelRetry, match="rate limit"):
             await apply_create_from_text(ctx, raw_text="bad")
 
@@ -1138,7 +1138,7 @@ async def test_lookup_rejects_unknown_type_filter():
 @pytest.mark.asyncio
 async def test_clone_from_meeting_clears_specified_fields(monkeypatch):
     store = InMemorySessionStore()
-    from app.meeting_agent import store as store_module
+    from app.agents.meeting import store as store_module
 
     monkeypatch.setattr(store_module, "session_store", store)
     deps = make_deps()
@@ -1187,7 +1187,7 @@ async def test_clone_from_meeting_clears_segment_detail_fields(monkeypatch):
     from app.models.meeting import Segment as MeetingSegment
 
     store = InMemorySessionStore()
-    from app.meeting_agent import store as store_module
+    from app.agents.meeting import store as store_module
 
     monkeypatch.setattr(store_module, "session_store", store)
     deps = make_deps()
@@ -1260,7 +1260,7 @@ async def test_clone_from_meeting_clears_segment_detail_fields(monkeypatch):
 @pytest.mark.asyncio
 async def test_clone_refuses_without_prior_lookup(monkeypatch):
     store = InMemorySessionStore()
-    from app.meeting_agent import store as store_module
+    from app.agents.meeting import store as store_module
 
     monkeypatch.setattr(store_module, "session_store", store)
     deps = make_deps()
@@ -1278,7 +1278,7 @@ async def test_clone_refuses_without_prior_lookup(monkeypatch):
 @pytest.mark.asyncio
 async def test_clone_refuses_when_lookup_was_for_a_different_no(monkeypatch):
     store = InMemorySessionStore()
-    from app.meeting_agent import store as store_module
+    from app.agents.meeting import store as store_module
 
     monkeypatch.setattr(store_module, "session_store", store)
     deps = make_deps()
@@ -1295,7 +1295,7 @@ async def test_clone_refuses_when_lookup_was_for_a_different_no(monkeypatch):
 @pytest.mark.asyncio
 async def test_clone_refuses_without_explicit_confirmation(monkeypatch):
     store = InMemorySessionStore()
-    from app.meeting_agent import store as store_module
+    from app.agents.meeting import store as store_module
 
     monkeypatch.setattr(store_module, "session_store", store)
     deps = make_deps()
@@ -1312,7 +1312,7 @@ async def test_clone_refuses_without_explicit_confirmation(monkeypatch):
 @pytest.mark.asyncio
 async def test_clone_from_meeting_unknown_no_raises_modelretry(monkeypatch):
     store = InMemorySessionStore()
-    from app.meeting_agent import store as store_module
+    from app.agents.meeting import store as store_module
 
     monkeypatch.setattr(store_module, "session_store", store)
     deps = make_deps()
@@ -1334,7 +1334,7 @@ async def test_create_from_image_uses_deps_image_bytes():
     ctx = FakeCtx(deps=deps)
 
     with patch(
-        "app.meeting_agent.tools.parse_meeting_agenda_image",
+        "app.agents.meeting.tools.parse_meeting_agenda_image",
         return_value=_fake_meeting_with_segments(),
     ) as mock:
         result = await apply_create_from_image(ctx)
@@ -1793,7 +1793,7 @@ def test_remove_segment_stale_short_id_after_delete_does_not_target_a_recycled_s
     """
     import uuid
 
-    from app.meeting_agent.tools import _shorten_id
+    from app.agents.meeting.tools import _shorten_id
 
     # Build an agenda with real UUIDs, capturing one we'll target.
     target_real = str(uuid.uuid4())
@@ -2166,8 +2166,8 @@ async def test_revert_last_turn_restores_agenda_before_of_latest_turn(monkeypatc
     """Seeds an InMemory store with one turn whose agenda_before differs from
     the current in-memory agenda. The tool should replace ctx.deps.agenda
     wholesale so it matches the stored snapshot."""
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
 
     fake_store = InMemorySessionStore()
     # The "before" state we want to restore: 1 segment, specific role.
@@ -2234,8 +2234,8 @@ async def test_revert_last_turn_skips_chit_chat_turns(monkeypatch):
     describe/question turn), revert_last_turn should walk back past it and
     undo the most recent actual EDIT turn. Matches user intuition: '撤销' is
     always about reversing state changes, not reversing descriptions."""
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
 
     fake_store = InMemorySessionStore()
     # Turn 1: real edit. agenda_before has ONE specific segment we can check.
@@ -2299,8 +2299,8 @@ async def test_revert_last_turn_refuses_when_only_chit_chat(monkeypatch):
     """A session with only describe/question turns has no edits to undo.
     The tool must refuse rather than silently no-op, so the agent can tell
     the user instead of falsely claiming to have reverted."""
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
 
     fake_store = InMemorySessionStore()
     await fake_store.save_turn(
@@ -2330,8 +2330,8 @@ async def test_revert_last_turn_refuses_when_previous_turn_was_revert(monkeypatc
     revert_last_turn must refuse to prevent ping-pong. The refusal message
     should include a list of recent non-revert edit turns for the agent to
     present to the user."""
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
 
     fake_store = InMemorySessionStore()
     # Turn 1: a real edit.
@@ -2390,8 +2390,8 @@ async def test_revert_to_turn_applies_agenda_after_of_target(monkeypatch):
     """revert_to_turn(after_seq=N) restores agenda_after of turn N (the state
     that existed right after turn N completed). 'AFTER' semantics — the seq
     the user picks maps directly to the parameter."""
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
 
     fake_store = InMemorySessionStore()
     # Seed three turns. Each one's agenda_after has a distinct segment type
@@ -2445,8 +2445,8 @@ async def test_revert_to_turn_applies_agenda_after_of_target(monkeypatch):
 async def test_revert_to_turn_after_seq_0_restores_initial_state(monkeypatch):
     """after_seq=0 is the 'initial state' restore point — agenda_before of
     turn 1 (what existed before any edits)."""
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
 
     fake_store = InMemorySessionStore()
     initial = {"meta": {"start_time": "19:00"}, "segments": []}
@@ -2490,8 +2490,8 @@ async def test_revert_to_turn_after_seq_0_restores_initial_state(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_revert_to_turn_unknown_seq_refuses(monkeypatch):
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore
 
     monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
     ctx = FakeCtx(deps=AgendaDeps(session_id="empty", agenda=Agenda(meta=Meta(), segments=[])))
@@ -2501,8 +2501,8 @@ async def test_revert_to_turn_unknown_seq_refuses(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_revert_to_turn_negative_seq_refuses(monkeypatch):
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore
 
     monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
     ctx = FakeCtx(deps=AgendaDeps(session_id="x", agenda=Agenda(meta=Meta(), segments=[])))
@@ -2514,8 +2514,8 @@ async def test_revert_to_turn_negative_seq_refuses(monkeypatch):
 async def test_revert_to_turn_0_on_empty_session_refuses(monkeypatch):
     """after_seq=0 on a never-saved session should refuse — there's no
     turn 1's agenda_before to load."""
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore
 
     monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
     ctx = FakeCtx(deps=AgendaDeps(session_id="none", agenda=Agenda(meta=Meta(), segments=[])))
@@ -2525,8 +2525,8 @@ async def test_revert_to_turn_0_on_empty_session_refuses(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_revert_last_turn_refuses_when_session_empty(monkeypatch):
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore
 
     monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
 
@@ -2546,8 +2546,8 @@ async def test_revert_last_turn_mutates_in_place_not_reassigns(monkeypatch):
     ctx.deps.agenda and reads it after the tool returns. If we reassigned
     ctx.deps.agenda = X instead of mutating, the framework would still see
     the old object. Verify the same Agenda instance is updated in place."""
-    from app.meeting_agent import store as store_module
-    from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+    from app.agents.meeting import store as store_module
+    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
 
     fake_store = InMemorySessionStore()
     # Must be an EDIT turn (not chit-chat) or the tool refuses — the in-place

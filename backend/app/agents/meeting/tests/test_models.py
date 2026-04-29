@@ -1,4 +1,4 @@
-from app.meeting_agent.models import Agenda, Meta, Segment
+from app.agents.meeting.models import Agenda, Meta, Segment
 from app.models.meeting import Attendee
 
 

@@ -4,10 +4,10 @@ import os
 
 import pytest
 
-from app.meeting_agent.agent import USAGE_LIMITS, agent
-from app.meeting_agent.models import Agenda, AgendaDeps, Meta, Segment
-from app.meeting_agent.prompts import SNAPSHOT_TEMPLATE
-from app.meeting_agent.tools import apply_create_from_text
+from app.agents.meeting.agent import USAGE_LIMITS, agent
+from app.agents.meeting.models import Agenda, AgendaDeps, Meta, Segment
+from app.agents.meeting.prompts import SNAPSHOT_TEMPLATE
+from app.agents.meeting.tools import apply_create_from_text
 
 
 class _FakeCtx:
@@ -143,7 +143,7 @@ def test_apply_create_from_text_smoke_real_registration():
     if overflow:
         # Acceptable only if last segment genuinely ends past meta.end_time.
         last = deps.agenda.segments[-1]
-        from app.meeting_agent.timing import _parse_hhmm
+        from app.agents.meeting.timing import _parse_hhmm
 
         last_end = _parse_hhmm(last.start_time) + last.duration
         meta_end = _parse_hhmm(deps.agenda.meta.end_time)

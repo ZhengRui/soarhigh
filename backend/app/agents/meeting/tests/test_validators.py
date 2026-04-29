@@ -1,6 +1,6 @@
-from app.meeting_agent.models import Agenda, Meta, Segment
-from app.meeting_agent.timing import recompute_start_times
-from app.meeting_agent.validators import run_validators
+from app.agents.meeting.models import Agenda, Meta, Segment
+from app.agents.meeting.timing import recompute_start_times
+from app.agents.meeting.validators import run_validators
 
 
 def make(start="19:15", end="21:30", segs=()):

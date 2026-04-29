@@ -23,12 +23,12 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from ...meeting_agent.agent import USAGE_LIMITS, agent
-from ...meeting_agent.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
-from ...meeting_agent.models import AgendaDeps
-from ...meeting_agent.prompts import SNAPSHOT_TEMPLATE
-from ...meeting_agent.segment_ids import shorten_agenda_dump
-from ...meeting_agent.store import TurnRecord, session_store
+from ...agents.meeting.agent import USAGE_LIMITS, agent
+from ...agents.meeting.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
+from ...agents.meeting.models import AgendaDeps
+from ...agents.meeting.prompts import SNAPSHOT_TEMPLATE
+from ...agents.meeting.segment_ids import shorten_agenda_dump
+from ...agents.meeting.store import TurnRecord, session_store
 from ...models.meeting_agent import MeetingAgentRevertRequest, MeetingAgentTurnRequest
 from ...services.meeting_preview_markdown import (
     format_role_display,
@@ -412,7 +412,7 @@ async def agent_turn(
             # Shorten segment ids to 5-char UUID prefixes for the model. Wire
             # format on both the request and `agenda_after` keeps full UUIDs;
             # the shortening applies ONLY to the prompt JSON the model reads.
-            # See `meeting_agent/segment_ids.py` for the bug class this
+            # See `agents/meeting/segment_ids.py` for the bug class this
             # closes vs. the prior `s1..sN` per-turn alias scheme.
             short_dump = shorten_agenda_dump(req.agenda_snapshot.model_dump())
             prompt = SNAPSHOT_TEMPLATE.format(

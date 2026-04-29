@@ -1,5 +1,5 @@
-from app.meeting_agent.models import Agenda, Meta, Segment
-from app.meeting_agent.timing import recompute_start_times
+from app.agents.meeting.models import Agenda, Meta, Segment
+from app.agents.meeting.timing import recompute_start_times
 
 
 def make(start_time: str, segs: list[tuple[str, int, int]]) -> Agenda:

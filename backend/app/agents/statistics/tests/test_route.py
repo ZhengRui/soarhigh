@@ -6,12 +6,12 @@ from fastapi.testclient import TestClient
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import ToolDefinition
 
-import app.statistics_agent.agent as stats_agent_module
+import app.agents.statistics.agent as stats_agent_module
+from app.agents.statistics import store as store_module
+from app.agents.statistics.store import InMemoryStatsSessionStore
 from app.api.routes.auth import get_current_user
 from app.api.serv import app
 from app.models.users import User
-from app.statistics_agent import store as store_module
-from app.statistics_agent.store import InMemoryStatsSessionStore
 
 
 class ForcedArgsTestModel(TestModel):

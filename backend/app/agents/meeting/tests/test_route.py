@@ -6,10 +6,10 @@ from fastapi.testclient import TestClient
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import ToolDefinition
 
+from app.agents.meeting import agent as agent_module
+from app.agents.meeting.store import InMemorySessionStore
 from app.api.routes.meeting_agent import _already_has_summary_table
 from app.api.serv import app
-from app.meeting_agent import agent as agent_module
-from app.meeting_agent.store import InMemorySessionStore
 from app.models.meeting import Attendee, Meeting
 from app.models.meeting import Segment as MeetingSegment
 
@@ -261,7 +261,7 @@ def test_turn_appends_creation_summary_table(client, mock_auth_dep):
         call_tools=["create_from_text"],
         forced_args={"create_from_text": {"raw_text": raw_text}},
     )
-    with patch("app.meeting_agent.tools.plan_meeting_from_text", return_value=_fake_planned_meeting()):
+    with patch("app.agents.meeting.tools.plan_meeting_from_text", return_value=_fake_planned_meeting()):
         with agent_module.agent.override(model=test_model):
             with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
                 assert r.status_code == 200
@@ -445,8 +445,8 @@ def test_build_agenda_addendum_renders_every_preview_in_one_turn():
     meta + agenda fold pair for EACH preview, in call order. The previous
     `_latest_preview_payload` helper only kept the last and silently
     dropped earlier ones."""
+    from app.agents.meeting.models import Agenda, Meta
     from app.api.routes.meeting_agent import _build_agenda_addendum
-    from app.meeting_agent.models import Agenda, Meta
 
     tool_trace = [
         {
@@ -508,8 +508,8 @@ def test_preview_addendum_intro_fold_omitted_when_intro_empty():
     """Preview render skips the Introduction fold entirely when the
     historical meeting has no intro text. We don't ship an empty
     section; cleaner UX to drop it."""
+    from app.agents.meeting.models import Agenda, Meta
     from app.api.routes.meeting_agent import _build_agenda_addendum
-    from app.meeting_agent.models import Agenda, Meta
 
     tool_trace = [
         {
@@ -588,8 +588,8 @@ def test_render_intro_block_fence_grows_to_outlast_inner_backticks():
 
 
 def test_preview_addendum_intro_fold_present_when_intro_text_present():
+    from app.agents.meeting.models import Agenda, Meta
     from app.api.routes.meeting_agent import _build_agenda_addendum
-    from app.meeting_agent.models import Agenda, Meta
 
     tool_trace = [
         {
@@ -624,8 +624,8 @@ def test_build_agenda_addendum_intro_fold_omitted_for_segment_only_edits():
     """A pure segment edit (set_role / set_duration) renders ONLY the
     Agenda fold. Bringing the intro fold along would clutter the reply
     on every per-segment fix; intro rides with the Meta axis."""
+    from app.agents.meeting.models import Agenda, Meta, Segment
     from app.api.routes.meeting_agent import _build_agenda_addendum
-    from app.meeting_agent.models import Agenda, Meta, Segment
 
     agenda = Agenda(
         meta=Meta(introduction="A meaningful description that should NOT show up here."),
@@ -661,8 +661,8 @@ def test_build_agenda_addendum_intro_fold_omitted_for_segment_only_edits():
 def test_build_agenda_addendum_intro_fold_rides_with_meta_changes():
     """When Meta is rendered (wholesale or meta-edit), the Introduction
     fold rides along — same axis (meeting-level info)."""
+    from app.agents.meeting.models import Agenda, Meta
     from app.api.routes.meeting_agent import _build_agenda_addendum
-    from app.meeting_agent.models import Agenda, Meta
 
     agenda = Agenda(
         meta=Meta(no=500, theme="X", introduction="Why this meeting matters."),
@@ -783,7 +783,7 @@ def test_turn_rejects_unsupported_image_type(client, mock_auth_dep):
 async def test_revert_returns_agenda_before_and_deletes_later_turns(client, mock_auth_dep, _force_in_memory_store):
     """Seeding the store directly is simpler than driving N turns through the
     SSE route. This exercises just the revert endpoint."""
-    from app.meeting_agent.store import TurnRecord
+    from app.agents.meeting.store import TurnRecord
 
     store = _force_in_memory_store
     for seq in range(1, 4):  # seeds turns 1, 2, 3
@@ -818,7 +818,7 @@ async def test_revert_returns_agenda_before_and_deletes_later_turns(client, mock
 
 @pytest.mark.asyncio
 async def test_revert_to_first_turn_rewinds_to_zero(client, mock_auth_dep, _force_in_memory_store):
-    from app.meeting_agent.store import TurnRecord
+    from app.agents.meeting.store import TurnRecord
 
     store = _force_in_memory_store
     await store.save_turn(

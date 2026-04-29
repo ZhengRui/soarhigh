@@ -1,6 +1,6 @@
 """Shared meeting-lookup primitives.
 
-Used today by `app.meeting_agent` for the clone path (`lookup_meeting` → user
+Used today by `app.agents.meeting` for the clone path (`lookup_meeting` → user
 confirmation → `clone_from_meeting`). Designed to be reused by the upcoming
 statistics agent for analytics queries — both agents share the same fuzzy
 resolver instead of each rolling their own. See plans/2026-04-27-statistics-

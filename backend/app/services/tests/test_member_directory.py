@@ -1,6 +1,6 @@
 """Tests for the shared member-directory + role-display helpers.
 
-These helpers used to live inside `meeting_agent/tools.py`, where the static
+These helpers used to live inside `agents/meeting/tools.py`, where the static
 `CLUB_MEMBERS` list doubled as both an LLM prompt hint and a membership
 oracle for the route's render layer. That conflation is the root cause of
 the meeting-preview member/guest mismatch (issue 2 of the Phase A bugfix):

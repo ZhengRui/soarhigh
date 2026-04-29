@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from app.meeting_agent.models import Agenda
+from app.agents.meeting.models import Agenda
 
 
 class MeetingAgentTurnRequest(BaseModel):

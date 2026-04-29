@@ -1,9 +1,9 @@
 import pytest
 
+from app.agents.meeting import store as store_module
+from app.agents.meeting.store import InMemorySessionStore
 from app.api.routes.auth import get_current_user
 from app.api.serv import app
-from app.meeting_agent import store as store_module
-from app.meeting_agent.store import InMemorySessionStore
 from app.models.users import User
 
 

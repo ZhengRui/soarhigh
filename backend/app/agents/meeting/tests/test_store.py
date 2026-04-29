@@ -1,6 +1,6 @@
 import pytest
 
-from app.meeting_agent.store import InMemorySessionStore, TurnRecord
+from app.agents.meeting.store import InMemorySessionStore, TurnRecord
 
 
 def _make_turn(seq: int, user_message: str = "m", history: list | None = None) -> TurnRecord:
@@ -177,7 +177,7 @@ def _patch_returns(client: FakeSupabaseClient):
 
 @pytest.mark.asyncio
 async def test_supabase_load_missing_session_returns_default(monkeypatch):
-    from app.meeting_agent.store import SupabaseSessionStore
+    from app.agents.meeting.store import SupabaseSessionStore
 
     client = FakeSupabaseClient(returns={})
     original_execute = _patch_returns(client)
@@ -190,7 +190,7 @@ async def test_supabase_load_missing_session_returns_default(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_supabase_load_reads_history_from_latest_turn(monkeypatch):
-    from app.meeting_agent.store import SupabaseSessionStore
+    from app.agents.meeting.store import SupabaseSessionStore
 
     client = FakeSupabaseClient(
         returns={
@@ -210,7 +210,7 @@ async def test_supabase_load_reads_history_from_latest_turn(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_supabase_save_turn_upserts_session_then_inserts_turn(monkeypatch):
-    from app.meeting_agent.store import SupabaseSessionStore
+    from app.agents.meeting.store import SupabaseSessionStore
 
     client = FakeSupabaseClient()
     original_execute = _patch_returns(client)
@@ -248,7 +248,7 @@ async def test_supabase_save_turn_upserts_session_then_inserts_turn(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_supabase_delete_turns_deletes_then_rewinds_tail(monkeypatch):
-    from app.meeting_agent.store import SupabaseSessionStore
+    from app.agents.meeting.store import SupabaseSessionStore
 
     client = FakeSupabaseClient()
     original_execute = _patch_returns(client)
@@ -273,7 +273,7 @@ async def test_supabase_delete_turns_deletes_then_rewinds_tail(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_supabase_delete_rewinds_to_zero_for_seq_1(monkeypatch):
-    from app.meeting_agent.store import SupabaseSessionStore
+    from app.agents.meeting.store import SupabaseSessionStore
 
     client = FakeSupabaseClient()
     original_execute = _patch_returns(client)

@@ -1,6 +1,6 @@
 """Static club member directory + membership lookup.
 
-Lives outside `meeting_agent/prompts.py` so non-prompt callers (the meeting
+Lives outside `agents/meeting/prompts.py` so non-prompt callers (the meeting
 preview renderer, the route addendum, ANY render layer that wants a
 membership decision for a bare-string role taker) don't have to import from
 the agent's prompt module to do so. The previous setup also conflated two

@@ -6,7 +6,7 @@ the same folded Meta / Introduction / Agenda blocks deterministically.
 
 `format_role_display` lives here because it is purely a render concern
 (produces the table cell text "Name (member)" / "Name (guest)" / "All" /
-"—"). It used to live in `meeting_agent/tools.py` where it forced every
+"—"). It used to live in `agents/meeting/tools.py` where it forced every
 caller — including this module and the stats agent — to depend on the
 agent's tool surface for a render decision. See `member_directory.py`
 for why the membership lookup is a fallback only.

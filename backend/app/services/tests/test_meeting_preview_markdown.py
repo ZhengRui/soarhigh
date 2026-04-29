@@ -1,4 +1,4 @@
-from app.meeting_agent.models import Segment
+from app.agents.meeting.models import Segment
 from app.services.meeting_preview_markdown import format_segment_detail_cell
 
 

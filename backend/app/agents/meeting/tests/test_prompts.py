@@ -1,4 +1,4 @@
-from app.meeting_agent.prompts import ROUTER_SYSTEM_PROMPT, SNAPSHOT_TEMPLATE
+from app.agents.meeting.prompts import ROUTER_SYSTEM_PROMPT, SNAPSHOT_TEMPLATE
 
 
 def test_router_prompt_documents_create_from_text():
@@ -150,7 +150,7 @@ def test_snapshot_template_language_hint_renders():
 
 
 def test_router_prompt_documents_language_hint():
-    from app.meeting_agent.prompts import ROUTER_SYSTEM_PROMPT
+    from app.agents.meeting.prompts import ROUTER_SYSTEM_PROMPT
 
     assert "[Reply language]" in ROUTER_SYSTEM_PROMPT
     assert "default to English" in ROUTER_SYSTEM_PROMPT

@@ -38,13 +38,13 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from ...meeting_agent.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
+from ...agents.meeting.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
+from ...agents.statistics.agent import USAGE_LIMITS, agent
+from ...agents.statistics.models import StatsDeps
+from ...agents.statistics.prompts import SNAPSHOT_TEMPLATE
+from ...agents.statistics.store import StatsTurnRecord, session_store
 from ...models.statistics_agent import StatisticsAgentTurnRequest
 from ...services.meeting_preview_markdown import render_preview_addendum
-from ...statistics_agent.agent import USAGE_LIMITS, agent
-from ...statistics_agent.models import StatsDeps
-from ...statistics_agent.prompts import SNAPSHOT_TEMPLATE
-from ...statistics_agent.store import StatsTurnRecord, session_store
 from .auth import get_current_user
 
 log = logging.getLogger(__name__)

@@ -1,13 +1,13 @@
 """Shared statistics primitives.
 
 Used by:
-  - The future statistics agent (`app.statistics_agent`) for analytics tools.
+  - The statistics agent (`app.agents.statistics`) for analytics tools.
   - The dashboard route helpers in `app.db.stats` (refactored to delegate
     here so dashboard and chat agent share a single source of truth for
     every metric).
 
 Design rules:
-  - DB is authoritative. The CLUB_MEMBERS list in `app.meeting_agent.prompts`
+  - DB is authoritative. The CLUB_MEMBERS list in `app.agents.meeting.prompts`
     is help-text for the LLM, NOT a gate or a fallback for resolution.
   - Every Supabase `.in_(ids)` call goes through `_batch_in` so an "all
     history" leaderboard query doesn't blow past PostgREST's URL-length

@@ -3,7 +3,7 @@
 Covers parse_query (free-text → filters), resolve_meetings (filters → cards),
 the projections (meeting_to_card / meeting_to_preview), and the lock /
 exact-no fast-path invariants. The agent-facing wrappers in
-`meeting_agent.tools` are exercised through their own test file."""
+`agents.meeting.tools` are exercised through their own test file."""
 
 from __future__ import annotations
 
