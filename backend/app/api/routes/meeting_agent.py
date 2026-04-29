@@ -29,6 +29,8 @@ from ...agents.meeting.models import AgendaDeps
 from ...agents.meeting.prompts import SNAPSHOT_TEMPLATE
 from ...agents.meeting.segment_ids import shorten_agenda_dump
 from ...agents.meeting.store import TurnRecord, session_store
+from ...agents.runtime.contracts import AgentKind
+from ...agents.runtime.policy import require_tool_allowed
 from ...models.meeting_agent import MeetingAgentRevertRequest, MeetingAgentTurnRequest
 from ...services.meeting_preview_markdown import (
     format_role_display,
@@ -462,6 +464,7 @@ async def agent_turn(
                             async for tool_event in tool_stream:
                                 if isinstance(tool_event, FunctionToolCallEvent):
                                     call_part: ToolCallPart = tool_event.part
+                                    require_tool_allowed(AgentKind.MEETING, call_part.tool_name)
                                     args = call_part.args_as_dict()
                                     tool_call_args[call_part.tool_call_id] = {
                                         "name": call_part.tool_name,

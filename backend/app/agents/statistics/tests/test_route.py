@@ -7,6 +7,8 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import ToolDefinition
 
 import app.agents.statistics.agent as stats_agent_module
+from app.agents.runtime.contracts import AgentKind
+from app.agents.runtime.policy import AgentPolicyError
 from app.agents.statistics import store as store_module
 from app.agents.statistics.store import InMemoryStatsSessionStore
 from app.api.routes.auth import get_current_user
@@ -104,7 +106,10 @@ def test_stats_preview_meeting_appends_folded_preview_blocks(client, mock_auth_d
         forced_args={"preview_meeting": {"no": 451}},
     )
 
-    with patch("app.services.meeting_lookup.fetch_meeting_full", return_value=fake_full_meeting):
+    with (
+        patch("app.services.meeting_lookup.fetch_meeting_full", return_value=fake_full_meeting),
+        patch("app.api.routes.statistics_agent.require_tool_allowed") as policy_check,
+    ):
         with stats_agent_module.agent.override(model=test_model):
             with client.stream(
                 "POST",
@@ -121,3 +126,28 @@ def test_stats_preview_meeting_appends_folded_preview_blocks(client, mock_auth_d
     assert "<summary>📋 Meeting #451 Agenda</summary>" in text
     assert "| Meeting No. | 451 |" in text
     assert "Liz Huang (member)" in text
+    policy_check.assert_called_once_with(AgentKind.STATISTICS, "preview_meeting")
+
+
+def test_stats_route_returns_error_when_policy_blocks_tool(client, mock_auth_dep):
+    test_model = ForcedArgsTestModel(
+        call_tools=["preview_meeting"],
+        forced_args={"preview_meeting": {"no": 451}},
+    )
+
+    with patch(
+        "app.api.routes.statistics_agent.require_tool_allowed",
+        side_effect=AgentPolicyError("blocked by policy"),
+    ):
+        with stats_agent_module.agent.override(model=test_model):
+            with client.stream(
+                "POST",
+                "/statistics-agent/turn",
+                json={"session_id": "stats-policy", "user_message": "查看 #451"},
+            ) as r:
+                assert r.status_code == 200
+                events = _parse_sse(r.iter_bytes())
+
+    assert events[-1]["event"] == "error"
+    assert events[-1]["data"]["reason"] == "agent_error"
+    assert "blocked by policy" in events[-1]["data"]["message"]

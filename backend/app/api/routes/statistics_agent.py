@@ -39,6 +39,8 @@ from pydantic_ai.messages import (
 )
 
 from ...agents.meeting.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
+from ...agents.runtime.contracts import AgentKind
+from ...agents.runtime.policy import require_tool_allowed
 from ...agents.statistics.agent import USAGE_LIMITS, agent
 from ...agents.statistics.models import StatsDeps
 from ...agents.statistics.prompts import SNAPSHOT_TEMPLATE
@@ -166,6 +168,7 @@ async def stats_agent_turn(
                             async for tool_event in tool_stream:
                                 if isinstance(tool_event, FunctionToolCallEvent):
                                     call_part: ToolCallPart = tool_event.part
+                                    require_tool_allowed(AgentKind.STATISTICS, call_part.tool_name)
                                     args = call_part.args_as_dict()
                                     tool_call_args[call_part.tool_call_id] = {
                                         "name": call_part.tool_name,

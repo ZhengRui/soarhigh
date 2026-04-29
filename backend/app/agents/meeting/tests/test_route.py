@@ -8,6 +8,7 @@ from pydantic_ai.tools import ToolDefinition
 
 from app.agents.meeting import agent as agent_module
 from app.agents.meeting.store import InMemorySessionStore
+from app.agents.runtime.contracts import AgentKind
 from app.api.routes.meeting_agent import _already_has_summary_table
 from app.api.serv import app
 from app.models.meeting import Attendee, Meeting
@@ -113,10 +114,11 @@ def test_turn_happy_path_streams_done(client, mock_auth_dep):
         call_tools=["set_role"],
         forced_args={"set_role": {"segment_id": "s1", "role_taker": "Test"}},
     )
-    with agent_module.agent.override(model=test_model):
-        with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
-            assert r.status_code == 200
-            events = _parse_sse(r.iter_bytes())
+    with patch("app.api.routes.meeting_agent.require_tool_allowed") as policy_check:
+        with agent_module.agent.override(model=test_model):
+            with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
+                assert r.status_code == 200
+                events = _parse_sse(r.iter_bytes())
 
     types = [e["event"] for e in events]
     assert "tool_call_start" in types, f"expected tool_call_start, got: {types}"
@@ -138,6 +140,7 @@ def test_turn_happy_path_streams_done(client, mock_auth_dep):
         "segment_id": "s1",
         "role_taker": "Test",
     }
+    policy_check.assert_called_once_with(AgentKind.MEETING, "set_role")
 
 
 @pytest.mark.asyncio
