@@ -63,6 +63,11 @@ _HISTORICAL_TERMS = (
     "今年",
     "上个月",
     "本月",
+    "最近",
+    "上次",
+    "哪些会议",
+    "哪几次",
+    "哪几期",
     "历史",
 )
 
@@ -71,9 +76,6 @@ _RECENT_ROLE_BALANCE_TERMS = (
     "has not done",
     "haven't done",
     "did not do",
-    "recently",
-    "recent",
-    "最近",
     "没做",
     "没有做",
 )

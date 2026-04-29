@@ -1,0 +1,122 @@
+[
+  {
+    "id": "route.statistics.awards.zh",
+    "user_message": "今年谁拿 Best Evaluator 最多?",
+    "has_agenda": false,
+    "expected_route": "specialist",
+    "expected_agent_kind": "statistics",
+    "expected_intent": "historical_statistics_or_lookup"
+  },
+  {
+    "id": "route.statistics.member_roles.en",
+    "user_message": "Who did TTE the most last year?",
+    "has_agenda": false,
+    "expected_route": "specialist",
+    "expected_agent_kind": "statistics",
+    "expected_intent": "historical_statistics_or_lookup"
+  },
+  {
+    "id": "route.statistics.attendance.zh",
+    "user_message": "今年出勤最高的是哪一次会议?",
+    "has_agenda": false,
+    "expected_route": "specialist",
+    "expected_agent_kind": "statistics",
+    "expected_intent": "historical_statistics_or_lookup"
+  },
+  {
+    "id": "route.statistics.lookup.zh.recent_manager",
+    "user_message": "Frank 最近主持过哪些会议?",
+    "has_agenda": true,
+    "expected_route": "specialist",
+    "expected_agent_kind": "statistics",
+    "expected_intent": "historical_statistics_or_lookup"
+  },
+  {
+    "id": "route.statistics.lookup.en.meeting_no",
+    "user_message": "show me #451",
+    "has_agenda": true,
+    "expected_route": "specialist",
+    "expected_agent_kind": "statistics",
+    "expected_intent": "historical_statistics_or_lookup"
+  },
+  {
+    "id": "route.statistics.unsupported_self_reference.zh",
+    "user_message": "我今年出勤率是多少?",
+    "has_agenda": false,
+    "expected_route": "specialist",
+    "expected_agent_kind": "statistics",
+    "expected_intent": "historical_statistics_or_lookup"
+  },
+  {
+    "id": "route.meeting.edit_role.en",
+    "user_message": "set Timer to Joyce Feng",
+    "has_agenda": true,
+    "expected_route": "specialist",
+    "expected_agent_kind": "meeting",
+    "expected_intent": "current_meeting_draft"
+  },
+  {
+    "id": "route.meeting.edit_role.zh",
+    "user_message": "把 Timer 改成 Joyce Feng",
+    "has_agenda": true,
+    "expected_route": "specialist",
+    "expected_agent_kind": "meeting",
+    "expected_intent": "current_meeting_draft"
+  },
+  {
+    "id": "route.meeting.edit_role.zh.recent_word_not_handoff",
+    "user_message": "最近把 Timer 改成 Joyce Feng",
+    "has_agenda": true,
+    "expected_route": "specialist",
+    "expected_agent_kind": "meeting",
+    "expected_intent": "current_meeting_draft"
+  },
+  {
+    "id": "route.meeting.clone.en",
+    "user_message": "clone #451 into this draft",
+    "has_agenda": true,
+    "expected_route": "specialist",
+    "expected_agent_kind": "meeting",
+    "expected_intent": "current_meeting_draft"
+  },
+  {
+    "id": "route.meeting.show_current.zh",
+    "user_message": "看一下当前议程",
+    "has_agenda": true,
+    "expected_route": "specialist",
+    "expected_agent_kind": "meeting",
+    "expected_intent": "current_meeting_draft"
+  },
+  {
+    "id": "route.clarify.meeting_without_agenda.en",
+    "user_message": "set Timer to Joyce Feng",
+    "has_agenda": false,
+    "expected_route": "clarify",
+    "expected_agent_kind": null,
+    "expected_intent": "meeting_edit_without_agenda_snapshot"
+  },
+  {
+    "id": "route.clarify.ambiguous.no_context",
+    "user_message": "hello",
+    "has_agenda": false,
+    "expected_route": "clarify",
+    "expected_agent_kind": null,
+    "expected_intent": "ambiguous_agent_target"
+  },
+  {
+    "id": "route.handoff.assign_role_from_stats.en",
+    "user_message": "Find who has not done TTE recently, then assign one to this meeting",
+    "has_agenda": true,
+    "expected_route": "handoff",
+    "expected_agent_kind": null,
+    "expected_intent": "statistics_to_meeting_handoff"
+  },
+  {
+    "id": "route.handoff.assign_role_from_stats.zh",
+    "user_message": "找一个最近没做过 TTE 的人, 安排到这次会议",
+    "has_agenda": true,
+    "expected_route": "handoff",
+    "expected_agent_kind": null,
+    "expected_intent": "statistics_to_meeting_handoff"
+  }
+]
