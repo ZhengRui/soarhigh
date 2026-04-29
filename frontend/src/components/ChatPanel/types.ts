@@ -28,6 +28,20 @@ export type AgendaSnapshot = {
 
 export type ToolCallStatus = 'pending' | 'ok' | 'retry';
 
+export type RouterAgentKind = 'router' | 'meeting' | 'statistics';
+export type RouterRouteKind = 'specialist' | 'clarify' | 'handoff' | 'refuse';
+
+export type RouterDecision = {
+  route: RouterRouteKind;
+  intent: string;
+  reason: string;
+  agent_kind?: RouterAgentKind | null;
+  confidence?: number | null;
+  clarification_question?: string | null;
+  handoff?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown>;
+};
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -48,9 +62,16 @@ export type ChatMessage = {
   // True when the user aborted the turn mid-stream via the Stop button.
   // Displayed as a small "[已取消]" footer.
   cancelled?: boolean;
+  // Unified /agent/turn only: router decision emitted before specialist
+  // events. Kept on the assistant bubble for lightweight route visibility.
+  routerDecision?: RouterDecision;
+  // Meeting turns can be reverted. Stats/router-only turns also carry seq
+  // values, but those belong to other stores and must not show the revert UI.
+  canRevert?: boolean;
 };
 
 export type AgentTurnEvent =
+  | { type: 'router_decision'; data: { seq: number; decision: RouterDecision } }
   | { type: 'thinking'; data: { chunk: string } }
   | { type: 'assistant_text'; data: { chunk: string } }
   | {
@@ -63,12 +84,17 @@ export type AgentTurnEvent =
         id: string;
         status?: 'ok' | 'retry';
         result: unknown;
-        agenda_after: AgendaSnapshot;
+        agenda_after?: AgendaSnapshot;
       };
     }
   | {
       type: 'done';
-      data: { seq: number; final_agenda: AgendaSnapshot; final_text: string };
+      data: {
+        seq: number;
+        final_agenda?: AgendaSnapshot;
+        final_text: string;
+        router_only?: boolean;
+      };
     }
   | {
       type: 'error';
