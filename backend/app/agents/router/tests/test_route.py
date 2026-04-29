@@ -229,6 +229,100 @@ def test_unified_route_handoff_runs_statistics_then_emits_proposal(
     assert unified_turn.domain_payload["handoff_proposal"]["requires_confirmation"] is True
 
 
+def test_unified_route_confirmed_handoff_dispatches_to_meeting(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+):
+    stores = _force_in_memory_stores
+
+    with stats_agent_module.agent.override(model=TestModel(call_tools=[])):
+        with client.stream(
+            "POST",
+            "/agent/turn",
+            json={
+                "session_id": "u-handoff-confirm",
+                "user_message": "Find someone who has not done TTE recently and assign them to Timer",
+                "agenda_snapshot": _agenda(),
+            },
+        ) as r:
+            assert r.status_code == 200
+            first_events = _parse_sse(r.iter_bytes())
+
+    assert "handoff_proposal" in [event["event"] for event in first_events]
+
+    meeting_model = ForcedArgsTestModel(
+        call_tools=["set_role"],
+        forced_args={"set_role": {"segment_id": "s1", "role_taker": "Joyce Feng"}},
+    )
+    with meeting_agent_module.agent.override(model=meeting_model):
+        with client.stream(
+            "POST",
+            "/agent/turn",
+            json={
+                "session_id": "u-handoff-confirm",
+                "user_message": "Confirm Joyce Feng as Timer",
+                "agenda_snapshot": _agenda(),
+            },
+        ) as r:
+            assert r.status_code == 200
+            events = _parse_sse(r.iter_bytes())
+
+    assert events[0]["event"] == "router_decision"
+    assert events[0]["data"]["decision"]["agent_kind"] == "meeting"
+    assert events[0]["data"]["decision"]["intent"] == "confirmed_handoff_meeting_mutation"
+    tool_end = next(event for event in events if event["event"] == "tool_call_end")
+    assert tool_end["data"]["result"] == {"segment_id": "s1", "role_taker": "Joyce Feng"}
+    assert events[-1]["event"] == "done"
+    assert "final_agenda" in events[-1]["data"]
+
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-handoff-confirm", 2))
+    assert unified_turn is not None
+    assert unified_turn.agent_kind == "meeting"
+    assert unified_turn.route == "specialist"
+    assert unified_turn.domain_payload["handoff_context"]["requires_confirmation"] is True
+
+
+def test_unified_route_vague_handoff_confirmation_clarifies(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+):
+    stores = _force_in_memory_stores
+
+    with stats_agent_module.agent.override(model=TestModel(call_tools=[])):
+        with client.stream(
+            "POST",
+            "/agent/turn",
+            json={
+                "session_id": "u-handoff-vague",
+                "user_message": "Find someone who has not done TTE recently and assign them to Timer",
+                "agenda_snapshot": _agenda(),
+            },
+        ) as r:
+            assert r.status_code == 200
+            _parse_sse(r.iter_bytes())
+
+    with client.stream(
+        "POST",
+        "/agent/turn",
+        json={
+            "session_id": "u-handoff-vague",
+            "user_message": "yes, do it",
+            "agenda_snapshot": _agenda(),
+        },
+    ) as r:
+        assert r.status_code == 200
+        events = _parse_sse(r.iter_bytes())
+
+    assert [event["event"] for event in events] == ["router_decision", "assistant_text", "done"]
+    assert events[0]["data"]["decision"]["route"] == "clarify"
+    assert events[0]["data"]["decision"]["intent"] == "handoff_confirmation_needs_details"
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-handoff-vague", 2))
+    assert unified_turn is not None
+    assert unified_turn.route == "clarify"
+
+
 @pytest.mark.asyncio
 async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     client,

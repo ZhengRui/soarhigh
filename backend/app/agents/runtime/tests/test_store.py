@@ -34,6 +34,19 @@ async def test_in_memory_store_saves_and_loads_turn():
     assert await store.load_turn("s1", 99) is None
 
 
+@pytest.mark.asyncio
+async def test_in_memory_store_loads_latest_turn():
+    store = InMemoryUnifiedAgentTurnStore()
+    await store.save_turn("s1", user_id="u1", turn=_make_turn(seq=1))
+    await store.save_turn("s1", user_id="u1", turn=_make_turn(seq=2))
+
+    loaded = await store.load_latest("s1")
+
+    assert loaded is not None
+    assert loaded.seq == 2
+    assert await store.load_latest("missing") is None
+
+
 class _FakeQuery:
     def __init__(self, trace: list[dict], table: str, op: str, returns: dict[tuple[str, str], list]):
         self._trace = trace
@@ -47,6 +60,10 @@ class _FakeQuery:
 
     def eq(self, col, val):
         self._entry["filters"].append(("eq", col, val))
+        return self
+
+    def order(self, col, *, desc=False):
+        self._entry["order"] = (col, desc)
         return self
 
     def limit(self, n):
@@ -150,3 +167,38 @@ async def test_supabase_store_loads_turn():
         domain_payload={"done": {"seq": 5}},
     )
     assert client.trace[0]["filters"] == [("eq", "session_id", "s1"), ("eq", "seq", 2)]
+
+
+@pytest.mark.asyncio
+async def test_supabase_store_loads_latest_turn():
+    client = _FakeClient(
+        returns={
+            (
+                "agent_turns",
+                "select",
+            ): [
+                {
+                    "seq": 7,
+                    "agent_kind": "router",
+                    "route": "handoff",
+                    "user_message": "assign someone",
+                    "assistant_text": "Confirm details.",
+                    "tool_trace": [],
+                    "router_decision": {"route": "handoff"},
+                    "specialist_seq": None,
+                    "agenda_before": {"segments": []},
+                    "agenda_after": None,
+                    "domain_payload": {"handoff_proposal": {"requires_confirmation": True}},
+                }
+            ],
+        }
+    )
+    store = SupabaseUnifiedAgentTurnStore(client=client)
+
+    loaded = await store.load_latest("s1")
+
+    assert loaded is not None
+    assert loaded.seq == 7
+    assert loaded.domain_payload["handoff_proposal"]["requires_confirmation"] is True
+    assert client.trace[0]["filters"] == [("eq", "session_id", "s1")]
+    assert client.trace[0]["order"] == ("seq", True)

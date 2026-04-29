@@ -46,6 +46,8 @@ class UnifiedAgentTurnStore(Protocol):
 
     async def load_turn(self, session_id: str, seq: int) -> AgentTurnRecord | None: ...
 
+    async def load_latest(self, session_id: str) -> AgentTurnRecord | None: ...
+
 
 class InMemoryUnifiedAgentTurnStore:
     """Process-local store used by tests and local dev without Supabase."""
@@ -71,6 +73,14 @@ class InMemoryUnifiedAgentTurnStore:
             if entry is None:
                 return None
             return entry[1].get(seq)
+
+    async def load_latest(self, session_id: str) -> AgentTurnRecord | None:
+        async with self._lock:
+            entry = self._data.get(session_id)
+            if entry is None:
+                return None
+            tail_seq, turns = entry
+            return turns.get(tail_seq)
 
 
 class SupabaseUnifiedAgentTurnStore:
@@ -125,6 +135,35 @@ class SupabaseUnifiedAgentTurnStore:
                 .select("*")
                 .eq("session_id", session_id)
                 .eq("seq", seq)
+                .limit(1)
+                .execute()
+            )
+            if not res.data:
+                return None
+            row = res.data[0]
+            return AgentTurnRecord(
+                seq=row["seq"],
+                agent_kind=row["agent_kind"],
+                route=row["route"],
+                user_message=row["user_message"],
+                assistant_text=row.get("assistant_text") or "",
+                tool_trace=row.get("tool_trace") or [],
+                router_decision=row.get("router_decision") or {},
+                specialist_seq=row.get("specialist_seq"),
+                agenda_before=row.get("agenda_before"),
+                agenda_after=row.get("agenda_after"),
+                domain_payload=row.get("domain_payload") or {},
+            )
+
+        return await asyncio.to_thread(_fetch)
+
+    async def load_latest(self, session_id: str) -> AgentTurnRecord | None:
+        def _fetch() -> AgentTurnRecord | None:
+            res = (
+                self._client.table(self.TURNS_TABLE)
+                .select("*")
+                .eq("session_id", session_id)
+                .order("seq", desc=True)
                 .limit(1)
                 .execute()
             )

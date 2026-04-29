@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends
@@ -82,6 +83,7 @@ class _UnifiedTurnCollector:
         decision: RouterDecision,
         user_message: str,
         agenda_before: dict | None = None,
+        handoff_context: dict | None = None,
     ) -> None:
         self.seq = seq
         self.decision = decision
@@ -95,6 +97,7 @@ class _UnifiedTurnCollector:
         self.error_data: dict | None = None
         self.agenda_after: dict | None = None
         self.handoff_proposal: dict | None = None
+        self.handoff_context = handoff_context
 
     def observe_chunk(self, chunk: bytes) -> None:
         self._buffer += chunk
@@ -162,6 +165,8 @@ class _UnifiedTurnCollector:
             domain_payload["error"] = self.error_data
         if self.handoff_proposal is not None:
             domain_payload["handoff_proposal"] = self.handoff_proposal
+        if self.handoff_context is not None:
+            domain_payload["handoff_context"] = self.handoff_context
 
         return AgentTurnRecord(
             seq=self.seq,
@@ -188,6 +193,22 @@ async def _save_unified_turn(
         await agent_turn_store.save_turn(session_id, user_id=user_id, turn=collector.to_record())
     except Exception:
         log.exception("failed to persist unified agent turn for session %s", session_id)
+
+
+async def _load_pending_handoff(session_id: str) -> dict | None:
+    try:
+        latest = await agent_turn_store.load_latest(session_id)
+    except Exception:
+        log.exception("failed to load pending handoff for session %s", session_id)
+        return None
+    if latest is None or latest.route not in {RouteKind.HANDOFF, RouteKind.HANDOFF.value}:
+        return None
+    proposal = latest.domain_payload.get("handoff_proposal")
+    if not isinstance(proposal, dict):
+        return None
+    if proposal.get("requires_confirmation") is not True:
+        return None
+    return proposal
 
 
 def _router_terminal_text(decision: RouterDecision, *, language: str) -> str:
@@ -294,6 +315,139 @@ def _build_handoff_proposal(
     }
 
 
+_CONFIRMATION_TERMS = (
+    "confirm",
+    "confirmed",
+    "yes",
+    "do it",
+    "go ahead",
+    "okay",
+    "确认",
+    "好的",
+    "可以",
+    "就这样",
+)
+_ACTION_TERMS = (
+    "assign",
+    "set",
+    "安排",
+    "分配",
+    "设为",
+    "设置",
+)
+_LINK_TERMS = ("as ", "to ", "把")
+_HANDOFF_ROLE_TERMS = (
+    "saa",
+    "timer",
+    "grammarian",
+    "hark master",
+    "tom",
+    "ttm",
+    "tte",
+    "ie",
+    "ge",
+    "prepared speech",
+    "table topic",
+    "evaluator",
+    "主持",
+    "计时",
+    "语法官",
+    "即兴",
+    "备稿",
+    "点评",
+)
+
+
+def _normalize_message(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def _contains_term(text: str, term: str) -> bool:
+    if term.isascii() and term.strip().replace(" ", "").isalpha() and " " not in term.strip():
+        return re.search(rf"\b{re.escape(term)}\b", text) is not None
+    return term in text
+
+
+def _looks_like_handoff_confirmation(text: str) -> bool:
+    normalized = _normalize_message(text)
+    return any(_contains_term(normalized, term) for term in _CONFIRMATION_TERMS + _ACTION_TERMS)
+
+
+def _handoff_confirmation_has_details(text: str) -> bool:
+    normalized = _normalize_message(text)
+    has_role = any(_contains_term(normalized, term) for term in _HANDOFF_ROLE_TERMS)
+    has_confirmation = any(_contains_term(normalized, term) for term in _CONFIRMATION_TERMS)
+    has_action = any(_contains_term(normalized, term) for term in _ACTION_TERMS)
+    has_link = any(term in normalized for term in _LINK_TERMS)
+    has_assignment = has_action or (has_confirmation and has_link)
+    return has_role and has_assignment
+
+
+def _handoff_clarification_text(*, language: str) -> str:
+    if language == "zh":
+        return (
+            "我已经有上一轮的 handoff 候选事实, 但执行当前议程修改前还需要你明确候选人和角色。"
+            "请回复类似: 确认把 Joyce Feng 安排为 Timer。"
+        )
+    return (
+        "I still need the exact candidate and role before applying the handoff. "
+        'Please reply with something like: "Confirm Joyce Feng as Timer."'
+    )
+
+
+def _confirmed_handoff_message(user_message: str, proposal: dict, *, language: str) -> str:
+    proposal_json = json.dumps(proposal, ensure_ascii=False)
+    if language == "zh":
+        return (
+            "[已确认的跨 agent handoff]\n"
+            "用户已经确认要把上一轮统计事实用于当前议程修改。"
+            "你是会议编辑 agent: 只执行用户本轮明确确认的候选人和角色, "
+            "不要根据统计候选事实自行选择未被用户点名的人或角色。\n\n"
+            f"[handoff proposal]\n{proposal_json}\n\n"
+            f"[用户确认]\n{user_message}"
+        )
+    return (
+        "[Confirmed cross-agent handoff]\n"
+        "The user has confirmed that the prior statistics facts should be used for a current-agenda edit. "
+        "You are the meeting editing agent: execute only the candidate and role explicitly confirmed "
+        "in this current user message. Do not choose an unnamed candidate or role from the statistics facts.\n\n"
+        f"[handoff proposal]\n{proposal_json}\n\n"
+        f"[User confirmation]\n{user_message}"
+    )
+
+
+def _classify_handoff_confirmation(req: AgentTurnRequest, proposal: dict, *, language: str) -> RouterDecision | None:
+    if not _looks_like_handoff_confirmation(req.user_message):
+        return None
+    if not _handoff_confirmation_has_details(req.user_message):
+        return RouterDecision(
+            route=RouteKind.CLARIFY,
+            intent="handoff_confirmation_needs_details",
+            reason="A pending handoff exists, but the confirmation does not name both a candidate and target role.",
+            clarification_question=_handoff_clarification_text(language=language),
+            metadata={"pending_handoff": proposal},
+        )
+    if req.agenda_snapshot is None:
+        return RouterDecision(
+            route=RouteKind.CLARIFY,
+            intent="handoff_confirmation_without_agenda_snapshot",
+            reason="A confirmed handoff needs the current agenda snapshot before the meeting agent can apply it.",
+            clarification_question=(
+                "I need the current agenda snapshot before I can apply that confirmed handoff. "
+                "Please retry from a meeting draft page."
+            ),
+            metadata={"pending_handoff": proposal},
+        )
+    return RouterDecision(
+        route=RouteKind.SPECIALIST,
+        agent_kind=AgentKind.MEETING,
+        intent="confirmed_handoff_meeting_mutation",
+        reason="The user confirmed a pending statistics-to-meeting handoff with explicit candidate and role details.",
+        confidence=0.9,
+        metadata={"pending_handoff": proposal},
+    )
+
+
 async def _prepend_router_event(
     *,
     seq: int,
@@ -303,12 +457,14 @@ async def _prepend_router_event(
     user_id: str | None,
     user_message: str,
     agenda_before: dict | None = None,
+    handoff_context: dict | None = None,
 ) -> AsyncIterator[bytes]:
     collector = _UnifiedTurnCollector(
         seq=seq,
         decision=decision,
         user_message=user_message,
         agenda_before=agenda_before,
+        handoff_context=handoff_context,
     )
     saved = False
     router_chunk = _sse("router_decision", _router_decision_payload(seq, decision))
@@ -423,14 +579,17 @@ async def _terminal_stream(
 @r.post("/turn")
 async def unified_agent_turn(req: AgentTurnRequest, user=Depends(get_current_user)):
     user_id = getattr(user, "uid", None)
-    decision = classify_turn(req)
+    language = _detect_user_language(req.user_message)
+    pending_handoff = await _load_pending_handoff(req.session_id)
+    decision = (
+        _classify_handoff_confirmation(req, pending_handoff, language=language) if pending_handoff is not None else None
+    ) or classify_turn(req)
     record = await decision_store.save_decision(
         req.session_id,
         user_id=user_id,
         user_message=req.user_message,
         decision=decision,
     )
-    language = _detect_user_language(req.user_message)
 
     if decision.route == RouteKind.HANDOFF:
         if req.agenda_snapshot is None:
@@ -512,10 +671,17 @@ async def unified_agent_turn(req: AgentTurnRequest, user=Depends(get_current_use
         )
 
     if decision.agent_kind == AgentKind.MEETING and req.agenda_snapshot is not None:
+        confirmed_handoff = decision.metadata.get("pending_handoff")
+        handoff_context = confirmed_handoff if isinstance(confirmed_handoff, dict) else None
+        meeting_user_message = (
+            _confirmed_handoff_message(req.user_message, handoff_context, language=language)
+            if handoff_context is not None
+            else req.user_message
+        )
         specialist_response = await meeting_agent_turn(
             payload=MeetingAgentTurnRequest(
                 session_id=req.session_id,
-                user_message=req.user_message,
+                user_message=meeting_user_message,
                 agenda_snapshot=req.agenda_snapshot,
             ).model_dump_json(),
             image=None,
@@ -530,6 +696,7 @@ async def unified_agent_turn(req: AgentTurnRequest, user=Depends(get_current_use
                 user_id=user_id,
                 user_message=req.user_message,
                 agenda_before=req.agenda_snapshot.model_dump(mode="json"),
+                handoff_context=handoff_context,
             ),
             media_type="text/event-stream",
         )
