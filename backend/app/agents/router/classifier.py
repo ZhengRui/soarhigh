@@ -57,6 +57,8 @@ _HISTORICAL_TERMS = (
     "ytd",
     "last month",
     "this month",
+    "last time",
+    "which meeting",
     "historical",
     "history",
     "去年",

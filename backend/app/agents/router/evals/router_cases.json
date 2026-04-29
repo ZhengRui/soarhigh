@@ -40,6 +40,22 @@
     "expected_intent": "historical_statistics_or_lookup"
   },
   {
+    "id": "route.statistics.lookup.en.which_meeting",
+    "user_message": "Which meetings did Frank host?",
+    "has_agenda": true,
+    "expected_route": "specialist",
+    "expected_agent_kind": "statistics",
+    "expected_intent": "historical_statistics_or_lookup"
+  },
+  {
+    "id": "route.statistics.lookup.en.last_time",
+    "user_message": "When was the last time Joyce did TTE?",
+    "has_agenda": true,
+    "expected_route": "specialist",
+    "expected_agent_kind": "statistics",
+    "expected_intent": "historical_statistics_or_lookup"
+  },
+  {
     "id": "route.statistics.unsupported_self_reference.zh",
     "user_message": "我今年出勤率是多少?",
     "has_agenda": false,
