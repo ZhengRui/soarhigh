@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic_ai import ModelRetry
 
-from app.db.stats import get_meeting_attendance_stats, get_member_meeting_stats
+from app.db.stats import get_meeting_attendance_stats, get_member_award_stats, get_member_meeting_stats
 from app.services import meeting_lookup, meeting_stats
 
 MeetingType = Literal["Regular", "Workshop", "Custom"]
@@ -40,12 +40,25 @@ MatrixRoleKey = Literal[
 MatrixRoleGroup = Literal["evaluation", "speaker", "hosting", "facilitator"]
 MatrixGroupBy = Literal["member", "role", "member_role", "meeting"]
 MatrixSortBy = Literal["count", "name", "date"]
+AwardCategoryKey = Literal[
+    "BestPS",
+    "BestHost",
+    "BestTTS",
+    "BestFacilitator",
+    "BestEvaluator",
+    "BestSupporter",
+    "BestMM",
+]
+AwardGroupBy = Literal["winner", "category", "winner_category", "meeting"]
+AwardSortBy = Literal["count", "name", "date"]
 
 _VALID_TYPE_FILTERS = {"Regular", "Workshop", "Custom"}
 _VALID_ATTENDANCE_SORTS = {"date", "member_count", "guest_count", "total_count"}
 _VALID_SORT_ORDERS = {"asc", "desc"}
 _VALID_MATRIX_GROUPS = {"member", "role", "member_role", "meeting"}
 _VALID_MATRIX_SORTS = {"count", "name", "date"}
+_VALID_AWARD_GROUPS = {"winner", "category", "winner_category", "meeting"}
+_VALID_AWARD_SORTS = {"count", "name", "date"}
 
 _MATRIX_ROLES: dict[str, dict[str, object]] = {
     "SAA": {"label": "SAA", "pattern": "Meeting Rules Introduction (SAA)"},
@@ -81,6 +94,16 @@ _MATRIX_ROLE_GROUPS: dict[str, tuple[str, ...]] = {
     "speaker": ("PreparedSpeech", "WorkshopSpeaker"),
     "hosting": ("TOM", "TTM", "GuestIntroHost", "MoT"),
     "facilitator": ("SAA", "Timer", "Grammarian", "HarkMaster"),
+}
+
+_STANDARD_AWARD_CATEGORIES: dict[str, str] = {
+    "BestPS": "Best Prepared Speaker",
+    "BestHost": "Best Host",
+    "BestTTS": "Best Table Topic Speaker",
+    "BestFacilitator": "Best Facilitator",
+    "BestEvaluator": "Best Evaluator",
+    "BestSupporter": "Best Supporter",
+    "BestMM": "Best Meeting Manager",
 }
 
 _REFERENCE_LIMIT = 20
@@ -161,9 +184,10 @@ def refuse_lookup_if_aggregate_count(ctx) -> None:
     if any(pattern in message for pattern in _COUNT_QUERY_PATTERNS):
         raise ModelRetry(
             "Do not use lookup_meeting for aggregate count questions in the statistics agent. "
-            "If a dashboard-backed tool can answer the count, use that tool with an explicit "
-            "date range when requested. If no stats tool can answer it completely, tell the "
-            "user this aggregate is not supported yet instead of counting bounded lookup cards."
+            "If meeting_attendance_list, member_role_matrix, or member_award_matrix can answer "
+            "the count, use that tool with an explicit date range when requested. If no stats "
+            "tool can answer it completely, tell the user this aggregate is not supported yet "
+            "instead of counting bounded lookup cards."
         )
 
 
@@ -250,6 +274,51 @@ def _role_label(role_key: str) -> str:
 
 def _role_group_mapping() -> dict[str, list[str]]:
     return {group_key: list(role_keys) for group_key, role_keys in _MATRIX_ROLE_GROUPS.items()}
+
+
+def _standard_award_category_mapping() -> dict[str, str]:
+    return dict(_STANDARD_AWARD_CATEGORIES)
+
+
+def _observed_award_categories(rows: list[dict]) -> list[str]:
+    return sorted({row.get("category") or "" for row in rows}, key=lambda c: c.lower())
+
+
+def _resolve_award_category_filters(
+    category_filters: list[str] | None,
+    observed_categories: list[str],
+) -> set[str] | None:
+    if not category_filters:
+        return None
+
+    observed_lower = {category.lower() for category in observed_categories}
+    standard_lower = {category.lower() for category in _STANDARD_AWARD_CATEGORIES.values()}
+
+    resolved: set[str] = set()
+    unknown: list[str] = []
+    for raw_filter in category_filters:
+        value = (raw_filter or "").strip()
+        if not value:
+            continue
+        if value in _STANDARD_AWARD_CATEGORIES:
+            resolved.add(_STANDARD_AWARD_CATEGORIES[value].lower())
+            continue
+        value_lower = value.lower()
+        if value_lower in observed_lower or value_lower in standard_lower:
+            resolved.add(value_lower)
+            continue
+        unknown.append(value)
+
+    if unknown:
+        observed = ", ".join(observed_categories) if observed_categories else "none"
+        standard = ", ".join(f"{key}={label}" for key, label in _STANDARD_AWARD_CATEGORIES.items())
+        raise ModelRetry(
+            "Unknown award category filter(s): "
+            f"{', '.join(unknown)}. Use a standard category key ({standard}) "
+            f"or one of the observed raw categories in this date range: {observed}."
+        )
+
+    return resolved or None
 
 
 def _resolve_member_or_retry(name: str) -> meeting_stats.Member:
@@ -616,6 +685,272 @@ async def apply_member_role_matrix(
         },
         "coverage": _coverage(
             source="dashboard_member_role_matrix",
+            total_matches=len(groups),
+            returned_count=len(capped),
+        ),
+        "scanned_count": len(rows),
+    }
+
+
+def _winner_key(row: dict) -> str:
+    member_id = row.get("member_id")
+    if member_id:
+        return f"member:{member_id}"
+    return f"raw:{row.get('winner_name') or ''}"
+
+
+def _winner_display_name(row: dict) -> str:
+    return row.get("full_name") or row.get("winner_name") or ""
+
+
+def _winner_fields(row: dict) -> dict:
+    return {
+        "winner_key": _winner_key(row),
+        "winner_name": row.get("winner_name"),
+        "winner_resolved": bool(row.get("winner_resolved")),
+        "member_id": row.get("member_id"),
+        "username": row.get("username"),
+        "full_name": row.get("full_name"),
+        "name": _winner_display_name(row),
+    }
+
+
+def _project_award_reference(row: dict) -> dict:
+    return {
+        "award_id": row.get("award_id"),
+        "meeting_id": row["meeting_id"],
+        "no": row.get("meeting_no"),
+        "date": row.get("meeting_date"),
+        "theme": row.get("meeting_theme"),
+        "category": row.get("category"),
+        "winner_name": row.get("winner_name"),
+        "winner_resolved": bool(row.get("winner_resolved")),
+        "member_id": row.get("member_id"),
+        "username": row.get("username"),
+        "full_name": row.get("full_name"),
+    }
+
+
+def _award_references(rows: list[dict], *, limit: int = _REFERENCE_LIMIT) -> list[dict]:
+    sorted_rows = sorted(
+        rows,
+        key=lambda r: (
+            r.get("meeting_date") or "",
+            r.get("meeting_no") or 0,
+            _winner_display_name(r),
+            r.get("category") or "",
+        ),
+        reverse=True,
+    )
+    return [_project_award_reference(row) for row in sorted_rows[:limit]]
+
+
+def _unresolved_winner_summary(rows: list[dict]) -> list[dict]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        if row.get("winner_resolved"):
+            continue
+        winner_name = row.get("winner_name") or ""
+        counts[winner_name] = counts.get(winner_name, 0) + 1
+    return [
+        {"winner_name": winner_name, "count": count}
+        for winner_name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+    ]
+
+
+def _rows_for_member_award_matrix(
+    *,
+    date_from: str | None,
+    date_to: str | None,
+    member: str | None,
+    category_filters: list[str] | None,
+) -> tuple[list[dict], list[str], set[str] | None]:
+    raw_rows = get_member_award_stats(date_from, date_to)
+    observed_categories = _observed_award_categories(raw_rows)
+    resolved_category_filters = _resolve_award_category_filters(category_filters, observed_categories)
+    canonical_member = _resolve_member_or_retry(member) if member else None
+
+    rows: list[dict] = []
+    for row in raw_rows:
+        if canonical_member and row.get("member_id") != canonical_member.id:
+            continue
+        category_lower = (row.get("category") or "").lower()
+        if resolved_category_filters is not None and category_lower not in resolved_category_filters:
+            continue
+        rows.append(row)
+
+    return rows, observed_categories, resolved_category_filters
+
+
+def _build_award_groups(
+    rows: list[dict],
+    *,
+    group_by: str,
+    include_meetings: bool,
+) -> list[dict]:
+    grouped: dict[tuple, list[dict]] = {}
+    for row in rows:
+        key: tuple[object, ...]
+        if group_by == "winner":
+            key = (_winner_key(row),)
+        elif group_by == "category":
+            key = (row.get("category") or "",)
+        elif group_by == "meeting":
+            key = (row["meeting_id"],)
+        else:
+            key = (_winner_key(row), row.get("category") or "")
+        grouped.setdefault(key, []).append(row)
+
+    groups: list[dict] = []
+    for key_rows in grouped.values():
+        first = key_rows[0]
+        meetings = _unique_meetings(key_rows)
+        if group_by == "winner":
+            group = {
+                **_winner_fields(first),
+                "count": len(key_rows),
+                "meeting_count": len(meetings),
+                "categories": {
+                    category: sum(1 for r in key_rows if (r.get("category") or "") == category)
+                    for category in sorted({r.get("category") or "" for r in key_rows}, key=lambda c: c.lower())
+                },
+            }
+        elif group_by == "category":
+            category = first.get("category") or ""
+            group = {
+                "category": category,
+                "name": category,
+                "count": len(key_rows),
+                "winner_count": len({_winner_key(r) for r in key_rows}),
+                "meeting_count": len(meetings),
+            }
+        elif group_by == "meeting":
+            group = {
+                **_project_meeting(first),
+                "count": len(key_rows),
+                "winner_count": len({_winner_key(r) for r in key_rows}),
+                "categories": sorted({r.get("category") or "" for r in key_rows}, key=lambda c: c.lower()),
+                "winners": sorted({_winner_display_name(r) for r in key_rows}, key=lambda n: n.lower()),
+            }
+        else:
+            category = first.get("category") or ""
+            group = {
+                **_winner_fields(first),
+                "category": category,
+                "count": len(key_rows),
+                "meeting_count": len(meetings),
+            }
+        if include_meetings:
+            group["meetings"] = meetings
+        groups.append(group)
+    return groups
+
+
+def _sort_award_groups(
+    groups: list[dict],
+    *,
+    sort_by: str,
+    sort_order: str,
+) -> list[dict]:
+    reverse = sort_order == "desc"
+    if sort_by == "date":
+        groups.sort(
+            key=lambda g: (
+                g.get("date") or "",
+                g.get("no") or 0,
+                g.get("name") or g.get("category") or "",
+            ),
+            reverse=reverse,
+        )
+    elif sort_by == "name":
+        groups.sort(
+            key=lambda g: (
+                g.get("name") or g.get("category") or "",
+                g.get("category") or "",
+            ),
+            reverse=reverse,
+        )
+    elif reverse:
+        groups.sort(
+            key=lambda g: (
+                -(g.get("count") or 0),
+                -(g.get("meeting_count") or 0),
+                g.get("name") or g.get("category") or g.get("date") or "",
+            )
+        )
+    else:
+        groups.sort(
+            key=lambda g: (
+                g.get("count") or 0,
+                g.get("meeting_count") or 0,
+                g.get("name") or g.get("category") or g.get("date") or "",
+            )
+        )
+    return groups
+
+
+async def apply_member_award_matrix(
+    ctx,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    member: str | None = None,
+    category_filters: list[str] | None = None,
+    group_by: str = "winner_category",
+    sort_by: str = "count",
+    sort_order: str = "desc",
+    limit: int = 50,
+    include_meetings: bool = True,
+) -> dict:
+    """Dashboard-style award rows grouped for chat answers."""
+    _require_relative_dates_if_requested(ctx, date_from, date_to)
+    _validate_dates(date_from, date_to)
+    _validate_limit(limit)
+    if group_by not in _VALID_AWARD_GROUPS:
+        raise ModelRetry(f"group_by must be one of: {', '.join(sorted(_VALID_AWARD_GROUPS))}. " f"Got: {group_by!r}.")
+    if sort_by not in _VALID_AWARD_SORTS:
+        raise ModelRetry(f"sort_by must be one of: {', '.join(sorted(_VALID_AWARD_SORTS))}. " f"Got: {sort_by!r}.")
+    if sort_order not in _VALID_SORT_ORDERS:
+        raise ModelRetry("sort_order must be 'asc' or 'desc'.")
+
+    rows, observed_categories, resolved_category_filters = await asyncio.to_thread(
+        _rows_for_member_award_matrix,
+        date_from=date_from,
+        date_to=date_to,
+        member=member,
+        category_filters=category_filters,
+    )
+    groups = _build_award_groups(rows, group_by=group_by, include_meetings=include_meetings)
+    groups = _sort_award_groups(groups, sort_by=sort_by, sort_order=sort_order)
+    capped = groups[:limit]
+
+    return {
+        "value": {
+            "groups": capped,
+            "total_rows": len(rows),
+            "total_groups": len(groups),
+            "limit": limit,
+            "references": _award_references(rows),
+            "reference_total": len(rows),
+            "reference_limit": _REFERENCE_LIMIT,
+            "unresolved_winners": _unresolved_winner_summary(rows),
+            "standard_category_mapping": _standard_award_category_mapping(),
+            "observed_categories": observed_categories,
+        },
+        "scope": {
+            "date_from": date_from,
+            "date_to": date_to,
+            "member": member,
+            "category_filters": category_filters,
+            "resolved_category_filters": (
+                sorted(resolved_category_filters) if resolved_category_filters is not None else None
+            ),
+            "group_by": group_by,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+            "include_meetings": include_meetings,
+        },
+        "coverage": _coverage(
+            source="dashboard_member_award_matrix",
             total_matches=len(groups),
             returned_count=len(capped),
         ),

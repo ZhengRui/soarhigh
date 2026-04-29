@@ -512,6 +512,279 @@ async def test_member_role_matrix_rejects_role_filter_and_group_together():
 
 
 @pytest.mark.asyncio
+async def test_member_award_matrix_groups_resolved_and_unresolved_winners():
+    ctx = FakeCtx(deps=_deps())
+    award_rows = [
+        {
+            "award_id": "a1",
+            "member_id": "mem-frank",
+            "username": "frank",
+            "full_name": "Frank Zeng",
+            "winner_resolved": True,
+            "winner_name": "Frank Zeng",
+            "meeting_id": "m1",
+            "meeting_date": "2026-01-07",
+            "meeting_theme": "A",
+            "meeting_no": 451,
+            "category": "Best Evaluator",
+        },
+        {
+            "award_id": "a2",
+            "member_id": "mem-frank",
+            "username": "frank",
+            "full_name": "Frank Zeng",
+            "winner_resolved": True,
+            "winner_name": "Frank",
+            "meeting_id": "m2",
+            "meeting_date": "2026-01-14",
+            "meeting_theme": "B",
+            "meeting_no": 452,
+            "category": "Best Evaluator",
+        },
+        {
+            "award_id": "a3",
+            "member_id": None,
+            "username": None,
+            "full_name": None,
+            "winner_resolved": False,
+            "winner_name": "Guest A",
+            "meeting_id": "m3",
+            "meeting_date": "2026-01-21",
+            "meeting_theme": "C",
+            "meeting_no": 453,
+            "category": "Best Joke",
+        },
+    ]
+
+    with patch("app.statistics_agent.tools.get_member_award_stats", return_value=award_rows):
+        out = await stats_tools.apply_member_award_matrix(
+            ctx,
+            date_from="2026-01-01",
+            date_to="2026-12-31",
+            group_by="winner_category",
+            include_meetings=False,
+        )
+
+    assert out["coverage"]["source"] == "dashboard_member_award_matrix"
+    assert out["value"]["total_rows"] == 3
+    assert out["value"]["unresolved_winners"] == [{"winner_name": "Guest A", "count": 1}]
+    assert out["value"]["groups"] == [
+        {
+            "winner_key": "member:mem-frank",
+            "winner_name": "Frank Zeng",
+            "winner_resolved": True,
+            "member_id": "mem-frank",
+            "username": "frank",
+            "full_name": "Frank Zeng",
+            "name": "Frank Zeng",
+            "category": "Best Evaluator",
+            "count": 2,
+            "meeting_count": 2,
+        },
+        {
+            "winner_key": "raw:Guest A",
+            "winner_name": "Guest A",
+            "winner_resolved": False,
+            "member_id": None,
+            "username": None,
+            "full_name": None,
+            "name": "Guest A",
+            "category": "Best Joke",
+            "count": 1,
+            "meeting_count": 1,
+        },
+    ]
+    assert out["value"]["references"][0]["award_id"] == "a3"
+    assert out["value"]["reference_total"] == 3
+    assert out["value"]["observed_categories"] == ["Best Evaluator", "Best Joke"]
+
+
+@pytest.mark.asyncio
+async def test_member_award_matrix_category_filters_accept_standard_keys_and_raw_custom_text():
+    ctx = FakeCtx(deps=_deps())
+    award_rows = [
+        {
+            "award_id": "a1",
+            "member_id": "mem-joyce",
+            "username": "joyce",
+            "full_name": "Joyce Feng",
+            "winner_resolved": True,
+            "winner_name": "Joyce Feng",
+            "meeting_id": "m1",
+            "meeting_date": "2026-01-07",
+            "meeting_theme": "A",
+            "meeting_no": 451,
+            "category": "Best Prepared Speaker",
+        },
+        {
+            "award_id": "a2",
+            "member_id": None,
+            "username": None,
+            "full_name": None,
+            "winner_resolved": False,
+            "winner_name": "Guest A",
+            "meeting_id": "m2",
+            "meeting_date": "2026-01-14",
+            "meeting_theme": "B",
+            "meeting_no": 452,
+            "category": "Best Joke",
+        },
+        {
+            "award_id": "a3",
+            "member_id": None,
+            "username": None,
+            "full_name": None,
+            "winner_resolved": False,
+            "winner_name": "Guest B",
+            "meeting_id": "m3",
+            "meeting_date": "2026-01-21",
+            "meeting_theme": "C",
+            "meeting_no": 453,
+            "category": "Custom",
+        },
+    ]
+
+    with patch("app.statistics_agent.tools.get_member_award_stats", return_value=award_rows):
+        out = await stats_tools.apply_member_award_matrix(
+            ctx,
+            category_filters=["BestPS", "Best Joke"],
+            group_by="category",
+            include_meetings=False,
+        )
+        custom = await stats_tools.apply_member_award_matrix(
+            ctx,
+            category_filters=["Custom"],
+            group_by="category",
+            include_meetings=False,
+        )
+
+    assert out["scope"]["resolved_category_filters"] == ["best joke", "best prepared speaker"]
+    assert [group["category"] for group in out["value"]["groups"]] == [
+        "Best Joke",
+        "Best Prepared Speaker",
+    ]
+    assert custom["value"]["groups"] == [
+        {
+            "category": "Custom",
+            "name": "Custom",
+            "count": 1,
+            "winner_count": 1,
+            "meeting_count": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_member_award_matrix_member_filter_uses_canonical_resolver():
+    ctx = FakeCtx(deps=_deps())
+    award_rows = [
+        {
+            "award_id": "a1",
+            "member_id": "mem-frank",
+            "username": "frank",
+            "full_name": "Frank Zeng",
+            "winner_resolved": True,
+            "winner_name": "Frank",
+            "meeting_id": "m1",
+            "meeting_date": "2026-01-07",
+            "meeting_theme": "A",
+            "meeting_no": 451,
+            "category": "Best Evaluator",
+        },
+        {
+            "award_id": "a2",
+            "member_id": None,
+            "username": None,
+            "full_name": None,
+            "winner_resolved": False,
+            "winner_name": "Frank",
+            "meeting_id": "m2",
+            "meeting_date": "2026-01-14",
+            "meeting_theme": "B",
+            "meeting_no": 452,
+            "category": "Best Joke",
+        },
+    ]
+
+    with (
+        patch("app.statistics_agent.tools.get_member_award_stats", return_value=award_rows),
+        patch(
+            "app.services.meeting_stats.resolve_member",
+            return_value=type(
+                "Member",
+                (),
+                {"id": "mem-frank", "full_name": "Frank Zeng", "username": "frank"},
+            )(),
+        ),
+    ):
+        out = await stats_tools.apply_member_award_matrix(
+            ctx,
+            member="Frank",
+            group_by="winner",
+            include_meetings=False,
+        )
+
+    assert out["value"]["total_rows"] == 1
+    assert out["value"]["groups"][0]["winner_key"] == "member:mem-frank"
+    assert out["value"]["unresolved_winners"] == []
+
+
+@pytest.mark.asyncio
+async def test_member_award_matrix_retries_for_unknown_custom_category():
+    ctx = FakeCtx(deps=_deps())
+    award_rows = [
+        {
+            "award_id": "a1",
+            "member_id": None,
+            "username": None,
+            "full_name": None,
+            "winner_resolved": False,
+            "winner_name": "Guest A",
+            "meeting_id": "m1",
+            "meeting_date": "2026-01-07",
+            "meeting_theme": "A",
+            "meeting_no": 451,
+            "category": "Best Joke",
+        }
+    ]
+
+    with patch("app.statistics_agent.tools.get_member_award_stats", return_value=award_rows):
+        with pytest.raises(ModelRetry, match="Best Joke"):
+            await stats_tools.apply_member_award_matrix(
+                ctx,
+                category_filters=["Best Pun"],
+            )
+
+
+@pytest.mark.asyncio
+async def test_member_award_matrix_standard_category_with_no_rows_returns_zero():
+    ctx = FakeCtx(deps=_deps())
+
+    with patch("app.statistics_agent.tools.get_member_award_stats", return_value=[]):
+        out = await stats_tools.apply_member_award_matrix(
+            ctx,
+            category_filters=["BestPS"],
+            group_by="winner",
+        )
+
+    assert out["value"]["total_rows"] == 0
+    assert out["value"]["groups"] == []
+    assert out["scope"]["resolved_category_filters"] == ["best prepared speaker"]
+
+
+@pytest.mark.asyncio
+async def test_member_award_matrix_retries_when_relative_date_scope_missing():
+    ctx = FakeCtx(deps=_deps(message="今年谁拿 Best Evaluator 最多?", today="2026-04-28"))
+
+    with pytest.raises(ModelRetry, match='date_from="2026-01-01"'):
+        await stats_tools.apply_member_award_matrix(
+            ctx,
+            category_filters=["BestEvaluator"],
+            group_by="winner",
+        )
+
+
+@pytest.mark.asyncio
 async def test_stats_deps_pool_cache_field_default_is_none():
     """Stats deps owns the same per-turn lookup cache as the meeting
     agent, so parallel lookup fan-out shares one recent-meetings fetch."""
@@ -600,4 +873,5 @@ async def test_stats_agent_only_registers_lookup_and_preview_tools():
         "preview_meeting",
         "meeting_attendance_list",
         "member_role_matrix",
+        "member_award_matrix",
     }

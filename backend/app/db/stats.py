@@ -18,6 +18,7 @@ from .supabase import supabase
 
 __all__ = [
     "get_meeting_attendance_stats",
+    "get_member_award_stats",
     "get_member_meeting_stats",
 ]
 
@@ -107,6 +108,109 @@ def get_member_meeting_stats(start_date: str | None, end_date: str | None) -> Li
                 "meeting_theme": meeting["theme"],
                 "meeting_no": meeting["no"],
                 "role": segment["type"],
+            }
+        )
+
+    return result
+
+
+def _resolve_member_from_rows(name: str, members: list[dict]) -> dict | None:
+    """Resolve a raw name against preloaded member rows.
+
+    Mirrors `meeting_stats.resolve_member` resolution order, but avoids
+    fetching the whole members table once per award row. Ambiguous and missing
+    names both return None because award rows must remain in the result as raw
+    winners when canonical member identity is not safe.
+    """
+    needle = (name or "").strip()
+    if not needle:
+        return None
+
+    needle_lower = needle.lower()
+
+    exact_full = [m for m in members if ((m.get("full_name") or "").strip().lower() == needle_lower)]
+    if len(exact_full) == 1:
+        return exact_full[0]
+    if len(exact_full) > 1:
+        return None
+
+    exact_user = [m for m in members if ((m.get("username") or "").strip().lower() == needle_lower)]
+    if len(exact_user) == 1:
+        return exact_user[0]
+    if len(exact_user) > 1:
+        return None
+
+    substring = [
+        m
+        for m in members
+        if needle_lower in (m.get("full_name") or "").strip().lower()
+        or needle_lower in (m.get("username") or "").strip().lower()
+    ]
+    if len(substring) == 1:
+        return substring[0]
+    return None
+
+
+def get_member_award_stats(start_date: str | None, end_date: str | None) -> List[Dict[str, Any]]:
+    """
+    Get raw data for award statistics.
+
+    Returns one row per award for published meetings in the date range.
+    Winners are stored as free-form text in `awards.winner`; when the name can
+    be resolved to exactly one member, canonical member fields are included.
+    Ambiguous or missing names are kept as unresolved raw winners instead of
+    being dropped.
+
+    Args:
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+
+    Returns:
+        List of dicts with award_id, meeting_id, meeting_date, meeting_theme,
+        meeting_no, category, winner_name, member_id, username, full_name,
+        winner_resolved
+    """
+    meetings = meeting_stats.load_meetings_in_range(start_date, end_date)
+    if not meetings:
+        return []
+
+    meeting_ids = [m["id"] for m in meetings]
+    meeting_map = {m["id"]: m for m in meetings}
+
+    def _fetch_awards(chunk: list[str]) -> list[dict]:
+        return meeting_stats._execute_all_pages(
+            lambda: supabase.table("awards").select("id, meeting_id, category, winner").in_("meeting_id", chunk)
+        )
+
+    awards = meeting_stats._batch_in(_fetch_awards, meeting_ids)
+    if not awards:
+        return []
+
+    members = meeting_stats._execute_all_pages(lambda: supabase.table("members").select("id, username, full_name"))
+
+    result: List[Dict[str, Any]] = []
+    for award in awards:
+        meeting = meeting_map.get(award.get("meeting_id"))
+        if not meeting:
+            continue
+
+        winner_name = award.get("winner") or ""
+        member = _resolve_member_from_rows(winner_name, members)
+        winner_resolved = member is not None
+
+        result.append(
+            {
+                "award_id": award.get("id"),
+                "meeting_id": meeting["id"],
+                "meeting_date": meeting["date"],
+                "meeting_theme": meeting["theme"],
+                "meeting_no": meeting["no"],
+                "category": award.get("category") or "",
+                "winner_name": winner_name,
+                "member_id": member.get("id") if member else None,
+                "username": member.get("username") if member else None,
+                "full_name": member.get("full_name") if member else None,
+                "winner_resolved": winner_resolved,
             }
         )
 

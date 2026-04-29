@@ -29,6 +29,7 @@ function formatToolArgs(args: Record<string, unknown>): string {
       let val: string;
       if (typeof v === 'string') val = JSON.stringify(v);
       else if (v === null || v === undefined) val = 'null';
+      else if (Array.isArray(v)) val = JSON.stringify(v);
       else val = String(v);
       return `${k}=${val}`;
     })

@@ -140,6 +140,41 @@ async def member_role_matrix(
     )
 
 
+@agent.tool
+async def member_award_matrix(
+    ctx: RunContext[StatsDeps],
+    date_from: str | None = None,
+    date_to: str | None = None,
+    member: str | None = None,
+    category_filters: list[str] | None = None,
+    group_by: Literal["winner", "category", "winner_category", "meeting"] = "winner_category",
+    sort_by: Literal["count", "name", "date"] = "count",
+    sort_order: Literal["asc", "desc"] = "desc",
+    limit: int = 50,
+    include_meetings: bool = True,
+) -> dict:
+    """Dashboard-style member/winner award matrix.
+
+    Use for questions about who won which awards, counts by award winner,
+    counts by category, or awards given by meeting. Award winners are stored
+    as raw names; unresolved guests or ambiguous names are included as raw
+    winner groups. category_filters accepts standard category keys like BestPS
+    and raw custom category text like "Best Joke" or "Custom".
+    """
+    return await _tools.apply_member_award_matrix(
+        ctx,
+        date_from=date_from,
+        date_to=date_to,
+        member=member,
+        category_filters=category_filters,
+        group_by=group_by,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=limit,
+        include_meetings=include_meetings,
+    )
+
+
 # ---------- Shared lookup tools (read-only; same as meeting agent) ----------
 #
 # Both agents thin-wrap the same `apply_*` helpers in
