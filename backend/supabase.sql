@@ -621,7 +621,6 @@ CREATE TABLE agent_turns (
     assistant_text   TEXT,
     tool_trace       JSONB NOT NULL DEFAULT '[]'::jsonb,
     router_decision  JSONB NOT NULL,
-    specialist_seq   INT,
     agenda_before    JSONB,
     agenda_after     JSONB,
     history_cursor   JSONB,           -- ModelMessage[] at end of this turn (NULL for router-only)

@@ -151,9 +151,44 @@ def _stub_classifier(monkeypatch):
     """
     from app.agents.runtime.contracts import AgentKind, HandoffPayload, RouteKind, RouterDecision
 
-    async def fake(req, *, message_history=None):
+    _CANDIDATE_NAMES = ("joyce feng", "leta li", "liz huang", "frank")
+    _CANCEL_TERMS = ("算了", "取消", "cancel", "skip it", "no thanks")
+
+    async def fake(req, *, message_history=None, pending_handoff=None):
         msg = (req.user_message or "").lower()
         has_agenda = req.agenda_snapshot is not None
+
+        if pending_handoff is not None:
+            if any(term in msg for term in _CANCEL_TERMS):
+                return RouterDecision(
+                    route=RouteKind.DIRECT_ANSWER,
+                    intent="router_direct_answer",
+                    reason="stub: handoff cancelled",
+                    direct_response="OK, cancelled.",
+                )
+            if any(name in msg for name in _CANDIDATE_NAMES) or "confirm" in msg:
+                if not has_agenda:
+                    return RouterDecision(
+                        route=RouteKind.CLARIFY,
+                        intent="handoff_confirmation_without_agenda_snapshot",
+                        reason="stub: confirmed handoff without agenda",
+                        clarification_question="Need the current agenda snapshot before applying the handoff.",
+                        metadata={"pending_handoff": pending_handoff},
+                    )
+                return RouterDecision(
+                    route=RouteKind.SPECIALIST,
+                    agent_kind=AgentKind.MEETING,
+                    intent="confirmed_handoff_meeting_mutation",
+                    reason="stub: confirmed handoff",
+                    metadata={"pending_handoff": pending_handoff},
+                )
+            return RouterDecision(
+                route=RouteKind.CLARIFY,
+                intent="handoff_confirmation_needs_details",
+                reason="stub: vague handoff confirmation",
+                clarification_question="Please name the candidate (and role if not obvious).",
+                metadata={"pending_handoff": pending_handoff},
+            )
 
         if "find someone" in msg or "找一个" in msg:
             return RouterDecision(
@@ -445,7 +480,6 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     assert unified_turn is not None
     assert unified_turn.agent_kind == "router"
     assert unified_turn.route == "clarify"
-    assert unified_turn.specialist_seq is None
 
 
 @pytest.mark.asyncio

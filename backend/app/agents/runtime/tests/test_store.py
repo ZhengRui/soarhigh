@@ -17,7 +17,6 @@ def _make_turn(seq: int = 1) -> AgentTurnRecord:
         assistant_text="Liz won twice.",
         tool_trace=[{"id": "t1", "name": "member_award_matrix", "status": "ok"}],
         router_decision={"route": "specialist", "agent_kind": "statistics"},
-        specialist_seq=3,
         domain_payload={"done": {"seq": 3, "final_text": "Liz won twice."}},
     )
 
@@ -152,7 +151,6 @@ async def test_supabase_store_upserts_session_then_inserts_turn():
     assert turn_payload["seq"] == 4
     assert turn_payload["agent_kind"] == "statistics"
     assert turn_payload["route"] == "specialist"
-    assert turn_payload["specialist_seq"] == 3
     assert turn_payload["router_decision"] == {"route": "specialist", "agent_kind": "statistics"}
     assert turn_payload["domain_payload"] == {"done": {"seq": 3, "final_text": "Liz won twice."}}
 
@@ -173,7 +171,6 @@ async def test_supabase_store_loads_turn():
                     "assistant_text": "Done.",
                     "tool_trace": [{"id": "t1"}],
                     "router_decision": {"route": "specialist", "agent_kind": "meeting"},
-                    "specialist_seq": 5,
                     "agenda_before": {"segments": []},
                     "agenda_after": {"segments": [{"id": "s1"}]},
                     "domain_payload": {"done": {"seq": 5}},
@@ -193,7 +190,6 @@ async def test_supabase_store_loads_turn():
         assistant_text="Done.",
         tool_trace=[{"id": "t1"}],
         router_decision={"route": "specialist", "agent_kind": "meeting"},
-        specialist_seq=5,
         agenda_before={"segments": []},
         agenda_after={"segments": [{"id": "s1"}]},
         domain_payload={"done": {"seq": 5}},
@@ -217,7 +213,6 @@ async def test_supabase_store_loads_latest_turn():
                     "assistant_text": "Confirm details.",
                     "tool_trace": [],
                     "router_decision": {"route": "handoff"},
-                    "specialist_seq": None,
                     "agenda_before": {"segments": []},
                     "agenda_after": None,
                     "domain_payload": {"handoff_proposal": {"requires_confirmation": True}},

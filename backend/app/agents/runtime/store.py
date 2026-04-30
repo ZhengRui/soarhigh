@@ -32,7 +32,6 @@ class AgentTurnRecord:
     assistant_text: str = ""
     tool_trace: list[dict] = field(default_factory=list)
     router_decision: dict = field(default_factory=dict)
-    specialist_seq: int | None = None
     agenda_before: dict | None = None
     agenda_after: dict | None = None
     history_cursor: list[dict] = field(default_factory=list)
@@ -48,7 +47,6 @@ def _row_to_record(row: dict) -> AgentTurnRecord:
         assistant_text=row.get("assistant_text") or "",
         tool_trace=row.get("tool_trace") or [],
         router_decision=row.get("router_decision") or {},
-        specialist_seq=row.get("specialist_seq"),
         agenda_before=row.get("agenda_before"),
         agenda_after=row.get("agenda_after"),
         history_cursor=row.get("history_cursor") or [],
@@ -193,7 +191,6 @@ class SupabaseUnifiedAgentTurnStore:
                     "assistant_text": turn.assistant_text,
                     "tool_trace": turn.tool_trace,
                     "router_decision": turn.router_decision,
-                    "specialist_seq": turn.specialist_seq,
                     "agenda_before": turn.agenda_before,
                     "agenda_after": turn.agenda_after,
                     "history_cursor": turn.history_cursor,
