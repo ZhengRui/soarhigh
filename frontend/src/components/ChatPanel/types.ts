@@ -32,7 +32,6 @@ export type RouterAgentKind = 'router' | 'meeting' | 'statistics';
 export type RouterRouteKind =
   | 'specialist'
   | 'clarify'
-  | 'handoff'
   | 'refuse'
   | 'direct_answer';
 
@@ -44,27 +43,7 @@ export type RouterDecision = {
   confidence?: number | null;
   clarification_question?: string | null;
   direct_response?: string | null;
-  handoff?: Record<string, unknown> | null;
   metadata?: Record<string, unknown>;
-};
-
-export type HandoffProposal = {
-  source_agent: RouterAgentKind;
-  target_agent: RouterAgentKind;
-  intent: string;
-  requires_confirmation: boolean;
-  facts?: Array<Record<string, unknown>>;
-  references?: Array<Record<string, unknown>>;
-  constraints?: Record<string, unknown>;
-  statistics?: {
-    seq?: number | null;
-    final_text?: string;
-    tool_call_count?: number;
-  };
-  confirmation?: {
-    required: boolean;
-    next_step: string;
-  };
 };
 
 export type ChatMessage = {
@@ -90,7 +69,6 @@ export type ChatMessage = {
   // Unified /agent/turn only: router decision emitted before specialist
   // events. Kept on the assistant bubble for lightweight route visibility.
   routerDecision?: RouterDecision;
-  handoffProposal?: HandoffProposal;
   // Meeting turns can be reverted. Stats/router-only turns also carry seq
   // values, but those belong to other stores and must not show the revert UI.
   canRevert?: boolean;
@@ -98,7 +76,6 @@ export type ChatMessage = {
 
 export type AgentTurnEvent =
   | { type: 'router_decision'; data: { seq: number; decision: RouterDecision } }
-  | { type: 'handoff_proposal'; data: HandoffProposal }
   | { type: 'thinking'; data: { chunk: string } }
   | { type: 'assistant_text'; data: { chunk: string } }
   | {
@@ -121,7 +98,6 @@ export type AgentTurnEvent =
         final_agenda?: AgendaSnapshot;
         final_text: string;
         router_only?: boolean;
-        handoff_requires_confirmation?: boolean;
       };
     }
   | {

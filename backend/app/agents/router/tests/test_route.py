@@ -149,59 +149,24 @@ def _stub_classifier(monkeypatch):
     given a known classifier output, so we map message keywords to
     fixed RouterDecisions instead of calling Pydantic AI.
     """
-    from app.agents.runtime.contracts import AgentKind, HandoffPayload, RouteKind, RouterDecision
+    from app.agents.runtime.contracts import AgentKind, RouteKind, RouterDecision
 
     _CANDIDATE_NAMES = ("joyce feng", "leta li", "liz huang", "frank")
-    _CANCEL_TERMS = ("算了", "取消", "cancel", "skip it", "no thanks")
 
-    async def fake(req, *, message_history=None, pending_handoff=None):
+    async def fake(req, *, message_history=None):
         msg = (req.user_message or "").lower()
         has_agenda = req.agenda_snapshot is not None
 
-        if pending_handoff is not None:
-            if any(term in msg for term in _CANCEL_TERMS):
-                return RouterDecision(
-                    route=RouteKind.DIRECT_ANSWER,
-                    intent="router_direct_answer",
-                    reason="stub: handoff cancelled",
-                    direct_response="OK, cancelled.",
-                )
-            if any(name in msg for name in _CANDIDATE_NAMES) or "confirm" in msg:
-                if not has_agenda:
-                    return RouterDecision(
-                        route=RouteKind.CLARIFY,
-                        intent="handoff_confirmation_without_agenda_snapshot",
-                        reason="stub: confirmed handoff without agenda",
-                        clarification_question="Need the current agenda snapshot before applying the handoff.",
-                        metadata={"pending_handoff": pending_handoff},
-                    )
-                return RouterDecision(
-                    route=RouteKind.SPECIALIST,
-                    agent_kind=AgentKind.MEETING,
-                    intent="confirmed_handoff_meeting_mutation",
-                    reason="stub: confirmed handoff",
-                    metadata={"pending_handoff": pending_handoff},
-                )
-            return RouterDecision(
-                route=RouteKind.CLARIFY,
-                intent="handoff_confirmation_needs_details",
-                reason="stub: vague handoff confirmation",
-                clarification_question="Please name the candidate (and role if not obvious).",
-                metadata={"pending_handoff": pending_handoff},
-            )
-
+        # Stats lookups, including "find someone for X" patterns whose
+        # ultimate goal is a follow-up assignment. The stats agent
+        # surfaces candidates; the next turn (user picks) routes to
+        # meeting via the candidate-name branch below.
         if "find someone" in msg or "找一个" in msg:
             return RouterDecision(
-                route=RouteKind.HANDOFF,
-                intent="statistics_to_meeting_handoff",
-                reason="stub: cross-domain handoff",
-                handoff=HandoffPayload(
-                    source_agent=AgentKind.STATISTICS,
-                    target_agent=AgentKind.MEETING,
-                    intent="assign_role_from_stats",
-                    constraints={"user_message": req.user_message or ""},
-                    requires_confirmation=True,
-                ),
+                route=RouteKind.SPECIALIST,
+                agent_kind=AgentKind.STATISTICS,
+                intent="historical_statistics_or_lookup",
+                reason="stub: find-and-assign → stats first",
             )
 
         if any(keyword in msg for keyword in ("拿奖", "best evaluator", "tte the most", "attendance", "出勤")):
@@ -210,6 +175,24 @@ def _stub_classifier(monkeypatch):
                 agent_kind=AgentKind.STATISTICS,
                 intent="historical_statistics_or_lookup",
                 reason="stub: historical lookup",
+            )
+
+        # User picks a candidate after stats listed them: route to
+        # meeting. This is the "natural cross-agent flow" — meeting
+        # reads prior stats reply from session history.
+        if any(name in msg for name in _CANDIDATE_NAMES) or "confirm" in msg:
+            if not has_agenda:
+                return RouterDecision(
+                    route=RouteKind.CLARIFY,
+                    intent="meeting_edit_without_agenda_snapshot",
+                    reason="stub: pick without agenda",
+                    clarification_question="I need the current agenda snapshot before I can edit the meeting.",
+                )
+            return RouterDecision(
+                route=RouteKind.SPECIALIST,
+                agent_kind=AgentKind.MEETING,
+                intent="current_meeting_draft",
+                reason="stub: pick after stats → meeting",
             )
 
         if "set " in msg or "把 timer 改成" in msg:
@@ -310,73 +293,40 @@ def test_unified_route_emits_router_decision_then_dispatches_to_meeting(
     assert unified_turn.tool_trace[0]["name"] == "set_role"
 
 
-def test_unified_route_handoff_runs_statistics_then_emits_proposal(
+def test_unified_route_find_then_assign_routes_stats_then_meeting(
     client,
     mock_auth_dep,
     _force_in_memory_stores,
 ):
-    stores = _force_in_memory_stores
-    test_model = TestModel(call_tools=[])
-
-    with stats_agent_module.agent.override(model=test_model):
-        with client.stream(
-            "POST",
-            "/agent/turn",
-            **_turn_kwargs(
-                {
-                    "session_id": "u-handoff",
-                    "user_message": "Find someone who has not done TTE recently and assign them to TTE",
-                    "agenda_snapshot": _agenda(),
-                }
-            ),
-        ) as r:
-            assert r.status_code == 200
-            events = _parse_sse(r.iter_bytes())
-
-    assert events[0]["event"] == "router_decision"
-    assert events[0]["data"]["decision"]["route"] == "handoff"
-    assert "handoff_proposal" in [event["event"] for event in events]
-    assert [event["event"] for event in events].count("done") == 1
-    proposal = next(event for event in events if event["event"] == "handoff_proposal")
-    assert proposal["data"]["source_agent"] == "statistics"
-    assert proposal["data"]["target_agent"] == "meeting"
-    assert proposal["data"]["requires_confirmation"] is True
-    assert events[-1]["event"] == "done"
-    assert events[-1]["data"]["router_only"] is True
-    assert events[-1]["data"]["handoff_requires_confirmation"] is True
-
-    unified_turn = asyncio.run(stores["unified"].load_turn("u-handoff", 1))
-    assert unified_turn is not None
-    assert unified_turn.route == "handoff"
-    assert unified_turn.agent_kind == "router"
-    assert unified_turn.agenda_before is not None
-    assert unified_turn.domain_payload["handoff_proposal"]["requires_confirmation"] is True
-
-
-def test_unified_route_confirmed_handoff_dispatches_to_meeting(
-    client,
-    mock_auth_dep,
-    _force_in_memory_stores,
-):
+    """Natural cross-agent flow (formerly the 'handoff'): turn 1 routes
+    a 'find someone for X and assign' request to stats, turn 2 routes
+    the user's pick to meeting. Both turns load the same session_id
+    history, so the meeting agent on turn 2 sees the stats agent's
+    prior tool calls + reply naturally — no handoff machinery."""
     stores = _force_in_memory_stores
 
+    # Turn 1: stats specialist gathers candidates.
     with stats_agent_module.agent.override(model=TestModel(call_tools=[])):
         with client.stream(
             "POST",
             "/agent/turn",
             **_turn_kwargs(
                 {
-                    "session_id": "u-handoff-confirm",
-                    "user_message": "Find someone who has not done TTE recently and assign them to Timer",
+                    "session_id": "u-find-assign",
+                    "user_message": "Find someone who has not done TTE recently and assign them to TTE",
                     "agenda_snapshot": _agenda(),
                 }
             ),
         ) as r:
             assert r.status_code == 200
-            first_events = _parse_sse(r.iter_bytes())
+            events_1 = _parse_sse(r.iter_bytes())
 
-    assert "handoff_proposal" in [event["event"] for event in first_events]
+    assert events_1[0]["data"]["decision"]["route"] == "specialist"
+    assert events_1[0]["data"]["decision"]["agent_kind"] == "statistics"
+    assert "handoff_proposal" not in [e["event"] for e in events_1]
 
+    # Turn 2: user picks a candidate, routes to meeting which loads
+    # the stats turn's history naturally.
     meeting_model = ForcedArgsTestModel(
         call_tools=["set_role"],
         forced_args={"set_role": {"segment_id": "s1", "role_taker": "Joyce Feng"}},
@@ -387,36 +337,36 @@ def test_unified_route_confirmed_handoff_dispatches_to_meeting(
             "/agent/turn",
             **_turn_kwargs(
                 {
-                    "session_id": "u-handoff-confirm",
-                    "user_message": "Confirm Joyce Feng as Timer",
+                    "session_id": "u-find-assign",
+                    "user_message": "Confirm Joyce Feng",
                     "agenda_snapshot": _agenda(),
                 }
             ),
         ) as r:
             assert r.status_code == 200
-            events = _parse_sse(r.iter_bytes())
+            events_2 = _parse_sse(r.iter_bytes())
 
-    assert events[0]["event"] == "router_decision"
-    assert events[0]["data"]["decision"]["agent_kind"] == "meeting"
-    assert events[0]["data"]["decision"]["intent"] == "confirmed_handoff_meeting_mutation"
-    tool_end = next(event for event in events if event["event"] == "tool_call_end")
+    assert events_2[0]["data"]["decision"]["agent_kind"] == "meeting"
+    assert events_2[0]["data"]["decision"]["intent"] == "current_meeting_draft"
+    tool_end = next(event for event in events_2 if event["event"] == "tool_call_end")
     assert tool_end["data"]["result"] == {"segment_id": "s1", "role_taker": "Joyce Feng"}
-    assert events[-1]["event"] == "done"
-    assert "final_agenda" in events[-1]["data"]
+    assert "final_agenda" in events_2[-1]["data"]
 
-    unified_turn = asyncio.run(stores["unified"].load_turn("u-handoff-confirm", 2))
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-find-assign", 2))
     assert unified_turn is not None
     assert unified_turn.agent_kind == "meeting"
     assert unified_turn.route == "specialist"
-    # The audit trail for a confirmed handoff lives in router_decision.metadata.
-    assert unified_turn.router_decision["metadata"]["pending_handoff"]["requires_confirmation"] is True
 
 
-def test_unified_route_vague_handoff_confirmation_clarifies(
+def test_unified_route_find_someone_without_agenda_still_routes_to_stats(
     client,
     mock_auth_dep,
     _force_in_memory_stores,
 ):
+    """No agenda + 'find someone for X and assign' still routes to
+    stats — stats can list candidates without needing an agenda. The
+    follow-up meeting turn is what enforces the agenda-snapshot
+    requirement."""
     stores = _force_in_memory_stores
 
     with stats_agent_module.agent.override(model=TestModel(call_tools=[])):
@@ -425,35 +375,19 @@ def test_unified_route_vague_handoff_confirmation_clarifies(
             "/agent/turn",
             **_turn_kwargs(
                 {
-                    "session_id": "u-handoff-vague",
-                    "user_message": "Find someone who has not done TTE recently and assign them to Timer",
-                    "agenda_snapshot": _agenda(),
+                    "session_id": "u-find-no-agenda",
+                    "user_message": "Find someone who has not done TTE recently and assign them to TTE",
                 }
             ),
         ) as r:
             assert r.status_code == 200
-            _parse_sse(r.iter_bytes())
+            events = _parse_sse(r.iter_bytes())
 
-    with client.stream(
-        "POST",
-        "/agent/turn",
-        **_turn_kwargs(
-            {
-                "session_id": "u-handoff-vague",
-                "user_message": "yes, do it",
-                "agenda_snapshot": _agenda(),
-            }
-        ),
-    ) as r:
-        assert r.status_code == 200
-        events = _parse_sse(r.iter_bytes())
-
-    assert [event["event"] for event in events] == ["router_decision", "assistant_text", "done"]
-    assert events[0]["data"]["decision"]["route"] == "clarify"
-    assert events[0]["data"]["decision"]["intent"] == "handoff_confirmation_needs_details"
-    unified_turn = asyncio.run(stores["unified"].load_turn("u-handoff-vague", 2))
+    assert events[0]["data"]["decision"]["route"] == "specialist"
+    assert events[0]["data"]["decision"]["agent_kind"] == "statistics"
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-find-no-agenda", 1))
     assert unified_turn is not None
-    assert unified_turn.route == "clarify"
+    assert unified_turn.agent_kind == "statistics"
 
 
 @pytest.mark.asyncio
@@ -479,35 +413,6 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     unified_turn = await unified_store.load_turn("u-clarify", 1)
     assert unified_turn is not None
     assert unified_turn.agent_kind == "router"
-    assert unified_turn.route == "clarify"
-
-
-@pytest.mark.asyncio
-async def test_unified_route_handoff_without_agenda_clarifies(
-    client,
-    mock_auth_dep,
-    _force_in_memory_stores,
-):
-    unified_store: InMemoryUnifiedAgentTurnStore = _force_in_memory_stores["unified"]
-
-    with client.stream(
-        "POST",
-        "/agent/turn",
-        **_turn_kwargs(
-            {
-                "session_id": "u-handoff-missing-agenda",
-                "user_message": "Find someone who has not done TTE recently and assign them to TTE",
-            }
-        ),
-    ) as r:
-        assert r.status_code == 200
-        events = _parse_sse(r.iter_bytes())
-
-    assert [event["event"] for event in events] == ["router_decision", "assistant_text", "done"]
-    assert events[0]["data"]["decision"]["route"] == "clarify"
-    assert events[-1]["data"]["router_only"] is True
-    unified_turn = await unified_store.load_turn("u-handoff-missing-agenda", 1)
-    assert unified_turn is not None
     assert unified_turn.route == "clarify"
 
 

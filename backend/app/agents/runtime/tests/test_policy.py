@@ -1,14 +1,13 @@
 import pytest
 
 from app.agents.runtime.capabilities import capability_for_tool, tool_names_for_agent
-from app.agents.runtime.contracts import AccessMode, AgentKind, HandoffPayload
+from app.agents.runtime.contracts import AccessMode, AgentKind
 from app.agents.runtime.policy import (
     AgentPolicyError,
     agent_can_write,
     policy_for_tool,
     require_read_only_toolset,
     require_tool_allowed,
-    validate_handoff_policy,
 )
 
 
@@ -53,31 +52,3 @@ def test_statistics_agent_cannot_call_meeting_mutation_tools():
 def test_agent_write_capability_is_explicit():
     assert agent_can_write(AgentKind.MEETING) is True
     assert agent_can_write(AgentKind.STATISTICS) is False
-
-
-def test_statistics_to_meeting_handoff_requires_confirmation():
-    payload = HandoffPayload(
-        source_agent=AgentKind.STATISTICS,
-        target_agent=AgentKind.MEETING,
-        intent="assign_role_from_stats",
-        facts=[{"member_id": "m1", "full_name": "Joyce Feng"}],
-        requires_confirmation=False,
-    )
-
-    with pytest.raises(AgentPolicyError, match="must require user confirmation"):
-        validate_handoff_policy(payload)
-
-
-def test_statistics_to_meeting_handoff_with_confirmation_is_allowed():
-    payload = validate_handoff_policy(
-        {
-            "source_agent": "statistics",
-            "target_agent": "meeting",
-            "intent": "assign_role_from_stats",
-            "facts": [{"member_id": "m1", "full_name": "Joyce Feng"}],
-            "requires_confirmation": True,
-        }
-    )
-
-    assert payload.source_agent == AgentKind.STATISTICS
-    assert payload.target_agent == AgentKind.MEETING

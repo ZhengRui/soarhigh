@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from app.agents.runtime.capabilities import capabilities_for_agent, capability_for_tool
-from app.agents.runtime.contracts import AccessMode, AgentKind, HandoffPayload
+from app.agents.runtime.contracts import AccessMode, AgentKind
 
 
 class AgentPolicyError(ValueError):
@@ -54,36 +54,3 @@ def require_read_only_toolset(agent_kind: AgentKind | str, tool_names: set[str] 
 
 def agent_can_write(agent_kind: AgentKind | str) -> bool:
     return any(capability.access == AccessMode.WRITE for capability in capabilities_for_agent(agent_kind))
-
-
-def validate_handoff_policy(payload: HandoffPayload | dict) -> HandoffPayload:
-    handoff = payload if isinstance(payload, HandoffPayload) else HandoffPayload.model_validate(payload)
-
-    if handoff.source_agent == AgentKind.STATISTICS and handoff.target_agent == AgentKind.MEETING:
-        if not handoff.requires_confirmation:
-            raise AgentPolicyError("statistics -> meeting handoff must require user confirmation before mutation")
-        return handoff
-
-    if handoff.target_agent == AgentKind.STATISTICS and not _intent_is_read_only(handoff.intent):
-        raise AgentPolicyError("handoff into the statistics agent must be read-only")
-
-    return handoff
-
-
-def _intent_is_read_only(intent: str) -> bool:
-    lowered = intent.lower()
-    mutating_words = (
-        "assign",
-        "set",
-        "update",
-        "change",
-        "create",
-        "clone",
-        "remove",
-        "delete",
-        "move",
-        "swap",
-        "shift",
-        "revert",
-    )
-    return not any(word in lowered for word in mutating_words)

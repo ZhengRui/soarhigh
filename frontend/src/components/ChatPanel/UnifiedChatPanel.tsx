@@ -53,7 +53,6 @@ function uuid() {
 }
 
 function routeLabel(decision: RouterDecision): string {
-  if (decision.route === 'handoff') return 'Handoff';
   if (decision.route === 'clarify') return 'Clarify';
   if (decision.route === 'refuse') return 'Refused';
   if (decision.route === 'direct_answer') return 'Router';
@@ -63,9 +62,6 @@ function routeLabel(decision: RouterDecision): string {
 }
 
 function routePalette(decision: RouterDecision): string {
-  if (decision.route === 'handoff') {
-    return 'bg-violet-50 border-violet-200 text-violet-800';
-  }
   if (decision.route === 'clarify' || decision.route === 'refuse') {
     return 'bg-amber-50 border-amber-200 text-amber-800';
   }
@@ -168,9 +164,6 @@ export function UnifiedChatPanel({
         const msg = { ...last };
         if (ev.type === 'router_decision') {
           msg.routerDecision = ev.data.decision;
-        }
-        if (ev.type === 'handoff_proposal') {
-          msg.handoffProposal = ev.data;
         }
         if (ev.type === 'thinking')
           msg.thinking = (msg.thinking || '') + ev.data.chunk;
@@ -392,29 +385,6 @@ export function UnifiedChatPanel({
                 >
                   <Route className='w-3 h-3 shrink-0 opacity-70' />
                   <span>{routeLabel(m.routerDecision)}</span>
-                </div>
-              )}
-              {m.role === 'assistant' && m.handoffProposal && (
-                <div
-                  title={m.handoffProposal.intent}
-                  className='flex flex-col gap-1 text-[11px] font-mono px-2 py-1.5 rounded-md border mb-1.5 bg-violet-50 border-violet-200 text-violet-800'
-                >
-                  <div className='flex items-center gap-1.5'>
-                    <Route className='w-3 h-3 shrink-0 opacity-70' />
-                    <span className='font-semibold'>
-                      {m.handoffProposal.source_agent} →{' '}
-                      {m.handoffProposal.target_agent}
-                    </span>
-                    {m.handoffProposal.requires_confirmation && (
-                      <span className='ml-auto text-[10px] uppercase tracking-wide opacity-70'>
-                        confirm
-                      </span>
-                    )}
-                  </div>
-                  <div className='text-[10px] opacity-75'>
-                    facts {m.handoffProposal.facts?.length ?? 0} · refs{' '}
-                    {m.handoffProposal.references?.length ?? 0}
-                  </div>
                 </div>
               )}
               {m.role === 'assistant' && m.thinking && (

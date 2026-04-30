@@ -112,20 +112,20 @@
     "expected_intent": "meeting_edit_without_agenda_snapshot"
   },
   {
-    "id": "route.handoff.assign_role_from_stats.en",
+    "id": "route.statistics.find_then_assign.en",
     "user_message": "Find who has not done TTE recently, then assign one to this meeting",
     "has_agenda": true,
-    "expected_route": "handoff",
-    "expected_agent_kind": null,
-    "expected_intent": "statistics_to_meeting_handoff"
+    "expected_route": "specialist",
+    "expected_agent_kind": "statistics",
+    "expected_intent": "historical_statistics_or_lookup"
   },
   {
-    "id": "route.handoff.assign_role_from_stats.zh",
+    "id": "route.statistics.find_then_assign.zh",
     "user_message": "找一个最近没做过 TTE 的人, 安排到这次会议",
     "has_agenda": true,
-    "expected_route": "handoff",
-    "expected_agent_kind": null,
-    "expected_intent": "statistics_to_meeting_handoff"
+    "expected_route": "specialist",
+    "expected_agent_kind": "statistics",
+    "expected_intent": "historical_statistics_or_lookup"
   },
   {
     "id": "route.direct_answer.greeting.en",

@@ -208,14 +208,14 @@ async def test_supabase_store_loads_latest_turn():
                 {
                     "seq": 7,
                     "agent_kind": "router",
-                    "route": "handoff",
-                    "user_message": "assign someone",
-                    "assistant_text": "Confirm details.",
+                    "route": "clarify",
+                    "user_message": "huh?",
+                    "assistant_text": "Could you clarify?",
                     "tool_trace": [],
-                    "router_decision": {"route": "handoff"},
+                    "router_decision": {"route": "clarify"},
                     "agenda_before": {"segments": []},
                     "agenda_after": None,
-                    "domain_payload": {"handoff_proposal": {"requires_confirmation": True}},
+                    "domain_payload": {"note": "ambiguous_target"},
                 }
             ],
         }
@@ -226,6 +226,6 @@ async def test_supabase_store_loads_latest_turn():
 
     assert loaded is not None
     assert loaded.seq == 7
-    assert loaded.domain_payload["handoff_proposal"]["requires_confirmation"] is True
+    assert loaded.domain_payload["note"] == "ambiguous_target"
     assert client.trace[0]["filters"] == [("eq", "session_id", "s1")]
     assert client.trace[0]["order"] == ("seq", True)

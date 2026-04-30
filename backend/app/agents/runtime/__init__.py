@@ -1,9 +1,9 @@
 """Shared runtime contracts and policies for agent orchestration."""
 
 from app.agents.runtime.capabilities import Capability, all_capabilities, capabilities_for_agent, capability_for_tool
-from app.agents.runtime.contracts import AccessMode, AgentKind, HandoffPayload, RouteKind, RouterDecision
+from app.agents.runtime.contracts import AccessMode, AgentKind, RouteKind, RouterDecision
 from app.agents.runtime.envelopes import ToolCoverage, ToolResultEnvelope, normalize_tool_result
-from app.agents.runtime.policy import AgentPolicyError, require_tool_allowed, validate_handoff_policy
+from app.agents.runtime.policy import AgentPolicyError, require_tool_allowed
 from app.agents.runtime.store import AgentTurnRecord, agent_turn_store
 
 __all__ = [
@@ -12,7 +12,6 @@ __all__ = [
     "AgentPolicyError",
     "AgentTurnRecord",
     "Capability",
-    "HandoffPayload",
     "RouteKind",
     "RouterDecision",
     "ToolCoverage",
@@ -23,5 +22,4 @@ __all__ = [
     "capability_for_tool",
     "normalize_tool_result",
     "require_tool_allowed",
-    "validate_handoff_policy",
 ]
