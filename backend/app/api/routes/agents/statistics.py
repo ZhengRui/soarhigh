@@ -11,8 +11,6 @@ Differences from the meeting agent route:
   - No agenda_after / show_current addenda — there's no draft to
     render. Historical previews still get folded meta / intro / agenda
     blocks, shared with the meeting agent.
-  - Persistence uses statistics_agent_sessions / statistics_agent_turns
-    (separate tables; Phase 3 unifies).
 """
 
 import asyncio
@@ -38,16 +36,16 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from ...agents.meeting.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
-from ...agents.runtime.contracts import AgentKind
-from ...agents.runtime.policy import require_tool_allowed
-from ...agents.statistics.agent import USAGE_LIMITS, agent
-from ...agents.statistics.models import StatsDeps
-from ...agents.statistics.prompts import SNAPSHOT_TEMPLATE
-from ...agents.statistics.store import StatsTurnRecord, session_store
-from ...models.statistics_agent import StatisticsAgentTurnRequest
-from ...services.meeting_preview_markdown import render_preview_addendum
-from .auth import get_current_user
+from ....agents.meeting.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
+from ....agents.runtime.contracts import AgentKind, RouteKind
+from ....agents.runtime.policy import require_tool_allowed
+from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
+from ....agents.statistics.agent import USAGE_LIMITS, agent
+from ....agents.statistics.models import StatsDeps
+from ....agents.statistics.prompts import SNAPSHOT_TEMPLATE
+from ....models.agents.statistics import StatisticsAgentTurnRequest
+from ....services.meeting_preview_markdown import render_preview_addendum
+from ..auth import get_current_user
 
 log = logging.getLogger(__name__)
 statistics_agent_router = r = APIRouter(prefix="/statistics-agent")
@@ -115,7 +113,7 @@ async def stats_agent_turn(
 
     async def event_stream() -> AsyncIterator[bytes]:
         try:
-            tail_seq, history_json = await session_store.load(req.session_id)
+            tail_seq, history_json = await agent_turn_store.load(req.session_id)
             next_seq = tail_seq + 1
 
             full_history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
@@ -218,14 +216,17 @@ async def stats_agent_turn(
             )
             final_msgs = strip_snapshots_from_dumped_history(final_msgs)
             assistant_text = "".join(assistant_text_chunks) or assistant_text_so_far or final_text
-            await session_store.save_turn(
+            await agent_turn_store.save_turn(
                 req.session_id,
                 user_id=getattr(user, "uid", None),
-                turn=StatsTurnRecord(
+                turn=AgentTurnRecord(
                     seq=next_seq,
+                    agent_kind=AgentKind.STATISTICS,
+                    route=RouteKind.SPECIALIST,
                     user_message=req.user_message,
                     assistant_text=assistant_text,
                     tool_trace=tool_trace,
+                    router_decision=req.router_decision or {},
                     history_cursor=final_msgs,
                 ),
             )

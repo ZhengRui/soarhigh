@@ -7,9 +7,9 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import ToolDefinition
 
 from app.agents.meeting import agent as agent_module
-from app.agents.meeting.store import InMemorySessionStore
-from app.agents.runtime.contracts import AgentKind
-from app.api.routes.meeting_agent import _already_has_summary_table
+from app.agents.runtime.contracts import AgentKind, RouteKind
+from app.agents.runtime.store import AgentTurnRecord
+from app.api.routes.agents.meeting import _already_has_summary_table
 from app.api.serv import app
 from app.models.meeting import Attendee, Meeting
 from app.models.meeting import Segment as MeetingSegment
@@ -114,7 +114,7 @@ def test_turn_happy_path_streams_done(client, mock_auth_dep):
         call_tools=["set_role"],
         forced_args={"set_role": {"segment_id": "s1", "role_taker": "Test"}},
     )
-    with patch("app.api.routes.meeting_agent.require_tool_allowed") as policy_check:
+    with patch("app.api.routes.agents.meeting.require_tool_allowed") as policy_check:
         with agent_module.agent.override(model=test_model):
             with client.stream("POST", "/meeting-agent/turn", data=_turn_form(body)) as r:
                 assert r.status_code == 200
@@ -150,7 +150,7 @@ async def test_turn_persists_history_cursor_as_json_safe_payload(client, mock_au
     carry a datetime `timestamp` field; dump_python(mode="json") is what makes
     them JSON-safe. If mode="json" is forgotten, the turn would raise
     `Object of type datetime is not JSON serializable`."""
-    store: InMemorySessionStore = _force_in_memory_store
+    store = _force_in_memory_store
 
     body = {
         "session_id": "persist-t1",
@@ -449,7 +449,7 @@ def test_build_agenda_addendum_renders_every_preview_in_one_turn():
     `_latest_preview_payload` helper only kept the last and silently
     dropped earlier ones."""
     from app.agents.meeting.models import Agenda, Meta
-    from app.api.routes.meeting_agent import _build_agenda_addendum
+    from app.api.routes.agents.meeting import _build_agenda_addendum
 
     tool_trace = [
         {
@@ -512,7 +512,7 @@ def test_preview_addendum_intro_fold_omitted_when_intro_empty():
     historical meeting has no intro text. We don't ship an empty
     section; cleaner UX to drop it."""
     from app.agents.meeting.models import Agenda, Meta
-    from app.api.routes.meeting_agent import _build_agenda_addendum
+    from app.api.routes.agents.meeting import _build_agenda_addendum
 
     tool_trace = [
         {
@@ -539,7 +539,7 @@ def test_render_intro_block_wraps_in_triple_backtick_fence():
     """Intros render inside a code fence so they're visually separated
     from the fold title — without a fence, the intro runs together with
     the summary line and reads like the agent's commentary."""
-    from app.api.routes.meeting_agent import _render_intro_block
+    from app.api.routes.agents.meeting import _render_intro_block
 
     body = _render_intro_block("Hello world")
     lines = body.splitlines()
@@ -555,7 +555,7 @@ def test_render_intro_block_single_line_padded_to_two_rows():
     """Single-line intros get a trailing blank line so the rendered
     code block has at least two visual rows. Without padding, short
     intros like 'ai is moving fast' render as a cramped one-row strip."""
-    from app.api.routes.meeting_agent import _render_intro_block
+    from app.api.routes.agents.meeting import _render_intro_block
 
     body = _render_intro_block("ai is moving at astonishing speed")
     inner_lines = body.splitlines()[1:-1]  # everything between the fences
@@ -567,7 +567,7 @@ def test_render_intro_block_single_line_padded_to_two_rows():
 def test_render_intro_block_multi_line_intro_not_padded_further():
     """Multi-line intros already have visual height; no extra blank
     line appended (would just create dead whitespace at the bottom)."""
-    from app.api.routes.meeting_agent import _render_intro_block
+    from app.api.routes.agents.meeting import _render_intro_block
 
     body = _render_intro_block("Line one\nLine two\nLine three")
     inner_lines = body.splitlines()[1:-1]
@@ -578,7 +578,7 @@ def test_render_intro_block_fence_grows_to_outlast_inner_backticks():
     """If the intro itself contains a triple-backtick run (e.g. someone
     pasted a code sample), the outer fence has to be longer than the
     longest inner run so it doesn't close prematurely."""
-    from app.api.routes.meeting_agent import _render_intro_block
+    from app.api.routes.agents.meeting import _render_intro_block
 
     intro_with_fence = "Use ``` for code blocks like this."
     body = _render_intro_block(intro_with_fence)
@@ -592,7 +592,7 @@ def test_render_intro_block_fence_grows_to_outlast_inner_backticks():
 
 def test_preview_addendum_intro_fold_present_when_intro_text_present():
     from app.agents.meeting.models import Agenda, Meta
-    from app.api.routes.meeting_agent import _build_agenda_addendum
+    from app.api.routes.agents.meeting import _build_agenda_addendum
 
     tool_trace = [
         {
@@ -628,7 +628,7 @@ def test_build_agenda_addendum_intro_fold_omitted_for_segment_only_edits():
     Agenda fold. Bringing the intro fold along would clutter the reply
     on every per-segment fix; intro rides with the Meta axis."""
     from app.agents.meeting.models import Agenda, Meta, Segment
-    from app.api.routes.meeting_agent import _build_agenda_addendum
+    from app.api.routes.agents.meeting import _build_agenda_addendum
 
     agenda = Agenda(
         meta=Meta(introduction="A meaningful description that should NOT show up here."),
@@ -665,7 +665,7 @@ def test_build_agenda_addendum_intro_fold_rides_with_meta_changes():
     """When Meta is rendered (wholesale or meta-edit), the Introduction
     fold rides along — same axis (meeting-level info)."""
     from app.agents.meeting.models import Agenda, Meta
-    from app.api.routes.meeting_agent import _build_agenda_addendum
+    from app.api.routes.agents.meeting import _build_agenda_addendum
 
     agenda = Agenda(
         meta=Meta(no=500, theme="X", introduction="Why this meeting matters."),
@@ -782,27 +782,28 @@ def test_turn_rejects_unsupported_image_type(client, mock_auth_dep):
 # ---------------------------------------------------------------------------
 
 
+def _meeting_turn(seq: int, **overrides) -> AgentTurnRecord:
+    """Test helper: build an AgentTurnRecord shaped like a meeting specialist turn."""
+    return AgentTurnRecord(
+        seq=seq,
+        agent_kind=AgentKind.MEETING,
+        route=RouteKind.SPECIALIST,
+        user_message=overrides.get("user_message", f"msg {seq}"),
+        assistant_text=overrides.get("assistant_text", f"reply {seq}"),
+        tool_trace=overrides.get("tool_trace", []),
+        agenda_before=overrides.get("agenda_before", {"snapshot_taken_before": seq}),
+        agenda_after=overrides.get("agenda_after", {"snapshot_taken_after": seq}),
+        history_cursor=overrides.get("history_cursor", [{"m": seq}]),
+    )
+
+
 @pytest.mark.asyncio
 async def test_revert_returns_agenda_before_and_deletes_later_turns(client, mock_auth_dep, _force_in_memory_store):
     """Seeding the store directly is simpler than driving N turns through the
     SSE route. This exercises just the revert endpoint."""
-    from app.agents.meeting.store import TurnRecord
-
     store = _force_in_memory_store
     for seq in range(1, 4):  # seeds turns 1, 2, 3
-        await store.save_turn(
-            "rev-s1",
-            user_id="test-user",
-            turn=TurnRecord(
-                seq=seq,
-                user_message=f"msg {seq}",
-                assistant_text=f"reply {seq}",
-                tool_trace=[],
-                agenda_before={"snapshot_taken_before": seq},
-                agenda_after={"snapshot_taken_after": seq},
-                history_cursor=[{"m": seq}],
-            ),
-        )
+        await store.save_turn("rev-s1", user_id="test-user", turn=_meeting_turn(seq))
 
     r = client.post("/meeting-agent/revert", json={"session_id": "rev-s1", "target_seq": 2})
     assert r.status_code == 200, r.text
@@ -821,20 +822,12 @@ async def test_revert_returns_agenda_before_and_deletes_later_turns(client, mock
 
 @pytest.mark.asyncio
 async def test_revert_to_first_turn_rewinds_to_zero(client, mock_auth_dep, _force_in_memory_store):
-    from app.agents.meeting.store import TurnRecord
-
     store = _force_in_memory_store
     await store.save_turn(
         "rev-s2",
         user_id="test-user",
-        turn=TurnRecord(
-            seq=1,
-            user_message="only turn",
-            assistant_text="reply",
-            tool_trace=[],
-            agenda_before={"initial": True},
-            agenda_after={"initial": True, "after": True},
-            history_cursor=[],
+        turn=_meeting_turn(
+            1, agenda_before={"initial": True}, agenda_after={"initial": True, "after": True}, history_cursor=[]
         ),
     )
     r = client.post("/meeting-agent/revert", json={"session_id": "rev-s2", "target_seq": 1})
@@ -844,6 +837,27 @@ async def test_revert_to_first_turn_rewinds_to_zero(client, mock_auth_dep, _forc
 
     tail, _ = await store.load("rev-s2")
     assert tail == 0
+
+
+@pytest.mark.asyncio
+async def test_revert_rejects_non_meeting_turns(client, mock_auth_dep, _force_in_memory_store):
+    """Stats and router-only turns have no agenda to revert to."""
+    store = _force_in_memory_store
+    await store.save_turn(
+        "rev-stats",
+        user_id="test-user",
+        turn=AgentTurnRecord(
+            seq=1,
+            agent_kind=AgentKind.STATISTICS,
+            route=RouteKind.SPECIALIST,
+            user_message="who won most awards?",
+            assistant_text="...",
+            agenda_before=None,
+        ),
+    )
+    r = client.post("/meeting-agent/revert", json={"session_id": "rev-stats", "target_seq": 1})
+    assert r.status_code == 400
+    assert "not a meeting edit" in r.json()["detail"]
 
 
 def test_revert_unknown_turn_returns_404(client, mock_auth_dep):

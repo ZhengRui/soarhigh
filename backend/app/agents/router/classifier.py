@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 
 from app.agents.runtime.contracts import AgentKind, HandoffPayload, RouteKind, RouterDecision
-from app.models.agent import AgentTurnRequest
+from app.models.agents.unified import AgentTurnRequest
 
 _COUNT_OR_RANK_RE = re.compile(
     r"\b(how many|count|counts|total|number of|rank|ranking|most|least|average|avg|top|bottom)\b",

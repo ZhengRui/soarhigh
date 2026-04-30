@@ -3,14 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from ..config import CORS_ORIGINS
-from .routes.agent import agent_router
+from .routes.agents.meeting import meeting_agent_router
+from .routes.agents.statistics import statistics_agent_router
+from .routes.agents.unified import agent_router
 from .routes.auth import auth_router
 from .routes.checkin import checkin_router
 from .routes.feedback import feedback_router
 from .routes.meeting import meeting_router
-from .routes.meeting_agent import meeting_agent_router
 from .routes.post import post_router
-from .routes.statistics_agent import statistics_agent_router
 from .routes.stats import stats_router
 from .routes.timing import timing_router
 

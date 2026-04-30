@@ -7,10 +7,10 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import ToolDefinition
 
 import app.agents.statistics.agent as stats_agent_module
+from app.agents.runtime import store as store_module
 from app.agents.runtime.contracts import AgentKind
 from app.agents.runtime.policy import AgentPolicyError
-from app.agents.statistics import store as store_module
-from app.agents.statistics.store import InMemoryStatsSessionStore
+from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
 from app.api.routes.auth import get_current_user
 from app.api.serv import app
 from app.models.users import User
@@ -67,11 +67,11 @@ def mock_auth_dep():
 
 @pytest.fixture(autouse=True)
 def _force_in_memory_stats_store(monkeypatch):
-    fake = InMemoryStatsSessionStore()
-    monkeypatch.setattr(store_module, "session_store", fake)
-    from app.api.routes import statistics_agent as route_module
+    fake = InMemoryUnifiedAgentTurnStore()
+    monkeypatch.setattr(store_module, "agent_turn_store", fake)
+    from app.api.routes.agents import statistics as route_module
 
-    monkeypatch.setattr(route_module, "session_store", fake)
+    monkeypatch.setattr(route_module, "agent_turn_store", fake)
     yield fake
 
 
@@ -108,7 +108,7 @@ def test_stats_preview_meeting_appends_folded_preview_blocks(client, mock_auth_d
 
     with (
         patch("app.services.meeting_lookup.fetch_meeting_full", return_value=fake_full_meeting),
-        patch("app.api.routes.statistics_agent.require_tool_allowed") as policy_check,
+        patch("app.api.routes.agents.statistics.require_tool_allowed") as policy_check,
     ):
         with stats_agent_module.agent.override(model=test_model):
             with client.stream(
@@ -136,7 +136,7 @@ def test_stats_route_returns_error_when_policy_blocks_tool(client, mock_auth_dep
     )
 
     with patch(
-        "app.api.routes.statistics_agent.require_tool_allowed",
+        "app.api.routes.agents.statistics.require_tool_allowed",
         side_effect=AgentPolicyError("blocked by policy"),
     ):
         with stats_agent_module.agent.override(model=test_model):

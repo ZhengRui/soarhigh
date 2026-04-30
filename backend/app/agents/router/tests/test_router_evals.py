@@ -5,7 +5,7 @@ import pytest
 
 from app.agents.meeting.models import Agenda
 from app.agents.router.classifier import classify_turn
-from app.models.agent import AgentTurnRequest
+from app.models.agents.unified import AgentTurnRequest
 
 _EVALS_PATH = Path(__file__).resolve().parents[1] / "evals" / "router_cases.json"
 

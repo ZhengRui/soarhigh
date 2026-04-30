@@ -11,3 +11,6 @@ class StatisticsAgentTurnRequest(BaseModel):
 
     session_id: str
     user_message: str
+    # Set by the unified /agent/turn dispatcher so the persisted turn carries
+    # the routing context. Standalone callers leave it empty.
+    router_decision: dict | None = None

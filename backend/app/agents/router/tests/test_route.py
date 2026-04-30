@@ -8,13 +8,10 @@ from pydantic_ai.tools import ToolDefinition
 
 import app.agents.meeting.agent as meeting_agent_module
 import app.agents.statistics.agent as stats_agent_module
-from app.agents.meeting import store as meeting_store_module
-from app.agents.meeting.store import InMemorySessionStore
 from app.agents.router import store as router_store_module
 from app.agents.router.store import InMemoryRouterDecisionStore
+from app.agents.runtime import store as runtime_store_module
 from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
-from app.agents.statistics import store as stats_store_module
-from app.agents.statistics.store import InMemoryStatsSessionStore
 from app.api.routes.auth import get_current_user
 from app.api.serv import app
 from app.models.users import User
@@ -29,6 +26,15 @@ class ForcedArgsTestModel(TestModel):
         if tool_def.name in self._forced_args:
             return self._forced_args[tool_def.name]
         return super().gen_tool_args(tool_def)
+
+
+def _turn_kwargs(body: dict) -> dict:
+    """Wrap a JSON body as multipart form for the /agent/turn endpoint.
+
+    The endpoint accepts multipart so it can receive optional images for the
+    create-from-image flow; tests that send no image just put the JSON in the
+    `payload` field."""
+    return {"data": {"payload": json.dumps(body)}}
 
 
 def _parse_sse(byte_chunks):
@@ -85,24 +91,18 @@ def mock_auth_dep():
 
 @pytest.fixture(autouse=True)
 def _force_in_memory_stores(monkeypatch):
-    meeting_store = InMemorySessionStore()
-    stats_store = InMemoryStatsSessionStore()
     router_store = InMemoryRouterDecisionStore()
     unified_store = InMemoryUnifiedAgentTurnStore()
 
-    monkeypatch.setattr(meeting_store_module, "session_store", meeting_store)
-    monkeypatch.setattr(stats_store_module, "session_store", stats_store)
     monkeypatch.setattr(router_store_module, "decision_store", router_store)
-    from app.agents.runtime import store as runtime_store_module
-
     monkeypatch.setattr(runtime_store_module, "agent_turn_store", unified_store)
 
-    from app.api.routes import agent as unified_route
-    from app.api.routes import meeting_agent as meeting_route
-    from app.api.routes import statistics_agent as stats_route
+    from app.api.routes.agents import meeting as meeting_route
+    from app.api.routes.agents import statistics as stats_route
+    from app.api.routes.agents import unified as unified_route
 
-    monkeypatch.setattr(meeting_route, "session_store", meeting_store)
-    monkeypatch.setattr(stats_route, "session_store", stats_store)
+    monkeypatch.setattr(meeting_route, "agent_turn_store", unified_store)
+    monkeypatch.setattr(stats_route, "agent_turn_store", unified_store)
     monkeypatch.setattr(unified_route, "decision_store", router_store)
     monkeypatch.setattr(unified_route, "agent_turn_store", unified_store)
     yield {"router": router_store, "unified": unified_store}
@@ -131,7 +131,7 @@ def test_unified_route_emits_router_decision_then_dispatches_to_statistics(
         with client.stream(
             "POST",
             "/agent/turn",
-            json={"session_id": "u-stats", "user_message": "今年谁拿奖最多?"},
+            **_turn_kwargs({"session_id": "u-stats", "user_message": "今年谁拿奖最多?"}),
         ) as r:
             assert r.status_code == 200
             events = _parse_sse(r.iter_bytes())
@@ -145,7 +145,7 @@ def test_unified_route_emits_router_decision_then_dispatches_to_statistics(
     assert unified_turn is not None
     assert unified_turn.agent_kind == "statistics"
     assert unified_turn.route == "specialist"
-    assert unified_turn.specialist_seq == events[-1]["data"]["seq"]
+    assert unified_turn.seq == events[-1]["data"]["seq"]
     assert unified_turn.router_decision["agent_kind"] == "statistics"
 
 
@@ -164,11 +164,13 @@ def test_unified_route_emits_router_decision_then_dispatches_to_meeting(
         with client.stream(
             "POST",
             "/agent/turn",
-            json={
-                "session_id": "u-meeting",
-                "user_message": "set Timer to Joyce Feng",
-                "agenda_snapshot": _agenda(),
-            },
+            **_turn_kwargs(
+                {
+                    "session_id": "u-meeting",
+                    "user_message": "set Timer to Joyce Feng",
+                    "agenda_snapshot": _agenda(),
+                }
+            ),
         ) as r:
             assert r.status_code == 200
             events = _parse_sse(r.iter_bytes())
@@ -200,11 +202,13 @@ def test_unified_route_handoff_runs_statistics_then_emits_proposal(
         with client.stream(
             "POST",
             "/agent/turn",
-            json={
-                "session_id": "u-handoff",
-                "user_message": "Find someone who has not done TTE recently and assign them to TTE",
-                "agenda_snapshot": _agenda(),
-            },
+            **_turn_kwargs(
+                {
+                    "session_id": "u-handoff",
+                    "user_message": "Find someone who has not done TTE recently and assign them to TTE",
+                    "agenda_snapshot": _agenda(),
+                }
+            ),
         ) as r:
             assert r.status_code == 200
             events = _parse_sse(r.iter_bytes())
@@ -240,11 +244,13 @@ def test_unified_route_confirmed_handoff_dispatches_to_meeting(
         with client.stream(
             "POST",
             "/agent/turn",
-            json={
-                "session_id": "u-handoff-confirm",
-                "user_message": "Find someone who has not done TTE recently and assign them to Timer",
-                "agenda_snapshot": _agenda(),
-            },
+            **_turn_kwargs(
+                {
+                    "session_id": "u-handoff-confirm",
+                    "user_message": "Find someone who has not done TTE recently and assign them to Timer",
+                    "agenda_snapshot": _agenda(),
+                }
+            ),
         ) as r:
             assert r.status_code == 200
             first_events = _parse_sse(r.iter_bytes())
@@ -259,11 +265,13 @@ def test_unified_route_confirmed_handoff_dispatches_to_meeting(
         with client.stream(
             "POST",
             "/agent/turn",
-            json={
-                "session_id": "u-handoff-confirm",
-                "user_message": "Confirm Joyce Feng as Timer",
-                "agenda_snapshot": _agenda(),
-            },
+            **_turn_kwargs(
+                {
+                    "session_id": "u-handoff-confirm",
+                    "user_message": "Confirm Joyce Feng as Timer",
+                    "agenda_snapshot": _agenda(),
+                }
+            ),
         ) as r:
             assert r.status_code == 200
             events = _parse_sse(r.iter_bytes())
@@ -280,7 +288,8 @@ def test_unified_route_confirmed_handoff_dispatches_to_meeting(
     assert unified_turn is not None
     assert unified_turn.agent_kind == "meeting"
     assert unified_turn.route == "specialist"
-    assert unified_turn.domain_payload["handoff_context"]["requires_confirmation"] is True
+    # The audit trail for a confirmed handoff lives in router_decision.metadata.
+    assert unified_turn.router_decision["metadata"]["pending_handoff"]["requires_confirmation"] is True
 
 
 def test_unified_route_vague_handoff_confirmation_clarifies(
@@ -294,11 +303,13 @@ def test_unified_route_vague_handoff_confirmation_clarifies(
         with client.stream(
             "POST",
             "/agent/turn",
-            json={
-                "session_id": "u-handoff-vague",
-                "user_message": "Find someone who has not done TTE recently and assign them to Timer",
-                "agenda_snapshot": _agenda(),
-            },
+            **_turn_kwargs(
+                {
+                    "session_id": "u-handoff-vague",
+                    "user_message": "Find someone who has not done TTE recently and assign them to Timer",
+                    "agenda_snapshot": _agenda(),
+                }
+            ),
         ) as r:
             assert r.status_code == 200
             _parse_sse(r.iter_bytes())
@@ -306,11 +317,13 @@ def test_unified_route_vague_handoff_confirmation_clarifies(
     with client.stream(
         "POST",
         "/agent/turn",
-        json={
-            "session_id": "u-handoff-vague",
-            "user_message": "yes, do it",
-            "agenda_snapshot": _agenda(),
-        },
+        **_turn_kwargs(
+            {
+                "session_id": "u-handoff-vague",
+                "user_message": "yes, do it",
+                "agenda_snapshot": _agenda(),
+            }
+        ),
     ) as r:
         assert r.status_code == 200
         events = _parse_sse(r.iter_bytes())
@@ -335,7 +348,7 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     with client.stream(
         "POST",
         "/agent/turn",
-        json={"session_id": "u-clarify", "user_message": "set Timer to Joyce Feng"},
+        **_turn_kwargs({"session_id": "u-clarify", "user_message": "set Timer to Joyce Feng"}),
     ) as r:
         assert r.status_code == 200
         events = _parse_sse(r.iter_bytes())
@@ -352,7 +365,6 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     assert unified_turn.agent_kind == "router"
     assert unified_turn.route == "clarify"
     assert unified_turn.specialist_seq is None
-    assert unified_turn.domain_payload["done"]["router_only"] is True
 
 
 @pytest.mark.asyncio
@@ -366,10 +378,12 @@ async def test_unified_route_handoff_without_agenda_clarifies(
     with client.stream(
         "POST",
         "/agent/turn",
-        json={
-            "session_id": "u-handoff-missing-agenda",
-            "user_message": "Find someone who has not done TTE recently and assign them to TTE",
-        },
+        **_turn_kwargs(
+            {
+                "session_id": "u-handoff-missing-agenda",
+                "user_message": "Find someone who has not done TTE recently and assign them to TTE",
+            }
+        ),
     ) as r:
         assert r.status_code == 200
         events = _parse_sse(r.iter_bytes())
@@ -383,5 +397,5 @@ async def test_unified_route_handoff_without_agenda_clarifies(
 
 
 def test_unified_route_requires_auth(client):
-    r = client.post("/agent/turn", json={"session_id": "u-auth", "user_message": "hello"})
+    r = client.post("/agent/turn", **_turn_kwargs({"session_id": "u-auth", "user_message": "hello"}))
     assert r.status_code in (401, 403)

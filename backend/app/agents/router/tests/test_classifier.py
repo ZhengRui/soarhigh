@@ -1,6 +1,6 @@
 from app.agents.router.classifier import classify_turn
 from app.agents.runtime.contracts import AgentKind, RouteKind
-from app.models.agent import AgentTurnRequest
+from app.models.agents.unified import AgentTurnRequest
 
 
 def _agenda() -> dict:

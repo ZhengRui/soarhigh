@@ -147,6 +147,7 @@ async def member_award_matrix(
     date_to: str | None = None,
     member: str | None = None,
     category_filters: list[str] | None = None,
+    meeting_no: int | None = None,
     group_by: Literal["winner", "category", "winner_category", "meeting"] = "winner_category",
     sort_by: Literal["count", "name", "date"] = "count",
     sort_order: Literal["asc", "desc"] = "desc",
@@ -159,7 +160,9 @@ async def member_award_matrix(
     counts by category, or awards given by meeting. Award winners are stored
     as raw names; unresolved guests or ambiguous names are included as raw
     winner groups. category_filters accepts standard category keys like BestPS
-    and raw custom category text like "Best Joke" or "Custom".
+    and raw custom category text like "Best Joke" or "Custom". Use meeting_no
+    to scope to a single meeting (e.g. "第408期获奖情况" → meeting_no=408,
+    group_by="winner_category").
     """
     return await _tools.apply_member_award_matrix(
         ctx,
@@ -167,6 +170,7 @@ async def member_award_matrix(
         date_to=date_to,
         member=member,
         category_filters=category_filters,
+        meeting_no=meeting_no,
         group_by=group_by,
         sort_by=sort_by,
         sort_order=sort_order,

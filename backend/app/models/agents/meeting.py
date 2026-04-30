@@ -7,6 +7,9 @@ class MeetingAgentTurnRequest(BaseModel):
     session_id: str
     user_message: str
     agenda_snapshot: Agenda
+    # Set by the unified /agent/turn dispatcher so the persisted turn carries
+    # the routing context. Standalone callers leave it empty.
+    router_decision: dict | None = None
 
 
 class MeetingAgentRevertRequest(BaseModel):

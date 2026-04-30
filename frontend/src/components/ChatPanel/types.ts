@@ -122,7 +122,7 @@ export type AgentTurnEvent =
       type: 'error';
       data: { reason: string; recoverable: boolean; message: string };
     }
-  // Synthetic event emitted by useMeetingAgentTurn when the user aborts.
+  // Synthetic event emitted by useUnifiedAgentTurn when the user aborts.
   // Backend never sends this; it's a client-side signal so onEvent can
   // mark the bubble + reset loading state in the same update path.
   | { type: 'cancelled'; data: Record<string, never> };

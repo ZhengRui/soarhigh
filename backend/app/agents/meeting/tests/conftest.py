@@ -1,7 +1,7 @@
 import pytest
 
-from app.agents.meeting import store as store_module
-from app.agents.meeting.store import InMemorySessionStore
+from app.agents.runtime import store as store_module
+from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
 from app.api.routes.auth import get_current_user
 from app.api.serv import app
 from app.models.users import User
@@ -21,16 +21,15 @@ def mock_auth_dep():
 
 @pytest.fixture(autouse=True)
 def _force_in_memory_store(monkeypatch):
-    """Route and smoke tests must not hit Supabase. Monkeypatch the module-
-    level singleton so `from ...store import session_store` in the route
-    resolves to a fresh InMemorySessionStore for every test."""
-    fake = InMemorySessionStore()
-    monkeypatch.setattr(store_module, "session_store", fake)
-    # The route imported session_store by name at module import time, so we
-    # also need to patch it inside the route module's namespace.
-    from app.api.routes import meeting_agent as route_module
+    """Route tests must not hit Supabase. Swap the unified store singleton for
+    a fresh InMemory one. The route imports `agent_turn_store` by name at
+    module import time, so we patch both the runtime module and the route's
+    namespace."""
+    fake = InMemoryUnifiedAgentTurnStore()
+    monkeypatch.setattr(store_module, "agent_turn_store", fake)
+    from app.api.routes.agents import meeting as route_module
 
-    monkeypatch.setattr(route_module, "session_store", fake)
+    monkeypatch.setattr(route_module, "agent_turn_store", fake)
     yield fake
 
 

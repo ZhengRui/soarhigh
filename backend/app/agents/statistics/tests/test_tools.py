@@ -773,6 +773,67 @@ async def test_member_award_matrix_standard_category_with_no_rows_returns_zero()
 
 
 @pytest.mark.asyncio
+async def test_member_award_matrix_meeting_no_filter_scopes_to_one_meeting():
+    """Per-meeting award questions like "第408期获奖情况" should not have to
+    pull all-history rows. meeting_no narrows to that meeting in one call."""
+    ctx = FakeCtx(deps=_deps())
+    award_rows = [
+        {
+            "award_id": "a1",
+            "member_id": "mem-joyce",
+            "username": "joyce",
+            "full_name": "Joyce Feng",
+            "winner_resolved": True,
+            "winner_name": "Joyce Feng",
+            "meeting_id": "m408",
+            "meeting_date": "2025-05-14",
+            "meeting_theme": "Luxury",
+            "meeting_no": 408,
+            "category": "Best Evaluator",
+        },
+        {
+            "award_id": "a2",
+            "member_id": "mem-max",
+            "username": "max",
+            "full_name": "Max Long",
+            "winner_resolved": True,
+            "winner_name": "Max Long",
+            "meeting_id": "m408",
+            "meeting_date": "2025-05-14",
+            "meeting_theme": "Luxury",
+            "meeting_no": 408,
+            "category": "Best Host",
+        },
+        {
+            "award_id": "a3",
+            "member_id": "mem-frank",
+            "username": "frank",
+            "full_name": "Frank Zeng",
+            "winner_resolved": True,
+            "winner_name": "Frank Zeng",
+            "meeting_id": "m409",
+            "meeting_date": "2025-05-21",
+            "meeting_theme": "Other",
+            "meeting_no": 409,
+            "category": "Best Evaluator",
+        },
+    ]
+
+    with patch("app.agents.statistics.tools.get_member_award_stats", return_value=award_rows):
+        out = await stats_tools.apply_member_award_matrix(
+            ctx,
+            meeting_no=408,
+            group_by="winner_category",
+            include_meetings=False,
+        )
+
+    assert out["scope"]["meeting_no"] == 408
+    assert out["value"]["total_rows"] == 2
+    pairs = sorted((g["full_name"], g["category"]) for g in out["value"]["groups"])
+    assert pairs == [("Joyce Feng", "Best Evaluator"), ("Max Long", "Best Host")]
+
+
+@pytest.mark.asyncio
 async def test_member_award_matrix_retries_when_relative_date_scope_missing():
     ctx = FakeCtx(deps=_deps(message="今年谁拿 Best Evaluator 最多?", today="2026-04-28"))
 

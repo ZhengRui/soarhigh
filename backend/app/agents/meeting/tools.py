@@ -911,13 +911,13 @@ def _tool_result_cards(result: Any) -> list[dict]:
 
 
 async def _recent_lookup_includes_no(session_id: str, no: int) -> bool:
-    from app.agents.meeting import store as _store_module
+    from app.agents.runtime.store import agent_turn_store
 
-    tail_seq, _ = await _store_module.session_store.load(session_id)
+    tail_seq, _ = await agent_turn_store.load(session_id)
     if tail_seq <= 0:
         return False
     for seq in range(tail_seq, max(0, tail_seq - _CLONE_LOOKUP_LOOKBACK_TURNS), -1):
-        turn = await _store_module.session_store.load_turn(session_id, seq)
+        turn = await agent_turn_store.load_turn(session_id, seq)
         if turn is None:
             continue
         for trace in turn.tool_trace or []:
@@ -1109,9 +1109,9 @@ async def apply_revert_last_turn(ctx) -> dict:
     Return contract: `undone_user_message` is the INSTRUCTION for the
     now-undone turn, NOT a description of the current state. The current
     state is BEFORE that instruction ran."""
-    from app.agents.meeting import store as _store_module
+    from app.agents.runtime.store import agent_turn_store
 
-    store = _store_module.session_store
+    store = agent_turn_store
     session_id = ctx.deps.session_id
     tail_seq, _ = await store.load(session_id)
     if tail_seq == 0:
@@ -1176,9 +1176,9 @@ async def apply_revert_to_turn(ctx, after_seq: int) -> dict:
     if after_seq < 0:
         raise ModelRetry(f"after_seq must be >= 0; got {after_seq}")
 
-    from app.agents.meeting import store as _store_module
+    from app.agents.runtime.store import agent_turn_store
 
-    store = _store_module.session_store
+    store = agent_turn_store
     session_id = ctx.deps.session_id
 
     if after_seq == 0:
@@ -1193,6 +1193,11 @@ async def apply_revert_to_turn(ctx, after_seq: int) -> dict:
         if target is None:
             raise ModelRetry(f"turn {after_seq} not found in this session; cannot revert to it")
         state = target.agenda_after
+
+    if state is None:
+        # Stats and router-only turns have no agenda snapshots; you can't
+        # revert TO a non-meeting turn. The model should pick an edit turn.
+        raise ModelRetry(f"turn {after_seq} is not a meeting edit; cannot revert to it. Pick an edit turn instead.")
 
     reverted = Agenda.model_validate(state)
     ctx.deps.agenda.meta = reverted.meta

@@ -3,20 +3,21 @@ import logging
 import re
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
-from ...agents.router.classifier import classify_turn
-from ...agents.router.store import decision_store
-from ...agents.runtime.contracts import AgentKind, RouteKind, RouterDecision
-from ...agents.runtime.policy import validate_handoff_policy
-from ...agents.runtime.store import AgentTurnRecord, agent_turn_store
-from ...models.agent import AgentTurnRequest
-from ...models.meeting_agent import MeetingAgentTurnRequest
-from ...models.statistics_agent import StatisticsAgentTurnRequest
-from .auth import get_current_user
-from .meeting_agent import agent_turn as meeting_agent_turn
-from .statistics_agent import stats_agent_turn
+from ....agents.router.classifier import classify_turn
+from ....agents.router.store import decision_store
+from ....agents.runtime.contracts import AgentKind, RouteKind, RouterDecision
+from ....agents.runtime.policy import validate_handoff_policy
+from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
+from ....models.agents.meeting import MeetingAgentTurnRequest
+from ....models.agents.statistics import StatisticsAgentTurnRequest
+from ....models.agents.unified import AgentTurnRequest
+from ..auth import get_current_user
+from .meeting import agent_turn as meeting_agent_turn
+from .statistics import stats_agent_turn
 
 log = logging.getLogger(__name__)
 agent_router = r = APIRouter(prefix="/agent")
@@ -45,10 +46,7 @@ def _detect_user_language(text: str) -> str:
 
 
 def _router_decision_payload(seq: int, decision: RouterDecision) -> dict:
-    return {
-        "seq": seq,
-        "decision": decision.model_dump(mode="json"),
-    }
+    return {"seq": seq, "decision": decision.model_dump(mode="json")}
 
 
 def _parse_sse_event(raw: bytes) -> tuple[str | None, dict]:
@@ -70,129 +68,36 @@ async def _iter_sse_frames(body_iterator) -> AsyncIterator[tuple[bytes, str | No
         buffer += _as_bytes(chunk)
         while b"\n\n" in buffer:
             raw, buffer = buffer.split(b"\n\n", 1)
-            frame = raw + b"\n\n"
-            event_name, data = _parse_sse_event(raw)
-            yield frame, event_name, data
+            yield raw + b"\n\n", *_parse_sse_event(raw)
 
 
-class _UnifiedTurnCollector:
-    def __init__(
-        self,
-        *,
-        seq: int,
-        decision: RouterDecision,
-        user_message: str,
-        agenda_before: dict | None = None,
-        handoff_context: dict | None = None,
-    ) -> None:
-        self.seq = seq
-        self.decision = decision
-        self.user_message = user_message
-        self.agenda_before = agenda_before
-        self.assistant_chunks: list[str] = []
-        self.tool_trace: list[dict] = []
-        self._tool_calls: dict[str, dict] = {}
-        self._buffer = b""
-        self.done_data: dict | None = None
-        self.error_data: dict | None = None
-        self.agenda_after: dict | None = None
-        self.handoff_proposal: dict | None = None
-        self.handoff_context = handoff_context
-
-    def observe_chunk(self, chunk: bytes) -> None:
-        self._buffer += chunk
-        while b"\n\n" in self._buffer:
-            raw, self._buffer = self._buffer.split(b"\n\n", 1)
-            event_name, data = _parse_sse_event(raw)
-            self.observe_event(event_name, data)
-
-    def observe_event(self, event_name: str | None, data: dict) -> None:
-        if event_name == "assistant_text":
-            chunk = data.get("chunk")
-            if isinstance(chunk, str):
-                self.assistant_chunks.append(chunk)
-        elif event_name == "tool_call_start":
-            call_id = data.get("id")
-            if isinstance(call_id, str):
-                self._tool_calls[call_id] = {
-                    "id": call_id,
-                    "name": data.get("name", ""),
-                    "args": data.get("args") or {},
-                }
-        elif event_name == "tool_call_end":
-            call_id = data.get("id")
-            call = self._tool_calls.get(call_id, {}) if isinstance(call_id, str) else {}
-            self.tool_trace.append(
-                {
-                    "id": call_id,
-                    "name": call.get("name", ""),
-                    "args": call.get("args", {}),
-                    "status": data.get("status", "ok"),
-                    "result": data.get("result"),
-                }
-            )
-            agenda_after = data.get("agenda_after")
-            if isinstance(agenda_after, dict):
-                self.agenda_after = agenda_after
-        elif event_name == "done":
-            self.done_data = data
-            final_agenda = data.get("final_agenda")
-            if isinstance(final_agenda, dict):
-                self.agenda_after = final_agenda
-        elif event_name == "error":
-            self.error_data = data
-        elif event_name == "handoff_proposal":
-            self.handoff_proposal = data
-
-    @property
-    def is_terminal(self) -> bool:
-        return self.done_data is not None or self.error_data is not None
-
-    def to_record(self) -> AgentTurnRecord:
-        done = self.done_data or {}
-        error = self.error_data or {}
-        agent_kind = (
-            self.decision.agent_kind
-            if self.decision.route == RouteKind.SPECIALIST and self.decision.agent_kind is not None
-            else AgentKind.ROUTER
-        )
-        specialist_seq = None if done.get("router_only") else done.get("seq")
-        assistant_text = "".join(self.assistant_chunks) or done.get("final_text") or error.get("message") or ""
-        domain_payload: dict = {}
-        if self.done_data is not None:
-            domain_payload["done"] = self.done_data
-        if self.error_data is not None:
-            domain_payload["error"] = self.error_data
-        if self.handoff_proposal is not None:
-            domain_payload["handoff_proposal"] = self.handoff_proposal
-        if self.handoff_context is not None:
-            domain_payload["handoff_context"] = self.handoff_context
-
-        return AgentTurnRecord(
-            seq=self.seq,
-            agent_kind=agent_kind,
-            route=self.decision.route,
-            user_message=self.user_message,
-            assistant_text=assistant_text,
-            tool_trace=self.tool_trace,
-            router_decision=self.decision.model_dump(mode="json"),
-            specialist_seq=specialist_seq if isinstance(specialist_seq, int) else None,
-            agenda_before=self.agenda_before,
-            agenda_after=self.agenda_after,
-            domain_payload=domain_payload,
-        )
-
-
-async def _save_unified_turn(
+async def _save_router_turn(
     *,
     session_id: str,
     user_id: str | None,
-    collector: _UnifiedTurnCollector,
+    seq: int,
+    decision: RouterDecision,
+    user_message: str,
+    assistant_text: str,
+    agenda_before: dict | None = None,
+    tool_trace: list[dict] | None = None,
+    domain_payload: dict | None = None,
 ) -> None:
+    record = AgentTurnRecord(
+        seq=seq,
+        agent_kind=AgentKind.ROUTER,
+        route=decision.route,
+        user_message=user_message,
+        assistant_text=assistant_text,
+        tool_trace=tool_trace or [],
+        router_decision=decision.model_dump(mode="json"),
+        agenda_before=agenda_before,
+        domain_payload=domain_payload or {},
+    )
     try:
-        await agent_turn_store.save_turn(session_id, user_id=user_id, turn=collector.to_record())
+        await agent_turn_store.save_turn(session_id, user_id=user_id, turn=record)
     except Exception:
-        log.exception("failed to persist unified agent turn for session %s", session_id)
+        log.exception("failed to persist router turn for session %s", session_id)
 
 
 async def _load_pending_handoff(session_id: str) -> dict | None:
@@ -204,9 +109,7 @@ async def _load_pending_handoff(session_id: str) -> dict | None:
     if latest is None or latest.route not in {RouteKind.HANDOFF, RouteKind.HANDOFF.value}:
         return None
     proposal = latest.domain_payload.get("handoff_proposal")
-    if not isinstance(proposal, dict):
-        return None
-    if proposal.get("requires_confirmation") is not True:
+    if not isinstance(proposal, dict) or proposal.get("requires_confirmation") is not True:
         return None
     return proposal
 
@@ -219,16 +122,6 @@ def _router_terminal_text(decision: RouterDecision, *, language: str) -> str:
         if language == "zh" and decision.intent == "ambiguous_agent_target":
             return "你想让我修改当前会议草稿, 还是回答历史统计问题?"
         return question
-    if decision.route == RouteKind.HANDOFF:
-        if language == "zh":
-            return (
-                "这个请求需要先查历史统计, 再把结果交给会议编辑 agent 执行。"
-                "后端已经识别为跨 agent handoff, 但执行编排还没启用; 请先分两步操作。"
-            )
-        return (
-            "This request needs a statistics-to-meeting handoff. The router recognizes it, "
-            "but executable handoff orchestration is not enabled yet; please do it in two steps for now."
-        )
     if language == "zh":
         return decision.reason or "这个请求当前无法处理。"
     return decision.reason or "This request is not supported yet."
@@ -264,13 +157,13 @@ def _extract_handoff_facts(tool_trace: list[dict], *, limit: int = 5) -> tuple[l
         if isinstance(value, dict):
             groups = value.get("groups")
             if isinstance(groups, list):
-                facts.extend(group for group in groups if isinstance(group, dict))
+                facts.extend(g for g in groups if isinstance(g, dict))
             value_refs = value.get("references")
             if isinstance(value_refs, list):
-                references.extend(ref for ref in value_refs if isinstance(ref, dict))
+                references.extend(r for r in value_refs if isinstance(r, dict))
         top_refs = result.get("references")
         if isinstance(top_refs, list):
-            references.extend(ref for ref in top_refs if isinstance(ref, dict))
+            references.extend(r for r in top_refs if isinstance(r, dict))
     return facts[:limit], references[:limit]
 
 
@@ -327,14 +220,7 @@ _CONFIRMATION_TERMS = (
     "可以",
     "就这样",
 )
-_ACTION_TERMS = (
-    "assign",
-    "set",
-    "安排",
-    "分配",
-    "设为",
-    "设置",
-)
+_ACTION_TERMS = ("assign", "set", "安排", "分配", "设为", "设置")
 _LINK_TERMS = ("as ", "to ", "把")
 _HANDOFF_ROLE_TERMS = (
     "saa",
@@ -449,34 +335,39 @@ def _classify_handoff_confirmation(req: AgentTurnRequest, proposal: dict, *, lan
 
 
 async def _prepend_router_event(
-    *,
     seq: int,
     decision: RouterDecision,
     specialist_response: StreamingResponse,
+) -> AsyncIterator[bytes]:
+    """Specialist dispatch: emit router_decision SSE, then forward bytes
+    verbatim. The specialist owns its agent_turns row write."""
+    yield _sse("router_decision", _router_decision_payload(seq, decision))
+    async for chunk in specialist_response.body_iterator:
+        yield _as_bytes(chunk)
+
+
+async def _terminal_stream(
+    *,
+    seq: int,
+    decision: RouterDecision,
+    text: str,
     session_id: str,
     user_id: str | None,
     user_message: str,
-    agenda_before: dict | None = None,
-    handoff_context: dict | None = None,
 ) -> AsyncIterator[bytes]:
-    collector = _UnifiedTurnCollector(
+    """Router-only paths (clarify / refuse). Emit the router envelope, then
+    persist a single agent_turns row with agent_kind=router."""
+    yield _sse("router_decision", _router_decision_payload(seq, decision))
+    yield _sse("assistant_text", {"chunk": text})
+    yield _sse("done", {"seq": seq, "final_text": text, "router_only": True})
+    await _save_router_turn(
+        session_id=session_id,
+        user_id=user_id,
         seq=seq,
         decision=decision,
         user_message=user_message,
-        agenda_before=agenda_before,
-        handoff_context=handoff_context,
+        assistant_text=text,
     )
-    saved = False
-    router_chunk = _sse("router_decision", _router_decision_payload(seq, decision))
-    collector.observe_chunk(router_chunk)
-    yield router_chunk
-    async for chunk in specialist_response.body_iterator:
-        chunk_bytes = _as_bytes(chunk)
-        collector.observe_chunk(chunk_bytes)
-        if collector.is_terminal and not saved:
-            await _save_unified_turn(session_id=session_id, user_id=user_id, collector=collector)
-            saved = True
-        yield chunk_bytes
 
 
 async def _handoff_stream(
@@ -490,107 +381,91 @@ async def _handoff_stream(
     agenda_before: dict,
     language: str,
 ) -> AsyncIterator[bytes]:
-    collector = _UnifiedTurnCollector(
-        seq=seq,
-        decision=decision,
-        user_message=user_message,
-        agenda_before=agenda_before,
-    )
-    router_chunk = _sse("router_decision", _router_decision_payload(seq, decision))
-    collector.observe_chunk(router_chunk)
-    yield router_chunk
+    """Run stats sub-call as fact gathering, suppress its done event, then
+    finish with a router-owned done that carries the handoff_proposal."""
+    yield _sse("router_decision", _router_decision_payload(seq, decision))
 
+    tool_calls: dict[str, dict] = {}
+    tool_trace: list[dict] = []
     stats_done: dict = {}
-    saved = False
+
     async for frame, event_name, data in _iter_sse_frames(stats_response.body_iterator):
-        if event_name == "done":
+        if event_name == "tool_call_start":
+            call_id = data.get("id")
+            if isinstance(call_id, str):
+                tool_calls[call_id] = {"name": data.get("name", ""), "args": data.get("args") or {}}
+        elif event_name == "tool_call_end":
+            call_id = data.get("id")
+            call = tool_calls.get(call_id, {}) if isinstance(call_id, str) else {}
+            tool_trace.append(
+                {
+                    "id": call_id,
+                    "name": call.get("name", ""),
+                    "args": call.get("args", {}),
+                    "status": data.get("status", "ok"),
+                    "result": data.get("result"),
+                }
+            )
+        elif event_name == "done":
             stats_done = data
             continue
-        collector.observe_chunk(frame)
-        if collector.is_terminal and not saved:
-            await _save_unified_turn(session_id=session_id, user_id=user_id, collector=collector)
-            saved = True
         yield frame
         if event_name == "error":
             return
 
     proposal = _build_handoff_proposal(
-        decision=decision,
-        stats_done=stats_done,
-        tool_trace=collector.tool_trace,
-        language=language,
+        decision=decision, stats_done=stats_done, tool_trace=tool_trace, language=language
     )
-    proposal_chunk = _sse("handoff_proposal", proposal)
-    collector.observe_chunk(proposal_chunk)
-    yield proposal_chunk
+    yield _sse("handoff_proposal", proposal)
 
     confirmation_text = _handoff_confirmation_text(language=language)
-    text_chunk = _sse("assistant_text", {"chunk": confirmation_text})
-    collector.observe_chunk(text_chunk)
-    yield text_chunk
-
-    final_text = "".join(collector.assistant_chunks)
-    done_chunk = _sse(
+    yield _sse("assistant_text", {"chunk": confirmation_text})
+    yield _sse(
         "done",
-        {
-            "seq": seq,
-            "final_text": final_text,
-            "router_only": True,
-            "handoff_requires_confirmation": True,
-        },
+        {"seq": seq, "final_text": confirmation_text, "router_only": True, "handoff_requires_confirmation": True},
     )
-    collector.observe_chunk(done_chunk)
-    if not saved:
-        await _save_unified_turn(session_id=session_id, user_id=user_id, collector=collector)
-    yield done_chunk
 
-
-async def _terminal_stream(
-    seq: int,
-    decision: RouterDecision,
-    text: str,
-    *,
-    session_id: str,
-    user_id: str | None,
-    user_message: str,
-) -> AsyncIterator[bytes]:
-    collector = _UnifiedTurnCollector(seq=seq, decision=decision, user_message=user_message)
-    chunks = [
-        _sse("router_decision", _router_decision_payload(seq, decision)),
-        _sse("assistant_text", {"chunk": text}),
-        _sse(
-            "done",
-            {
-                "seq": seq,
-                "final_text": text,
-                "router_only": True,
-            },
-        ),
-    ]
-    saved = False
-    for chunk in chunks:
-        collector.observe_chunk(chunk)
-        if collector.is_terminal and not saved:
-            await _save_unified_turn(session_id=session_id, user_id=user_id, collector=collector)
-            saved = True
-        yield chunk
+    await _save_router_turn(
+        session_id=session_id,
+        user_id=user_id,
+        seq=seq,
+        decision=decision,
+        user_message=user_message,
+        assistant_text=confirmation_text,
+        agenda_before=agenda_before,
+        tool_trace=tool_trace,
+        domain_payload={"handoff_proposal": proposal},
+    )
 
 
 @r.post("/turn")
-async def unified_agent_turn(req: AgentTurnRequest, user=Depends(get_current_user)):
+async def unified_agent_turn(
+    payload: str = Form(...),
+    image: UploadFile | None = File(None),
+    user=Depends(get_current_user),
+):
+    try:
+        req = AgentTurnRequest.model_validate_json(payload)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors()) from e
+
     user_id = getattr(user, "uid", None)
     language = _detect_user_language(req.user_message)
+
     pending_handoff = await _load_pending_handoff(req.session_id)
     decision = (
         _classify_handoff_confirmation(req, pending_handoff, language=language) if pending_handoff is not None else None
     ) or classify_turn(req)
+
     record = await decision_store.save_decision(
         req.session_id,
         user_id=user_id,
         user_message=req.user_message,
         decision=decision,
     )
+    seq = record.seq
 
+    # HANDOFF: run stats fact-gathering, then emit proposal that requires confirmation.
     if decision.route == RouteKind.HANDOFF:
         if req.agenda_snapshot is None:
             fallback = RouterDecision(
@@ -602,32 +477,30 @@ async def unified_agent_turn(req: AgentTurnRequest, user=Depends(get_current_use
                     "Please retry from a meeting draft page."
                 ),
             )
-            text = _router_terminal_text(fallback, language=language)
             return StreamingResponse(
                 _terminal_stream(
-                    record.seq,
-                    fallback,
-                    text,
+                    seq=seq,
+                    decision=fallback,
+                    text=_router_terminal_text(fallback, language=language),
                     session_id=req.session_id,
                     user_id=user_id,
                     user_message=req.user_message,
                 ),
                 media_type="text/event-stream",
             )
-
         if decision.handoff is None:
             raise RuntimeError("handoff route is missing handoff payload")
         validate_handoff_policy(decision.handoff)
         stats_response = await stats_agent_turn(
             StatisticsAgentTurnRequest(
-                session_id=f"{req.session_id}:handoff:{record.seq}:statistics",
+                session_id=f"{req.session_id}:handoff:{seq}:statistics",
                 user_message=_handoff_stats_message(req.user_message, language=language),
             ),
             user=user,
         )
         return StreamingResponse(
             _handoff_stream(
-                seq=record.seq,
+                seq=seq,
                 decision=decision,
                 stats_response=stats_response,
                 session_id=req.session_id,
@@ -639,13 +512,13 @@ async def unified_agent_turn(req: AgentTurnRequest, user=Depends(get_current_use
             media_type="text/event-stream",
         )
 
+    # CLARIFY / REFUSE: router-only.
     if decision.route != RouteKind.SPECIALIST:
-        text = _router_terminal_text(decision, language=language)
         return StreamingResponse(
             _terminal_stream(
-                record.seq,
-                decision,
-                text,
+                seq=seq,
+                decision=decision,
+                text=_router_terminal_text(decision, language=language),
                 session_id=req.session_id,
                 user_id=user_id,
                 user_message=req.user_message,
@@ -653,20 +526,21 @@ async def unified_agent_turn(req: AgentTurnRequest, user=Depends(get_current_use
             media_type="text/event-stream",
         )
 
+    # SPECIALIST: dispatch and pass router_decision through so the specialist's
+    # agent_turns row carries the routing context. The specialist owns the write.
+    decision_payload = decision.model_dump(mode="json")
+
     if decision.agent_kind == AgentKind.STATISTICS:
         specialist_response = await stats_agent_turn(
-            StatisticsAgentTurnRequest(session_id=req.session_id, user_message=req.user_message),
+            StatisticsAgentTurnRequest(
+                session_id=req.session_id,
+                user_message=req.user_message,
+                router_decision=decision_payload,
+            ),
             user=user,
         )
         return StreamingResponse(
-            _prepend_router_event(
-                seq=record.seq,
-                decision=decision,
-                specialist_response=specialist_response,
-                session_id=req.session_id,
-                user_id=user_id,
-                user_message=req.user_message,
-            ),
+            _prepend_router_event(seq, decision, specialist_response),
             media_type="text/event-stream",
         )
 
@@ -683,21 +557,13 @@ async def unified_agent_turn(req: AgentTurnRequest, user=Depends(get_current_use
                 session_id=req.session_id,
                 user_message=meeting_user_message,
                 agenda_snapshot=req.agenda_snapshot,
+                router_decision=decision_payload,
             ).model_dump_json(),
-            image=None,
+            image=image,
             user=user,
         )
         return StreamingResponse(
-            _prepend_router_event(
-                seq=record.seq,
-                decision=decision,
-                specialist_response=specialist_response,
-                session_id=req.session_id,
-                user_id=user_id,
-                user_message=req.user_message,
-                agenda_before=req.agenda_snapshot.model_dump(mode="json"),
-                handoff_context=handoff_context,
-            ),
+            _prepend_router_event(seq, decision, specialist_response),
             media_type="text/event-stream",
         )
 
@@ -708,12 +574,11 @@ async def unified_agent_turn(req: AgentTurnRequest, user=Depends(get_current_use
         reason="Router selected a specialist without the required request payload.",
         clarification_question="Please retry with the current meeting draft context.",
     )
-    text = _router_terminal_text(fallback, language=language)
     return StreamingResponse(
         _terminal_stream(
-            record.seq,
-            fallback,
-            text,
+            seq=seq,
+            decision=fallback,
+            text=_router_terminal_text(fallback, language=language),
             session_id=req.session_id,
             user_id=user_id,
             user_message=req.user_message,

@@ -764,6 +764,7 @@ def _rows_for_member_award_matrix(
     date_to: str | None,
     member: str | None,
     category_filters: list[str] | None,
+    meeting_no: int | None,
 ) -> tuple[list[dict], list[str], set[str] | None]:
     raw_rows = get_member_award_stats(date_from, date_to)
     observed_categories = _observed_award_categories(raw_rows)
@@ -773,6 +774,8 @@ def _rows_for_member_award_matrix(
     rows: list[dict] = []
     for row in raw_rows:
         if canonical_member and row.get("member_id") != canonical_member.id:
+            continue
+        if meeting_no is not None and row.get("meeting_no") != meeting_no:
             continue
         category_lower = (row.get("category") or "").lower()
         if resolved_category_filters is not None and category_lower not in resolved_category_filters:
@@ -895,6 +898,7 @@ async def apply_member_award_matrix(
     date_to: str | None = None,
     member: str | None = None,
     category_filters: list[str] | None = None,
+    meeting_no: int | None = None,
     group_by: str = "winner_category",
     sort_by: str = "count",
     sort_order: str = "desc",
@@ -918,6 +922,7 @@ async def apply_member_award_matrix(
         date_to=date_to,
         member=member,
         category_filters=category_filters,
+        meeting_no=meeting_no,
     )
     groups = _build_award_groups(rows, group_by=group_by, include_meetings=include_meetings)
     groups = _sort_award_groups(groups, sort_by=sort_by, sort_order=sort_order)
@@ -944,6 +949,7 @@ async def apply_member_award_matrix(
             "resolved_category_filters": (
                 sorted(resolved_category_filters) if resolved_category_filters is not None else None
             ),
+            "meeting_no": meeting_no,
             "group_by": group_by,
             "sort_by": sort_by,
             "sort_order": sort_order,

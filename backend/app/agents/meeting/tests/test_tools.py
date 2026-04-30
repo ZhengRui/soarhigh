@@ -7,7 +7,6 @@ import pytest
 from pydantic_ai import ModelRetry
 
 from app.agents.meeting.models import Agenda, AgendaDeps, Meta, Segment
-from app.agents.meeting.store import InMemorySessionStore, TurnRecord
 from app.agents.meeting.timing import recompute_start_times
 from app.agents.meeting.tools import (
     apply_add_segment,
@@ -30,6 +29,8 @@ from app.agents.meeting.tools import (
     apply_swap_roles,
     apply_swap_time,
 )
+from app.agents.runtime.contracts import AgentKind, RouteKind
+from app.agents.runtime.store import AgentTurnRecord, InMemoryUnifiedAgentTurnStore
 
 
 @dataclass
@@ -150,11 +151,13 @@ def _fake_db_meetings():
     ]
 
 
-async def _seed_lookup_turn(store: InMemorySessionStore, session_id: str, no: int):
+async def _seed_lookup_turn(store: InMemoryUnifiedAgentTurnStore, session_id: str, no: int):
     await store.save_turn(
         session_id,
         user_id=None,
-        turn=TurnRecord(
+        turn=AgentTurnRecord(
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
             seq=1,
             user_message=f"复制 #{no}",
             assistant_text="Found it. 确认从这期克隆吗?",
@@ -1137,10 +1140,10 @@ async def test_lookup_rejects_unknown_type_filter():
 
 @pytest.mark.asyncio
 async def test_clone_from_meeting_clears_specified_fields(monkeypatch):
-    store = InMemorySessionStore()
-    from app.agents.meeting import store as store_module
+    store = InMemoryUnifiedAgentTurnStore()
+    from app.agents.runtime import store as store_module
 
-    monkeypatch.setattr(store_module, "session_store", store)
+    monkeypatch.setattr(store_module, "agent_turn_store", store)
     deps = make_deps()
     deps.session_id = "clone-happy"
     deps.current_user_message = "确认"
@@ -1186,10 +1189,10 @@ async def test_clone_from_meeting_clears_segment_detail_fields(monkeypatch):
     from app.models.meeting import Attendee
     from app.models.meeting import Segment as MeetingSegment
 
-    store = InMemorySessionStore()
-    from app.agents.meeting import store as store_module
+    store = InMemoryUnifiedAgentTurnStore()
+    from app.agents.runtime import store as store_module
 
-    monkeypatch.setattr(store_module, "session_store", store)
+    monkeypatch.setattr(store_module, "agent_turn_store", store)
     deps = make_deps()
     deps.session_id = "clone-detail"
     deps.current_user_message = "确认"
@@ -1259,10 +1262,10 @@ async def test_clone_from_meeting_clears_segment_detail_fields(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_clone_refuses_without_prior_lookup(monkeypatch):
-    store = InMemorySessionStore()
-    from app.agents.meeting import store as store_module
+    store = InMemoryUnifiedAgentTurnStore()
+    from app.agents.runtime import store as store_module
 
-    monkeypatch.setattr(store_module, "session_store", store)
+    monkeypatch.setattr(store_module, "agent_turn_store", store)
     deps = make_deps()
     deps.session_id = "clone-no-lookup"
     deps.current_user_message = "确认"
@@ -1277,10 +1280,10 @@ async def test_clone_refuses_without_prior_lookup(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_clone_refuses_when_lookup_was_for_a_different_no(monkeypatch):
-    store = InMemorySessionStore()
-    from app.agents.meeting import store as store_module
+    store = InMemoryUnifiedAgentTurnStore()
+    from app.agents.runtime import store as store_module
 
-    monkeypatch.setattr(store_module, "session_store", store)
+    monkeypatch.setattr(store_module, "agent_turn_store", store)
     deps = make_deps()
     deps.session_id = "clone-wrong-no"
     deps.current_user_message = "确认"
@@ -1294,10 +1297,10 @@ async def test_clone_refuses_when_lookup_was_for_a_different_no(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_clone_refuses_without_explicit_confirmation(monkeypatch):
-    store = InMemorySessionStore()
-    from app.agents.meeting import store as store_module
+    store = InMemoryUnifiedAgentTurnStore()
+    from app.agents.runtime import store as store_module
 
-    monkeypatch.setattr(store_module, "session_store", store)
+    monkeypatch.setattr(store_module, "agent_turn_store", store)
     deps = make_deps()
     deps.session_id = "clone-no-confirm"
     deps.current_user_message = "不是这个"
@@ -1311,10 +1314,10 @@ async def test_clone_refuses_without_explicit_confirmation(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_clone_from_meeting_unknown_no_raises_modelretry(monkeypatch):
-    store = InMemorySessionStore()
-    from app.agents.meeting import store as store_module
+    store = InMemoryUnifiedAgentTurnStore()
+    from app.agents.runtime import store as store_module
 
-    monkeypatch.setattr(store_module, "session_store", store)
+    monkeypatch.setattr(store_module, "agent_turn_store", store)
     deps = make_deps()
     deps.session_id = "clone-unknown"
     deps.current_user_message = "确认"
@@ -2166,10 +2169,9 @@ async def test_revert_last_turn_restores_agenda_before_of_latest_turn(monkeypatc
     """Seeds an InMemory store with one turn whose agenda_before differs from
     the current in-memory agenda. The tool should replace ctx.deps.agenda
     wholesale so it matches the stored snapshot."""
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
+    from app.agents.runtime import store as store_module
 
-    fake_store = InMemorySessionStore()
+    fake_store = InMemoryUnifiedAgentTurnStore()
     # The "before" state we want to restore: 1 segment, specific role.
     before_snapshot = {
         "meta": {"start_time": "19:15"},
@@ -2187,7 +2189,9 @@ async def test_revert_last_turn_restores_agenda_before_of_latest_turn(monkeypatc
     await fake_store.save_turn(
         "sess-rev",
         user_id="u",
-        turn=TurnRecord(
+        turn=AgentTurnRecord(
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
             seq=1,
             user_message="change SAA to Modified",
             assistant_text="ok",
@@ -2197,7 +2201,7 @@ async def test_revert_last_turn_restores_agenda_before_of_latest_turn(monkeypatc
             history_cursor=[],
         ),
     )
-    monkeypatch.setattr(store_module, "session_store", fake_store)
+    monkeypatch.setattr(store_module, "agent_turn_store", fake_store)
 
     # Current in-memory agenda is different from agenda_before — after revert
     # it should match `before_snapshot` exactly.
@@ -2234,10 +2238,9 @@ async def test_revert_last_turn_skips_chit_chat_turns(monkeypatch):
     describe/question turn), revert_last_turn should walk back past it and
     undo the most recent actual EDIT turn. Matches user intuition: '撤销' is
     always about reversing state changes, not reversing descriptions."""
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
+    from app.agents.runtime import store as store_module
 
-    fake_store = InMemorySessionStore()
+    fake_store = InMemoryUnifiedAgentTurnStore()
     # Turn 1: real edit. agenda_before has ONE specific segment we can check.
     edit_before = {
         "meta": {},
@@ -2255,7 +2258,9 @@ async def test_revert_last_turn_skips_chit_chat_turns(monkeypatch):
     await fake_store.save_turn(
         "sess",
         user_id="u",
-        turn=TurnRecord(
+        turn=AgentTurnRecord(
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
             seq=1,
             user_message="add a segment",
             assistant_text="ok",
@@ -2269,7 +2274,9 @@ async def test_revert_last_turn_skips_chit_chat_turns(monkeypatch):
     await fake_store.save_turn(
         "sess",
         user_id="u",
-        turn=TurnRecord(
+        turn=AgentTurnRecord(
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
             seq=2,
             user_message="教一下刚才的操作",
             assistant_text="you added a segment",
@@ -2279,7 +2286,7 @@ async def test_revert_last_turn_skips_chit_chat_turns(monkeypatch):
             history_cursor=[],
         ),
     )
-    monkeypatch.setattr(store_module, "session_store", fake_store)
+    monkeypatch.setattr(store_module, "agent_turn_store", fake_store)
 
     deps = AgendaDeps(session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
     ctx = FakeCtx(deps=deps)
@@ -2299,14 +2306,15 @@ async def test_revert_last_turn_refuses_when_only_chit_chat(monkeypatch):
     """A session with only describe/question turns has no edits to undo.
     The tool must refuse rather than silently no-op, so the agent can tell
     the user instead of falsely claiming to have reverted."""
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
+    from app.agents.runtime import store as store_module
 
-    fake_store = InMemorySessionStore()
+    fake_store = InMemoryUnifiedAgentTurnStore()
     await fake_store.save_turn(
         "sess",
         user_id="u",
-        turn=TurnRecord(
+        turn=AgentTurnRecord(
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
             seq=1,
             user_message="hi",
             assistant_text="hello!",
@@ -2316,7 +2324,7 @@ async def test_revert_last_turn_refuses_when_only_chit_chat(monkeypatch):
             history_cursor=[],
         ),
     )
-    monkeypatch.setattr(store_module, "session_store", fake_store)
+    monkeypatch.setattr(store_module, "agent_turn_store", fake_store)
 
     deps = AgendaDeps(session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
     ctx = FakeCtx(deps=deps)
@@ -2330,15 +2338,16 @@ async def test_revert_last_turn_refuses_when_previous_turn_was_revert(monkeypatc
     revert_last_turn must refuse to prevent ping-pong. The refusal message
     should include a list of recent non-revert edit turns for the agent to
     present to the user."""
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
+    from app.agents.runtime import store as store_module
 
-    fake_store = InMemorySessionStore()
+    fake_store = InMemoryUnifiedAgentTurnStore()
     # Turn 1: a real edit.
     await fake_store.save_turn(
         "sess",
         user_id="u",
-        turn=TurnRecord(
+        turn=AgentTurnRecord(
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
             seq=1,
             user_message="把 SAA 改成 Joyce",
             assistant_text="ok",
@@ -2352,7 +2361,9 @@ async def test_revert_last_turn_refuses_when_previous_turn_was_revert(monkeypatc
     await fake_store.save_turn(
         "sess",
         user_id="u",
-        turn=TurnRecord(
+        turn=AgentTurnRecord(
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
             seq=2,
             user_message="撤销一下",
             assistant_text="已撤销",
@@ -2362,7 +2373,7 @@ async def test_revert_last_turn_refuses_when_previous_turn_was_revert(monkeypatc
             history_cursor=[],
         ),
     )
-    monkeypatch.setattr(store_module, "session_store", fake_store)
+    monkeypatch.setattr(store_module, "agent_turn_store", fake_store)
 
     deps = AgendaDeps(session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
     ctx = FakeCtx(deps=deps)
@@ -2390,17 +2401,18 @@ async def test_revert_to_turn_applies_agenda_after_of_target(monkeypatch):
     """revert_to_turn(after_seq=N) restores agenda_after of turn N (the state
     that existed right after turn N completed). 'AFTER' semantics — the seq
     the user picks maps directly to the parameter."""
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
+    from app.agents.runtime import store as store_module
 
-    fake_store = InMemorySessionStore()
+    fake_store = InMemoryUnifiedAgentTurnStore()
     # Seed three turns. Each one's agenda_after has a distinct segment type
     # so we can verify the RIGHT turn's after-state got restored.
     for seq in range(1, 4):
         await fake_store.save_turn(
             "s",
             user_id="u",
-            turn=TurnRecord(
+            turn=AgentTurnRecord(
+                agent_kind=AgentKind.MEETING,
+                route=RouteKind.SPECIALIST,
                 seq=seq,
                 user_message=f"turn {seq}",
                 assistant_text=f"reply {seq}",
@@ -2422,7 +2434,7 @@ async def test_revert_to_turn_applies_agenda_after_of_target(monkeypatch):
                 history_cursor=[],
             ),
         )
-    monkeypatch.setattr(store_module, "session_store", fake_store)
+    monkeypatch.setattr(store_module, "agent_turn_store", fake_store)
 
     deps = AgendaDeps(
         session_id="s",
@@ -2445,15 +2457,16 @@ async def test_revert_to_turn_applies_agenda_after_of_target(monkeypatch):
 async def test_revert_to_turn_after_seq_0_restores_initial_state(monkeypatch):
     """after_seq=0 is the 'initial state' restore point — agenda_before of
     turn 1 (what existed before any edits)."""
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
+    from app.agents.runtime import store as store_module
 
-    fake_store = InMemorySessionStore()
+    fake_store = InMemoryUnifiedAgentTurnStore()
     initial = {"meta": {"start_time": "19:00"}, "segments": []}
     await fake_store.save_turn(
         "s",
         user_id="u",
-        turn=TurnRecord(
+        turn=AgentTurnRecord(
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
             seq=1,
             user_message="first edit",
             assistant_text="ok",
@@ -2475,7 +2488,7 @@ async def test_revert_to_turn_after_seq_0_restores_initial_state(monkeypatch):
             history_cursor=[],
         ),
     )
-    monkeypatch.setattr(store_module, "session_store", fake_store)
+    monkeypatch.setattr(store_module, "agent_turn_store", fake_store)
 
     deps = AgendaDeps(
         session_id="s",
@@ -2490,10 +2503,10 @@ async def test_revert_to_turn_after_seq_0_restores_initial_state(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_revert_to_turn_unknown_seq_refuses(monkeypatch):
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore
+    from app.agents.runtime import store as store_module
+    from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
 
-    monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
+    monkeypatch.setattr(store_module, "agent_turn_store", InMemoryUnifiedAgentTurnStore())
     ctx = FakeCtx(deps=AgendaDeps(session_id="empty", agenda=Agenda(meta=Meta(), segments=[])))
     with pytest.raises(ModelRetry, match="not found"):
         await apply_revert_to_turn(ctx, after_seq=5)
@@ -2501,10 +2514,10 @@ async def test_revert_to_turn_unknown_seq_refuses(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_revert_to_turn_negative_seq_refuses(monkeypatch):
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore
+    from app.agents.runtime import store as store_module
+    from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
 
-    monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
+    monkeypatch.setattr(store_module, "agent_turn_store", InMemoryUnifiedAgentTurnStore())
     ctx = FakeCtx(deps=AgendaDeps(session_id="x", agenda=Agenda(meta=Meta(), segments=[])))
     with pytest.raises(ModelRetry, match=">= 0"):
         await apply_revert_to_turn(ctx, after_seq=-1)
@@ -2514,10 +2527,10 @@ async def test_revert_to_turn_negative_seq_refuses(monkeypatch):
 async def test_revert_to_turn_0_on_empty_session_refuses(monkeypatch):
     """after_seq=0 on a never-saved session should refuse — there's no
     turn 1's agenda_before to load."""
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore
+    from app.agents.runtime import store as store_module
+    from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
 
-    monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
+    monkeypatch.setattr(store_module, "agent_turn_store", InMemoryUnifiedAgentTurnStore())
     ctx = FakeCtx(deps=AgendaDeps(session_id="none", agenda=Agenda(meta=Meta(), segments=[])))
     with pytest.raises(ModelRetry, match="no turns"):
         await apply_revert_to_turn(ctx, after_seq=0)
@@ -2525,10 +2538,10 @@ async def test_revert_to_turn_0_on_empty_session_refuses(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_revert_last_turn_refuses_when_session_empty(monkeypatch):
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore
+    from app.agents.runtime import store as store_module
+    from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
 
-    monkeypatch.setattr(store_module, "session_store", InMemorySessionStore())
+    monkeypatch.setattr(store_module, "agent_turn_store", InMemoryUnifiedAgentTurnStore())
 
     deps = AgendaDeps(
         session_id="never-saved",
@@ -2546,16 +2559,17 @@ async def test_revert_last_turn_mutates_in_place_not_reassigns(monkeypatch):
     ctx.deps.agenda and reads it after the tool returns. If we reassigned
     ctx.deps.agenda = X instead of mutating, the framework would still see
     the old object. Verify the same Agenda instance is updated in place."""
-    from app.agents.meeting import store as store_module
-    from app.agents.meeting.store import InMemorySessionStore, TurnRecord
+    from app.agents.runtime import store as store_module
 
-    fake_store = InMemorySessionStore()
+    fake_store = InMemoryUnifiedAgentTurnStore()
     # Must be an EDIT turn (not chit-chat) or the tool refuses — the in-place
     # invariant only matters on the success path.
     await fake_store.save_turn(
         "sess",
         user_id="u",
-        turn=TurnRecord(
+        turn=AgentTurnRecord(
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
             seq=1,
             user_message="remove everything",
             assistant_text="ok",
@@ -2565,7 +2579,7 @@ async def test_revert_last_turn_mutates_in_place_not_reassigns(monkeypatch):
             history_cursor=[],
         ),
     )
-    monkeypatch.setattr(store_module, "session_store", fake_store)
+    monkeypatch.setattr(store_module, "agent_turn_store", fake_store)
 
     deps = AgendaDeps(
         session_id="sess",

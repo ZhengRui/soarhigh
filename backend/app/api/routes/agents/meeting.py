@@ -23,21 +23,21 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from ...agents.meeting.agent import USAGE_LIMITS, agent
-from ...agents.meeting.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
-from ...agents.meeting.models import AgendaDeps
-from ...agents.meeting.prompts import SNAPSHOT_TEMPLATE
-from ...agents.meeting.segment_ids import shorten_agenda_dump
-from ...agents.meeting.store import TurnRecord, session_store
-from ...agents.runtime.contracts import AgentKind
-from ...agents.runtime.policy import require_tool_allowed
-from ...models.meeting_agent import MeetingAgentRevertRequest, MeetingAgentTurnRequest
-from ...services.meeting_preview_markdown import (
+from ....agents.meeting.agent import USAGE_LIMITS, agent
+from ....agents.meeting.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
+from ....agents.meeting.models import AgendaDeps
+from ....agents.meeting.prompts import SNAPSHOT_TEMPLATE
+from ....agents.meeting.segment_ids import shorten_agenda_dump
+from ....agents.runtime.contracts import AgentKind, RouteKind
+from ....agents.runtime.policy import require_tool_allowed
+from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
+from ....models.agents.meeting import MeetingAgentRevertRequest, MeetingAgentTurnRequest
+from ....services.meeting_preview_markdown import (
     format_role_display,
     format_segment_detail_cell,
     render_preview_addendum,
 )
-from .auth import get_current_user
+from ..auth import get_current_user
 
 log = logging.getLogger(__name__)
 meeting_agent_router = r = APIRouter(prefix="/meeting-agent")
@@ -373,12 +373,12 @@ async def agent_turn(
 
     async def event_stream() -> AsyncIterator[bytes]:
         try:
-            tail_seq, history_json = await session_store.load(req.session_id)
+            tail_seq, history_json = await agent_turn_store.load(req.session_id)
             next_seq = tail_seq + 1
 
             full_history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
             # Cap context window at the last N user turns. Older turns drop off
-            # here; they remain in session_store (so the UI can still show the
+            # here; they remain in agent_turns (so the UI can still show the
             # full conversation), only the portion fed to the LLM is trimmed.
             history = truncate_to_last_turns(full_history)
             # Eager-fetch the live members directory once per turn. The agent
@@ -531,14 +531,17 @@ async def agent_turn(
             # run.result.output is None because of an early exit), but fall back
             # to final_text if no chunks were streamed.
             assistant_text = "".join(assistant_text_chunks) or final_text
-            await session_store.save_turn(
+            await agent_turn_store.save_turn(
                 req.session_id,
                 user_id=getattr(user, "uid", None),
-                turn=TurnRecord(
+                turn=AgentTurnRecord(
                     seq=next_seq,
+                    agent_kind=AgentKind.MEETING,
+                    route=RouteKind.SPECIALIST,
                     user_message=req.user_message,
                     assistant_text=assistant_text,
                     tool_trace=tool_trace,
+                    router_decision=req.router_decision or {},
                     agenda_before=agenda_before,
                     agenda_after=deps.agenda.model_dump(),
                     history_cursor=final_msgs,
@@ -589,11 +592,16 @@ async def agent_revert(req: MeetingAgentRevertRequest, user=Depends(get_current_
     if req.target_seq < 1:
         raise HTTPException(status_code=400, detail="target_seq must be >= 1")
 
-    turn = await session_store.load_turn(req.session_id, req.target_seq)
+    turn = await agent_turn_store.load_turn(req.session_id, req.target_seq)
     if turn is None:
         raise HTTPException(status_code=404, detail=f"turn {req.target_seq} not found")
+    # AgentKind is a str Enum, so equality covers both enum and raw string forms.
+    if turn.agent_kind != AgentKind.MEETING or turn.agenda_before is None:
+        raise HTTPException(
+            status_code=400, detail=f"turn {req.target_seq} is not a meeting edit and cannot be reverted"
+        )
 
-    await session_store.delete_turns_at_or_after(req.session_id, req.target_seq)
+    await agent_turn_store.delete_turns_at_or_after(req.session_id, req.target_seq)
     return {
         "agenda": turn.agenda_before,
         "new_tail_seq": req.target_seq - 1,

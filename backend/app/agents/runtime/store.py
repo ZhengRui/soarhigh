@@ -1,8 +1,10 @@
-"""Unified turn persistence for the top-level agent endpoint.
+"""Unified turn persistence for the agent endpoints.
 
-The specialist stores remain the source of truth for model history and meeting
-revert. This store records the user-facing `/agent/turn` envelope so a single
-conversation can contain router-only, meeting, and statistics turns.
+Single source of truth for both /agent/turn (router-mediated) and the standalone
+/meeting-agent/turn / /statistics-agent/turn endpoints. One row per user
+message, regardless of which specialist handled it. `history_cursor` carries
+the Pydantic AI ModelMessage[] so the next turn — possibly run by a different
+specialist — picks up the conversation seamlessly.
 """
 
 from __future__ import annotations
@@ -33,10 +35,32 @@ class AgentTurnRecord:
     specialist_seq: int | None = None
     agenda_before: dict | None = None
     agenda_after: dict | None = None
+    history_cursor: list[dict] = field(default_factory=list)
     domain_payload: dict = field(default_factory=dict)
 
 
+def _row_to_record(row: dict) -> AgentTurnRecord:
+    return AgentTurnRecord(
+        seq=row["seq"],
+        agent_kind=row["agent_kind"],
+        route=row["route"],
+        user_message=row["user_message"],
+        assistant_text=row.get("assistant_text") or "",
+        tool_trace=row.get("tool_trace") or [],
+        router_decision=row.get("router_decision") or {},
+        specialist_seq=row.get("specialist_seq"),
+        agenda_before=row.get("agenda_before"),
+        agenda_after=row.get("agenda_after"),
+        history_cursor=row.get("history_cursor") or [],
+        domain_payload=row.get("domain_payload") or {},
+    )
+
+
 class UnifiedAgentTurnStore(Protocol):
+    async def load(self, session_id: str) -> tuple[int, list]:
+        """Return (tail_seq, history_cursor_of_latest_turn). Missing → (0, [])."""
+        ...
+
     async def save_turn(
         self,
         session_id: str,
@@ -48,6 +72,8 @@ class UnifiedAgentTurnStore(Protocol):
 
     async def load_latest(self, session_id: str) -> AgentTurnRecord | None: ...
 
+    async def delete_turns_at_or_after(self, session_id: str, seq: int) -> None: ...
+
 
 class InMemoryUnifiedAgentTurnStore:
     """Process-local store used by tests and local dev without Supabase."""
@@ -55,6 +81,15 @@ class InMemoryUnifiedAgentTurnStore:
     def __init__(self) -> None:
         self._data: dict[str, tuple[int, dict[int, AgentTurnRecord]]] = {}
         self._lock = asyncio.Lock()
+
+    async def load(self, session_id: str) -> tuple[int, list]:
+        async with self._lock:
+            entry = self._data.get(session_id)
+            if entry is None:
+                return (0, [])
+            tail_seq, turns = entry
+            latest = turns.get(tail_seq)
+            return (tail_seq, latest.history_cursor if latest else [])
 
     async def save_turn(
         self,
@@ -82,6 +117,18 @@ class InMemoryUnifiedAgentTurnStore:
             tail_seq, turns = entry
             return turns.get(tail_seq)
 
+    async def delete_turns_at_or_after(self, session_id: str, seq: int) -> None:
+        async with self._lock:
+            entry = self._data.get(session_id)
+            if entry is None:
+                return
+            _tail, turns = entry
+            for s in list(turns.keys()):
+                if s >= seq:
+                    del turns[s]
+            new_tail = max(turns.keys(), default=0)
+            self._data[session_id] = (new_tail, turns)
+
 
 class SupabaseUnifiedAgentTurnStore:
     """Durable store backed by agent_sessions / agent_turns."""
@@ -94,6 +141,33 @@ class SupabaseUnifiedAgentTurnStore:
             from app.db.supabase import supabase as client
 
         self._client = client
+
+    async def load(self, session_id: str) -> tuple[int, list]:
+        def _fetch() -> tuple[int, list]:
+            sess = (
+                self._client.table(self.SESSIONS_TABLE)
+                .select("tail_seq")
+                .eq("session_id", session_id)
+                .limit(1)
+                .execute()
+            )
+            if not sess.data:
+                return (0, [])
+            tail_seq = sess.data[0]["tail_seq"] or 0
+            if tail_seq == 0:
+                return (0, [])
+            turn = (
+                self._client.table(self.TURNS_TABLE)
+                .select("history_cursor")
+                .eq("session_id", session_id)
+                .eq("seq", tail_seq)
+                .limit(1)
+                .execute()
+            )
+            history = turn.data[0]["history_cursor"] if turn.data else []
+            return (tail_seq, history or [])
+
+        return await asyncio.to_thread(_fetch)
 
     async def save_turn(
         self,
@@ -122,6 +196,7 @@ class SupabaseUnifiedAgentTurnStore:
                     "specialist_seq": turn.specialist_seq,
                     "agenda_before": turn.agenda_before,
                     "agenda_after": turn.agenda_after,
+                    "history_cursor": turn.history_cursor,
                     "domain_payload": turn.domain_payload,
                 }
             ).execute()
@@ -138,22 +213,7 @@ class SupabaseUnifiedAgentTurnStore:
                 .limit(1)
                 .execute()
             )
-            if not res.data:
-                return None
-            row = res.data[0]
-            return AgentTurnRecord(
-                seq=row["seq"],
-                agent_kind=row["agent_kind"],
-                route=row["route"],
-                user_message=row["user_message"],
-                assistant_text=row.get("assistant_text") or "",
-                tool_trace=row.get("tool_trace") or [],
-                router_decision=row.get("router_decision") or {},
-                specialist_seq=row.get("specialist_seq"),
-                agenda_before=row.get("agenda_before"),
-                agenda_after=row.get("agenda_after"),
-                domain_payload=row.get("domain_payload") or {},
-            )
+            return _row_to_record(res.data[0]) if res.data else None
 
         return await asyncio.to_thread(_fetch)
 
@@ -167,24 +227,18 @@ class SupabaseUnifiedAgentTurnStore:
                 .limit(1)
                 .execute()
             )
-            if not res.data:
-                return None
-            row = res.data[0]
-            return AgentTurnRecord(
-                seq=row["seq"],
-                agent_kind=row["agent_kind"],
-                route=row["route"],
-                user_message=row["user_message"],
-                assistant_text=row.get("assistant_text") or "",
-                tool_trace=row.get("tool_trace") or [],
-                router_decision=row.get("router_decision") or {},
-                specialist_seq=row.get("specialist_seq"),
-                agenda_before=row.get("agenda_before"),
-                agenda_after=row.get("agenda_after"),
-                domain_payload=row.get("domain_payload") or {},
-            )
+            return _row_to_record(res.data[0]) if res.data else None
 
         return await asyncio.to_thread(_fetch)
+
+    async def delete_turns_at_or_after(self, session_id: str, seq: int) -> None:
+        def _delete() -> None:
+            self._client.table(self.TURNS_TABLE).delete().eq("session_id", session_id).gte("seq", seq).execute()
+            self._client.table(self.SESSIONS_TABLE).update({"tail_seq": max(seq - 1, 0)}).eq(
+                "session_id", session_id
+            ).execute()
+
+        await asyncio.to_thread(_delete)
 
 
 def _build_default_store() -> UnifiedAgentTurnStore:

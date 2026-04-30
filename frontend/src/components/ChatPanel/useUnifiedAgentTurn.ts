@@ -15,6 +15,7 @@ export function useUnifiedAgentTurn({
       session_id: string;
       user_message: string;
       agenda_snapshot: AgendaSnapshot;
+      image?: File | null;
     }) => {
       controllerRef.current?.abort();
       const controller = new AbortController();
@@ -23,17 +24,26 @@ export function useUnifiedAgentTurn({
       const token =
         typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
-      const res = await fetch(`${apiEndpoint}/agent/turn`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
+      // The unified route accepts multipart so the create-from-image flow can
+      // attach an image alongside the JSON payload. No-image turns just have
+      // an empty `image` field.
+      const form = new FormData();
+      form.append(
+        'payload',
+        JSON.stringify({
           session_id: args.session_id,
           user_message: args.user_message,
           agenda_snapshot: args.agenda_snapshot,
-        }),
+        })
+      );
+      if (args.image) form.append('image', args.image, args.image.name);
+
+      const res = await fetch(`${apiEndpoint}/agent/turn`, {
+        method: 'POST',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: form,
         signal: controller.signal,
       });
       if (!res.ok || !res.body) throw new Error(`Bad response: ${res.status}`);

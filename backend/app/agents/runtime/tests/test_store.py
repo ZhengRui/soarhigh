@@ -47,6 +47,38 @@ async def test_in_memory_store_loads_latest_turn():
     assert await store.load_latest("missing") is None
 
 
+@pytest.mark.asyncio
+async def test_in_memory_store_load_returns_tail_and_history():
+    store = InMemoryUnifiedAgentTurnStore()
+    assert await store.load("nope") == (0, [])
+
+    turn1 = _make_turn(seq=1)
+    turn1.history_cursor = [{"msg": "a"}]
+    await store.save_turn("s1", user_id="u1", turn=turn1)
+    turn2 = _make_turn(seq=2)
+    turn2.history_cursor = [{"msg": "a"}, {"msg": "b"}]
+    await store.save_turn("s1", user_id="u1", turn=turn2)
+
+    tail, hist = await store.load("s1")
+    assert tail == 2
+    assert hist == [{"msg": "a"}, {"msg": "b"}]
+
+
+@pytest.mark.asyncio
+async def test_in_memory_store_delete_at_or_after_rewinds_tail():
+    store = InMemoryUnifiedAgentTurnStore()
+    for seq in range(1, 5):  # 1..4
+        await store.save_turn("s1", user_id="u1", turn=_make_turn(seq=seq))
+
+    await store.delete_turns_at_or_after("s1", 3)
+
+    tail, _ = await store.load("s1")
+    assert tail == 2
+    assert await store.load_turn("s1", 3) is None
+    assert await store.load_turn("s1", 4) is None
+    assert await store.load_turn("s1", 2) is not None
+
+
 class _FakeQuery:
     def __init__(self, trace: list[dict], table: str, op: str, returns: dict[tuple[str, str], list]):
         self._trace = trace
