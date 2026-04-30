@@ -31,6 +31,7 @@ class RouteKind(str, Enum):
     CLARIFY = "clarify"
     HANDOFF = "handoff"
     REFUSE = "refuse"
+    DIRECT_ANSWER = "direct_answer"
 
 
 class HandoffPayload(BaseModel):
@@ -70,6 +71,7 @@ class RouterDecision(BaseModel):
     agent_kind: AgentKind | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     clarification_question: str | None = None
+    direct_response: str | None = None
     handoff: HandoffPayload | None = None
     metadata: JsonObject = Field(default_factory=dict)
 
@@ -95,4 +97,11 @@ class RouterDecision(BaseModel):
                 raise ValueError("refuse route requires reason")
             if self.handoff is not None:
                 raise ValueError("refuse route must not include handoff payload")
+        elif self.route == RouteKind.DIRECT_ANSWER:
+            if not (self.direct_response or "").strip():
+                raise ValueError("direct_answer route requires direct_response")
+            if self.handoff is not None:
+                raise ValueError("direct_answer route must not include handoff payload")
+            if self.agent_kind is not None:
+                raise ValueError("direct_answer route must not include agent_kind")
         return self

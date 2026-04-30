@@ -38,15 +38,40 @@ export function useUnifiedAgentTurn({
       );
       if (args.image) form.append('image', args.image, args.image.name);
 
-      const res = await fetch(`${apiEndpoint}/agent/turn`, {
-        method: 'POST',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: form,
-        signal: controller.signal,
-      });
-      if (!res.ok || !res.body) throw new Error(`Bad response: ${res.status}`);
+      // Synthesize an error event into onEvent so the chat panel's
+      // existing handler shows the banner + clears loading. Without
+      // this, fetch failures or non-OK responses would propagate to
+      // the caller's catch and leave a stuck empty "…" bubble.
+      const reportError = (message: string) => {
+        onEvent({
+          type: 'error',
+          data: { reason: 'transport_error', recoverable: true, message },
+        });
+      };
+
+      let res: Response;
+      try {
+        res = await fetch(`${apiEndpoint}/agent/turn`, {
+          method: 'POST',
+          headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: form,
+          signal: controller.signal,
+        });
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') {
+          onEvent({ type: 'cancelled', data: {} });
+          return;
+        }
+        reportError((e as Error).message || 'Network error');
+        return;
+      }
+
+      if (!res.ok || !res.body) {
+        reportError(`Server returned ${res.status}`);
+        return;
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -74,7 +99,7 @@ export function useUnifiedAgentTurn({
         if ((e as Error).name === 'AbortError') {
           onEvent({ type: 'cancelled', data: {} });
         } else {
-          throw e;
+          reportError((e as Error).message || 'Stream read error');
         }
       }
     },

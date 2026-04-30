@@ -107,16 +107,6 @@ _STANDARD_AWARD_CATEGORIES: dict[str, str] = {
 }
 
 _REFERENCE_LIMIT = 20
-_COUNT_QUERY_PATTERNS = (
-    "几次",
-    "多少",
-    "一共",
-    "总共",
-    "how many",
-    "count",
-    "number of",
-    "total",
-)
 
 
 def _validate_dates(date_from: str | None, date_to: str | None) -> None:
@@ -176,19 +166,6 @@ def _require_relative_dates_if_requested(ctx, date_from: str | None, date_to: st
         f'date_from="{suggested_from}" and date_to="{suggested_to}" so the answer '
         "does not accidentally use all-history data."
     )
-
-
-def refuse_lookup_if_aggregate_count(ctx) -> None:
-    """Stats lookup is bounded; do not let it answer complete count questions."""
-    message = (getattr(getattr(ctx, "deps", None), "current_user_message", "") or "").lower()
-    if any(pattern in message for pattern in _COUNT_QUERY_PATTERNS):
-        raise ModelRetry(
-            "Do not use lookup_meeting for aggregate count questions in the statistics agent. "
-            "If meeting_attendance_list, member_role_matrix, or member_award_matrix can answer "
-            "the count, use that tool with an explicit date range when requested. If no stats "
-            "tool can answer it completely, tell the user this aggregate is not supported yet "
-            "instead of counting bounded lookup cards."
-        )
 
 
 def _validate_limit(limit: int) -> None:
@@ -689,6 +666,68 @@ async def apply_member_role_matrix(
             returned_count=len(capped),
         ),
         "scanned_count": len(rows),
+    }
+
+
+async def apply_meeting_manager_matrix(
+    ctx,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    type_filter: str | None = None,
+    sort_by: str = "count",
+    sort_order: str = "desc",
+    limit: int = 50,
+) -> dict:
+    """Per-member counts of meetings managed (Meeting Manager role).
+
+    Backed by `meeting_stats.group_meetings_by_manager`, which counts
+    meetings.manager_id grouped by resolved member_id. Always
+    server-side aggregated — never have the LLM count cards.
+    """
+    _require_relative_dates_if_requested(ctx, date_from, date_to)
+    _validate_dates(date_from, date_to)
+    _validate_limit(limit)
+    type_filter = _validate_type_filter(type_filter)
+    if sort_by not in ("count", "name"):
+        raise ModelRetry(f"sort_by must be 'count' or 'name'. Got: {sort_by!r}.")
+    if sort_order not in _VALID_SORT_ORDERS:
+        raise ModelRetry("sort_order must be 'asc' or 'desc'.")
+
+    rows = await asyncio.to_thread(
+        meeting_stats.group_meetings_by_manager,
+        date_from=date_from,
+        date_to=date_to,
+        type_filter=type_filter,  # type: ignore[arg-type]
+    )
+
+    reverse = sort_order == "desc"
+    if sort_by == "name":
+        rows.sort(key=lambda r: (r.get("full_name") or "").lower(), reverse=reverse)
+    else:
+        rows.sort(key=lambda r: (r.get("count", 0), (r.get("full_name") or "").lower()), reverse=reverse)
+
+    capped = rows[:limit]
+    total_meetings = sum(r.get("count", 0) for r in rows)
+
+    return {
+        "value": {
+            "groups": capped,
+            "total_managers": len(rows),
+            "total_meetings": total_meetings,
+            "limit": limit,
+        },
+        "scope": {
+            "date_from": date_from,
+            "date_to": date_to,
+            "type_filter": type_filter,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+        },
+        "coverage": _coverage(
+            source="meeting_manager_matrix",
+            total_matches=len(rows),
+            returned_count=len(capped),
+        ),
     }
 
 

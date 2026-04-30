@@ -9,7 +9,17 @@ We cap history length by turn count rather than by raw message count so the
 cap is meaningful regardless of how many tools got called in each turn.
 """
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
+from datetime import datetime, timezone
+
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    SystemPromptPart,
+    TextPart,
+    UserPromptPart,
+)
 
 MAX_TURNS_KEPT = 10
 
@@ -56,6 +66,74 @@ def truncate_to_last_turns(
 
     # Fewer than max_turns + 1 user messages total — nothing to trim.
     return history
+
+
+def replace_system_prompt(
+    history: list[ModelMessage],
+    system_prompt: str,
+) -> list[ModelMessage]:
+    """Replace foreign SystemPromptParts with the given agent's prompt.
+
+    Pydantic AI only injects an agent's registered `system_prompt` when
+    `message_history` is empty (see _agent_graph.py — `if not messages:
+    parts.extend(self._sys_parts(...))`). On follow-up turns history is
+    NEVER empty, so the agent's own prompt is silently skipped and the
+    model runs with whatever SystemPromptPart was persisted from a
+    prior turn. That's the wrong agent's identity (e.g. the router
+    inheriting the meeting agent's prompt).
+
+    Stripping isn't enough either — a non-empty history with no
+    SystemPromptPart still skips _sys_parts injection, leaving the
+    agent prompt-less. So we strip foreign system prompts AND prepend
+    our own at the head of the first ModelRequest.
+    """
+    if not history:
+        return history  # Pydantic AI will inject _sys_parts itself
+    cleaned: list[ModelMessage] = []
+    for msg in history:
+        if isinstance(msg, ModelRequest):
+            kept_parts = [p for p in msg.parts if not isinstance(p, SystemPromptPart)]
+            if not kept_parts:
+                continue  # drop request that was only a system prompt
+            cleaned.append(ModelRequest(parts=kept_parts, instructions=msg.instructions))
+        else:
+            cleaned.append(msg)
+    if not cleaned:
+        return cleaned
+    first = cleaned[0]
+    if isinstance(first, ModelRequest):
+        cleaned[0] = ModelRequest(
+            parts=[SystemPromptPart(content=system_prompt), *first.parts],
+            instructions=first.instructions,
+        )
+    else:
+        cleaned.insert(0, ModelRequest(parts=[SystemPromptPart(content=system_prompt)]))
+    return cleaned
+
+
+def append_router_exchange(
+    prior_history_dumped: list[dict],
+    *,
+    user_message: str,
+    assistant_text: str,
+) -> list[dict]:
+    """Append a router-only user/assistant exchange to a JSON-dumped history.
+
+    Specialists rely on Pydantic AI's `result.all_messages()` to capture
+    the full turn, but the router's structured output and server-side
+    text overrides (localized clarify text, fallback question) mean what
+    we actually emit can differ from the raw LLM output. Build the new
+    Pydantic AI messages explicitly so the unified history chain stays
+    intact across router-only turns; otherwise the next turn loads an
+    empty history_cursor and the router goes blind to prior context.
+    """
+    now = datetime.now(timezone.utc)
+    new_messages: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content=user_message, timestamp=now)]),
+        ModelResponse(parts=[TextPart(content=assistant_text)], timestamp=now),
+    ]
+    new_dumped = ModelMessagesTypeAdapter.dump_python(new_messages, mode="json")
+    return list(prior_history_dumped) + new_dumped
 
 
 def strip_snapshots_from_dumped_history(dumped: list[dict]) -> list[dict]:

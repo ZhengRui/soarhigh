@@ -411,13 +411,6 @@ async def test_meeting_attendance_list_retries_when_relative_date_scope_missing(
         )
 
 
-def test_stats_lookup_refuses_aggregate_count_questions():
-    ctx = FakeCtx(deps=_deps(message="主题里有 AI 的会议有几次?"))
-
-    with pytest.raises(ModelRetry, match="Do not use lookup_meeting"):
-        stats_tools.refuse_lookup_if_aggregate_count(ctx)
-
-
 @pytest.mark.asyncio
 async def test_member_role_matrix_hosting_and_facilitator_group_memberships():
     ctx = FakeCtx(deps=_deps())
@@ -935,4 +928,6 @@ async def test_stats_agent_only_registers_lookup_and_preview_tools():
         "meeting_attendance_list",
         "member_role_matrix",
         "member_award_matrix",
+        "meeting_manager_matrix",
+        "list_members",
     }

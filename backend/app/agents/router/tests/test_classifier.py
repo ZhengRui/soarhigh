@@ -88,3 +88,35 @@ def test_clarify_falls_back_to_default_question_when_missing():
 
     assert decision.route == RouteKind.CLARIFY
     assert decision.clarification_question
+
+
+def test_direct_answer_emits_router_response():
+    decision = _to_decision(
+        _RouterChoice(
+            route="direct_answer",
+            reason="greeting",
+            direct_response="Hi! I can help edit the current agenda or look up past meetings.",
+        ),
+        user_message="hello",
+        has_agenda=False,
+    )
+
+    assert decision.route == RouteKind.DIRECT_ANSWER
+    assert decision.intent == "router_direct_answer"
+    assert decision.direct_response == "Hi! I can help edit the current agenda or look up past meetings."
+    assert decision.agent_kind is None
+    assert decision.handoff is None
+
+
+def test_direct_answer_without_response_falls_back_to_clarify():
+    """Defensive: if the LLM picks direct_answer but forgets to fill
+    direct_response, we fall back to clarify rather than emit an empty
+    assistant message."""
+    decision = _to_decision(
+        _RouterChoice(route="direct_answer", reason="confused"),
+        user_message="hmm",
+        has_agenda=False,
+    )
+
+    assert decision.route == RouteKind.CLARIFY
+    assert decision.intent == "ambiguous_agent_target"

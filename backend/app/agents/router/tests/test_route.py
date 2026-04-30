@@ -3,6 +3,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import ToolDefinition
 
@@ -18,6 +19,18 @@ from app.models.users import User
 
 
 class ForcedArgsTestModel(TestModel):
+    """TestModel variant for our agent route tests.
+
+    `forced_args`: deterministic args for specific tools.
+
+    Stock TestModel emits tool calls only when no `ModelResponse` exists
+    in `messages` (see test.py:215). Real conversations always have prior
+    responses in history, so a follow-up turn would skip tool calls and
+    short-circuit to plain text — masking that the agent actually ran.
+    Strip prior responses before the decision so tool calls fire on
+    every run; harmless for tests, only affects this test fixture.
+    """
+
     def __init__(self, *, forced_args: dict[str, dict], **kwargs):
         super().__init__(**kwargs)
         self._forced_args = forced_args
@@ -26,6 +39,19 @@ class ForcedArgsTestModel(TestModel):
         if tool_def.name in self._forced_args:
             return self._forced_args[tool_def.name]
         return super().gen_tool_args(tool_def)
+
+    def _request(self, messages, model_settings, model_request_parameters):
+        # Only on the first model call of THIS run (last message is a
+        # fresh UserPromptPart, not a ToolReturn): hide prior responses
+        # so TestModel's tool-emission gate opens. Continuation calls
+        # (after a tool return) use stock TestModel logic so the run
+        # ends with a text response instead of looping on tools.
+        if messages and isinstance(messages[-1], ModelRequest):
+            is_fresh_user_turn = any(isinstance(p, UserPromptPart) for p in messages[-1].parts)
+            if is_fresh_user_turn:
+                fresh = [m for m in messages if not isinstance(m, ModelResponse)]
+                return super()._request(fresh, model_settings, model_request_parameters)
+        return super()._request(messages, model_settings, model_request_parameters)
 
 
 def _turn_kwargs(body: dict) -> dict:
@@ -130,7 +156,7 @@ def _stub_classifier(monkeypatch):
     """
     from app.agents.runtime.contracts import AgentKind, HandoffPayload, RouteKind, RouterDecision
 
-    async def fake(req):
+    async def fake(req, *, message_history=None):
         msg = (req.user_message or "").lower()
         has_agenda = req.agenda_snapshot is not None
 

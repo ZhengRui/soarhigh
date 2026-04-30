@@ -29,7 +29,12 @@ export type AgendaSnapshot = {
 export type ToolCallStatus = 'pending' | 'ok' | 'retry';
 
 export type RouterAgentKind = 'router' | 'meeting' | 'statistics';
-export type RouterRouteKind = 'specialist' | 'clarify' | 'handoff' | 'refuse';
+export type RouterRouteKind =
+  | 'specialist'
+  | 'clarify'
+  | 'handoff'
+  | 'refuse'
+  | 'direct_answer';
 
 export type RouterDecision = {
   route: RouterRouteKind;
@@ -38,6 +43,7 @@ export type RouterDecision = {
   agent_kind?: RouterAgentKind | null;
   confidence?: number | null;
   clarification_question?: string | null;
+  direct_response?: string | null;
   handoff?: Record<string, unknown> | null;
   metadata?: Record<string, unknown>;
 };

@@ -56,6 +56,7 @@ function routeLabel(decision: RouterDecision): string {
   if (decision.route === 'handoff') return 'Handoff';
   if (decision.route === 'clarify') return 'Clarify';
   if (decision.route === 'refuse') return 'Refused';
+  if (decision.route === 'direct_answer') return 'Router';
   if (decision.agent_kind === 'statistics') return 'Statistics';
   if (decision.agent_kind === 'meeting') return 'Meeting';
   return 'Router';
@@ -67,6 +68,9 @@ function routePalette(decision: RouterDecision): string {
   }
   if (decision.route === 'clarify' || decision.route === 'refuse') {
     return 'bg-amber-50 border-amber-200 text-amber-800';
+  }
+  if (decision.route === 'direct_answer') {
+    return 'bg-gray-50 border-gray-200 text-gray-700';
   }
   if (decision.agent_kind === 'statistics') {
     return 'bg-sky-50 border-sky-200 text-sky-800';

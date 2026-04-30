@@ -5,6 +5,7 @@ statistics tools plus shared historical meeting lookup / preview
 primitives.
 """
 
+import asyncio
 import os
 from typing import Literal
 
@@ -107,6 +108,18 @@ async def member_role_matrix(
     Use role_filter for one exact matrix column, or role_group for a
     broader category like evaluation = TTE + IE + GE. Counts role
     assignments, not full attendance.
+
+    DOES NOT INCLUDE Meeting Manager (会议经理) — that role lives on
+    the meeting metadata, not on segments. For "X 组织 / managed /
+    做 Meeting Manager / 担任会议经理" questions, use
+    `meeting_manager_matrix` (exact aggregate counts) or
+    `lookup_meeting` with name_substring=X (to get the actual meeting
+    list) — NOT this matrix.
+
+    Chinese "X 主持" → use this matrix with role_group="hosting" (TOM,
+    TTM, MoT, GuestIntroHost, HarkMaster, SAA). 主持 refers to in-
+    meeting hosting roles, NOT Meeting Manager — keep them separate
+    even though a Meeting Manager often also signs up as TTM.
     """
     return await _tools.apply_member_role_matrix(
         ctx,
@@ -120,6 +133,47 @@ async def member_role_matrix(
         sort_order=sort_order,
         limit=limit,
         include_meetings=include_meetings,
+    )
+
+
+@agent.tool
+async def meeting_manager_matrix(
+    ctx: RunContext[StatsDeps],
+    date_from: str | None = None,
+    date_to: str | None = None,
+    type_filter: Literal["Regular", "Workshop", "Custom"] | None = None,
+    sort_by: Literal["count", "name"] = "count",
+    sort_order: Literal["asc", "desc"] = "desc",
+    limit: int = 50,
+) -> dict:
+    """Per-manager meeting-manager (会议经理) counts, server-aggregated.
+
+    Use for questions about who organized / managed how many meetings,
+    Meeting Manager rankings, or per-person organize counts.
+    Triggers: "X 组织过多少次会议?", "今年每个会员组织了多少次会议?",
+    "Meeting Manager 排名", "做 Meeting Manager 最多的是谁?",
+    "担任会议经理的次数".
+
+    The aggregation runs in Python over the full date range — counts
+    are exact. Do NOT use lookup_meeting to count cards yourself; this
+    tool is the canonical source.
+
+    Result groups are {member_id, full_name, username, count,
+    is_member}. INCLUDES managers whose attendee does NOT resolve to a
+    current member (former members, guests, broken links) — those rows
+    have member_id="" and is_member=false. Treat them as legitimate
+    managers, not noise. The result envelope also includes
+    `total_meetings` (sum of all counts) so you can spot-check your
+    reply against ground truth.
+    """
+    return await _tools.apply_meeting_manager_matrix(
+        ctx,
+        date_from=date_from,
+        date_to=date_to,
+        type_filter=type_filter,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=limit,
     )
 
 
@@ -181,10 +235,40 @@ async def lookup_meeting(
     date_to: str | None = None,
     limit: int = 5,
 ) -> dict:
-    """READ-ONLY. Find historical meetings by structured filter. See
-    the meeting agent's `lookup_meeting` docstring for full semantics —
-    same tool, same envelope."""
-    _tools.refuse_lookup_if_aggregate_count(ctx)
+    """READ-ONLY. Find historical meetings by structured filter.
+
+    Filter axes (AND across distinct axes; fire parallel calls for OR):
+    - `no`: exact display number; bypasses pool scan.
+    - `name_substring`: case-insensitive substring on **meeting manager
+      name ONLY**. Use for queries about who **organized / managed**
+      a meeting as Meeting Manager (会议经理). Chinese phrasing:
+      "组织 / 担任会议经理 / 做 Meeting Manager / 当 Meeting Manager"
+      → name_substring=person + the requested date range. Does NOT
+      match theme or intro.
+      Do NOT use this for "X 主持" — that means in-meeting hosting
+      roles (TOM, TTM, MoT, etc.), not Meeting Manager. Use
+      `member_role_matrix(member=X, role_group="hosting")` for those.
+    - `theme_substring`: substring on `theme` ("Emojis 那次", "主题
+      关于教育的").
+    - `introduction_substring`: substring on `introduction` body
+      ("提到 leadership 的").
+    - `type_filter`: Regular / Workshop / Custom.
+    - `date_from` / `date_to`: ISO YYYY-MM-DD inclusive bounds.
+    - `limit`: max cards returned. Default 5.
+
+    HOW TO ANSWER COUNT QUESTIONS ("多少 / 几次 / how many"):
+    Call this with the right filters + date range, then read
+    `total_matches` from the result envelope (NOT len(cards), which is
+    capped at limit). If `limit_clamped` is True you have only a
+    partial sample of cards but `total_matches` is still the full
+    count — report it. If the user wants the meeting list AND the
+    count, raise `limit` to >= total_matches in a follow-up call.
+
+    For per-manager AGGREGATION ("每个会员组织了多少次会议",
+    "Meeting Manager 排名"), do NOT iterate cards from this tool.
+    Use `meeting_manager_matrix` instead — it does exact server-side
+    counting over the full date range.
+    """
     return await meeting_lookup.apply_lookup_meeting(
         ctx,
         no=no,
@@ -204,3 +288,18 @@ async def preview_meeting(ctx: RunContext[StatsDeps], no: int) -> dict:
     (meta + introduction + segments). Same tool as the meeting agent's
     preview_meeting."""
     return await meeting_lookup.apply_preview_meeting(ctx, no=no)
+
+
+@agent.tool
+async def list_members(ctx: RunContext[StatsDeps]) -> dict:
+    """READ-ONLY. List all club members (id, username, full_name).
+
+    Use for questions about who the members are, member-vs-guest
+    classification, member counts ("我们俱乐部有多少会员?",
+    "现在有哪些会员?", "Frank 是会员吗?"), or to provide a roster as
+    context for follow-up role/award lookups.
+    """
+    from app.db.core import get_members
+
+    rows = await asyncio.to_thread(get_members) or []
+    return {"members": rows, "count": len(rows)}

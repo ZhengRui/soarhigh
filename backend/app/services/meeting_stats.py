@@ -390,11 +390,16 @@ def group_meetings_by_manager(
     type_filter: MeetingType | None = None,
 ) -> list[dict]:
     """Per-manager meeting counts in scope. Returns list of
-    {member_id, full_name, username, count} sorted desc by count.
+    {member_id, full_name, username, count, is_member} sorted desc by
+    count.
 
-    A meeting with no manager_id is skipped (counts that as 'no manager'
-    would mostly surface drafty/incomplete records and would rarely be
-    what a leaderboard question wants)."""
+    Includes managers whose attendee record does NOT resolve to a
+    current member (former members, guests one-off managers, broken
+    member links). Those rows have member_id="" and is_member=False;
+    `full_name` falls back to the attendee.name.
+
+    A meeting with no manager_id at all is skipped — that surfaces
+    drafty/incomplete records and rarely matches user intent."""
     meetings = load_meetings_in_range(date_from, date_to, type_filter)
     counts: dict[str, int] = {}
     for m in meetings:
@@ -405,40 +410,54 @@ def group_meetings_by_manager(
     if not counts:
         return []
 
-    # Resolve attendee_id → member_id → member info. The `manager_id` on
-    # a meeting points at attendees.id, not members.id directly.
+    # Resolve attendee_id → (name, member_id). The `manager_id` on a
+    # meeting points at attendees.id, not members.id directly.
     def _fetch_attendees(chunk: list[str]) -> list[dict]:
-        return _execute_all_pages(lambda: supabase.table("attendees").select("id, member_id").in_("id", chunk))
+        return _execute_all_pages(lambda: supabase.table("attendees").select("id, name, member_id").in_("id", chunk))
 
     attendees = _batch_in(_fetch_attendees, list(counts.keys()))
-    attendee_to_member = {a["id"]: a.get("member_id") for a in attendees}
-    member_ids = list({mid for mid in attendee_to_member.values() if mid})
+    attendee_info = {a["id"]: a for a in attendees}
+    member_ids: list[str] = list({mid for a in attendees if (mid := a.get("member_id"))})
 
     def _fetch_members(chunk: list[str]) -> list[dict]:
         return _execute_all_pages(lambda: supabase.table("members").select("id, username, full_name").in_("id", chunk))
 
-    members_rows = _batch_in(_fetch_members, member_ids)
+    members_rows = _batch_in(_fetch_members, member_ids) if member_ids else []
     member_map = {m["id"]: m for m in members_rows}
 
-    # Roll up: meetings managed by an attendee → that attendee's member_id.
-    # Multiple attendees can map to the same member_id (rare but legal),
-    # so sum.
+    # Roll up two ways. Member-resolved attendees collapse into one row
+    # per member_id (multiple attendees → same member_id is rare but
+    # legal). Unresolved attendees stay as their own rows keyed by
+    # attendee_id so different guest-managers don't get merged.
     member_counts: dict[str, int] = {}
+    unresolved_rows: list[dict] = []
     for attendee_id, count in counts.items():
-        member_id = attendee_to_member.get(attendee_id)
-        if not member_id:
-            continue
-        member_counts[member_id] = member_counts.get(member_id, 0) + count
+        info = attendee_info.get(attendee_id) or {}
+        member_id = info.get("member_id")
+        if member_id:
+            member_counts[member_id] = member_counts.get(member_id, 0) + count
+        else:
+            unresolved_rows.append(
+                {
+                    "member_id": "",
+                    "full_name": info.get("name") or "",
+                    "username": "",
+                    "count": count,
+                    "is_member": False,
+                }
+            )
 
-    out = [
+    out: list[dict] = [
         {
             "member_id": mid,
             "full_name": member_map.get(mid, {}).get("full_name", ""),
             "username": member_map.get(mid, {}).get("username", ""),
             "count": cnt,
+            "is_member": True,
         }
         for mid, cnt in member_counts.items()
     ]
+    out.extend(unresolved_rows)
     out.sort(key=lambda r: (-r["count"], r["full_name"]))
     return out
 

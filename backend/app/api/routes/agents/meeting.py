@@ -24,9 +24,13 @@ from pydantic_ai.messages import (
 )
 
 from ....agents.meeting.agent import USAGE_LIMITS, agent
-from ....agents.meeting.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
+from ....agents.meeting.history import (
+    replace_system_prompt,
+    strip_snapshots_from_dumped_history,
+    truncate_to_last_turns,
+)
 from ....agents.meeting.models import AgendaDeps
-from ....agents.meeting.prompts import SNAPSHOT_TEMPLATE
+from ....agents.meeting.prompts import ROUTER_SYSTEM_PROMPT, SNAPSHOT_TEMPLATE
 from ....agents.meeting.segment_ids import shorten_agenda_dump
 from ....agents.runtime.contracts import AgentKind, RouteKind
 from ....agents.runtime.policy import require_tool_allowed
@@ -377,6 +381,12 @@ async def agent_turn(
             next_seq = tail_seq + 1
 
             full_history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
+            # Pydantic AI only injects this agent's `_sys_parts` when
+            # message_history is empty — and a prior turn (specialist
+            # or router) may have persisted a SystemPromptPart with a
+            # different agent's prompt. Replace it with this agent's
+            # prompt so we always run with the correct identity.
+            full_history = replace_system_prompt(full_history, ROUTER_SYSTEM_PROMPT)
             # Cap context window at the last N user turns. Older turns drop off
             # here; they remain in agent_turns (so the UI can still show the
             # full conversation), only the portion fed to the LLM is trimmed.

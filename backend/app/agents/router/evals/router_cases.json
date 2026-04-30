@@ -112,14 +112,6 @@
     "expected_intent": "meeting_edit_without_agenda_snapshot"
   },
   {
-    "id": "route.clarify.ambiguous.no_context",
-    "user_message": "hello",
-    "has_agenda": false,
-    "expected_route": "clarify",
-    "expected_agent_kind": null,
-    "expected_intent": "ambiguous_agent_target"
-  },
-  {
     "id": "route.handoff.assign_role_from_stats.en",
     "user_message": "Find who has not done TTE recently, then assign one to this meeting",
     "has_agenda": true,
@@ -134,5 +126,37 @@
     "expected_route": "handoff",
     "expected_agent_kind": null,
     "expected_intent": "statistics_to_meeting_handoff"
+  },
+  {
+    "id": "route.direct_answer.greeting.en",
+    "user_message": "hi there",
+    "has_agenda": false,
+    "expected_route": "direct_answer",
+    "expected_agent_kind": null,
+    "expected_intent": "router_direct_answer"
+  },
+  {
+    "id": "route.direct_answer.greeting.zh",
+    "user_message": "你好",
+    "has_agenda": false,
+    "expected_route": "direct_answer",
+    "expected_agent_kind": null,
+    "expected_intent": "router_direct_answer"
+  },
+  {
+    "id": "route.direct_answer.thanks.en",
+    "user_message": "thanks!",
+    "has_agenda": true,
+    "expected_route": "direct_answer",
+    "expected_agent_kind": null,
+    "expected_intent": "router_direct_answer"
+  },
+  {
+    "id": "route.direct_answer.capabilities.zh",
+    "user_message": "你能做什么?",
+    "has_agenda": false,
+    "expected_route": "direct_answer",
+    "expected_agent_kind": null,
+    "expected_intent": "router_direct_answer"
   }
 ]

@@ -60,8 +60,10 @@ STATISTICS_READ_TOOLS: tuple[str, ...] = (
     "meeting_attendance_list",
     "member_role_matrix",
     "member_award_matrix",
+    "meeting_manager_matrix",
     "lookup_meeting",
     "preview_meeting",
+    "list_members",
 )
 
 
@@ -145,6 +147,37 @@ CAPABILITIES: tuple[Capability, ...] = (
         example_user_requests=("Show me the Emojis meeting.", "Preview meeting #451."),
         expected_route=AgentKind.STATISTICS,
         eval_fixture_id="route.statistics.meeting_lookup",
+    ),
+    Capability(
+        id="statistics.meeting_manager",
+        owner_agent=AgentKind.STATISTICS,
+        access=AccessMode.READ,
+        supported_intents=(
+            "Meeting Manager counts by member",
+            "Meeting Manager rankings",
+            "who organized the most meetings",
+        ),
+        unsupported_intents=("assign Meeting Manager for upcoming meetings",),
+        tool_names=("meeting_manager_matrix",),
+        prompt_snippet="Use meeting_manager_matrix for exact server-side counts of Meeting Manager assignments.",
+        example_user_requests=(
+            "今年每个会员组织了多少次会议?",
+            "Meeting Manager 排名",
+        ),
+        expected_route=AgentKind.STATISTICS,
+        eval_fixture_id="route.statistics.meeting_manager",
+    ),
+    Capability(
+        id="statistics.member_directory",
+        owner_agent=AgentKind.STATISTICS,
+        access=AccessMode.READ,
+        supported_intents=("list club members", "member vs guest classification", "member roster size"),
+        unsupported_intents=("add or remove members",),
+        tool_names=("list_members",),
+        prompt_snippet="Use list_members to enumerate the current club roster (id, username, full_name).",
+        example_user_requests=("现在有哪些会员?", "我们俱乐部有多少会员?"),
+        expected_route=AgentKind.STATISTICS,
+        eval_fixture_id="route.statistics.member_directory",
     ),
 )
 

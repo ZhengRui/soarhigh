@@ -6,7 +6,9 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
+from pydantic_ai.messages import ModelMessagesTypeAdapter
 
+from ....agents.meeting.history import append_router_exchange, truncate_to_last_turns
 from ....agents.router.classifier import classify_turn
 from ....agents.router.store import decision_store
 from ....agents.runtime.contracts import AgentKind, RouteKind, RouterDecision
@@ -79,10 +81,16 @@ async def _save_router_turn(
     decision: RouterDecision,
     user_message: str,
     assistant_text: str,
+    prior_history: list[dict] | None = None,
     agenda_before: dict | None = None,
     tool_trace: list[dict] | None = None,
     domain_payload: dict | None = None,
 ) -> None:
+    history_cursor = append_router_exchange(
+        prior_history or [],
+        user_message=user_message,
+        assistant_text=assistant_text,
+    )
     record = AgentTurnRecord(
         seq=seq,
         agent_kind=AgentKind.ROUTER,
@@ -93,6 +101,7 @@ async def _save_router_turn(
         router_decision=decision.model_dump(mode="json"),
         agenda_before=agenda_before,
         domain_payload=domain_payload or {},
+        history_cursor=history_cursor,
     )
     try:
         await agent_turn_store.save_turn(session_id, user_id=user_id, turn=record)
@@ -114,7 +123,47 @@ async def _load_pending_handoff(session_id: str) -> dict | None:
     return proposal
 
 
+def _router_pre_dispatch_error_message(e: Exception, *, language: str) -> str:
+    """Short user-readable message for failures BEFORE the router can
+    return a stream — i.e. the unified history load, handoff lookup,
+    decision_store write, or the router LLM call itself. Mirrors the
+    shape of `_extract_error_info` in the specialist routes but stays
+    inline since the unified route only needs the message string.
+    """
+    try:
+        from pydantic_ai.exceptions import ModelHTTPError, UsageLimitExceeded
+    except ImportError:
+        return str(e)
+    if isinstance(e, ModelHTTPError):
+        body = e.body if isinstance(e.body, dict) else {}
+        err = body.get("error") if isinstance(body, dict) else None
+        msg = err.get("message") if isinstance(err, dict) else None
+        if msg:
+            return f"[{e.status_code}] {msg}"
+        return f"Model HTTP error {e.status_code}"
+    if isinstance(e, UsageLimitExceeded):
+        return str(e)
+    name = type(e).__name__
+    detail = str(e) or "(no message)"
+    if language == "zh":
+        return f"路由失败 ({name}): {detail}"
+    return f"Router failure ({name}): {detail}"
+
+
+async def _error_only_stream(*, reason: str, recoverable: bool, message: str) -> AsyncIterator[bytes]:
+    """Single-event SSE stream used when the router can't even reach
+    the dispatch point (history load / classify / decision save fails).
+    Same shape the specialists emit on agent_error so the frontend's
+    onEvent handler renders the banner the same way."""
+    yield _sse(
+        "error",
+        {"reason": reason, "recoverable": recoverable, "message": message},
+    )
+
+
 def _router_terminal_text(decision: RouterDecision, *, language: str) -> str:
+    if decision.route == RouteKind.DIRECT_ANSWER:
+        return decision.direct_response or ""
     if decision.route == RouteKind.CLARIFY:
         question = decision.clarification_question or "Please clarify which agent should handle this request."
         if language == "zh" and decision.intent == "meeting_edit_without_agenda_snapshot":
@@ -354,9 +403,11 @@ async def _terminal_stream(
     session_id: str,
     user_id: str | None,
     user_message: str,
+    prior_history: list[dict],
 ) -> AsyncIterator[bytes]:
-    """Router-only paths (clarify / refuse). Emit the router envelope, then
-    persist a single agent_turns row with agent_kind=router."""
+    """Router-only paths (clarify / refuse / direct_answer). Emit the
+    router envelope, then persist a single agent_turns row with
+    agent_kind=router."""
     yield _sse("router_decision", _router_decision_payload(seq, decision))
     yield _sse("assistant_text", {"chunk": text})
     yield _sse("done", {"seq": seq, "final_text": text, "router_only": True})
@@ -367,6 +418,7 @@ async def _terminal_stream(
         decision=decision,
         user_message=user_message,
         assistant_text=text,
+        prior_history=prior_history,
     )
 
 
@@ -380,6 +432,7 @@ async def _handoff_stream(
     user_message: str,
     agenda_before: dict,
     language: str,
+    prior_history: list[dict],
 ) -> AsyncIterator[bytes]:
     """Run stats sub-call as fact gathering, suppress its done event, then
     finish with a router-owned done that carries the handoff_proposal."""
@@ -432,6 +485,7 @@ async def _handoff_stream(
         decision=decision,
         user_message=user_message,
         assistant_text=confirmation_text,
+        prior_history=prior_history,
         agenda_before=agenda_before,
         tool_trace=tool_trace,
         domain_payload={"handoff_proposal": proposal},
@@ -452,20 +506,47 @@ async def unified_agent_turn(
     user_id = getattr(user, "uid", None)
     language = _detect_user_language(req.user_message)
 
-    pending_handoff = await _load_pending_handoff(req.session_id)
-    decision = (
-        _classify_handoff_confirmation(req, pending_handoff, language=language) if pending_handoff is not None else None
-    )
-    if decision is None:
-        decision = await classify_turn(req)
+    # Wrap all pre-stream work (history load, handoff lookup, router LLM
+    # call, decision persistence) in try/except. Any failure here would
+    # otherwise propagate as a 500 with no SSE body, leaving the frontend
+    # to silently swallow the error and the user staring at a stuck "…"
+    # bubble. We return a tiny error-only stream so the existing onEvent
+    # handler renders the banner with Retry like any other agent_error.
+    try:
+        _tail_seq, prior_history = await agent_turn_store.load(req.session_id)
 
-    record = await decision_store.save_decision(
-        req.session_id,
-        user_id=user_id,
-        user_message=req.user_message,
-        decision=decision,
-    )
-    seq = record.seq
+        pending_handoff = await _load_pending_handoff(req.session_id)
+        decision = (
+            _classify_handoff_confirmation(req, pending_handoff, language=language)
+            if pending_handoff is not None
+            else None
+        )
+        if decision is None:
+            full_history = ModelMessagesTypeAdapter.validate_python(prior_history) if prior_history else []
+            # classify_turn handles its own SystemPromptPart normalization
+            # (Pydantic AI only injects _sys_parts when message_history is
+            # empty, so the router replaces any persisted system prompt
+            # internally with its own).
+            router_history = truncate_to_last_turns(full_history)
+            decision = await classify_turn(req, message_history=router_history)
+
+        record = await decision_store.save_decision(
+            req.session_id,
+            user_id=user_id,
+            user_message=req.user_message,
+            decision=decision,
+        )
+        seq = record.seq
+    except Exception as e:
+        log.exception("router pre-dispatch failed for session %s", req.session_id)
+        return StreamingResponse(
+            _error_only_stream(
+                reason="router_failure",
+                recoverable=True,
+                message=_router_pre_dispatch_error_message(e, language=language),
+            ),
+            media_type="text/event-stream",
+        )
 
     # HANDOFF: run stats fact-gathering, then emit proposal that requires confirmation.
     if decision.route == RouteKind.HANDOFF:
@@ -487,6 +568,7 @@ async def unified_agent_turn(
                     session_id=req.session_id,
                     user_id=user_id,
                     user_message=req.user_message,
+                    prior_history=prior_history,
                 ),
                 media_type="text/event-stream",
             )
@@ -510,11 +592,12 @@ async def unified_agent_turn(
                 user_message=req.user_message,
                 agenda_before=req.agenda_snapshot.model_dump(mode="json"),
                 language=language,
+                prior_history=prior_history,
             ),
             media_type="text/event-stream",
         )
 
-    # CLARIFY / REFUSE: router-only.
+    # CLARIFY / REFUSE / DIRECT_ANSWER: router-only.
     if decision.route != RouteKind.SPECIALIST:
         return StreamingResponse(
             _terminal_stream(
@@ -524,6 +607,7 @@ async def unified_agent_turn(
                 session_id=req.session_id,
                 user_id=user_id,
                 user_message=req.user_message,
+                prior_history=prior_history,
             ),
             media_type="text/event-stream",
         )
@@ -584,6 +668,7 @@ async def unified_agent_turn(
             session_id=req.session_id,
             user_id=user_id,
             user_message=req.user_message,
+            prior_history=prior_history,
         ),
         media_type="text/event-stream",
     )
