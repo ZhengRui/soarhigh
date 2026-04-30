@@ -1,85 +1,90 @@
-from app.agents.router.classifier import classify_turn
+"""Unit tests for the classifier's server-side post-processing.
+
+Live LLM behavior is covered in test_router_evals.py (marked
+@pytest.mark.live). These tests assert the deterministic mapping from
+LLM choice → RouterDecision, including the agenda-snapshot guard and
+HandoffPayload construction.
+"""
+
+from app.agents.router.classifier import _RouterChoice, _to_decision
 from app.agents.runtime.contracts import AgentKind, RouteKind
-from app.models.agents.unified import AgentTurnRequest
 
 
-def _agenda() -> dict:
-    return {
-        "meta": {"start_time": "19:15", "end_time": "21:30"},
-        "segments": [
-            {
-                "id": "s1",
-                "type": "Timer",
-                "start_time": "19:30",
-                "duration": 3,
-                "role_taker": "",
-                "buffer_before": 0,
-            }
-        ],
-    }
-
-
-def test_routes_award_count_to_statistics():
-    decision = classify_turn(
-        AgentTurnRequest(
-            session_id="s1",
-            user_message="今年谁拿 Best Evaluator 最多?",
-        )
-    )
-
-    assert decision.route == RouteKind.SPECIALIST
-    assert decision.agent_kind == AgentKind.STATISTICS
-
-
-def test_routes_current_agenda_edit_to_meeting_when_snapshot_exists():
-    decision = classify_turn(
-        AgentTurnRequest(
-            session_id="s1",
-            user_message="set Timer to Joyce Feng",
-            agenda_snapshot=_agenda(),
-        )
+def test_specialist_meeting_with_agenda_routes_to_meeting():
+    decision = _to_decision(
+        _RouterChoice(route="specialist_meeting", reason="edit current draft"),
+        user_message="set Timer to Joyce",
+        has_agenda=True,
     )
 
     assert decision.route == RouteKind.SPECIALIST
     assert decision.agent_kind == AgentKind.MEETING
+    assert decision.intent == "current_meeting_draft"
 
 
-def test_clarifies_meeting_edit_without_snapshot():
-    decision = classify_turn(
-        AgentTurnRequest(
-            session_id="s1",
-            user_message="set Timer to Joyce Feng",
-        )
+def test_specialist_meeting_without_agenda_clarifies():
+    decision = _to_decision(
+        _RouterChoice(route="specialist_meeting", reason="edit current draft"),
+        user_message="set Timer to Joyce",
+        has_agenda=False,
     )
 
     assert decision.route == RouteKind.CLARIFY
     assert decision.intent == "meeting_edit_without_agenda_snapshot"
+    assert decision.clarification_question
 
 
-def test_historical_meeting_preview_defaults_to_statistics():
-    decision = classify_turn(
-        AgentTurnRequest(
-            session_id="s1",
-            user_message="show me #451",
-            agenda_snapshot=_agenda(),
-        )
+def test_specialist_statistics_routes_to_stats():
+    decision = _to_decision(
+        _RouterChoice(route="specialist_statistics", reason="historical lookup"),
+        user_message="who won Best Evaluator this year?",
+        has_agenda=False,
     )
 
     assert decision.route == RouteKind.SPECIALIST
     assert decision.agent_kind == AgentKind.STATISTICS
+    assert decision.intent == "historical_statistics_or_lookup"
 
 
-def test_cross_domain_request_is_recognized_as_handoff():
-    decision = classify_turn(
-        AgentTurnRequest(
-            session_id="s1",
-            user_message="Find who has not done TTE recently, then assign one to this meeting",
-            agenda_snapshot=_agenda(),
-        )
+def test_handoff_builds_payload_with_user_message_constraint():
+    decision = _to_decision(
+        _RouterChoice(route="handoff_stats_to_meeting", reason="cross-domain"),
+        user_message="assign someone who hasn't done TTE",
+        has_agenda=True,
     )
 
     assert decision.route == RouteKind.HANDOFF
+    assert decision.intent == "statistics_to_meeting_handoff"
     assert decision.handoff is not None
     assert decision.handoff.source_agent == AgentKind.STATISTICS
     assert decision.handoff.target_agent == AgentKind.MEETING
+    assert decision.handoff.intent == "assign_role_from_stats"
     assert decision.handoff.requires_confirmation is True
+    assert decision.handoff.constraints == {"user_message": "assign someone who hasn't done TTE"}
+
+
+def test_clarify_uses_llm_question_when_provided():
+    decision = _to_decision(
+        _RouterChoice(
+            route="clarify",
+            reason="ambiguous",
+            clarification_question="Do you mean the current draft, or last year's stats?",
+        ),
+        user_message="hello",
+        has_agenda=False,
+    )
+
+    assert decision.route == RouteKind.CLARIFY
+    assert decision.intent == "ambiguous_agent_target"
+    assert decision.clarification_question == "Do you mean the current draft, or last year's stats?"
+
+
+def test_clarify_falls_back_to_default_question_when_missing():
+    decision = _to_decision(
+        _RouterChoice(route="clarify", reason="ambiguous"),
+        user_message="hello",
+        has_agenda=False,
+    )
+
+    assert decision.route == RouteKind.CLARIFY
+    assert decision.clarification_question

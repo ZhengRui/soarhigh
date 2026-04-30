@@ -119,6 +119,70 @@ def _fake_members_directory(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_classifier(monkeypatch):
+    """Deterministic classifier stub for unified-route plumbing tests.
+
+    Real LLM behavior is covered separately by test_router_evals.py
+    (live). These tests assert the route's SSE / persistence / dispatch
+    given a known classifier output, so we map message keywords to
+    fixed RouterDecisions instead of calling Pydantic AI.
+    """
+    from app.agents.runtime.contracts import AgentKind, HandoffPayload, RouteKind, RouterDecision
+
+    async def fake(req):
+        msg = (req.user_message or "").lower()
+        has_agenda = req.agenda_snapshot is not None
+
+        if "find someone" in msg or "找一个" in msg:
+            return RouterDecision(
+                route=RouteKind.HANDOFF,
+                intent="statistics_to_meeting_handoff",
+                reason="stub: cross-domain handoff",
+                handoff=HandoffPayload(
+                    source_agent=AgentKind.STATISTICS,
+                    target_agent=AgentKind.MEETING,
+                    intent="assign_role_from_stats",
+                    constraints={"user_message": req.user_message or ""},
+                    requires_confirmation=True,
+                ),
+            )
+
+        if any(keyword in msg for keyword in ("拿奖", "best evaluator", "tte the most", "attendance", "出勤")):
+            return RouterDecision(
+                route=RouteKind.SPECIALIST,
+                agent_kind=AgentKind.STATISTICS,
+                intent="historical_statistics_or_lookup",
+                reason="stub: historical lookup",
+            )
+
+        if "set " in msg or "把 timer 改成" in msg:
+            if not has_agenda:
+                return RouterDecision(
+                    route=RouteKind.CLARIFY,
+                    intent="meeting_edit_without_agenda_snapshot",
+                    reason="stub: missing agenda",
+                    clarification_question=("I need the current agenda snapshot before I can edit the meeting."),
+                )
+            return RouterDecision(
+                route=RouteKind.SPECIALIST,
+                agent_kind=AgentKind.MEETING,
+                intent="current_meeting_draft",
+                reason="stub: meeting edit",
+            )
+
+        return RouterDecision(
+            route=RouteKind.CLARIFY,
+            intent="ambiguous_agent_target",
+            reason="stub: ambiguous",
+            clarification_question="Edit the current draft, or look up history?",
+        )
+
+    from app.api.routes.agents import unified as unified_route
+
+    monkeypatch.setattr(unified_route, "classify_turn", fake)
+
+
 def test_unified_route_emits_router_decision_then_dispatches_to_statistics(
     client,
     mock_auth_dep,

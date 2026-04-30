@@ -7,7 +7,8 @@ from app.agents.meeting import tools as _tools
 from app.agents.meeting.models import AgendaDeps
 from app.agents.meeting.prompts import ROUTER_SYSTEM_PROMPT
 from app.agents.meeting.validators import run_validators
-from app.config import GOOGLE_API_KEY, MEETING_AGENT_MODEL, OPENAI_API_KEY
+from app.agents.runtime.model_settings import build_model_settings
+from app.config import GOOGLE_API_KEY, MEETING_AGENT_MODEL, MEETING_THINKING_LEVEL, OPENAI_API_KEY
 
 # Pydantic AI providers read their API keys from os.environ at Agent()
 # construction time. Our config uses starlette.Config which reads .env into
@@ -26,33 +27,12 @@ os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY or "not-configured")
 # realistically consume 10-20K tokens per model call and 3-5 calls per turn.
 USAGE_LIMITS = UsageLimits(request_limit=15, total_tokens_limit=500_000)
 
-# Gemini thinking models emit thought summaries only when explicitly asked
-# via `include_thoughts: True`. Flash Lite doesn't support thinking at all —
-# sending the config to it may error or be silently ignored, so guard with a
-# substring match. Extend this set when new thinking-capable models ship.
-_GEMINI_THINKING_MODELS = {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-pro"}
-
-
-def _build_model_settings(model_spec: str):
-    if any(m in model_spec for m in _GEMINI_THINKING_MODELS):
-        # Lazy import so non-Google setups don't pay the import cost.
-        from pydantic_ai.models.google import GoogleModelSettings
-
-        return GoogleModelSettings(
-            google_thinking_config={
-                "thinking_budget": -1,  # dynamic; model decides per request
-                "include_thoughts": True,
-            },
-        )
-    return None
-
-
 agent = Agent(
     MEETING_AGENT_MODEL,
     system_prompt=ROUTER_SYSTEM_PROMPT,
     deps_type=AgendaDeps,
     retries=2,
-    model_settings=_build_model_settings(MEETING_AGENT_MODEL),
+    model_settings=build_model_settings(MEETING_AGENT_MODEL, thinking_level=MEETING_THINKING_LEVEL),
 )
 
 

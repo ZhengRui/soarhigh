@@ -11,10 +11,11 @@ from typing import Literal
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.usage import UsageLimits
 
+from app.agents.runtime.model_settings import build_model_settings
 from app.agents.statistics import tools as _tools
 from app.agents.statistics.models import StatsDeps
 from app.agents.statistics.prompts import STATS_SYSTEM_PROMPT
-from app.config import GOOGLE_API_KEY, MEETING_AGENT_MODEL, OPENAI_API_KEY
+from app.config import GOOGLE_API_KEY, OPENAI_API_KEY, STATISTICS_AGENT_MODEL, STATISTICS_THINKING_LEVEL
 from app.services import meeting_lookup
 
 # Bridge .env values to os.environ — Pydantic AI providers read keys at
@@ -24,31 +25,13 @@ os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY or "not-configured")
 
 USAGE_LIMITS = UsageLimits(request_limit=15, total_tokens_limit=500_000)
 
-_GEMINI_THINKING_MODELS = {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-pro"}
 
-
-def _build_model_settings(model_spec: str):
-    if any(m in model_spec for m in _GEMINI_THINKING_MODELS):
-        from pydantic_ai.models.google import GoogleModelSettings
-
-        return GoogleModelSettings(
-            google_thinking_config={
-                "thinking_budget": -1,
-                "include_thoughts": True,
-            },
-        )
-    return None
-
-
-# Reuse the same model the meeting agent uses (Phase 2 doesn't introduce
-# a separate config). Phase 3 may select a smaller/faster classifier
-# model for the router — orthogonal.
 agent = Agent(
-    MEETING_AGENT_MODEL,
+    STATISTICS_AGENT_MODEL,
     system_prompt=STATS_SYSTEM_PROMPT,
     deps_type=StatsDeps,
     retries=2,
-    model_settings=_build_model_settings(MEETING_AGENT_MODEL),
+    model_settings=build_model_settings(STATISTICS_AGENT_MODEL, thinking_level=STATISTICS_THINKING_LEVEL),
 )
 
 

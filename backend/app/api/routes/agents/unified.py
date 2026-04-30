@@ -455,7 +455,9 @@ async def unified_agent_turn(
     pending_handoff = await _load_pending_handoff(req.session_id)
     decision = (
         _classify_handoff_confirmation(req, pending_handoff, language=language) if pending_handoff is not None else None
-    ) or classify_turn(req)
+    )
+    if decision is None:
+        decision = await classify_turn(req)
 
     record = await decision_store.save_decision(
         req.session_id,

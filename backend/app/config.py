@@ -25,6 +25,22 @@ OPENAI_API_KEY = config("OPENAI_API_KEY", cast=str)
 # meeting_agent module / meeting_agent_sessions table — future agents
 # (blog, vote) can add their own MODEL env vars without collision.
 MEETING_AGENT_MODEL = config("MEETING_AGENT_MODEL", cast=str, default="google-gla:gemini-3.1-flash-lite-preview")
+# Router classifier (Pydantic AI). Tiny prompt, structured output, no tools —
+# kept independent of MEETING_AGENT_MODEL so router latency / cost can be
+# tuned (or downgraded to a smaller model) without touching the specialists.
+ROUTER_AGENT_MODEL = config("ROUTER_AGENT_MODEL", cast=str, default="google-gla:gemini-3.1-flash-lite-preview")
+# Statistics agent (Pydantic AI). Read-only analytics over historical
+# meetings. Kept independent of MEETING_AGENT_MODEL so stats can be tuned
+# upward (e.g. gemini-2.5-flash/pro for richer aggregation reasoning) without
+# affecting meeting-edit latency.
+STATISTICS_AGENT_MODEL = config("STATISTICS_AGENT_MODEL", cast=str, default="google-gla:gemini-3.1-flash-lite-preview")
+# Per-agent thinking effort. Mapped onto provider-specific knobs by
+# app/agents/runtime/model_settings.py: thinking_level for Gemini 3.x,
+# thinking_budget=-1 (dynamic; level ignored) for Gemini 2.5, and
+# openai_reasoning_effort for OpenAI o-series / gpt-5.
+ROUTER_THINKING_LEVEL = config("ROUTER_THINKING_LEVEL", cast=str, default="MINIMAL")
+MEETING_THINKING_LEVEL = config("MEETING_THINKING_LEVEL", cast=str, default="MINIMAL")
+STATISTICS_THINKING_LEVEL = config("STATISTICS_THINKING_LEVEL", cast=str, default="MINIMAL")
 # Inner OpenAI model for converting pasted registration text into a structured
 # Meeting. Kept separate from MEETING_AGENT_MODEL so we can compare planner
 # quality/latency independently of the outer Pydantic AI router.
