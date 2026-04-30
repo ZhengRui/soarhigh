@@ -9,8 +9,6 @@ from pydantic_ai.tools import ToolDefinition
 
 import app.agents.meeting.agent as meeting_agent_module
 import app.agents.statistics.agent as stats_agent_module
-from app.agents.router import store as router_store_module
-from app.agents.router.store import InMemoryRouterDecisionStore
 from app.agents.runtime import store as runtime_store_module
 from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
 from app.api.routes.auth import get_current_user
@@ -117,10 +115,8 @@ def mock_auth_dep():
 
 @pytest.fixture(autouse=True)
 def _force_in_memory_stores(monkeypatch):
-    router_store = InMemoryRouterDecisionStore()
     unified_store = InMemoryUnifiedAgentTurnStore()
 
-    monkeypatch.setattr(router_store_module, "decision_store", router_store)
     monkeypatch.setattr(runtime_store_module, "agent_turn_store", unified_store)
 
     from app.api.routes.agents import meeting as meeting_route
@@ -129,9 +125,8 @@ def _force_in_memory_stores(monkeypatch):
 
     monkeypatch.setattr(meeting_route, "agent_turn_store", unified_store)
     monkeypatch.setattr(stats_route, "agent_turn_store", unified_store)
-    monkeypatch.setattr(unified_route, "decision_store", router_store)
     monkeypatch.setattr(unified_route, "agent_turn_store", unified_store)
-    yield {"router": router_store, "unified": unified_store}
+    yield {"unified": unified_store}
 
 
 @pytest.fixture(autouse=True)
@@ -432,7 +427,6 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     mock_auth_dep,
     _force_in_memory_stores,
 ):
-    router_store: InMemoryRouterDecisionStore = _force_in_memory_stores["router"]
     unified_store: InMemoryUnifiedAgentTurnStore = _force_in_memory_stores["unified"]
 
     with client.stream(
@@ -447,9 +441,6 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     assert events[0]["data"]["decision"]["route"] == "clarify"
     assert events[-1]["data"]["router_only"] is True
 
-    records = await router_store.load_decisions("u-clarify")
-    assert len(records) == 1
-    assert records[0].decision["route"] == "clarify"
     unified_turn = await unified_store.load_turn("u-clarify", 1)
     assert unified_turn is not None
     assert unified_turn.agent_kind == "router"

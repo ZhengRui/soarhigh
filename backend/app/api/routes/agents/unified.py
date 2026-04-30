@@ -10,7 +10,6 @@ from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 from ....agents.meeting.history import append_router_exchange, truncate_to_last_turns
 from ....agents.router.classifier import classify_turn
-from ....agents.router.store import decision_store
 from ....agents.runtime.contracts import AgentKind, RouteKind, RouterDecision
 from ....agents.runtime.policy import validate_handoff_policy
 from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
@@ -126,9 +125,9 @@ async def _load_pending_handoff(session_id: str) -> dict | None:
 def _router_pre_dispatch_error_message(e: Exception, *, language: str) -> str:
     """Short user-readable message for failures BEFORE the router can
     return a stream — i.e. the unified history load, handoff lookup,
-    decision_store write, or the router LLM call itself. Mirrors the
-    shape of `_extract_error_info` in the specialist routes but stays
-    inline since the unified route only needs the message string.
+    or the router LLM call itself. Mirrors the shape of
+    `_extract_error_info` in the specialist routes but stays inline
+    since the unified route only needs the message string.
     """
     try:
         from pydantic_ai.exceptions import ModelHTTPError, UsageLimitExceeded
@@ -530,13 +529,12 @@ async def unified_agent_turn(
             router_history = truncate_to_last_turns(full_history)
             decision = await classify_turn(req, message_history=router_history)
 
-        record = await decision_store.save_decision(
-            req.session_id,
-            user_id=user_id,
-            user_message=req.user_message,
-            decision=decision,
-        )
-        seq = record.seq
+        # The router decision is persisted on the unified `agent_turns`
+        # row (router_decision JSONB) when the router-only path saves,
+        # or carried into the specialist's row via router_decision on
+        # the dispatch request. seq advances off the unified store's
+        # tail so router and specialist turns share one sequence.
+        seq = _tail_seq + 1
     except Exception as e:
         log.exception("router pre-dispatch failed for session %s", req.session_id)
         return StreamingResponse(
