@@ -323,12 +323,17 @@ export function UnifiedChatPanel({
 
   const placeholderHelp = useMemo(
     () => (
-      <div className='text-xs text-gray-400 text-center py-10 leading-relaxed'>
-        Ask about this agenda or historical stats.
-        <br />
-        e.g. &ldquo;set Timer to Joyce&rdquo;,
-        <br />
-        &ldquo;who won Best Evaluator most?&rdquo;.
+      <div className='text-xs text-gray-400 text-center py-10 leading-relaxed space-y-3 px-4'>
+        <div>Try:</div>
+        <div className='space-y-1'>
+          <div>&ldquo;clone a meeting from #451&rdquo;</div>
+          <div>&ldquo;让 Helen 做 Timer&rdquo;</div>
+          <div>
+            &ldquo;when was last meeting Joyce as the meeting manager&rdquo;
+          </div>
+          <div>&ldquo;按今年会员参会次数排序前三名是哪些人&rdquo;</div>
+        </div>
+        <div>…and more.</div>
       </div>
     ),
     []
@@ -540,7 +545,7 @@ export function UnifiedChatPanel({
                 submit();
               }
             }}
-            placeholder='Ask or edit…'
+            placeholder='Chat an agenda or ask about stats'
             disabled={loading}
           />
           {loading ? (
