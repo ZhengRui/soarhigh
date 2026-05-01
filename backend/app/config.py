@@ -1,10 +1,10 @@
-from os import path
+from os import environ, path
 from typing import List
 
 from starlette.config import Config
 
-# Check if .env file exists first
-env_path = ".env"
+# main.py sets ENV_FILE=.env.bak when --backup is passed; defaults to .env.
+env_path = environ.get("ENV_FILE", ".env")
 config = Config(env_path if path.exists(env_path) else None)
 
 SUPABASE_URL = config("SUPABASE_URL", cast=str)

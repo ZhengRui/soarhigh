@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta
+from threading import Lock
 from typing import List, Optional, Union
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import ExpiredSignatureError, JWTError, jwt
 
-from ...config import SUPABASE_JWT_SECRET, WECHAT_JWT_SECRET
+from ...config import SUPABASE_JWT_SECRET, SUPABASE_URL, WECHAT_JWT_SECRET
 from ...db.core import get_attendee_id_by_wxid, get_members, get_user_by_wxid
 from ...db.supabase import supabase
 from ...models.users import User
@@ -34,14 +36,68 @@ expired_exception = HTTPException(
 )
 
 
-def verify_access_token(token: str, jwt_secret: str = SUPABASE_JWT_SECRET) -> dict:
+_jwks_cache: Optional[dict] = None
+_jwks_lock = Lock()
+
+
+def _fetch_jwks(force: bool = False) -> dict:
+    global _jwks_cache
+    with _jwks_lock:
+        if _jwks_cache is None or force:
+            url = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json"
+            _jwks_cache = httpx.get(url, timeout=5.0).raise_for_status().json()
+        assert _jwks_cache is not None
+        return _jwks_cache
+
+
+def _find_jwk(kid: str) -> Optional[dict]:
+    """Find JWK by kid; refresh JWKS once on miss in case of recent key rotation."""
+    for entry in _fetch_jwks().get("keys", []):
+        if entry.get("kid") == kid:
+            return entry
+    for entry in _fetch_jwks(force=True).get("keys", []):
+        if entry.get("kid") == kid:
+            return entry
+    return None
+
+
+def _decode_supabase_token(token: str) -> dict:
+    """Verify a Supabase user JWT.
+
+    Tries JWKS-based verification first (modern asymmetric keys, ES256/RS256);
+    falls back to the legacy HS256 shared secret for tokens with no kid or kid
+    not present in JWKS — covers both pre-rotation projects and tokens still
+    in flight after a rotation.
+    """
     try:
-        payload = jwt.decode(token, jwt_secret, algorithms=["HS256"], audience="authenticated")
-        return payload
-    except ExpiredSignatureError:
-        raise expired_exception
-    except JWTError:
-        raise credentials_exception
+        header = jwt.get_unverified_header(token)
+    except JWTError as exc:
+        raise credentials_exception from exc
+
+    kid = header.get("kid")
+    alg = header.get("alg", "HS256")
+
+    if kid:
+        jwk_entry = _find_jwk(kid)
+        if jwk_entry is not None:
+            try:
+                return jwt.decode(token, jwk_entry, algorithms=[alg], audience="authenticated")
+            except ExpiredSignatureError as exc:
+                raise expired_exception from exc
+            except JWTError as exc:
+                raise credentials_exception from exc
+
+    # Legacy HS256 fallback (old tokens / old projects without kid).
+    try:
+        return jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
+    except ExpiredSignatureError as exc:
+        raise expired_exception from exc
+    except JWTError as exc:
+        raise credentials_exception from exc
+
+
+def verify_access_token(token: str) -> dict:
+    return _decode_supabase_token(token)
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(http_scheme)) -> User:
@@ -119,14 +175,8 @@ def verify_extended_access_token(token: str) -> dict:
     except (ExpiredSignatureError, JWTError):
         pass
 
-    # Try Supabase token
-    try:
-        payload = jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated")
-        return payload
-    except ExpiredSignatureError:
-        raise expired_exception
-    except JWTError:
-        raise credentials_exception
+    # Try Supabase token (JWKS first, HS256 secret fallback — see _decode_supabase_token)
+    return _decode_supabase_token(token)
 
 
 def get_current_extended_user(
