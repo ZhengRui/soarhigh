@@ -2609,7 +2609,11 @@ SH = ZoneInfo("Asia/Shanghai")
 
 
 def _make_save_deps(no=999, date="2026-06-01", start="19:30", end="21:30"):
-    """Future-dated agenda with realistic schedule."""
+    """Future-dated agenda with realistic schedule.
+
+    `current_user_message` defaults to "保存" so the preview-intent gate
+    in apply_save_draft passes by default; tests that exercise the gate
+    explicitly override it."""
     deps = make_deps()
     deps.agenda.meta.no = no
     deps.agenda.meta.date = date
@@ -2618,7 +2622,7 @@ def _make_save_deps(no=999, date="2026-06-01", start="19:30", end="21:30"):
     deps.agenda.meta.theme = "Resilience"
     deps.agenda.meta.manager = "Joyce Feng"
     deps.user_id = "test-user-id"
-    deps.current_user_message = ""
+    deps.current_user_message = "保存"
     return deps
 
 
@@ -2714,13 +2718,21 @@ async def test_save_draft_persist_create_calls_create_meeting():
     ctx = FakeCtx(deps=deps)
     fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
 
-    with patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None):
-        with patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now):
-            with patch(
-                "app.agents.meeting.tools.create_meeting",
-                return_value={"id": "new-uuid", "no": 9999},
-            ) as mock_create:
-                result = await apply_save_draft(ctx, confirmed=True)
+    # Bypass the prior-turn guard for this persist-logic test; dedicated
+    # tests below cover the guard's behavior.
+    with (
+        patch(
+            "app.agents.meeting.tools._immediately_prior_turn_was_save_preview",
+            return_value=True,
+        ),
+        patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None),
+        patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now),
+        patch(
+            "app.agents.meeting.tools.create_meeting",
+            return_value={"id": "new-uuid", "no": 9999},
+        ) as mock_create,
+    ):
+        result = await apply_save_draft(ctx, confirmed=True)
 
     mock_create.assert_called_once()
     payload = mock_create.call_args[0][0]
@@ -2745,14 +2757,20 @@ async def test_save_draft_persist_update_calls_update_meeting():
     fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
     db_meeting = {"id": "mtg-uuid", "no": 451, "date": "2026-06-01", "end_time": "21:30"}
 
-    with patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value="mtg-uuid"):
-        with patch("app.agents.meeting.tools.get_meeting_by_id", return_value=db_meeting):
-            with patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now):
-                with patch(
-                    "app.agents.meeting.tools.update_meeting",
-                    return_value={"id": "mtg-uuid", "no": 451},
-                ) as mock_update:
-                    result = await apply_save_draft(ctx, confirmed=True)
+    with (
+        patch(
+            "app.agents.meeting.tools._immediately_prior_turn_was_save_preview",
+            return_value=True,
+        ),
+        patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value="mtg-uuid"),
+        patch("app.agents.meeting.tools.get_meeting_by_id", return_value=db_meeting),
+        patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now),
+        patch(
+            "app.agents.meeting.tools.update_meeting",
+            return_value={"id": "mtg-uuid", "no": 451},
+        ) as mock_update,
+    ):
+        result = await apply_save_draft(ctx, confirmed=True)
 
     mock_update.assert_called_once()
     args = mock_update.call_args[0]
@@ -2761,3 +2779,171 @@ async def test_save_draft_persist_update_calls_update_meeting():
     assert args[2] == "test-user-id"  # user_id
     assert result["mode"] == "update"
     assert result["pending_confirmation"] is False
+
+
+@pytest.mark.asyncio
+async def test_save_draft_persist_refuses_without_prior_preview():
+    """confirmed=True with explicit user yes but NO save_draft preview
+    in the immediately prior turn → ModelRetry. Closes the bug where
+    'save_draft(confirmed=true)' on a fresh turn (or after edits) would
+    persist without re-showing the preview."""
+    deps = _make_save_deps(no=9999)
+    deps.current_user_message = "yes"
+    ctx = FakeCtx(deps=deps)
+    fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
+
+    with (
+        patch(
+            "app.agents.meeting.tools._immediately_prior_turn_was_save_preview",
+            return_value=False,
+        ),
+        patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None),
+        patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now),
+    ):
+        with pytest.raises(ModelRetry, match="no fresh preview"):
+            await apply_save_draft(ctx, confirmed=True)
+
+
+@pytest.mark.asyncio
+async def test_save_draft_persist_refuses_when_user_repeats_save_verb():
+    """A save verb ('保存', 'save', '再保存一下') is a FRESH save request,
+    never a confirmation. Even with a prior save preview in history,
+    repeating 'save' must NOT persist — the model is expected to
+    re-preview. Closes the bug where 'save again' was wrongly read as
+    confirmation."""
+    deps = _make_save_deps(no=9999)
+    deps.current_user_message = "再保存一下"
+    ctx = FakeCtx(deps=deps)
+    fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
+
+    with (
+        patch(
+            "app.agents.meeting.tools._immediately_prior_turn_was_save_preview",
+            return_value=True,
+        ),
+        patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None),
+        patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now),
+    ):
+        with pytest.raises(ModelRetry, match="not.*explicit confirmation"):
+            await apply_save_draft(ctx, confirmed=True)
+
+
+@pytest.mark.asyncio
+async def test_save_draft_prior_turn_helper_true_when_tail_was_save_preview():
+    """The prior-turn helper detects a save_draft preview as the most
+    recent turn."""
+    from app.agents.meeting.tools import _immediately_prior_turn_was_save_preview
+    from app.agents.runtime.contracts import AgentKind, RouteKind
+    from app.agents.runtime.store import AgentTurnRecord, InMemoryUnifiedAgentTurnStore
+
+    store = InMemoryUnifiedAgentTurnStore()
+    session_id = "s-prior-preview"
+    await store.save_turn(
+        session_id,
+        user_id="u",
+        turn=AgentTurnRecord(
+            seq=1,
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
+            user_message="保存",
+            assistant_text="confirm?",
+            tool_trace=[
+                {
+                    "name": "save_draft",
+                    "status": "ok",
+                    "result": {"mode": "create", "pending_confirmation": True, "preview": {}},
+                }
+            ],
+        ),
+    )
+
+    with patch("app.agents.meeting.tools.agent_turn_store", store, create=True):
+        # The helper imports the store lazily; patch the attribute on the
+        # module the helper actually reaches for.
+        from app.agents.runtime import store as store_module
+
+        with patch.object(store_module, "agent_turn_store", store):
+            assert await _immediately_prior_turn_was_save_preview(session_id) is True
+
+
+@pytest.mark.asyncio
+async def test_save_draft_prior_turn_helper_false_when_intervening_edit():
+    """An edit (or any non-preview turn) AFTER a save_draft preview
+    invalidates the preview — strict immediately-prior rule."""
+    from app.agents.meeting.tools import _immediately_prior_turn_was_save_preview
+    from app.agents.runtime.contracts import AgentKind, RouteKind
+    from app.agents.runtime.store import AgentTurnRecord, InMemoryUnifiedAgentTurnStore
+
+    store = InMemoryUnifiedAgentTurnStore()
+    session_id = "s-intervening-edit"
+    # Turn 1: save_draft preview
+    await store.save_turn(
+        session_id,
+        user_id="u",
+        turn=AgentTurnRecord(
+            seq=1,
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
+            user_message="保存",
+            assistant_text="confirm?",
+            tool_trace=[
+                {
+                    "name": "save_draft",
+                    "status": "ok",
+                    "result": {"mode": "create", "pending_confirmation": True},
+                }
+            ],
+        ),
+    )
+    # Turn 2: a set_meta edit (not a save preview)
+    await store.save_turn(
+        session_id,
+        user_id="u",
+        turn=AgentTurnRecord(
+            seq=2,
+            agent_kind=AgentKind.MEETING,
+            route=RouteKind.SPECIALIST,
+            user_message="主题是X",
+            assistant_text="set",
+            tool_trace=[{"name": "set_meta", "status": "ok", "result": {}}],
+        ),
+    )
+
+    from app.agents.runtime import store as store_module
+
+    with patch.object(store_module, "agent_turn_store", store):
+        assert await _immediately_prior_turn_was_save_preview(session_id) is False
+
+
+@pytest.mark.asyncio
+async def test_save_draft_preview_refuses_when_user_did_not_ask_to_save():
+    """The model must NOT call save_draft on its own. If the user's
+    current message is an edit ("Timer是Vicky") or anything else
+    without an explicit save verb, the preview-turn gate refuses.
+    Closes the bug where the model preemptively chained
+    save_draft after an unrelated edit."""
+    deps = _make_save_deps(no=9999)
+    deps.current_user_message = "Timer是Vicky"
+    ctx = FakeCtx(deps=deps)
+
+    with pytest.raises(ModelRetry, match="does not request a save"):
+        await apply_save_draft(ctx, confirmed=False)
+
+
+@pytest.mark.asyncio
+async def test_save_draft_preview_allows_compound_edit_and_save():
+    """Compound message like '主题是X, 然后保存' carries save intent
+    in the same turn — preview gate should pass."""
+    deps = _make_save_deps(no=9999)
+    deps.current_user_message = "主题是X, 然后保存"
+    ctx = FakeCtx(deps=deps)
+    fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
+
+    with (
+        patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None),
+        patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now),
+    ):
+        result = await apply_save_draft(ctx, confirmed=False)
+
+    assert result["mode"] == "create"
+    assert result["pending_confirmation"] is True

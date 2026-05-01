@@ -42,7 +42,7 @@ from ....agents.meeting.history import (
     truncate_to_last_turns,
 )
 from ....agents.runtime.contracts import AgentKind, RouteKind
-from ....agents.runtime.policy import require_tool_allowed
+from ....agents.runtime.policy import AgentPolicyError, require_tool_allowed
 from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
 from ....agents.statistics.agent import USAGE_LIMITS, agent
 from ....agents.statistics.models import StatsDeps
@@ -176,7 +176,18 @@ async def stats_agent_turn(
                             async for tool_event in tool_stream:
                                 if isinstance(tool_event, FunctionToolCallEvent):
                                     call_part: ToolCallPart = tool_event.part
-                                    require_tool_allowed(AgentKind.STATISTICS, call_part.tool_name)
+                                    # See meeting.py for rationale. We log policy rejections but
+                                    # don't raise — Pydantic AI's natural unknown-tool path will
+                                    # surface a retry the model can self-correct from, instead
+                                    # of a hard turn failure on hallucinated tool names.
+                                    try:
+                                        require_tool_allowed(AgentKind.STATISTICS, call_part.tool_name)
+                                    except AgentPolicyError as policy_err:
+                                        log.warning(
+                                            "statistics agent policy rejected tool %r: %s",
+                                            call_part.tool_name,
+                                            policy_err,
+                                        )
                                     args = call_part.args_as_dict()
                                     tool_call_args[call_part.tool_call_id] = {
                                         "name": call_part.tool_name,

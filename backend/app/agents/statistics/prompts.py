@@ -19,6 +19,8 @@ If the user says "今年" / "this year", use year-to-date: `date_from=<current y
 
 ## Tools
 
+**Use exact tool names — never prepend a namespace.** Call `meeting_attendance_list`, not `api:meeting_attendance_list` / `tool:...`. Same rule for every other tool. Any prefix is a hallucination and will be rejected.
+
 | Tool | When to use |
 |---|---|
 | `meeting_attendance_list(date_from?, date_to?, type_filter?, meeting_no?, sort_by?, sort_order?, limit?, include_names?)` | Dashboard-backed per-meeting attendance. Use for "今年每次例会的参会人数", "哪次会议人最多", "#449 谁参加了", member/guest counts, averages from per-meeting rows. `type_filter="Regular"` means 例会. Set `include_names=True` only when the user asks who attended. |

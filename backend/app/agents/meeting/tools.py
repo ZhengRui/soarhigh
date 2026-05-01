@@ -1060,6 +1060,11 @@ def _agenda_to_meeting_payload(agenda) -> dict:
 
 
 _SAVE_CONFIRM_NEGATIVES = ("不", "别", "不用", "不要", "算了", "取消", "不是", "no", "not", "wrong", "cancel")
+# Generic yes-tokens that ratify a pending preview. Intentionally
+# DISJOINT from `_SAVE_INTENT_TOKENS` — repeating a save verb like
+# "保存" is treated as a fresh save request (re-initiate the preview),
+# not as confirmation of an earlier preview. Only an explicit yes
+# without a save verb counts as confirmation.
 _SAVE_CONFIRM_POSITIVES = (
     "确认",
     "对",
@@ -1069,9 +1074,6 @@ _SAVE_CONFIRM_POSITIVES = (
     "可以",
     "行",
     "没错",
-    "保存",
-    "存",
-    "save",
     "yes",
     "yep",
     "ok",
@@ -1091,6 +1093,55 @@ def _is_explicit_save_confirmation(text: str) -> bool:
     return any(p in q for p in _SAVE_CONFIRM_POSITIVES)
 
 
+# Strict subset of confirmation tokens — the user is unambiguously
+# asking to save NOW. Used for the preview-turn gate to prevent the
+# model from calling save_draft on its own initiative after unrelated
+# edits. Intentionally excludes generic confirmation tokens like
+# "yes" / "ok" / "好" / "确认" — those confirm a pending preview but
+# do NOT initiate one.
+_SAVE_INTENT_TOKENS = (
+    "保存",
+    "存盘",
+    "存一下",
+    "save",
+)
+
+
+def _is_explicit_save_request(text: str) -> bool:
+    """True iff the user's current message explicitly asks to save.
+    Distinct from `_is_explicit_save_confirmation`: that helper accepts
+    a yes-token to ratify a pending preview; this one demands an
+    actual save verb to *initiate* one."""
+    q = (text or "").strip().lower()
+    if not q:
+        return False
+    if any(n in q for n in _SAVE_CONFIRM_NEGATIVES):
+        return False
+    return any(t in q for t in _SAVE_INTENT_TOKENS)
+
+
+async def _immediately_prior_turn_was_save_preview(session_id: str) -> bool:
+    """True iff the immediately previous turn ran a successful
+    `save_draft` with `pending_confirmation: True`. Strict check — any
+    intervening turn (including read-only ones like show_current_agenda
+    or any edit) invalidates the preview and forces a fresh one."""
+    from app.agents.runtime.store import agent_turn_store
+
+    tail_seq, _ = await agent_turn_store.load(session_id)
+    if tail_seq <= 0:
+        return False
+    turn = await agent_turn_store.load_turn(session_id, tail_seq)
+    if turn is None:
+        return False
+    for trace in turn.tool_trace or []:
+        if trace.get("name") != "save_draft" or trace.get("status") != "ok":
+            continue
+        result = trace.get("result")
+        if isinstance(result, dict) and result.get("pending_confirmation") is True:
+            return True
+    return False
+
+
 async def apply_save_draft(ctx, *, confirmed: bool = False) -> dict:
     """Save the current agenda as a meeting draft.
 
@@ -1106,6 +1157,20 @@ async def apply_save_draft(ctx, *, confirmed: bool = False) -> dict:
     ModelRetry — terminal for the turn (no retries).
     """
     agenda = ctx.deps.agenda
+
+    # Preview-turn intent gate. Block the model from calling save_draft
+    # on its own after unrelated edits (e.g. user says "Timer 是 Vicky"
+    # and the model preemptively chains a save). The check is per-turn,
+    # so a compound message like "Timer 是 Vicky, 然后保存" still
+    # passes — "保存" satisfies the gate.
+    if not confirmed and not _is_explicit_save_request(ctx.deps.current_user_message):
+        raise ModelRetry(
+            "save_draft refused: this turn's user message does not request a save. "
+            "Don't call save_draft preemptively after edits — only call it when the "
+            "user explicitly asks (e.g. '保存', 'save', 'save the draft'). "
+            "Reply with the edit summary and stop."
+        )
+
     no = agenda.meta.no
 
     db_meeting: dict | None = None
@@ -1163,6 +1228,14 @@ async def apply_save_draft(ctx, *, confirmed: bool = False) -> dict:
         raise ModelRetry(
             "save_draft refused: confirmed=True but the current user message is not "
             "an explicit confirmation. Show the preview and wait for the user's yes."
+        )
+
+    if not await _immediately_prior_turn_was_save_preview(ctx.deps.session_id):
+        raise ModelRetry(
+            "save_draft refused: no fresh preview in the immediately prior turn. "
+            "Any turn between preview and confirm — including edits or read-only "
+            "tool calls — invalidates the preview. Call save_draft(confirmed=false) "
+            "first to show a new preview, then wait for the user's yes."
         )
 
     payload = _agenda_to_meeting_payload(agenda)

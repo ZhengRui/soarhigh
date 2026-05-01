@@ -129,25 +129,53 @@ def test_stats_preview_meeting_appends_folded_preview_blocks(client, mock_auth_d
     policy_check.assert_called_once_with(AgentKind.STATISTICS, "preview_meeting")
 
 
-def test_stats_route_returns_error_when_policy_blocks_tool(client, mock_auth_dep):
+def test_stats_route_logs_policy_rejection_without_killing_turn(client, mock_auth_dep, caplog):
+    """Policy rejections are logged as warnings but do NOT raise. This
+    keeps a hallucinated tool name (e.g. 'api:preview_meeting') from
+    surfacing as a hard 'Request failed' banner; the model can self-
+    correct via Pydantic AI's natural unknown-tool retry path."""
+    import logging
+
+    fake_full_meeting = {
+        "id": "uuid-451",
+        "no": 451,
+        "type": "Regular",
+        "manager": {"id": None, "name": "Vicky Yang", "member_id": ""},
+        "theme": "T",
+        "date": "2026-04-22",
+        "start_time": "19:15",
+        "end_time": "21:35",
+        "location": "Loc",
+        "introduction": "",
+        "segments": [],
+    }
     test_model = ForcedArgsTestModel(
         call_tools=["preview_meeting"],
         forced_args={"preview_meeting": {"no": 451}},
     )
 
-    with patch(
-        "app.api.routes.agents.statistics.require_tool_allowed",
-        side_effect=AgentPolicyError("blocked by policy"),
-    ):
-        with stats_agent_module.agent.override(model=test_model):
-            with client.stream(
-                "POST",
-                "/statistics-agent/turn",
-                json={"session_id": "stats-policy", "user_message": "查看 #451"},
-            ) as r:
-                assert r.status_code == 200
-                events = _parse_sse(r.iter_bytes())
+    caplog.set_level(logging.WARNING, logger="app.api.routes.agents.statistics")
 
-    assert events[-1]["event"] == "error"
-    assert events[-1]["data"]["reason"] == "agent_error"
-    assert "blocked by policy" in events[-1]["data"]["message"]
+    with (
+        patch(
+            "app.api.routes.agents.statistics.require_tool_allowed",
+            side_effect=AgentPolicyError("blocked by policy"),
+        ),
+        patch("app.services.meeting_lookup.fetch_meeting_full", return_value=fake_full_meeting),
+        stats_agent_module.agent.override(model=test_model),
+    ):
+        with client.stream(
+            "POST",
+            "/statistics-agent/turn",
+            json={"session_id": "stats-policy", "user_message": "查看 #451"},
+        ) as r:
+            assert r.status_code == 200
+            events = _parse_sse(r.iter_bytes())
+
+    assert any(
+        "policy rejected tool" in record.message and "blocked by policy" in record.message for record in caplog.records
+    )
+    # Stream completes normally — no `error` event should be emitted just
+    # because the policy check was bypassed. The tool runs successfully.
+    assert events[-1]["event"] == "done"
+    assert not any(e["event"] == "error" for e in events)

@@ -33,7 +33,7 @@ from ....agents.meeting.models import AgendaDeps
 from ....agents.meeting.prompts import ROUTER_SYSTEM_PROMPT, SNAPSHOT_TEMPLATE
 from ....agents.meeting.segment_ids import shorten_agenda_dump
 from ....agents.runtime.contracts import AgentKind, RouteKind
-from ....agents.runtime.policy import require_tool_allowed
+from ....agents.runtime.policy import AgentPolicyError, require_tool_allowed
 from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
 from ....models.agents.meeting import MeetingAgentRevertRequest, MeetingAgentTurnRequest
 from ....services.meeting_preview_markdown import (
@@ -486,7 +486,24 @@ async def agent_turn(
                             async for tool_event in tool_stream:
                                 if isinstance(tool_event, FunctionToolCallEvent):
                                     call_part: ToolCallPart = tool_event.part
-                                    require_tool_allowed(AgentKind.MEETING, call_part.tool_name)
+                                    # Defense-in-depth: registered tools must appear in the
+                                    # capabilities registry. The startup test
+                                    # `test_capability_registry_covers_registered_specialist_tools`
+                                    # enforces this; a violation here would mean a registered
+                                    # tool slipped past CI. We catch instead of raising so a
+                                    # hallucinated tool name from the model (e.g. "api:save_draft"
+                                    # when the registered tool is plain "save_draft") produces
+                                    # a soft, model-recoverable error via Pydantic AI's natural
+                                    # unknown-tool retry path — not a hard "Request failed"
+                                    # banner that kills the turn.
+                                    try:
+                                        require_tool_allowed(AgentKind.MEETING, call_part.tool_name)
+                                    except AgentPolicyError as policy_err:
+                                        log.warning(
+                                            "meeting agent policy rejected tool %r: %s",
+                                            call_part.tool_name,
+                                            policy_err,
+                                        )
                                     args = call_part.args_as_dict()
                                     tool_call_args[call_part.tool_call_id] = {
                                         "name": call_part.tool_name,
