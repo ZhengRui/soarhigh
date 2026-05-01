@@ -1,0 +1,51 @@
+name: db-snapshot
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'   # 03:00 UTC every Sunday (= 11:00 Beijing time)
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Dump database (roles, schema, data)
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%F)
+          mkdir -p out
+
+          supabase db dump --db-url "$DB_URL" -f "out/roles.sql"  --role-only
+          supabase db dump --db-url "$DB_URL" -f "out/schema.sql"
+          supabase db dump --db-url "$DB_URL" -f "out/data.sql"   --data-only --use-copy
+
+          gzip out/*.sql
+          ls -lh out
+
+          echo "DATE=$DATE" >> "$GITHUB_ENV"
+
+      - name: Install ossutil
+        run: |
+          set -euo pipefail
+          curl -fsSL -o ossutil https://gosspublic.alicdn.com/ossutil/1.7.18/ossutil64
+          chmod +x ossutil
+          sudo mv ossutil /usr/local/bin/ossutil
+          ossutil --version
+
+      - name: Upload to OSS
+        env:
+          OSS_KEY:      ${{ secrets.ALICLOUD_ACCESS_KEY_ID }}
+          OSS_SECRET:   ${{ secrets.ALICLOUD_ACCESS_KEY_SECRET }}
+          OSS_ENDPOINT: ${{ secrets.ALICLOUD_OSS_ENDPOINT }}
+          OSS_BUCKET:   ${{ secrets.ALICLOUD_OSS_BUCKET }}
+        run: |
+          set -euo pipefail
+          ossutil cp -r out/ "oss://${OSS_BUCKET}/db-backups/${DATE}/" \
+            -i "$OSS_KEY" -k "$OSS_SECRET" -e "$OSS_ENDPOINT" \
+            --force
