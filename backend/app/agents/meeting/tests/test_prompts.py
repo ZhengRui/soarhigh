@@ -161,3 +161,15 @@ def test_save_draft_tool_registered():
 
     tool_names = {tool_def.name for tool_def in agent._function_toolset.tools.values()}
     assert "save_draft" in tool_names
+
+
+def test_meeting_prompt_documents_save_draft_protocol():
+    from app.agents.meeting.prompts import ROUTER_SYSTEM_PROMPT
+
+    p = ROUTER_SYSTEM_PROMPT
+    assert "save_draft" in p
+    # Two-turn protocol present
+    plower = p.lower()
+    assert "preview" in plower and "confirm" in plower
+    # Refuse cases mentioned (past meeting / dashboard handling delegated to refusal)
+    assert "past meeting" in plower or "dashboard" in plower
