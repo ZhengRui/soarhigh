@@ -317,11 +317,12 @@ def _build_agenda_addendum(tool_trace: list[dict], agenda, assistant_text_so_far
     if previews:
         return render_preview_addendum(previews)
 
-    if _show_current_was_called(tool_trace):
-        # Read-only request to display the current draft. Same folded layout
-        # as the post-mutation render, no missing-fields nudge (this isn't
-        # a creation event), no "(preview of #N)" label since it IS the user's
-        # current agenda.
+    if _show_current_was_called(tool_trace) or _save_draft_preview_was_called(tool_trace):
+        # Read-only display path: show full draft (Meta + Intro + Agenda).
+        # save_draft preview reuses this layout so the user sees what they'd
+        # be saving before confirming. No missing-fields nudge (not a creation
+        # event), no "(preview of #N)" label since it IS the user's current
+        # agenda.
         parts = [_fold("📌 Meeting Meta", _render_meta_table(agenda))]
         intro_text = (agenda.meta.introduction or "").strip()
         if intro_text:
@@ -334,6 +335,16 @@ def _build_agenda_addendum(tool_trace: list[dict], agenda, assistant_text_so_far
 
 def _show_current_was_called(tool_trace: list[dict]) -> bool:
     return any(trace.get("name") in _SHOW_CURRENT_TOOL_NAMES and trace.get("status") == "ok" for trace in tool_trace)
+
+
+def _save_draft_preview_was_called(tool_trace: list[dict]) -> bool:
+    for trace in tool_trace:
+        if trace.get("name") != "save_draft" or trace.get("status") != "ok":
+            continue
+        result = trace.get("result")
+        if isinstance(result, dict) and result.get("pending_confirmation") is True:
+            return True
+    return False
 
 
 def _already_has_summary_table(text: str) -> bool:

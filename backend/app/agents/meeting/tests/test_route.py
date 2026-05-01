@@ -777,6 +777,54 @@ def test_turn_rejects_unsupported_image_type(client, mock_auth_dep):
     assert r.status_code == 400
 
 
+def test_route_renders_folds_for_save_draft_preview():
+    """save_draft preview triggers Meta + Introduction + Agenda folds."""
+    from app.agents.meeting.models import Agenda, Meta
+    from app.api.routes.agents.meeting import _build_agenda_addendum
+
+    agenda = Agenda(
+        meta=Meta(
+            no=451,
+            theme="T",
+            manager="M",
+            date="2026-06-01",
+            start_time="19:30",
+            end_time="21:30",
+            introduction="hi",
+        ),
+        segments=[],
+    )
+    tool_trace = [
+        {
+            "name": "save_draft",
+            "status": "ok",
+            "result": {"mode": "create", "pending_confirmation": True, "preview": {}},
+        }
+    ]
+    out = _build_agenda_addendum(tool_trace, agenda, assistant_text_so_far="")
+    assert "📌 Meeting Meta" in out
+    assert "📝 Introduction" in out
+    assert "📋 Agenda" in out
+
+
+def test_route_does_not_render_folds_for_save_draft_persisted():
+    """Confirmed save: model already showed the folds last turn; no
+    duplicate render here."""
+    from app.agents.meeting.models import Agenda, Meta
+    from app.api.routes.agents.meeting import _build_agenda_addendum
+
+    agenda = Agenda(meta=Meta(no=451), segments=[])
+    tool_trace = [
+        {
+            "name": "save_draft",
+            "status": "ok",
+            "result": {"mode": "create", "pending_confirmation": False, "meeting_id": "x"},
+        }
+    ]
+    out = _build_agenda_addendum(tool_trace, agenda, assistant_text_so_far="")
+    assert out == ""
+
+
 # ---------------------------------------------------------------------------
 # /meeting-agent/revert
 # ---------------------------------------------------------------------------
