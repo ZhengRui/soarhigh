@@ -1149,17 +1149,7 @@ async def apply_save_draft(ctx, *, confirmed: bool = False) -> dict:
                 "if you need to update this one, go to the dashboard."
             )
 
-    preview = {
-        "no": agenda.meta.no,
-        "type": agenda.meta.type,
-        "theme": agenda.meta.theme,
-        "manager": agenda.meta.manager,
-        "date": agenda.meta.date,
-        "start_time": agenda.meta.start_time,
-        "end_time": agenda.meta.end_time,
-        "location": agenda.meta.location,
-        "segment_count": len(agenda.segments),
-    }
+    preview = _meeting_summary(agenda)
 
     if not confirmed:
         return {

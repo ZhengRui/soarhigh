@@ -2727,6 +2727,11 @@ async def test_save_draft_persist_create_calls_create_meeting():
     assert payload["no"] == 9999
     assert payload["theme"] == "Resilience"
     assert payload["status"] == "draft"
+    # Persistence shape requires duration as str (Meeting.Segment.duration: str),
+    # not int as the agent's Agenda carries internally. The conversion in
+    # _agenda_to_meeting_payload must coerce — locking the contract here.
+    assert all(isinstance(s["duration"], str) for s in payload["segments"])
+    assert payload["manager"]["name"] == "Joyce Feng"
     assert result["mode"] == "create"
     assert result["pending_confirmation"] is False
     assert result["meeting_id"] == "new-uuid"
