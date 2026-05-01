@@ -10,11 +10,22 @@ from pydantic_ai import ModelRetry
 
 from app.agents.meeting.models import Agenda, Segment
 from app.agents.meeting.normalize import meeting_to_agenda
+from app.agents.meeting.save_gate import (
+    classify_save,
+    now_shanghai,
+)
 from app.agents.meeting.segment_ids import resolve as _resolve_segment_id
 from app.agents.meeting.segment_ids import shorten as _shorten_id
 from app.agents.meeting.timing import recompute_start_times
 from app.agents.meeting.validators import run_validators
+from app.db.core import (
+    create_meeting,
+    get_meeting_by_id,
+    get_meeting_id_by_no,
+    update_meeting,
+)
 from app.models.meeting import Attendee, Meeting
+from app.models.meeting import Segment as MeetingSegment
 from app.services import meeting_lookup
 from app.utils.meeting import parse_meeting_agenda_image, plan_meeting_from_text
 
@@ -998,6 +1009,196 @@ async def apply_clone_from_meeting(ctx, no: int) -> dict:
         "segments": _segments_summary(ctx.deps.agenda),
         "missing_required_fields": _missing_required_fields(ctx.deps.agenda),
         "validation_issues": _validation_issues(ctx.deps.agenda),
+    }
+
+
+def _agenda_to_meeting_payload(agenda) -> dict:
+    """Convert an Agenda (Meta + segments with structured Attendee role_takers)
+    into the dict shape `create_meeting` / `update_meeting` expect (mirrors
+    Meeting.dict(exclude={'id'}) from the REST routes). Manager string is
+    coerced into an Attendee. Status defaults to draft."""
+    meta = agenda.meta
+    manager_name = (meta.manager or "").strip()
+    manager = Attendee(id=None, name=manager_name, member_id="")
+    segments_payload: list[dict] = []
+    for seg in agenda.segments:
+        rt = seg.role_taker
+        role_attendee = (
+            Attendee(id=None, name=rt.name, member_id=rt.member_id or "")
+            if rt and (rt.name or "").strip()
+            else Attendee(id=None, name="", member_id="")
+        )
+        segments_payload.append(
+            MeetingSegment(
+                id=seg.id,
+                type=seg.type or "",
+                start_time=seg.start_time or "",
+                end_time="",  # backend recalculates from start + duration
+                duration=str(seg.duration) if seg.duration is not None else "",
+                role_taker=role_attendee,
+                title=seg.title or "",
+                content=seg.content or "",
+                related_segment_ids=seg.related_segment_ids or "",
+            ).dict()
+        )
+    payload = Meeting(
+        id=None,
+        no=meta.no,
+        type=meta.type or "Regular",
+        theme=meta.theme or "",
+        manager=manager,
+        date=meta.date or "",
+        start_time=meta.start_time or "",
+        end_time=meta.end_time or "",
+        location=meta.location or "",
+        introduction=meta.introduction or "",
+        status="draft",
+        segments=[],
+    ).dict(exclude={"id", "segments"})
+    payload["segments"] = segments_payload
+    return payload
+
+
+_SAVE_CONFIRM_NEGATIVES = ("不", "别", "不用", "不要", "算了", "取消", "不是", "no", "not", "wrong", "cancel")
+_SAVE_CONFIRM_POSITIVES = (
+    "确认",
+    "对",
+    "是",
+    "好的",
+    "好",
+    "可以",
+    "行",
+    "没错",
+    "保存",
+    "存",
+    "save",
+    "yes",
+    "yep",
+    "ok",
+    "okay",
+    "sure",
+    "confirm",
+    "do it",
+)
+
+
+def _is_explicit_save_confirmation(text: str) -> bool:
+    q = (text or "").strip().lower()
+    if not q:
+        return False
+    if any(n in q for n in _SAVE_CONFIRM_NEGATIVES):
+        return False
+    return any(p in q for p in _SAVE_CONFIRM_POSITIVES)
+
+
+async def apply_save_draft(ctx, *, confirmed: bool = False) -> dict:
+    """Save the current agenda as a meeting draft.
+
+    Two-turn protocol:
+      1. First call (`confirmed=False`): classify create vs update vs
+         refuse using the time gate. Return a preview without writing.
+      2. Second call (`confirmed=True` AND explicit user confirmation
+         in `current_user_message`): re-validate the gate, then persist
+         via `create_meeting` or `update_meeting`.
+
+    The tool re-checks the time gate on every call so the LLM cannot
+    skip it by passing `confirmed=True` directly. Refusals raise
+    ModelRetry — terminal for the turn (no retries).
+    """
+    agenda = ctx.deps.agenda
+    no = agenda.meta.no
+
+    db_meeting: dict | None = None
+    meeting_id: str | None = None
+    if no is not None:
+        meeting_id = await asyncio.to_thread(get_meeting_id_by_no, no, ctx.deps.user_id)
+        if meeting_id:
+            db_meeting = await asyncio.to_thread(get_meeting_by_id, meeting_id, ctx.deps.user_id)
+
+    classification = classify_save(agenda, db_meeting, now_shanghai())
+
+    if classification.mode == "refuse":
+        if classification.reason == "missing_no":
+            raise ModelRetry(
+                "save_draft refused: the agenda has no meeting number. "
+                "Ask the user for the meeting #N before saving."
+            )
+        if classification.reason == "missing_schedule":
+            raise ModelRetry(
+                "save_draft refused: the agenda is missing date or start_time. "
+                "Ask the user to fill them in before saving."
+            )
+        if classification.reason == "create_past":
+            raise ModelRetry(
+                "save_draft refused: cannot create a past meeting through chat. "
+                "The agenda's start_time is already in the past."
+            )
+        if classification.reason == "edit_past":
+            # Single refuse path covers both possible user intents,
+            # since the tool can't tell which they meant:
+            # (a) intended update on an existing meeting that already
+            #     ended → directs them to the dashboard;
+            # (b) intended create with a `no` that collides with a past
+            #     meeting → directs them to pick a different number.
+            past_date = (db_meeting or {}).get("date") if db_meeting else None
+            date_clause = f"was held on {past_date}" if past_date else "already happened"
+            raise ModelRetry(
+                f"save_draft refused: meeting #{agenda.meta.no} {date_clause} — "
+                "past meetings can't be modified from chat. "
+                "If you wanted to create a new meeting, pick a different number; "
+                "if you need to update this one, go to the dashboard."
+            )
+
+    preview = {
+        "no": agenda.meta.no,
+        "type": agenda.meta.type,
+        "theme": agenda.meta.theme,
+        "manager": agenda.meta.manager,
+        "date": agenda.meta.date,
+        "start_time": agenda.meta.start_time,
+        "end_time": agenda.meta.end_time,
+        "location": agenda.meta.location,
+        "segment_count": len(agenda.segments),
+    }
+
+    if not confirmed:
+        return {
+            "mode": classification.mode,
+            "pending_confirmation": True,
+            "meeting_id": classification.meeting_id,
+            "preview": preview,
+        }
+
+    if not _is_explicit_save_confirmation(ctx.deps.current_user_message):
+        raise ModelRetry(
+            "save_draft refused: confirmed=True but the current user message is not "
+            "an explicit confirmation. Show the preview and wait for the user's yes."
+        )
+
+    payload = _agenda_to_meeting_payload(agenda)
+
+    if classification.mode == "create":
+        saved = await asyncio.to_thread(create_meeting, payload)
+        return {
+            "mode": "create",
+            "pending_confirmation": False,
+            "meeting_id": saved.get("id"),
+            "no": saved.get("no"),
+            "preview": preview,
+        }
+
+    # mode == "update"
+    if not ctx.deps.user_id:
+        raise ModelRetry("save_draft refused: missing user_id; cannot perform update.")
+    # classification.meeting_id is non-None when mode == "update" (set by classify_save).
+    assert classification.meeting_id is not None
+    updated = await asyncio.to_thread(update_meeting, classification.meeting_id, payload, ctx.deps.user_id)
+    return {
+        "mode": "update",
+        "pending_confirmation": False,
+        "meeting_id": classification.meeting_id,
+        "no": updated.get("no") if updated else agenda.meta.no,
+        "preview": preview,
     }
 
 

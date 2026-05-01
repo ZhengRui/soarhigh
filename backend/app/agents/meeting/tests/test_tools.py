@@ -1,7 +1,9 @@
 import asyncio
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic_ai import ModelRetry
@@ -18,6 +20,7 @@ from app.agents.meeting.tools import (
     apply_remove_segment,
     apply_revert_last_turn,
     apply_revert_to_turn,
+    apply_save_draft,
     apply_set_buffer,
     apply_set_content,
     apply_set_duration,
@@ -2596,3 +2599,160 @@ async def test_revert_last_turn_mutates_in_place_not_reassigns(monkeypatch):
     # Same python object, emptied contents.
     assert id(deps.agenda) == original_agenda_id
     assert deps.agenda.segments == []
+
+
+# -----------------------------------------------------------------------------
+# save_draft tests
+# -----------------------------------------------------------------------------
+
+SH = ZoneInfo("Asia/Shanghai")
+
+
+def _make_save_deps(no=999, date="2026-06-01", start="19:30", end="21:30"):
+    """Future-dated agenda with realistic schedule."""
+    deps = make_deps()
+    deps.agenda.meta.no = no
+    deps.agenda.meta.date = date
+    deps.agenda.meta.start_time = start
+    deps.agenda.meta.end_time = end
+    deps.agenda.meta.theme = "Resilience"
+    deps.agenda.meta.manager = "Joyce Feng"
+    deps.user_id = "test-user-id"
+    deps.current_user_message = ""
+    return deps
+
+
+@pytest.mark.asyncio
+async def test_save_draft_preview_create_when_no_not_in_db():
+    deps = _make_save_deps(no=9999)
+    ctx = FakeCtx(deps=deps)
+    fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
+
+    with patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None):
+        with patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now):
+            result = await apply_save_draft(ctx, confirmed=False)
+
+    assert result["mode"] == "create"
+    assert result["pending_confirmation"] is True
+    assert result["preview"]["no"] == 9999
+    assert result["preview"]["theme"] == "Resilience"
+    assert result["preview"]["manager"] == "Joyce Feng"
+    assert result["preview"]["date"] == "2026-06-01"
+
+
+@pytest.mark.asyncio
+async def test_save_draft_preview_update_when_no_exists_and_within_grace():
+    deps = _make_save_deps(no=451)
+    ctx = FakeCtx(deps=deps)
+    fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
+    db_meeting = {
+        "id": "mtg-uuid",
+        "no": 451,
+        "date": "2026-06-01",
+        "end_time": "21:30",
+    }
+
+    with patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value="mtg-uuid"):
+        with patch("app.agents.meeting.tools.get_meeting_by_id", return_value=db_meeting):
+            with patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now):
+                result = await apply_save_draft(ctx, confirmed=False)
+
+    assert result["mode"] == "update"
+    assert result["pending_confirmation"] is True
+    assert result["meeting_id"] == "mtg-uuid"
+
+
+@pytest.mark.asyncio
+async def test_save_draft_refuses_create_for_past_start_time():
+    deps = _make_save_deps(no=9999, date="2026-04-01", start="19:30")
+    ctx = FakeCtx(deps=deps)
+    fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
+
+    with patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None):
+        with patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now):
+            with pytest.raises(ModelRetry, match="past meeting"):
+                await apply_save_draft(ctx, confirmed=False)
+
+
+@pytest.mark.asyncio
+async def test_save_draft_refuses_edit_after_grace_window():
+    deps = _make_save_deps(no=451)
+    ctx = FakeCtx(deps=deps)
+    fake_now = datetime(2026, 5, 10, 22, 31, tzinfo=SH)  # 61 min after end_time
+    db_meeting = {"id": "mtg-uuid", "no": 451, "date": "2026-05-10", "end_time": "21:30"}
+
+    with patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value="mtg-uuid"):
+        with patch("app.agents.meeting.tools.get_meeting_by_id", return_value=db_meeting):
+            with patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now):
+                with pytest.raises(ModelRetry) as exc:
+                    await apply_save_draft(ctx, confirmed=False)
+    msg = str(exc.value)
+    assert "past meetings can't be modified" in msg
+    assert "pick a different number" in msg
+    assert "dashboard" in msg
+
+
+@pytest.mark.asyncio
+async def test_save_draft_persist_create_requires_explicit_confirmation():
+    """confirmed=True alone is not enough — current_user_message must be
+    an explicit yes."""
+    deps = _make_save_deps(no=9999)
+    deps.current_user_message = "let me think"
+    ctx = FakeCtx(deps=deps)
+    fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
+
+    with patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None):
+        with patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now):
+            with pytest.raises(ModelRetry, match="explicit confirmation"):
+                await apply_save_draft(ctx, confirmed=True)
+
+
+@pytest.mark.asyncio
+async def test_save_draft_persist_create_calls_create_meeting():
+    deps = _make_save_deps(no=9999)
+    deps.current_user_message = "yes"
+    ctx = FakeCtx(deps=deps)
+    fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
+
+    with patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None):
+        with patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now):
+            with patch(
+                "app.agents.meeting.tools.create_meeting",
+                return_value={"id": "new-uuid", "no": 9999},
+            ) as mock_create:
+                result = await apply_save_draft(ctx, confirmed=True)
+
+    mock_create.assert_called_once()
+    payload = mock_create.call_args[0][0]
+    assert payload["no"] == 9999
+    assert payload["theme"] == "Resilience"
+    assert payload["status"] == "draft"
+    assert result["mode"] == "create"
+    assert result["pending_confirmation"] is False
+    assert result["meeting_id"] == "new-uuid"
+
+
+@pytest.mark.asyncio
+async def test_save_draft_persist_update_calls_update_meeting():
+    deps = _make_save_deps(no=451)
+    deps.current_user_message = "确认"
+    ctx = FakeCtx(deps=deps)
+    fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
+    db_meeting = {"id": "mtg-uuid", "no": 451, "date": "2026-06-01", "end_time": "21:30"}
+
+    with patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value="mtg-uuid"):
+        with patch("app.agents.meeting.tools.get_meeting_by_id", return_value=db_meeting):
+            with patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now):
+                with patch(
+                    "app.agents.meeting.tools.update_meeting",
+                    return_value={"id": "mtg-uuid", "no": 451},
+                ) as mock_update:
+                    result = await apply_save_draft(ctx, confirmed=True)
+
+    mock_update.assert_called_once()
+    args = mock_update.call_args[0]
+    assert args[0] == "mtg-uuid"  # meeting_id
+    assert args[1]["no"] == 451  # payload
+    assert args[2] == "test-user-id"  # user_id
+    assert result["mode"] == "update"
+    assert result["pending_confirmation"] is False
