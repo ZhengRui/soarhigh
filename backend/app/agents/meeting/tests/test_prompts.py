@@ -154,3 +154,10 @@ def test_router_prompt_documents_language_hint():
 
     assert "[Reply language]" in ROUTER_SYSTEM_PROMPT
     assert "default to English" in ROUTER_SYSTEM_PROMPT
+
+
+def test_save_draft_tool_registered():
+    from app.agents.meeting.agent import agent
+
+    tool_names = {tool_def.name for tool_def in agent._function_toolset.tools.values()}
+    assert "save_draft" in tool_names

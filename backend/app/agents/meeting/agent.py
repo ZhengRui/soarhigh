@@ -499,6 +499,16 @@ async def create_from_image(ctx: RunContext[AgendaDeps]) -> dict:
 
 
 @agent.tool
+async def save_draft(ctx: RunContext[AgendaDeps], confirmed: bool = False) -> dict:
+    """Save the current agenda as a meeting draft.
+
+    Two-turn protocol — first call without confirmed (preview), then call
+    again with confirmed=true once the user has explicitly agreed.
+    """
+    return await _tools.apply_save_draft(ctx, confirmed=confirmed)
+
+
+@agent.tool
 async def create_from_template(ctx: RunContext[AgendaDeps], template: str) -> dict:
     """WHOLESALE REPLACE the current agenda with a stock template — deterministic,
     no LLM call. Use when the user asks to create a meeting from scratch with

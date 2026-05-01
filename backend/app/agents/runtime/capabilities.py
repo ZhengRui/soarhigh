@@ -47,6 +47,7 @@ MEETING_MUTATION_TOOLS: tuple[str, ...] = (
     "clone_from_meeting",
     "revert_last_turn",
     "revert_to_turn",
+    "save_draft",
 )
 
 MEETING_READ_TOOLS: tuple[str, ...] = (
@@ -76,6 +77,7 @@ CAPABILITIES: tuple[Capability, ...] = (
             "edit the current meeting draft",
             "create a meeting draft from text, image, template, or historical meeting",
             "undo or revert draft edits",
+            "save the current draft as a new or existing meeting",
         ),
         unsupported_intents=("answer complete historical aggregate statistics",),
         tool_names=MEETING_MUTATION_TOOLS,
@@ -84,6 +86,7 @@ CAPABILITIES: tuple[Capability, ...] = (
             "Set Timer to Joyce Feng.",
             "Create a regular meeting template.",
             "Clone meeting #451 after I confirm.",
+            "Save the meeting draft.",
         ),
         expected_route=AgentKind.MEETING,
         eval_fixture_id="route.meeting.agenda_mutation",
