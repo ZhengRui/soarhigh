@@ -210,6 +210,21 @@ def _stub_classifier(monkeypatch):
                 reason="stub: meeting edit",
             )
 
+        if "save" in msg or "保存" in msg:
+            if not has_agenda:
+                return RouterDecision(
+                    route=RouteKind.CLARIFY,
+                    intent="meeting_edit_without_agenda_snapshot",
+                    reason="stub: save without agenda",
+                    clarification_question="I need the current agenda snapshot.",
+                )
+            return RouterDecision(
+                route=RouteKind.SPECIALIST,
+                agent_kind=AgentKind.MEETING,
+                intent="current_meeting_draft",
+                reason="stub: save → meeting",
+            )
+
         return RouterDecision(
             route=RouteKind.CLARIFY,
             intent="ambiguous_agent_target",
@@ -574,3 +589,115 @@ def _fake_parsed_meeting():
             )
         ],
     )
+
+
+def test_unified_route_save_draft_preview_emits_folds(client, mock_auth_dep, _force_in_memory_stores):
+    """save_draft preview through unified route → meeting agent dispatch
+    → tool returns preview with pending_confirmation=True → route addendum
+    appends Meta/Intro/Agenda folds. End-to-end check that the chain
+    correctly surfaces the save preview to the user."""
+    from datetime import datetime
+    from unittest.mock import patch
+    from zoneinfo import ZoneInfo
+
+    SH = ZoneInfo("Asia/Shanghai")
+    fake_now = datetime(2026, 5, 1, 10, 0, tzinfo=SH)
+
+    test_model = ForcedArgsTestModel(
+        call_tools=["save_draft"],
+        forced_args={"save_draft": {"confirmed": False}},
+    )
+
+    agenda_with_no = {
+        "meta": {
+            "no": 9999,
+            "theme": "Resilience",
+            "manager": "Joyce Feng",
+            "date": "2026-06-01",
+            "start_time": "19:30",
+            "end_time": "21:30",
+        },
+        "segments": [
+            {
+                "id": "s1",
+                "type": "Timer",
+                "start_time": "19:30",
+                "duration": 3,
+                "role_taker": "Liz Huang",
+                "buffer_before": 0,
+            }
+        ],
+    }
+
+    with (
+        patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now),
+        patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None),
+    ):
+        with meeting_agent_module.agent.override(model=test_model):
+            with client.stream(
+                "POST",
+                "/agent/turn",
+                **_turn_kwargs(
+                    {
+                        "session_id": "u-save-preview",
+                        "user_message": "save the draft",
+                        "agenda_snapshot": agenda_with_no,
+                    }
+                ),
+            ) as r:
+                assert r.status_code == 200
+                events = _parse_sse(r.iter_bytes())
+
+    text = "".join(e["data"]["chunk"] for e in events if e["event"] == "assistant_text")
+    assert "📌 Meeting Meta" in text
+    assert "📋 Agenda" in text
+
+
+def test_unified_route_save_draft_refuses_past_create(client, mock_auth_dep, _force_in_memory_stores):
+    """save_draft of an agenda whose start_time is already past →
+    ModelRetry inside the tool → SSE tool_call_end carries status=retry."""
+    from datetime import datetime
+    from unittest.mock import patch
+    from zoneinfo import ZoneInfo
+
+    SH = ZoneInfo("Asia/Shanghai")
+    fake_now = datetime(2026, 5, 10, 19, 31, tzinfo=SH)  # past start_time
+
+    test_model = ForcedArgsTestModel(
+        call_tools=["save_draft"],
+        forced_args={"save_draft": {"confirmed": False}},
+    )
+
+    agenda_past = {
+        "meta": {
+            "no": 9999,
+            "theme": "T",
+            "manager": "M",
+            "date": "2026-05-10",
+            "start_time": "19:30",
+            "end_time": "21:30",
+        },
+        "segments": [],
+    }
+
+    with (
+        patch("app.agents.meeting.tools.now_shanghai", return_value=fake_now),
+        patch("app.agents.meeting.tools.get_meeting_id_by_no", return_value=None),
+    ):
+        with meeting_agent_module.agent.override(model=test_model):
+            with client.stream(
+                "POST",
+                "/agent/turn",
+                **_turn_kwargs(
+                    {
+                        "session_id": "u-save-past",
+                        "user_message": "save",
+                        "agenda_snapshot": agenda_past,
+                    }
+                ),
+            ) as r:
+                assert r.status_code == 200
+                events = _parse_sse(r.iter_bytes())
+
+    tool_end = next(e for e in events if e["event"] == "tool_call_end")
+    assert tool_end["data"]["status"] == "retry"  # ModelRetry → retry status
