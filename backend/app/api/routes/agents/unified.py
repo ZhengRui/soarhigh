@@ -184,6 +184,70 @@ async def unified_agent_turn(
     user_id = getattr(user, "uid", None)
     language = _detect_user_language(req.user_message)
 
+    # Image attached → skip the router. Attached images are only consumed by
+    # the meeting agent's create_from_image tool, so there is no routing
+    # decision to make. Without this short-circuit an empty user_message +
+    # image lands at clarify (the router has no text to classify and falls
+    # back to "edit the draft, or look up history?").
+    if image is not None:
+        try:
+            _tail_seq, prior_history = await agent_turn_store.load(req.session_id)
+        except Exception as e:
+            log.exception("image-route pre-dispatch failed for session %s", req.session_id)
+            return StreamingResponse(
+                _error_only_stream(
+                    reason="router_failure",
+                    recoverable=True,
+                    message=_router_pre_dispatch_error_message(e, language=language),
+                ),
+                media_type="text/event-stream",
+            )
+        seq = _tail_seq + 1
+
+        if req.agenda_snapshot is None:
+            decision = RouterDecision(
+                route=RouteKind.CLARIFY,
+                intent="meeting_edit_without_agenda_snapshot",
+                reason="Image attached but no agenda_snapshot was supplied.",
+                clarification_question=(
+                    "I need the current agenda snapshot before I can use the attached image. "
+                    "Please retry from a meeting draft page."
+                ),
+            )
+            return StreamingResponse(
+                _terminal_stream(
+                    seq=seq,
+                    decision=decision,
+                    text=_router_terminal_text(decision, language=language),
+                    session_id=req.session_id,
+                    user_id=user_id,
+                    user_message=req.user_message,
+                    prior_history=prior_history,
+                ),
+                media_type="text/event-stream",
+            )
+
+        decision = RouterDecision(
+            route=RouteKind.SPECIALIST,
+            agent_kind=AgentKind.MEETING,
+            intent="image_attachment_create_from_image",
+            reason="Attached image is consumed by create_from_image; dispatched directly to meeting agent.",
+        )
+        specialist_response = await meeting_agent_turn(
+            payload=MeetingAgentTurnRequest(
+                session_id=req.session_id,
+                user_message=req.user_message,
+                agenda_snapshot=req.agenda_snapshot,
+                router_decision=decision.model_dump(mode="json"),
+            ).model_dump_json(),
+            image=image,
+            user=user,
+        )
+        return StreamingResponse(
+            _prepend_router_event(seq, decision, specialist_response),
+            media_type="text/event-stream",
+        )
+
     # Wrap pre-stream work (history load + router LLM call) in try/except.
     # Any failure here would otherwise propagate as a 500 with no SSE body,
     # leaving the frontend to silently swallow the error and the user staring

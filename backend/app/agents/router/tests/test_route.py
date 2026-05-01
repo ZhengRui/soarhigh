@@ -419,3 +419,158 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
 def test_unified_route_requires_auth(client):
     r = client.post("/agent/turn", **_turn_kwargs({"session_id": "u-auth", "user_message": "hello"}))
     assert r.status_code in (401, 403)
+
+
+def _turn_kwargs_with_image(body: dict, image_bytes: bytes, content_type: str = "image/jpeg") -> dict:
+    """Multipart form for /agent/turn with an attached image."""
+    return {
+        "data": {"payload": json.dumps(body)},
+        "files": {"image": ("agenda.jpg", image_bytes, content_type)},
+    }
+
+
+def test_unified_route_with_image_bypasses_router_and_dispatches_to_meeting(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+    monkeypatch,
+):
+    """Image attached → unified route skips classify_turn entirely and
+    dispatches straight to the meeting agent. Without the short-circuit,
+    an empty user_message + image lands at clarify because the router
+    has no text to classify."""
+    from app.api.routes.agents import unified as unified_route
+
+    # Track whether classify_turn was called. The autouse _stub_classifier
+    # already replaced it; wrap that with a counter.
+    classify_calls: list = []
+    original_fake = unified_route.classify_turn
+
+    async def counting_fake(req, *, message_history=None):
+        classify_calls.append(req.user_message)
+        return await original_fake(req, message_history=message_history)
+
+    monkeypatch.setattr(unified_route, "classify_turn", counting_fake)
+
+    stores = _force_in_memory_stores
+    test_model = ForcedArgsTestModel(
+        call_tools=["create_from_image"],
+        forced_args={"create_from_image": {}},
+    )
+
+    from unittest.mock import patch as mock_patch
+
+    fake_meeting_module = "app.agents.meeting.tools.parse_meeting_agenda_image"
+    fake_meeting = _fake_parsed_meeting()
+
+    with mock_patch(fake_meeting_module, return_value=fake_meeting):
+        with meeting_agent_module.agent.override(model=test_model):
+            with client.stream(
+                "POST",
+                "/agent/turn",
+                **_turn_kwargs_with_image(
+                    {
+                        "session_id": "u-image",
+                        "user_message": "",
+                        "agenda_snapshot": _agenda(),
+                    },
+                    image_bytes=b"fake-jpeg-bytes",
+                ),
+            ) as r:
+                assert r.status_code == 200
+                events = _parse_sse(r.iter_bytes())
+
+    # Router was NOT consulted — the short-circuit fired.
+    assert classify_calls == []
+
+    assert events[0]["event"] == "router_decision"
+    assert events[0]["data"]["decision"]["agent_kind"] == "meeting"
+    assert events[0]["data"]["decision"]["intent"] == "image_attachment_create_from_image"
+    tool_start = next(event for event in events if event["event"] == "tool_call_start")
+    assert tool_start["data"]["name"] == "create_from_image"
+
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-image", 1))
+    assert unified_turn is not None
+    assert unified_turn.agent_kind == "meeting"
+    assert unified_turn.router_decision["intent"] == "image_attachment_create_from_image"
+    assert unified_turn.tool_trace[0]["name"] == "create_from_image"
+
+
+@pytest.mark.asyncio
+async def test_unified_route_with_image_without_agenda_clarifies(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+    monkeypatch,
+):
+    """Image attached but no agenda_snapshot → clarify (matches the
+    existing meeting_edit_without_agenda_snapshot intent)."""
+    from app.api.routes.agents import unified as unified_route
+
+    classify_calls: list = []
+    original_fake = unified_route.classify_turn
+
+    async def counting_fake(req, *, message_history=None):
+        classify_calls.append(req.user_message)
+        return await original_fake(req, message_history=message_history)
+
+    monkeypatch.setattr(unified_route, "classify_turn", counting_fake)
+
+    unified_store: InMemoryUnifiedAgentTurnStore = _force_in_memory_stores["unified"]
+
+    with client.stream(
+        "POST",
+        "/agent/turn",
+        **_turn_kwargs_with_image(
+            {"session_id": "u-image-no-agenda", "user_message": ""},
+            image_bytes=b"fake-jpeg-bytes",
+        ),
+    ) as r:
+        assert r.status_code == 200
+        events = _parse_sse(r.iter_bytes())
+
+    # Router was NOT consulted; we still emitted a synthetic clarify.
+    assert classify_calls == []
+
+    assert [event["event"] for event in events] == ["router_decision", "assistant_text", "done"]
+    assert events[0]["data"]["decision"]["route"] == "clarify"
+    assert events[0]["data"]["decision"]["intent"] == "meeting_edit_without_agenda_snapshot"
+
+    unified_turn = await unified_store.load_turn("u-image-no-agenda", 1)
+    assert unified_turn is not None
+    assert unified_turn.agent_kind == "router"
+    assert unified_turn.route == "clarify"
+
+
+def _fake_parsed_meeting():
+    """Stand-in Meeting for parse_meeting_agenda_image patching. Mirrors
+    the shape used by tests/test_tools.py:_fake_meeting_with_segments()."""
+    from app.models.meeting import Attendee, Meeting
+    from app.models.meeting import Segment as MeetingSegment
+
+    return Meeting(
+        id=None,
+        no=391,
+        type="Regular",
+        theme="ImageTheme",
+        manager=Attendee(id=None, name="Rui Zheng", member_id=""),
+        date="2026-04-30",
+        start_time="19:30",
+        end_time="21:30",
+        location="L",
+        introduction="",
+        status="draft",
+        segments=[
+            MeetingSegment(
+                id="legacy-0",
+                type="SAA",
+                start_time="19:30",
+                end_time="19:32",
+                duration="2",
+                role_taker=Attendee(id=None, name="Joyce Feng", member_id=""),
+                title="",
+                content="",
+                related_segment_ids="",
+            )
+        ],
+    )
