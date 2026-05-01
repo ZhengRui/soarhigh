@@ -22,8 +22,8 @@ jobs:
           mkdir -p out
 
           supabase db dump --db-url "$DB_URL" -f "out/roles.sql"  --role-only
-          supabase db dump --db-url "$DB_URL" -f "out/schema.sql"
-          supabase db dump --db-url "$DB_URL" -f "out/data.sql"   --data-only --use-copy
+          supabase db dump --db-url "$DB_URL" -f "out/schema.sql" --schema public
+          supabase db dump --db-url "$DB_URL" -f "out/data.sql"   --schema public --data-only --use-copy
 
           gzip out/*.sql
           ls -lh out
