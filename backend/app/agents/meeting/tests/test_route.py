@@ -180,12 +180,12 @@ async def test_turn_persists_history_cursor_as_json_safe_payload(client, mock_au
             for _ in r.iter_bytes():
                 pass
 
-    tail, history = await store.load("persist-t1")
+    tail, history = await store.load("persist-t1", user_id="test-user")
     assert tail == 1, f"expected one turn saved, got tail={tail}"
     # The actual regression guard: json.dumps is what supabase-py does internally.
     # If any datetime slipped through, this raises TypeError.
     json.dumps(history)
-    turn = await store.load_turn("persist-t1", 1)
+    turn = await store.load_turn("persist-t1", 1, user_id="test-user")
     assert turn is not None
     json.dumps(turn.history_cursor)
     json.dumps(turn.tool_trace)
@@ -861,10 +861,10 @@ async def test_revert_returns_agenda_before_and_deletes_later_turns(client, mock
     assert body["new_tail_seq"] == 1
 
     # Turns 2 and 3 are gone; turn 1 survives.
-    assert await store.load_turn("rev-s1", 1) is not None
-    assert await store.load_turn("rev-s1", 2) is None
-    assert await store.load_turn("rev-s1", 3) is None
-    tail, _ = await store.load("rev-s1")
+    assert await store.load_turn("rev-s1", 1, user_id="test-user") is not None
+    assert await store.load_turn("rev-s1", 2, user_id="test-user") is None
+    assert await store.load_turn("rev-s1", 3, user_id="test-user") is None
+    tail, _ = await store.load("rev-s1", user_id="test-user")
     assert tail == 1
 
 
@@ -883,7 +883,7 @@ async def test_revert_to_first_turn_rewinds_to_zero(client, mock_auth_dep, _forc
     assert r.json()["new_tail_seq"] == 0
     assert r.json()["agenda"] == {"initial": True}
 
-    tail, _ = await store.load("rev-s2")
+    tail, _ = await store.load("rev-s2", user_id="test-user")
     assert tail == 0
 
 

@@ -14,7 +14,6 @@ Differences from the meeting agent route:
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime
 from typing import AsyncIterator
@@ -36,12 +35,12 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from ....agents.meeting.history import (
+from ....agents.runtime.contracts import AgentKind, RouteKind
+from ....agents.runtime.history import (
     replace_system_prompt,
     strip_snapshots_from_dumped_history,
     truncate_to_last_turns,
 )
-from ....agents.runtime.contracts import AgentKind, RouteKind
 from ....agents.runtime.policy import AgentPolicyError, require_tool_allowed
 from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
 from ....agents.statistics.agent import USAGE_LIMITS, agent
@@ -50,44 +49,11 @@ from ....agents.statistics.prompts import SNAPSHOT_TEMPLATE, STATS_SYSTEM_PROMPT
 from ....models.agents.statistics import StatisticsAgentTurnRequest
 from ....services.meeting_preview_markdown import render_preview_addendum
 from ..auth import get_current_user
+from ._shared import _detect_user_language, _extract_error_info, _session_unavailable_response, _sse
 
 log = logging.getLogger(__name__)
 statistics_agent_router = r = APIRouter(prefix="/statistics-agent")
 _PREVIEW_TOOL_NAMES = {"preview_meeting"}
-
-
-def _sse(event: str, data: dict) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
-
-
-def _extract_error_info(e: Exception) -> tuple[str, bool]:
-    try:
-        from pydantic_ai.exceptions import ModelHTTPError, UsageLimitExceeded
-    except ImportError:
-        return (str(e), True)
-    if isinstance(e, UsageLimitExceeded):
-        return (str(e), False)
-    if isinstance(e, ModelHTTPError):
-        body = e.body if isinstance(e.body, dict) else {}
-        err = body.get("error") if isinstance(body, dict) else None
-        msg = err.get("message") if isinstance(err, dict) else None
-        if msg:
-            return (f"[{e.status_code}] {msg}", True)
-        return (f"Model HTTP error {e.status_code}", True)
-    return (str(e), True)
-
-
-def _detect_user_language(text: str) -> str:
-    """Same heuristic the meeting agent uses — CJK majority → 'zh',
-    otherwise 'en'. Per-turn detection so the model's reply language
-    follows the user's current message regardless of session history."""
-    if not text:
-        return "en"
-    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
-    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
-    if cjk == 0 and latin == 0:
-        return "en"
-    return "zh" if cjk > latin else "en"
 
 
 def _all_preview_payloads(tool_trace: list[dict]) -> list[dict]:
@@ -115,9 +81,13 @@ async def stats_agent_turn(
     # — no manual model_validate_json needed (the meeting agent does it
     # only because it parses a multipart `payload` field as a string).
 
+    user_id = getattr(user, "uid", None)
+    if not await agent_turn_store.verify_session_access(req.session_id, user_id=user_id):
+        return _session_unavailable_response()
+
     async def event_stream() -> AsyncIterator[bytes]:
         try:
-            tail_seq, history_json = await agent_turn_store.load(req.session_id)
+            tail_seq, history_json = await agent_turn_store.load(req.session_id, user_id=user_id)
             next_seq = tail_seq + 1
 
             full_history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
@@ -176,15 +146,19 @@ async def stats_agent_turn(
                             async for tool_event in tool_stream:
                                 if isinstance(tool_event, FunctionToolCallEvent):
                                     call_part: ToolCallPart = tool_event.part
-                                    # See meeting.py for rationale. We log policy rejections but
-                                    # don't raise — Pydantic AI's natural unknown-tool path will
-                                    # surface a retry the model can self-correct from, instead
-                                    # of a hard turn failure on hallucinated tool names.
+                                    # See meeting.py for the full rationale. Registered-but-
+                                    # unauthorized tools fail closed (config mistake); names that
+                                    # aren't registered at all fall through to Pydantic AI's
+                                    # unknown-tool retry path (model hallucination).
                                     try:
                                         require_tool_allowed(AgentKind.STATISTICS, call_part.tool_name)
                                     except AgentPolicyError as policy_err:
+                                        registered = {t.name for t in agent._function_toolset.tools.values()}
+                                        if call_part.tool_name in registered:
+                                            raise
                                         log.warning(
-                                            "statistics agent policy rejected tool %r: %s",
+                                            "statistics agent policy rejected unregistered tool %r "
+                                            "(likely model hallucination): %s",
                                             call_part.tool_name,
                                             policy_err,
                                         )
@@ -239,7 +213,7 @@ async def stats_agent_turn(
             assistant_text = "".join(assistant_text_chunks) or assistant_text_so_far or final_text
             await agent_turn_store.save_turn(
                 req.session_id,
-                user_id=getattr(user, "uid", None),
+                user_id=user_id,
                 turn=AgentTurnRecord(
                     seq=next_seq,
                     agent_kind=AgentKind.STATISTICS,

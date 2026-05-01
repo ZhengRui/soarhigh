@@ -5,6 +5,12 @@ Single source of truth for both /agent/turn (router-mediated) and the standalone
 message, regardless of which specialist handled it. `history_cursor` carries
 the Pydantic AI ModelMessage[] so the next turn — possibly run by a different
 specialist — picks up the conversation seamlessly.
+
+Ownership: every read and delete requires `user_id`. Sessions belong to one
+user; a foreign-owner request on `load` / `load_turn` / `load_latest` returns
+an empty result (no info leak about session existence), and a foreign-owner
+`save_turn` is a no-op. Without this, the service-role Supabase client (which
+ignores RLS) would expose any session_id to any authenticated caller.
 """
 
 from __future__ import annotations
@@ -55,22 +61,35 @@ def _row_to_record(row: dict) -> AgentTurnRecord:
 
 
 class UnifiedAgentTurnStore(Protocol):
-    async def load(self, session_id: str) -> tuple[int, list]:
-        """Return (tail_seq, history_cursor_of_latest_turn). Missing → (0, [])."""
+    async def load(self, session_id: str, *, user_id: str | None) -> tuple[int, list]:
+        """Return (tail_seq, history_cursor_of_latest_turn). Missing or
+        foreign-owner → (0, [])."""
         ...
 
     async def save_turn(
         self,
         session_id: str,
+        *,
         user_id: str | None,
         turn: AgentTurnRecord,
-    ) -> None: ...
+    ) -> None:
+        """Persist a turn. Establishes ownership on first call; subsequent
+        calls with a different user_id are silently dropped."""
+        ...
 
-    async def load_turn(self, session_id: str, seq: int) -> AgentTurnRecord | None: ...
+    async def load_turn(self, session_id: str, seq: int, *, user_id: str | None) -> AgentTurnRecord | None: ...
 
-    async def load_latest(self, session_id: str) -> AgentTurnRecord | None: ...
+    async def load_latest(self, session_id: str, *, user_id: str | None) -> AgentTurnRecord | None: ...
 
-    async def delete_turns_at_or_after(self, session_id: str, seq: int) -> None: ...
+    async def delete_turns_at_or_after(self, session_id: str, seq: int, *, user_id: str | None) -> None: ...
+
+    async def verify_session_access(self, session_id: str, *, user_id: str | None) -> bool:
+        """True if the session is unclaimed (new) or owned by `user_id`.
+        False only when the session exists with a different owner.
+
+        Lets routes reject foreign sessions BEFORE running the model so
+        a probe doesn't get a fake-success stream + silent save drop."""
+        ...
 
 
 class InMemoryUnifiedAgentTurnStore:
@@ -78,10 +97,18 @@ class InMemoryUnifiedAgentTurnStore:
 
     def __init__(self) -> None:
         self._data: dict[str, tuple[int, dict[int, AgentTurnRecord]]] = {}
+        self._owners: dict[str, str | None] = {}
         self._lock = asyncio.Lock()
 
-    async def load(self, session_id: str) -> tuple[int, list]:
+    def _owner_matches(self, session_id: str, user_id: str | None) -> bool:
+        """True if the session is unowned (new) or owned by user_id."""
+        owner = self._owners.get(session_id)
+        return owner == user_id if session_id in self._owners else True
+
+    async def load(self, session_id: str, *, user_id: str | None) -> tuple[int, list]:
         async with self._lock:
+            if not self._owner_matches(session_id, user_id):
+                return (0, [])
             entry = self._data.get(session_id)
             if entry is None:
                 return (0, [])
@@ -92,31 +119,47 @@ class InMemoryUnifiedAgentTurnStore:
     async def save_turn(
         self,
         session_id: str,
+        *,
         user_id: str | None,
         turn: AgentTurnRecord,
     ) -> None:
         async with self._lock:
+            # Distinguish "key absent" (legitimate new session, anyone may
+            # claim) from "key present with value None" (existing session
+            # owned by None — a None caller would otherwise sneak past the
+            # `is not None` check below and overwrite the owner).
+            if session_id in self._owners and self._owners[session_id] != user_id:
+                # Foreign owner — silently drop. Mirrors the load-empty
+                # behavior so a hostile caller can't probe via writes either.
+                return
+            self._owners[session_id] = user_id
             _tail, turns = self._data.get(session_id, (0, {}))
             turns[turn.seq] = turn
             self._data[session_id] = (turn.seq, turns)
 
-    async def load_turn(self, session_id: str, seq: int) -> AgentTurnRecord | None:
+    async def load_turn(self, session_id: str, seq: int, *, user_id: str | None) -> AgentTurnRecord | None:
         async with self._lock:
+            if not self._owner_matches(session_id, user_id):
+                return None
             entry = self._data.get(session_id)
             if entry is None:
                 return None
             return entry[1].get(seq)
 
-    async def load_latest(self, session_id: str) -> AgentTurnRecord | None:
+    async def load_latest(self, session_id: str, *, user_id: str | None) -> AgentTurnRecord | None:
         async with self._lock:
+            if not self._owner_matches(session_id, user_id):
+                return None
             entry = self._data.get(session_id)
             if entry is None:
                 return None
             tail_seq, turns = entry
             return turns.get(tail_seq)
 
-    async def delete_turns_at_or_after(self, session_id: str, seq: int) -> None:
+    async def delete_turns_at_or_after(self, session_id: str, seq: int, *, user_id: str | None) -> None:
         async with self._lock:
+            if not self._owner_matches(session_id, user_id):
+                return
             entry = self._data.get(session_id)
             if entry is None:
                 return
@@ -127,9 +170,19 @@ class InMemoryUnifiedAgentTurnStore:
             new_tail = max(turns.keys(), default=0)
             self._data[session_id] = (new_tail, turns)
 
+    async def verify_session_access(self, session_id: str, *, user_id: str | None) -> bool:
+        async with self._lock:
+            return self._owner_matches(session_id, user_id)
+
 
 class SupabaseUnifiedAgentTurnStore:
-    """Durable store backed by agent_sessions / agent_turns."""
+    """Durable store backed by agent_sessions / agent_turns.
+
+    Ownership is enforced application-side because the service-role
+    Supabase client bypasses RLS. Each read/delete first checks
+    `agent_sessions.user_id` against the caller's `user_id`; mismatches
+    return empty (or no-op) so the API doesn't leak session existence.
+    """
 
     SESSIONS_TABLE = "agent_sessions"
     TURNS_TABLE = "agent_turns"
@@ -140,18 +193,22 @@ class SupabaseUnifiedAgentTurnStore:
 
         self._client = client
 
-    async def load(self, session_id: str) -> tuple[int, list]:
+    def _fetch_session(self, session_id: str) -> dict | None:
+        sess = (
+            self._client.table(self.SESSIONS_TABLE)
+            .select("tail_seq, user_id")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()
+        )
+        return sess.data[0] if sess.data else None
+
+    async def load(self, session_id: str, *, user_id: str | None) -> tuple[int, list]:
         def _fetch() -> tuple[int, list]:
-            sess = (
-                self._client.table(self.SESSIONS_TABLE)
-                .select("tail_seq")
-                .eq("session_id", session_id)
-                .limit(1)
-                .execute()
-            )
-            if not sess.data:
+            sess = self._fetch_session(session_id)
+            if sess is None or sess.get("user_id") != user_id:
                 return (0, [])
-            tail_seq = sess.data[0]["tail_seq"] or 0
+            tail_seq = sess.get("tail_seq") or 0
             if tail_seq == 0:
                 return (0, [])
             turn = (
@@ -170,10 +227,15 @@ class SupabaseUnifiedAgentTurnStore:
     async def save_turn(
         self,
         session_id: str,
+        *,
         user_id: str | None,
         turn: AgentTurnRecord,
     ) -> None:
         def _write() -> None:
+            sess = self._fetch_session(session_id)
+            if sess is not None and sess.get("user_id") != user_id:
+                # Foreign owner — silently drop. See class docstring.
+                return
             self._client.table(self.SESSIONS_TABLE).upsert(
                 {
                     "session_id": session_id,
@@ -200,8 +262,11 @@ class SupabaseUnifiedAgentTurnStore:
 
         await asyncio.to_thread(_write)
 
-    async def load_turn(self, session_id: str, seq: int) -> AgentTurnRecord | None:
+    async def load_turn(self, session_id: str, seq: int, *, user_id: str | None) -> AgentTurnRecord | None:
         def _fetch() -> AgentTurnRecord | None:
+            sess = self._fetch_session(session_id)
+            if sess is None or sess.get("user_id") != user_id:
+                return None
             res = (
                 self._client.table(self.TURNS_TABLE)
                 .select("*")
@@ -214,8 +279,11 @@ class SupabaseUnifiedAgentTurnStore:
 
         return await asyncio.to_thread(_fetch)
 
-    async def load_latest(self, session_id: str) -> AgentTurnRecord | None:
+    async def load_latest(self, session_id: str, *, user_id: str | None) -> AgentTurnRecord | None:
         def _fetch() -> AgentTurnRecord | None:
+            sess = self._fetch_session(session_id)
+            if sess is None or sess.get("user_id") != user_id:
+                return None
             res = (
                 self._client.table(self.TURNS_TABLE)
                 .select("*")
@@ -228,14 +296,24 @@ class SupabaseUnifiedAgentTurnStore:
 
         return await asyncio.to_thread(_fetch)
 
-    async def delete_turns_at_or_after(self, session_id: str, seq: int) -> None:
+    async def delete_turns_at_or_after(self, session_id: str, seq: int, *, user_id: str | None) -> None:
         def _delete() -> None:
+            sess = self._fetch_session(session_id)
+            if sess is None or sess.get("user_id") != user_id:
+                return
             self._client.table(self.TURNS_TABLE).delete().eq("session_id", session_id).gte("seq", seq).execute()
             self._client.table(self.SESSIONS_TABLE).update({"tail_seq": max(seq - 1, 0)}).eq(
                 "session_id", session_id
             ).execute()
 
         await asyncio.to_thread(_delete)
+
+    async def verify_session_access(self, session_id: str, *, user_id: str | None) -> bool:
+        def _check() -> bool:
+            sess = self._fetch_session(session_id)
+            return sess is None or sess.get("user_id") == user_id
+
+        return await asyncio.to_thread(_check)
 
 
 def _build_default_store() -> UnifiedAgentTurnStore:

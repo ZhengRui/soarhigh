@@ -24,15 +24,15 @@ from pydantic_ai.messages import (
 )
 
 from ....agents.meeting.agent import USAGE_LIMITS, agent
-from ....agents.meeting.history import (
+from ....agents.meeting.models import AgendaDeps
+from ....agents.meeting.prompts import MEETING_SYSTEM_PROMPT, SNAPSHOT_TEMPLATE
+from ....agents.meeting.segment_ids import shorten_agenda_dump
+from ....agents.runtime.contracts import AgentKind, RouteKind
+from ....agents.runtime.history import (
     replace_system_prompt,
     strip_snapshots_from_dumped_history,
     truncate_to_last_turns,
 )
-from ....agents.meeting.models import AgendaDeps
-from ....agents.meeting.prompts import ROUTER_SYSTEM_PROMPT, SNAPSHOT_TEMPLATE
-from ....agents.meeting.segment_ids import shorten_agenda_dump
-from ....agents.runtime.contracts import AgentKind, RouteKind
 from ....agents.runtime.policy import AgentPolicyError, require_tool_allowed
 from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
 from ....models.agents.meeting import MeetingAgentRevertRequest, MeetingAgentTurnRequest
@@ -42,6 +42,7 @@ from ....services.meeting_preview_markdown import (
     render_preview_addendum,
 )
 from ..auth import get_current_user
+from ._shared import _detect_user_language, _extract_error_info, _session_unavailable_response, _sse
 
 log = logging.getLogger(__name__)
 meeting_agent_router = r = APIRouter(prefix="/meeting-agent")
@@ -51,54 +52,6 @@ _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _CREATE_TOOL_NAMES = {"create_from_text", "create_from_image", "clone_from_meeting", "create_from_template"}
 _PREVIEW_TOOL_NAMES = {"preview_meeting"}
 _SHOW_CURRENT_TOOL_NAMES = {"show_current_agenda"}
-
-
-def _sse(event: str, data: dict) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
-
-
-def _extract_error_info(e: Exception) -> tuple[str, bool]:
-    """Pull a user-readable message + recoverability hint out of an agent
-    exception. The raw `str(e)` on Pydantic AI errors is a huge dump of the
-    provider's JSON response; the UI banner needs a single clean sentence."""
-    try:
-        from pydantic_ai.exceptions import ModelHTTPError, UsageLimitExceeded
-    except ImportError:
-        return (str(e), True)
-
-    if isinstance(e, UsageLimitExceeded):
-        # Same request will hit the same limit; no point offering Retry.
-        return (str(e), False)
-
-    if isinstance(e, ModelHTTPError):
-        body = e.body if isinstance(e.body, dict) else {}
-        # Gemini/OpenAI convention: {"error": {"message": "..."}}
-        err = body.get("error") if isinstance(body, dict) else None
-        msg = err.get("message") if isinstance(err, dict) else None
-        if msg:
-            return (f"[{e.status_code}] {msg}", True)
-        return (f"Model HTTP error {e.status_code}", True)
-
-    return (str(e), True)
-
-
-def _detect_user_language(text: str) -> str:
-    """Heuristic language tag for the model's reply language hint.
-
-    Per-turn detection is deterministic and overrides whatever language the
-    bilingual examples in ROUTER_SYSTEM_PROMPT or earlier session turns might
-    have biased the model toward. Counts CJK ideographs vs Latin letters in
-    the user's CURRENT message; ties / both-zero default to English.
-
-    Returns the BCP-47-style language tag the model is instructed to obey
-    (e.g. 'en' or 'zh'). Extend the heuristic when other languages matter."""
-    if not text:
-        return "en"
-    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
-    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
-    if cjk == 0 and latin == 0:
-        return "en"
-    return "zh" if cjk > latin else "en"
 
 
 def _display_cell(value) -> str:
@@ -374,6 +327,17 @@ async def agent_turn(
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors()) from e
 
+    user_id = getattr(user, "uid", None)
+    # Ownership check runs BEFORE upload validation. Two reasons:
+    # (a) don't waste read/validate work on a foreign-session probe;
+    # (b) keep the response shape uniform — a foreign session always
+    # returns the generic `session_unavailable` SSE, regardless of
+    # whether the attached image was valid. Otherwise an attacker
+    # could distinguish "image rejected (HTTP 400)" from "session
+    # foreign (SSE error)" and infer ownership state.
+    if not await agent_turn_store.verify_session_access(req.session_id, user_id=user_id):
+        return _session_unavailable_response()
+
     image_bytes: bytes | None = None
     image_ct: str | None = None
     if image is not None:
@@ -388,7 +352,7 @@ async def agent_turn(
 
     async def event_stream() -> AsyncIterator[bytes]:
         try:
-            tail_seq, history_json = await agent_turn_store.load(req.session_id)
+            tail_seq, history_json = await agent_turn_store.load(req.session_id, user_id=user_id)
             next_seq = tail_seq + 1
 
             full_history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
@@ -397,7 +361,7 @@ async def agent_turn(
             # or router) may have persisted a SystemPromptPart with a
             # different agent's prompt. Replace it with this agent's
             # prompt so we always run with the correct identity.
-            full_history = replace_system_prompt(full_history, ROUTER_SYSTEM_PROMPT)
+            full_history = replace_system_prompt(full_history, MEETING_SYSTEM_PROMPT)
             # Cap context window at the last N user turns. Older turns drop off
             # here; they remain in agent_turns (so the UI can still show the
             # full conversation), only the portion fed to the LLM is trimmed.
@@ -486,21 +450,26 @@ async def agent_turn(
                             async for tool_event in tool_stream:
                                 if isinstance(tool_event, FunctionToolCallEvent):
                                     call_part: ToolCallPart = tool_event.part
-                                    # Defense-in-depth: registered tools must appear in the
-                                    # capabilities registry. The startup test
-                                    # `test_capability_registry_covers_registered_specialist_tools`
-                                    # enforces this; a violation here would mean a registered
-                                    # tool slipped past CI. We catch instead of raising so a
-                                    # hallucinated tool name from the model (e.g. "api:save_draft"
-                                    # when the registered tool is plain "save_draft") produces
-                                    # a soft, model-recoverable error via Pydantic AI's natural
-                                    # unknown-tool retry path — not a hard "Request failed"
-                                    # banner that kills the turn.
+                                    # Two distinct failure modes need distinct handling:
+                                    # 1) Tool name is registered on the agent BUT missing from
+                                    #    capabilities.py — a configuration mistake. CI's
+                                    #    `test_capability_registry_covers_registered_specialist_tools`
+                                    #    should catch it, but if CI is bypassed / incomplete /
+                                    #    hot-fixed, we fail closed here so the misconfiguration
+                                    #    surfaces immediately instead of running the disallowed tool.
+                                    # 2) Tool name is NOT registered (model hallucination like
+                                    #    "api:save_draft"). Let it fall through to Pydantic AI's
+                                    #    natural unknown-tool retry path so the model self-corrects
+                                    #    mid-turn instead of crashing the whole turn.
                                     try:
                                         require_tool_allowed(AgentKind.MEETING, call_part.tool_name)
                                     except AgentPolicyError as policy_err:
+                                        registered = {t.name for t in agent._function_toolset.tools.values()}
+                                        if call_part.tool_name in registered:
+                                            raise
                                         log.warning(
-                                            "meeting agent policy rejected tool %r: %s",
+                                            "meeting agent policy rejected unregistered tool %r "
+                                            "(likely model hallucination): %s",
                                             call_part.tool_name,
                                             policy_err,
                                         )
@@ -572,7 +541,7 @@ async def agent_turn(
             assistant_text = "".join(assistant_text_chunks) or final_text
             await agent_turn_store.save_turn(
                 req.session_id,
-                user_id=getattr(user, "uid", None),
+                user_id=user_id,
                 turn=AgentTurnRecord(
                     seq=next_seq,
                     agent_kind=AgentKind.MEETING,
@@ -631,7 +600,8 @@ async def agent_revert(req: MeetingAgentRevertRequest, user=Depends(get_current_
     if req.target_seq < 1:
         raise HTTPException(status_code=400, detail="target_seq must be >= 1")
 
-    turn = await agent_turn_store.load_turn(req.session_id, req.target_seq)
+    user_id = getattr(user, "uid", None)
+    turn = await agent_turn_store.load_turn(req.session_id, req.target_seq, user_id=user_id)
     if turn is None:
         raise HTTPException(status_code=404, detail=f"turn {req.target_seq} not found")
     # AgentKind is a str Enum, so equality covers both enum and raw string forms.
@@ -640,7 +610,7 @@ async def agent_revert(req: MeetingAgentRevertRequest, user=Depends(get_current_
             status_code=400, detail=f"turn {req.target_seq} is not a meeting edit and cannot be reverted"
         )
 
-    await agent_turn_store.delete_turns_at_or_after(req.session_id, req.target_seq)
+    await agent_turn_store.delete_turns_at_or_after(req.session_id, req.target_seq, user_id=user_id)
     return {
         "agenda": turn.agenda_before,
         "new_tail_seq": req.target_seq - 1,

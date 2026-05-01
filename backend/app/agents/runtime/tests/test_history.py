@@ -7,8 +7,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from app.agents.meeting.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
 from app.agents.meeting.prompts import SNAPSHOT_TEMPLATE
+from app.agents.runtime.history import strip_snapshots_from_dumped_history, truncate_to_last_turns
 
 
 def _user_turn(text: str = "hello"):

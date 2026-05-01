@@ -1,4 +1,3 @@
-import json
 import logging
 from collections.abc import AsyncIterator
 
@@ -7,23 +6,20 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-from ....agents.meeting.history import append_router_exchange, truncate_to_last_turns
 from ....agents.router.classifier import classify_turn
 from ....agents.runtime.contracts import AgentKind, RouteKind, RouterDecision
+from ....agents.runtime.history import append_router_exchange, truncate_to_last_turns
 from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
 from ....models.agents.meeting import MeetingAgentTurnRequest
 from ....models.agents.statistics import StatisticsAgentTurnRequest
 from ....models.agents.unified import AgentTurnRequest
 from ..auth import get_current_user
+from ._shared import _detect_user_language, _error_only_stream, _session_unavailable_response, _sse
 from .meeting import agent_turn as meeting_agent_turn
 from .statistics import stats_agent_turn
 
 log = logging.getLogger(__name__)
 agent_router = r = APIRouter(prefix="/agent")
-
-
-def _sse(event: str, data: dict) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
 def _as_bytes(chunk: str | bytes | memoryview) -> bytes:
@@ -32,16 +28,6 @@ def _as_bytes(chunk: str | bytes | memoryview) -> bytes:
     if isinstance(chunk, memoryview):
         return chunk.tobytes()
     return chunk.encode("utf-8")
-
-
-def _detect_user_language(text: str) -> str:
-    if not text:
-        return "en"
-    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
-    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
-    if cjk == 0 and latin == 0:
-        return "en"
-    return "zh" if cjk > latin else "en"
 
 
 def _router_decision_payload(seq: int, decision: RouterDecision) -> dict:
@@ -103,17 +89,6 @@ def _router_pre_dispatch_error_message(e: Exception, *, language: str) -> str:
     if language == "zh":
         return f"路由失败 ({name}): {detail}"
     return f"Router failure ({name}): {detail}"
-
-
-async def _error_only_stream(*, reason: str, recoverable: bool, message: str) -> AsyncIterator[bytes]:
-    """Single-event SSE stream used when the router can't even reach
-    the dispatch point (history load / classify fails). Same shape the
-    specialists emit on agent_error so the frontend's onEvent handler
-    renders the banner the same way."""
-    yield _sse(
-        "error",
-        {"reason": reason, "recoverable": recoverable, "message": message},
-    )
 
 
 def _router_terminal_text(decision: RouterDecision, *, language: str) -> str:
@@ -184,6 +159,15 @@ async def unified_agent_turn(
     user_id = getattr(user, "uid", None)
     language = _detect_user_language(req.user_message)
 
+    # Reject foreign-owned sessions BEFORE running any model. Without this,
+    # a probe with another user's session_id would still trigger the router
+    # (or image short-circuit) + LLM, drop the save silently, and let the
+    # attacker observe persistence absence on the next turn — leaking that
+    # the session exists. Generic error keeps "foreign" / "expired" /
+    # "server error" indistinguishable client-side.
+    if not await agent_turn_store.verify_session_access(req.session_id, user_id=user_id):
+        return _session_unavailable_response()
+
     # Image attached → skip the router. Attached images are only consumed by
     # the meeting agent's create_from_image tool, so there is no routing
     # decision to make. Without this short-circuit an empty user_message +
@@ -191,7 +175,7 @@ async def unified_agent_turn(
     # back to "edit the draft, or look up history?").
     if image is not None:
         try:
-            _tail_seq, prior_history = await agent_turn_store.load(req.session_id)
+            _tail_seq, prior_history = await agent_turn_store.load(req.session_id, user_id=user_id)
         except Exception as e:
             log.exception("image-route pre-dispatch failed for session %s", req.session_id)
             return StreamingResponse(
@@ -255,7 +239,7 @@ async def unified_agent_turn(
     # existing onEvent handler renders the banner with Retry like any other
     # agent_error.
     try:
-        _tail_seq, prior_history = await agent_turn_store.load(req.session_id)
+        _tail_seq, prior_history = await agent_turn_store.load(req.session_id, user_id=user_id)
         full_history = ModelMessagesTypeAdapter.validate_python(prior_history) if prior_history else []
         # classify_turn handles its own SystemPromptPart normalization
         # (Pydantic AI only injects _sys_parts when message_history is

@@ -27,8 +27,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
-from app.agents.meeting.history import replace_system_prompt
 from app.agents.runtime.contracts import AgentKind, RouteKind, RouterDecision
+from app.agents.runtime.history import replace_system_prompt
 from app.agents.runtime.model_settings import build_model_settings
 from app.config import GOOGLE_API_KEY, OPENAI_API_KEY, ROUTER_AGENT_MODEL, ROUTER_THINKING_LEVEL
 from app.models.agents.unified import AgentTurnRequest

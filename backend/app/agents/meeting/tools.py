@@ -921,14 +921,14 @@ def _tool_result_cards(result: Any) -> list[dict]:
     return []
 
 
-async def _recent_lookup_includes_no(session_id: str, no: int) -> bool:
+async def _recent_lookup_includes_no(session_id: str, no: int, user_id: str | None) -> bool:
     from app.agents.runtime.store import agent_turn_store
 
-    tail_seq, _ = await agent_turn_store.load(session_id)
+    tail_seq, _ = await agent_turn_store.load(session_id, user_id=user_id)
     if tail_seq <= 0:
         return False
     for seq in range(tail_seq, max(0, tail_seq - _CLONE_LOOKUP_LOOKBACK_TURNS), -1):
-        turn = await agent_turn_store.load_turn(session_id, seq)
+        turn = await agent_turn_store.load_turn(session_id, seq, user_id=user_id)
         if turn is None:
             continue
         for trace in turn.tool_trace or []:
@@ -968,7 +968,7 @@ def _is_explicit_clone_confirmation(text: str) -> bool:
 
 async def apply_clone_from_meeting(ctx, no: int) -> dict:
     """Clone a meeting's structure into the current agenda after confirmation."""
-    if not await _recent_lookup_includes_no(ctx.deps.session_id, no):
+    if not await _recent_lookup_includes_no(ctx.deps.session_id, no, ctx.deps.user_id):
         raise ModelRetry(
             f"clone_from_meeting refused: no recent lookup_meeting surfaced #{no}. "
             "Call lookup_meeting first, present the result, then wait for explicit confirmation."
@@ -1120,17 +1120,17 @@ def _is_explicit_save_request(text: str) -> bool:
     return any(t in q for t in _SAVE_INTENT_TOKENS)
 
 
-async def _immediately_prior_turn_was_save_preview(session_id: str) -> bool:
+async def _immediately_prior_turn_was_save_preview(session_id: str, user_id: str | None) -> bool:
     """True iff the immediately previous turn ran a successful
     `save_draft` with `pending_confirmation: True`. Strict check — any
     intervening turn (including read-only ones like show_current_agenda
     or any edit) invalidates the preview and forces a fresh one."""
     from app.agents.runtime.store import agent_turn_store
 
-    tail_seq, _ = await agent_turn_store.load(session_id)
+    tail_seq, _ = await agent_turn_store.load(session_id, user_id=user_id)
     if tail_seq <= 0:
         return False
-    turn = await agent_turn_store.load_turn(session_id, tail_seq)
+    turn = await agent_turn_store.load_turn(session_id, tail_seq, user_id=user_id)
     if turn is None:
         return False
     for trace in turn.tool_trace or []:
@@ -1230,7 +1230,7 @@ async def apply_save_draft(ctx, *, confirmed: bool = False) -> dict:
             "an explicit confirmation. Show the preview and wait for the user's yes."
         )
 
-    if not await _immediately_prior_turn_was_save_preview(ctx.deps.session_id):
+    if not await _immediately_prior_turn_was_save_preview(ctx.deps.session_id, ctx.deps.user_id):
         raise ModelRetry(
             "save_draft refused: no fresh preview in the immediately prior turn. "
             "Any turn between preview and confirm — including edits or read-only "
@@ -1322,12 +1322,12 @@ def _classify_turn(tool_names: set[str]) -> str:
     return "chit-chat"
 
 
-async def _walk_back_to_meaningful_turn(store, session_id: str, from_seq: int):
+async def _walk_back_to_meaningful_turn(store, session_id: str, from_seq: int, user_id: str | None):
     """Walk backward from `from_seq`, skipping chit-chat turns. Return
     (seq, turn, kind, tool_names) for the first edit-or-revert turn found,
     or None if the session has no meaningful turns."""
     for seq in range(from_seq, 0, -1):
-        t = await store.load_turn(session_id, seq)
+        t = await store.load_turn(session_id, seq, user_id=user_id)
         if t is None:
             continue
         names = {nm for nm in (x.get("name", "") for x in (t.tool_trace or [])) if nm}
@@ -1337,13 +1337,15 @@ async def _walk_back_to_meaningful_turn(store, session_id: str, from_seq: int):
     return None
 
 
-async def _load_recent_edit_turns_for_refusal(store, session_id: str, before_seq: int, limit: int = 5) -> list[dict]:
+async def _load_recent_edit_turns_for_refusal(
+    store, session_id: str, before_seq: int, user_id: str | None, limit: int = 5
+) -> list[dict]:
     """Collect up to `limit` edit turns (skipping revert and chit-chat) to
     surface in the consecutive-revert refusal."""
     out: list[dict] = []
     seq = before_seq - 1
     while seq >= 1 and len(out) < limit:
-        t = await store.load_turn(session_id, seq)
+        t = await store.load_turn(session_id, seq, user_id=user_id)
         if t is not None:
             names = {nm for nm in (x.get("name", "") for x in (t.tool_trace or [])) if nm}
             if _classify_turn(names) == "edit":
@@ -1377,18 +1379,19 @@ async def apply_revert_last_turn(ctx) -> dict:
 
     store = agent_turn_store
     session_id = ctx.deps.session_id
-    tail_seq, _ = await store.load(session_id)
+    user_id = ctx.deps.user_id
+    tail_seq, _ = await store.load(session_id, user_id=user_id)
     if tail_seq == 0:
         raise ModelRetry("no prior turns in this session; nothing to revert")
 
-    meaningful = await _walk_back_to_meaningful_turn(store, session_id, tail_seq)
+    meaningful = await _walk_back_to_meaningful_turn(store, session_id, tail_seq, user_id)
     if meaningful is None:
         raise ModelRetry("no edits made in this session yet; nothing to revert")
 
     target_seq, target_turn, kind, names = meaningful
 
     if kind == "revert":
-        recent = await _load_recent_edit_turns_for_refusal(store, session_id, before_seq=target_seq)
+        recent = await _load_recent_edit_turns_for_refusal(store, session_id, before_seq=target_seq, user_id=user_id)
         # Present each edit turn as a named restore point. The user picks a
         # seq; the agent passes it VERBATIM to revert_to_turn(after_seq=N).
         # Include seq 0 (initial state) as an explicit option.
@@ -1444,16 +1447,17 @@ async def apply_revert_to_turn(ctx, after_seq: int) -> dict:
 
     store = agent_turn_store
     session_id = ctx.deps.session_id
+    user_id = ctx.deps.user_id
 
     if after_seq == 0:
         # Initial state = agenda_before of turn 1. If turn 1 doesn't exist,
         # there's nothing to revert — refuse.
-        first = await store.load_turn(session_id, 1)
+        first = await store.load_turn(session_id, 1, user_id=user_id)
         if first is None:
             raise ModelRetry("session has no turns; already at initial state")
         state = first.agenda_before
     else:
-        target = await store.load_turn(session_id, after_seq)
+        target = await store.load_turn(session_id, after_seq, user_id=user_id)
         if target is None:
             raise ModelRetry(f"turn {after_seq} not found in this session; cannot revert to it")
         state = target.agenda_after

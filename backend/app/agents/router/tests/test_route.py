@@ -259,7 +259,7 @@ def test_unified_route_emits_router_decision_then_dispatches_to_statistics(
     assert events[0]["data"]["decision"]["route"] == "specialist"
     assert "assistant_text" in [event["event"] for event in events]
     assert events[-1]["event"] == "done"
-    unified_turn = asyncio.run(stores["unified"].load_turn("u-stats", 1))
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-stats", 1, user_id="test-user"))
     assert unified_turn is not None
     assert unified_turn.agent_kind == "statistics"
     assert unified_turn.route == "specialist"
@@ -298,7 +298,7 @@ def test_unified_route_emits_router_decision_then_dispatches_to_meeting(
     tool_end = next(event for event in events if event["event"] == "tool_call_end")
     assert tool_end["data"]["result"] == {"segment_id": "s1", "role_taker": "Joyce Feng"}
     assert "final_agenda" in events[-1]["data"]
-    unified_turn = asyncio.run(stores["unified"].load_turn("u-meeting", 1))
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-meeting", 1, user_id="test-user"))
     assert unified_turn is not None
     assert unified_turn.agent_kind == "meeting"
     assert unified_turn.agenda_before is not None
@@ -367,7 +367,7 @@ def test_unified_route_find_then_assign_routes_stats_then_meeting(
     assert tool_end["data"]["result"] == {"segment_id": "s1", "role_taker": "Joyce Feng"}
     assert "final_agenda" in events_2[-1]["data"]
 
-    unified_turn = asyncio.run(stores["unified"].load_turn("u-find-assign", 2))
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-find-assign", 2, user_id="test-user"))
     assert unified_turn is not None
     assert unified_turn.agent_kind == "meeting"
     assert unified_turn.route == "specialist"
@@ -400,7 +400,7 @@ def test_unified_route_find_someone_without_agenda_still_routes_to_stats(
 
     assert events[0]["data"]["decision"]["route"] == "specialist"
     assert events[0]["data"]["decision"]["agent_kind"] == "statistics"
-    unified_turn = asyncio.run(stores["unified"].load_turn("u-find-no-agenda", 1))
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-find-no-agenda", 1, user_id="test-user"))
     assert unified_turn is not None
     assert unified_turn.agent_kind == "statistics"
 
@@ -425,7 +425,7 @@ async def test_unified_route_clarifies_meeting_edit_without_snapshot(
     assert events[0]["data"]["decision"]["route"] == "clarify"
     assert events[-1]["data"]["router_only"] is True
 
-    unified_turn = await unified_store.load_turn("u-clarify", 1)
+    unified_turn = await unified_store.load_turn("u-clarify", 1, user_id="test-user")
     assert unified_turn is not None
     assert unified_turn.agent_kind == "router"
     assert unified_turn.route == "clarify"
@@ -436,12 +436,146 @@ def test_unified_route_requires_auth(client):
     assert r.status_code in (401, 403)
 
 
+def test_unified_route_rejects_foreign_session_before_running_model(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+):
+    """A session_id owned by another user must be rejected at the route
+    entry — no router LLM call, no specialist dispatch, no save attempt
+    that the attacker could probe via subsequent persistence checks.
+    Generic 'session_unavailable' error mirrors the shape of any
+    server error, so 'foreign' / 'expired' / 'invalid' are
+    indistinguishable client-side."""
+    from app.agents.runtime.contracts import AgentKind, RouteKind
+    from app.agents.runtime.store import AgentTurnRecord
+
+    stores = _force_in_memory_stores
+    # Pre-claim "u-foreign" for someone OTHER than test-user.
+    asyncio.run(
+        stores["unified"].save_turn(
+            "u-foreign",
+            user_id="other-user",
+            turn=AgentTurnRecord(
+                seq=1,
+                agent_kind=AgentKind.MEETING,
+                route=RouteKind.SPECIALIST,
+                user_message="hello",
+                assistant_text="hi",
+            ),
+        )
+    )
+
+    classify_calls: list = []
+    from app.api.routes.agents import unified as unified_route
+
+    original = unified_route.classify_turn
+
+    async def counting(req, *, message_history=None):
+        classify_calls.append(req.user_message)
+        return await original(req, message_history=message_history)
+
+    # Wrap the autouse stub so we can prove the router was NOT invoked.
+    import contextlib
+
+    @contextlib.contextmanager
+    def _swap():
+        prior = unified_route.classify_turn
+        unified_route.classify_turn = counting
+        try:
+            yield
+        finally:
+            unified_route.classify_turn = prior
+
+    with (
+        _swap(),
+        client.stream(
+            "POST",
+            "/agent/turn",
+            **_turn_kwargs({"session_id": "u-foreign", "user_message": "hello"}),
+        ) as r,
+    ):
+        assert r.status_code == 200
+        events = _parse_sse(r.iter_bytes())
+
+    # Only one event: a generic error. Router never ran.
+    assert classify_calls == []
+    assert events == [
+        {
+            "event": "error",
+            "data": {
+                "reason": "session_unavailable",
+                "recoverable": False,
+                "message": "Session unavailable.",
+            },
+        }
+    ]
+
+
 def _turn_kwargs_with_image(body: dict, image_bytes: bytes, content_type: str = "image/jpeg") -> dict:
     """Multipart form for /agent/turn with an attached image."""
     return {
         "data": {"payload": json.dumps(body)},
         "files": {"image": ("agenda.jpg", image_bytes, content_type)},
     }
+
+
+def test_meeting_route_foreign_session_with_bad_image_returns_session_unavailable_sse(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+):
+    """Direct meeting route: a foreign-owned session_id + an invalid
+    image (wrong content-type) must return the generic session_unavailable
+    SSE — NOT an HTTP 400 from image validation. Otherwise an attacker
+    could distinguish 'image rejected' (own session, bad image) from
+    'session foreign' (any image) and infer ownership state."""
+    from app.agents.runtime.contracts import AgentKind, RouteKind
+    from app.agents.runtime.store import AgentTurnRecord
+
+    stores = _force_in_memory_stores
+    asyncio.run(
+        stores["unified"].save_turn(
+            "m-foreign",
+            user_id="other-user",
+            turn=AgentTurnRecord(
+                seq=1,
+                agent_kind=AgentKind.MEETING,
+                route=RouteKind.SPECIALIST,
+                user_message="hello",
+                assistant_text="hi",
+            ),
+        )
+    )
+
+    # Bad content-type would normally trigger HTTP 400 from image validation.
+    bad_image_files = {"image": ("x.gif", b"GIF89a", "image/gif")}
+    payload = {
+        "session_id": "m-foreign",
+        "user_message": "save",
+        "agenda_snapshot": _agenda(),
+    }
+
+    with client.stream(
+        "POST",
+        "/meeting-agent/turn",
+        data={"payload": json.dumps(payload)},
+        files=bad_image_files,
+    ) as r:
+        # 200 SSE with session_unavailable, NOT 400 HTTP from image validation.
+        assert r.status_code == 200
+        events = _parse_sse(r.iter_bytes())
+
+    assert events == [
+        {
+            "event": "error",
+            "data": {
+                "reason": "session_unavailable",
+                "recoverable": False,
+                "message": "Session unavailable.",
+            },
+        }
+    ]
 
 
 def test_unified_route_with_image_bypasses_router_and_dispatches_to_meeting(
@@ -504,7 +638,7 @@ def test_unified_route_with_image_bypasses_router_and_dispatches_to_meeting(
     tool_start = next(event for event in events if event["event"] == "tool_call_start")
     assert tool_start["data"]["name"] == "create_from_image"
 
-    unified_turn = asyncio.run(stores["unified"].load_turn("u-image", 1))
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-image", 1, user_id="test-user"))
     assert unified_turn is not None
     assert unified_turn.agent_kind == "meeting"
     assert unified_turn.router_decision["intent"] == "image_attachment_create_from_image"
@@ -551,7 +685,7 @@ async def test_unified_route_with_image_without_agenda_clarifies(
     assert events[0]["data"]["decision"]["route"] == "clarify"
     assert events[0]["data"]["decision"]["intent"] == "meeting_edit_without_agenda_snapshot"
 
-    unified_turn = await unified_store.load_turn("u-image-no-agenda", 1)
+    unified_turn = await unified_store.load_turn("u-image-no-agenda", 1, user_id="test-user")
     assert unified_turn is not None
     assert unified_turn.agent_kind == "router"
     assert unified_turn.route == "clarify"

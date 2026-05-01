@@ -5,7 +5,7 @@ from pydantic_ai.usage import UsageLimits
 
 from app.agents.meeting import tools as _tools
 from app.agents.meeting.models import AgendaDeps
-from app.agents.meeting.prompts import ROUTER_SYSTEM_PROMPT
+from app.agents.meeting.prompts import MEETING_SYSTEM_PROMPT
 from app.agents.meeting.validators import run_validators
 from app.agents.runtime.model_settings import build_model_settings
 from app.config import GOOGLE_API_KEY, MEETING_AGENT_MODEL, MEETING_THINKING_LEVEL, OPENAI_API_KEY
@@ -29,7 +29,7 @@ USAGE_LIMITS = UsageLimits(request_limit=15, total_tokens_limit=500_000)
 
 agent = Agent(
     MEETING_AGENT_MODEL,
-    system_prompt=ROUTER_SYSTEM_PROMPT,
+    system_prompt=MEETING_SYSTEM_PROMPT,
     deps_type=AgendaDeps,
     retries=2,
     model_settings=build_model_settings(MEETING_AGENT_MODEL, thinking_level=MEETING_THINKING_LEVEL),

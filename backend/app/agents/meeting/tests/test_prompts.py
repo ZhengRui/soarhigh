@@ -1,12 +1,12 @@
-from app.agents.meeting.prompts import ROUTER_SYSTEM_PROMPT, SNAPSHOT_TEMPLATE
+from app.agents.meeting.prompts import MEETING_SYSTEM_PROMPT, SNAPSHOT_TEMPLATE
 
 
 def test_router_prompt_documents_create_from_text():
-    assert "create_from_text" in ROUTER_SYSTEM_PROMPT
+    assert "create_from_text" in MEETING_SYSTEM_PROMPT
 
 
 def test_router_prompt_documents_clone_protocol():
-    prompt = ROUTER_SYSTEM_PROMPT
+    prompt = MEETING_SYSTEM_PROMPT
     assert "lookup_meeting" in prompt
     assert "clone_from_meeting" in prompt
     assert "confirmation" in prompt.lower()
@@ -19,7 +19,7 @@ def test_router_prompt_clone_path_documents_all_lookup_axes():
     reading the clone path saw a narrower API than the real tool, which
     can steer it away from theme/intro/date filters in clone-by-
     description queries."""
-    prompt = ROUTER_SYSTEM_PROMPT
+    prompt = MEETING_SYSTEM_PROMPT
     # Find the clone-path bullet line.
     clone_lines = [line for line in prompt.splitlines() if line.startswith("- `lookup_meeting(")]
     assert clone_lines, "clone-path bullet for lookup_meeting not found in prompt"
@@ -38,7 +38,7 @@ def test_router_prompt_clone_path_documents_all_lookup_axes():
 
 
 def test_router_prompt_documents_create_from_image():
-    prompt = ROUTER_SYSTEM_PROMPT
+    prompt = MEETING_SYSTEM_PROMPT
     assert "create_from_image" in prompt
     assert "[Attachment]" in prompt
 
@@ -47,7 +47,7 @@ def test_router_prompt_documents_preview_meeting_path():
     """preview_meeting bridges lookup (lightweight) and clone (destructive) so
     the model can show users a historical meeting's segments BEFORE the user
     commits to clone. Pinned in prompt so future edits don't drop it."""
-    prompt = ROUTER_SYSTEM_PROMPT
+    prompt = MEETING_SYSTEM_PROMPT
     assert "preview_meeting" in prompt
     # The prompt must explicitly redirect to preview_meeting when the model is
     # tempted to claim segment data is inaccessible (the bug we just fixed).
@@ -61,7 +61,7 @@ def test_router_prompt_documents_five_creation_paths_and_gateway():
     rule, and both template variants so a future edit can't silently
     introduce a free-form creation backdoor or collapse Custom into
     Regular as a sub-bullet."""
-    prompt = ROUTER_SYSTEM_PROMPT
+    prompt = MEETING_SYSTEM_PROMPT
     # All five paths represented.
     assert "create_from_text" in prompt
     assert "create_from_image" in prompt
@@ -83,7 +83,7 @@ def test_router_prompt_documents_five_creation_paths_and_gateway():
 
 
 def test_router_prompt_requires_validation_issues_to_be_surfaced():
-    prompt = ROUTER_SYSTEM_PROMPT
+    prompt = MEETING_SYSTEM_PROMPT
     assert "validation_issues" in prompt
     assert "non-empty" in prompt
 
@@ -95,7 +95,7 @@ def test_router_prompt_delegates_creation_tables_to_route():
     them itself — duplicating risks bilingual-mismatched or unannotated
     tables. This test pins that delegation in the router prompt so a future
     edit can't silently add tables back to the model's output."""
-    prompt = ROUTER_SYSTEM_PROMPT
+    prompt = MEETING_SYSTEM_PROMPT
     assert "After wholesale creation tools" in prompt
     # Explicit ban on the model emitting agenda tables.
     assert "Do NOT emit any meta or agenda Markdown table yourself" in prompt
@@ -150,10 +150,10 @@ def test_snapshot_template_language_hint_renders():
 
 
 def test_router_prompt_documents_language_hint():
-    from app.agents.meeting.prompts import ROUTER_SYSTEM_PROMPT
+    from app.agents.meeting.prompts import MEETING_SYSTEM_PROMPT
 
-    assert "[Reply language]" in ROUTER_SYSTEM_PROMPT
-    assert "default to English" in ROUTER_SYSTEM_PROMPT
+    assert "[Reply language]" in MEETING_SYSTEM_PROMPT
+    assert "default to English" in MEETING_SYSTEM_PROMPT
 
 
 def test_save_draft_tool_registered():
@@ -164,9 +164,9 @@ def test_save_draft_tool_registered():
 
 
 def test_meeting_prompt_documents_save_draft_protocol():
-    from app.agents.meeting.prompts import ROUTER_SYSTEM_PROMPT
+    from app.agents.meeting.prompts import MEETING_SYSTEM_PROMPT
 
-    p = ROUTER_SYSTEM_PROMPT
+    p = MEETING_SYSTEM_PROMPT
     assert "save_draft" in p
     # Two-turn protocol present
     plower = p.lower()

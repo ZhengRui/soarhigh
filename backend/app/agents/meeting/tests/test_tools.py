@@ -44,6 +44,9 @@ class FakeCtx:
 def make_deps():
     return AgendaDeps(
         session_id="t",
+        # Owner of the test session — matches the user_id="u" used by
+        # _seed_lookup_turn and friends so ownership-gated reads pass.
+        user_id="u",
         agenda=Agenda(
             meta=Meta(start_time="19:15"),
             segments=[
@@ -157,7 +160,7 @@ def _fake_db_meetings():
 async def _seed_lookup_turn(store: InMemoryUnifiedAgentTurnStore, session_id: str, no: int):
     await store.save_turn(
         session_id,
-        user_id=None,
+        user_id="u",
         turn=AgentTurnRecord(
             agent_kind=AgentKind.MEETING,
             route=RouteKind.SPECIALIST,
@@ -2210,6 +2213,7 @@ async def test_revert_last_turn_restores_agenda_before_of_latest_turn(monkeypatc
     # it should match `before_snapshot` exactly.
     deps = AgendaDeps(
         session_id="sess-rev",
+        user_id="u",
         agenda=Agenda(
             meta=Meta(start_time="19:15"),
             segments=[
@@ -2291,7 +2295,7 @@ async def test_revert_last_turn_skips_chit_chat_turns(monkeypatch):
     )
     monkeypatch.setattr(store_module, "agent_turn_store", fake_store)
 
-    deps = AgendaDeps(session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
+    deps = AgendaDeps(user_id="u", session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
     ctx = FakeCtx(deps=deps)
     result = await apply_revert_last_turn(ctx)
 
@@ -2329,7 +2333,7 @@ async def test_revert_last_turn_refuses_when_only_chit_chat(monkeypatch):
     )
     monkeypatch.setattr(store_module, "agent_turn_store", fake_store)
 
-    deps = AgendaDeps(session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
+    deps = AgendaDeps(user_id="u", session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
     ctx = FakeCtx(deps=deps)
     with pytest.raises(ModelRetry, match="no edits"):
         await apply_revert_last_turn(ctx)
@@ -2378,7 +2382,7 @@ async def test_revert_last_turn_refuses_when_previous_turn_was_revert(monkeypatc
     )
     monkeypatch.setattr(store_module, "agent_turn_store", fake_store)
 
-    deps = AgendaDeps(session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
+    deps = AgendaDeps(user_id="u", session_id="sess", agenda=Agenda(meta=Meta(), segments=[]))
     ctx = FakeCtx(deps=deps)
 
     with pytest.raises(ModelRetry) as exc:
@@ -2441,6 +2445,7 @@ async def test_revert_to_turn_applies_agenda_after_of_target(monkeypatch):
 
     deps = AgendaDeps(
         session_id="s",
+        user_id="u",
         agenda=Agenda(meta=Meta(), segments=[Segment(id="other", type="X", start_time="20:00", duration=5)]),
     )
     ctx = FakeCtx(deps=deps)
@@ -2452,7 +2457,7 @@ async def test_revert_to_turn_applies_agenda_after_of_target(monkeypatch):
     assert len(deps.agenda.segments) == 1
     assert deps.agenda.segments[0].type == "state_after_2"
     # No turns deleted — soft revert.
-    tail, _ = await fake_store.load("s")
+    tail, _ = await fake_store.load("s", user_id="u")
     assert tail == 3
 
 
@@ -2495,6 +2500,7 @@ async def test_revert_to_turn_after_seq_0_restores_initial_state(monkeypatch):
 
     deps = AgendaDeps(
         session_id="s",
+        user_id="u",
         agenda=Agenda(meta=Meta(), segments=[Segment(id="junk", type="Junk", start_time="20:00", duration=5)]),
     )
     ctx = FakeCtx(deps=deps)
@@ -2586,6 +2592,7 @@ async def test_revert_last_turn_mutates_in_place_not_reassigns(monkeypatch):
 
     deps = AgendaDeps(
         session_id="sess",
+        user_id="u",
         agenda=Agenda(
             meta=Meta(),
             segments=[Segment(id="s1", type="X", start_time="19:30", duration=5)],
@@ -2863,7 +2870,7 @@ async def test_save_draft_prior_turn_helper_true_when_tail_was_save_preview():
         from app.agents.runtime import store as store_module
 
         with patch.object(store_module, "agent_turn_store", store):
-            assert await _immediately_prior_turn_was_save_preview(session_id) is True
+            assert await _immediately_prior_turn_was_save_preview(session_id, user_id="u") is True
 
 
 @pytest.mark.asyncio
@@ -2912,7 +2919,7 @@ async def test_save_draft_prior_turn_helper_false_when_intervening_edit():
     from app.agents.runtime import store as store_module
 
     with patch.object(store_module, "agent_turn_store", store):
-        assert await _immediately_prior_turn_was_save_preview(session_id) is False
+        assert await _immediately_prior_turn_was_save_preview(session_id, user_id="u") is False
 
 
 @pytest.mark.asyncio
