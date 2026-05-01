@@ -401,6 +401,7 @@ async def agent_turn(
             deps = AgendaDeps(
                 agenda=copy.deepcopy(req.agenda_snapshot),
                 session_id=req.session_id,
+                user_id=getattr(user, "uid", None),
                 current_user_message=req.user_message,
                 image_data=image_bytes,
                 image_content_type=image_ct,

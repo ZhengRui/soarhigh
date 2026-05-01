@@ -98,6 +98,7 @@ class Agenda(BaseModel):
 class AgendaDeps(BaseModel):
     agenda: Agenda
     session_id: str
+    user_id: Optional[str] = None  # set by route from get_current_user; needed by save_draft
     current_user_message: str = ""
     image_data: Optional[bytes] = None
     image_content_type: Optional[str] = None
