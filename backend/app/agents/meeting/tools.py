@@ -703,7 +703,7 @@ async def apply_create_from_text(ctx, raw_text: str) -> dict:
     _clear_required_fields_absent_from_text(new_agenda, raw_text)
     # Trust the planner's start_times. The developer prompt enforces the
     # invariants we care about (Note 2: no buffer between segments; Note 8:
-    # 19:15 "Members and Guest Registration, Warm Up" as the first segment
+    # 19:15 "Members and Guests Registration, Warm up" as the first segment
     # for Regular / Workshop). Calling recompute_start_times here would
     # re-anchor on meta.start_time (e.g. 19:30 from the source registration
     # text) and overwrite the planner's 19:15 warmup positioning.

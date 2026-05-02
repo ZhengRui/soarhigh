@@ -379,7 +379,7 @@ def test_preview_meeting_appends_folded_preview_tables(client, mock_auth_dep):
         "segments": [
             {
                 "id": "1",
-                "type": "Members and Guests Registration, Warm Up",
+                "type": "Members and Guests Registration, Warm up",
                 "start_time": "19:15",
                 "duration": "15",
                 "role_taker": {"id": None, "name": "All", "member_id": ""},

@@ -31,7 +31,7 @@ def test_user_prompt_requires_warmup_first_segment_for_regular_workshop():
     segment with the canonical type label, even if the source text doesn't
     explicitly mention registration."""
     prompt = plan_meeting_from_text_user_prompt
-    assert "Members and Guests Registration, Warm Up" in prompt
+    assert "Members and Guests Registration, Warm up" in prompt
     assert '"19:15"' in prompt
     assert "Custom meetings have no such convention" in prompt
 
@@ -40,9 +40,9 @@ def test_developer_prompt_describes_warmup_segment():
     """Same rule documented in the segment list at the top of the developer
     prompt so the planner sees it twice (segment list + Important Notes)."""
     prompt = plan_meeting_from_text_developer_prompt
-    assert "Members and Guests Registration, Warm Up" in prompt
+    assert "Members and Guests Registration, Warm up" in prompt
     # And the few-shot Example outputs must use the canonical label too.
-    assert '"type": "Members and Guests Registration, Warm Up"' in prompt
+    assert '"type": "Members and Guests Registration, Warm up"' in prompt
     # Old label should no longer appear in example outputs.
     assert '"type": "Guests Registration"' not in prompt
 

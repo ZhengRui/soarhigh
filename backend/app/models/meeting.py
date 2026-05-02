@@ -204,6 +204,41 @@ class MeetingPlannedFromText(BaseModel):
     segments: List[SegmentPlannedFromText] = Field(description="A list of segments that the meeting is composed of.")
 
 
+class SegmentPlannedFromTextLoose(BaseModel):
+    """Loose variant of `SegmentPlannedFromText` — `type` accepts any
+    string, and `title` is optional. Used by providers that cannot
+    enforce JSON Schema enums or required-field injection at decoding
+    time (e.g. DeepSeek's `json_object` mode). The prompt's example
+    JSON omits `title` for non-speech segments, so non-strict providers
+    follow suit; the caller normalizes canonical-shorthand types back
+    to `defaultSegmentTypes` and any genuinely custom segment names
+    round-trip as-is.
+    """
+
+    type: str = Field(description="Segment type — canonical name OR free-form custom label.")
+    start_time: str = Field(description="The start time of the segment.")
+    duration: str = Field(description="The duration of the segment.")
+    role_taker: str = Field(description="The name(s) of the person(s) performing the segment.")
+    title: str = Field(default="", description="The title of the speech or workshop, if applicable.")
+
+
+class MeetingPlannedFromTextLoose(BaseModel):
+    """Loose variant of `MeetingPlannedFromText`. See
+    `SegmentPlannedFromTextLoose` for the rationale.
+    """
+
+    no: Optional[int] = Field(None, description="The meeting number.")
+    type: str = Field(description="The type of meeting, e.g., Regular, Workshop, Custom.")
+    theme: str = Field(description="The theme for the meeting.")
+    manager: str = Field(description="The name of the person organizing/managing the meeting.")
+    date: str = Field(description="The date of the meeting.")
+    start_time: str = Field(description="The start time of the meeting.")
+    end_time: str = Field(description="The end time of the meeting.")
+    location: str = Field(description="The location where the meeting is held.")
+    introduction: str = Field(description="The introduction of the meeting.")
+    segments: List[SegmentPlannedFromTextLoose] = Field(description="Segments of the meeting.")
+
+
 T = TypeVar("T")
 
 

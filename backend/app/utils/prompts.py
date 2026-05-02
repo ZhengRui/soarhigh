@@ -68,9 +68,9 @@ segments and you will help me generate an meeting agenda.
 prepared speech segment.
 
 ## Segments (ordered by time)
-- Members and Guests Registration, Warm Up: REQUIRED for Regular and Workshop meetings as the FIRST segment. \
+- Members and Guests Registration, Warm up: REQUIRED for Regular and Workshop meetings as the FIRST segment. \
 Always 15 minutes starting at 19:15 (the official meeting begins at 19:30; this is a warmup window for everyone \
-to arrive and check in). Use the EXACT type label "Members and Guests Registration, Warm Up" and role_taker "All". \
+to arrive and check in). Use the EXACT type label "Members and Guests Registration, Warm up" and role_taker "All". \
 Include this segment even if the source text does not explicitly mention it.
 - SAA (or Meeting Rules Introduction): required, usually 2 mins, formally announce the begin of the meeting.
 - Opening Remarks: required, usually 2 mins, brief introduction of toastmasters and the club.
@@ -166,7 +166,7 @@ help treat nearly all diseases. How can we and our parents age peacefully and gr
 us at our meeting to discuss this vital topic!\n\n【The true costs of ageing】 https://www.bilibili.com/video/BV1iLpaeaE4k",
   "segments": [
     {
-      "type": "Members and Guests Registration, Warm Up",
+      "type": "Members and Guests Registration, Warm up",
       "start_time": "19:15",
       "duration": "15",
       "role_taker": "All"
@@ -362,7 +362,7 @@ make me feel like I'm being bossed around. Join us this Wednesday to share your 
 communication gaps between generations.",
   "segments": [
     {
-      "type": "Members and Guests Registration, Warm Up",
+      "type": "Members and Guests Registration, Warm up",
       "start_time": "19:15",
       "duration": "15",
       "role_taker": "All"
@@ -525,7 +525,7 @@ Remarks" is sometimes labelled "Club Intro" in the registration text — treat t
 6. Photographer is not required, so don't add a segment for photographer.
 7. Only start Prepared Speech Evaluation after all Prepared Speeches are done.
 8. For Regular and Workshop meetings the FIRST segment in the output MUST be the warmup window — \
-type EXACTLY `"Members and Guests Registration, Warm Up"`, `start_time` `"19:15"`, `duration` `15`, \
+type EXACTLY `"Members and Guests Registration, Warm up"`, `start_time` `"19:15"`, `duration` `15`, \
 `role_taker` `"All"`. Include it even when the source text does not mention registration. Do NOT replace \
 it with `"Guests Registration"`, `"Guests Self Introduction"`, or any other label. Custom meetings have no \
 such convention — skip it for Custom.
