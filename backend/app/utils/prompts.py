@@ -354,7 +354,7 @@ GE:Jessica
   "start_time": "19:15:00",
   "end_time": "21:30:00",
   "location": "华美居装饰家居城B区809 (1号线宝体站)",
-  "introduction": "When someone sends a smiling face sticker[Smile] on WeChat, it might evoke a few thoughts:\n\
+  "introduction": "When someone sends a smiling face sticker😊 on WeChat, it might evoke a few thoughts:\n\
 Positive emotion, response cue, connection or just casual tone. However, for some Millennials and Generation Z, \
 a smiling face sticker might come across as overly simplistic or dismissive, potentially leading to feelings of \
 offense if the context of the conversation is more serious. I don't like seeing exclamation marks in chats, they \
@@ -535,6 +535,10 @@ club / event name as the meeting number and output it as an integer. Only output
 genuinely contains no number anywhere.
 10. Other meeting-level fields: do not invent theme, manager, date, time, or location. If the source text does not \
 provide one, output an empty string so the caller can ask the user to fill it in.
+11. `introduction`: copy the source text's context/intro section verbatim. Preserve emojis (😊 🌟 ✨ 📅 etc.) \
+as actual emoji characters — do NOT transcribe them to text labels like "[Smile]". Strip only the framing \
+markers (e.g. `🌟Context: 🌟` headers) that exist purely to delimit the section, not the emojis embedded in \
+the body content.
 
 
 #### Output

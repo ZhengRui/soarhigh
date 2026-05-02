@@ -28,6 +28,16 @@ export type AgendaSnapshot = {
 
 export type ToolCallStatus = 'pending' | 'ok' | 'retry';
 
+// Ordered timeline element. The reducer pushes a new part when the SSE
+// stream emits something new; same-kind chunks (text/text or
+// thinking/thinking) coalesce into the trailing part. Tool parts hold
+// only the toolCallId so `tool_call_end` can update the canonical entry
+// in `ChatMessage.toolCalls` without disturbing render order.
+export type MessagePart =
+  | { kind: 'thinking'; content: string }
+  | { kind: 'text'; content: string }
+  | { kind: 'tool'; toolCallId: string };
+
 export type RouterAgentKind = 'router' | 'meeting' | 'statistics';
 export type RouterRouteKind =
   | 'specialist'
@@ -58,6 +68,13 @@ export type ChatMessage = {
     result?: unknown;
     status: ToolCallStatus;
   }>;
+  // Linear timeline of streamed parts (text / thinking / tool refs) in
+  // the order the model produced them. Renderer iterates this list so
+  // text and tool calls interleave naturally instead of collapsing into
+  // separate "all tools then all text" sections. `content`, `thinking`,
+  // and `toolCalls` above remain the source of truth for empty-checks,
+  // persistence, and tool status — `parts` is render-only positioning.
+  parts?: MessagePart[];
   seq?: number;
   // Legacy: inline error on the bubble. Kept as a fallback for messages that
   // errored before we started routing errors to the top banner. New errors

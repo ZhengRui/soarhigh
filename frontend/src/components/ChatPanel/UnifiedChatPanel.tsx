@@ -29,8 +29,26 @@ import {
   AgendaSnapshot,
   AgentTurnEvent,
   ChatMessage,
+  MessagePart,
   RouterDecision,
 } from './types';
+
+// Coalesce consecutive same-kind streamed chunks (text/text or
+// thinking/thinking) into the trailing part so a 50-chunk text stream
+// renders as one markdown block, not 50 fragments. Tool parts always
+// push fresh — see reducer in onEvent.
+function appendStreamingChunk(
+  parts: MessagePart[] | undefined,
+  kind: 'text' | 'thinking',
+  chunk: string
+): MessagePart[] {
+  const list = parts || [];
+  const last = list[list.length - 1];
+  if (last && last.kind === kind) {
+    return [...list.slice(0, -1), { ...last, content: last.content + chunk }];
+  }
+  return [...list, { kind, content: chunk }];
+}
 
 function formatToolArgs(args: Record<string, unknown>): string {
   return Object.entries(args)
@@ -165,10 +183,18 @@ export function UnifiedChatPanel({
         if (ev.type === 'router_decision') {
           msg.routerDecision = ev.data.decision;
         }
-        if (ev.type === 'thinking')
+        if (ev.type === 'thinking') {
           msg.thinking = (msg.thinking || '') + ev.data.chunk;
-        if (ev.type === 'assistant_text')
+          msg.parts = appendStreamingChunk(
+            msg.parts,
+            'thinking',
+            ev.data.chunk
+          );
+        }
+        if (ev.type === 'assistant_text') {
           msg.content = (msg.content || '') + ev.data.chunk;
+          msg.parts = appendStreamingChunk(msg.parts, 'text', ev.data.chunk);
+        }
         if (ev.type === 'tool_call_start') {
           msg.toolCalls = [
             ...(msg.toolCalls || []),
@@ -179,6 +205,10 @@ export function UnifiedChatPanel({
               status: 'pending',
             },
           ];
+          msg.parts = [
+            ...(msg.parts || []),
+            { kind: 'tool', toolCallId: ev.data.id },
+          ];
         }
         if (ev.type === 'tool_call_end') {
           const status = ev.data.status === 'retry' ? 'retry' : 'ok';
@@ -187,6 +217,9 @@ export function UnifiedChatPanel({
               ? { ...tc, status, result: ev.data.result }
               : tc
           );
+          // `parts` intentionally NOT touched — the tool's position in
+          // the timeline was fixed at start; only its rendered status
+          // updates via the toolCalls lookup.
         }
         if (ev.type === 'done') {
           msg.seq = ev.data.seq;
@@ -387,23 +420,32 @@ export function UnifiedChatPanel({
                   <span>{routeLabel(m.routerDecision)}</span>
                 </div>
               )}
-              {m.role === 'assistant' && m.thinking && (
-                <ThinkingBlock
-                  content={m.thinking}
-                  streaming={
-                    !m.content &&
-                    !(
-                      m.toolCalls &&
-                      m.toolCalls.some((t) => t.status !== 'pending')
-                    )
-                  }
-                />
-              )}
-              {m.role === 'assistant' &&
-                m.toolCalls &&
-                m.toolCalls.length > 0 && (
-                  <div className='flex flex-col gap-1 mb-1.5'>
-                    {m.toolCalls.map((tc) => {
+              {m.role === 'assistant' ? (
+                m.parts && m.parts.length > 0 ? (
+                  <div className='flex flex-col gap-1.5'>
+                    {m.parts.map((part, idx) => {
+                      const isLast = idx === m.parts!.length - 1;
+                      if (part.kind === 'thinking') {
+                        return (
+                          <ThinkingBlock
+                            key={`p${idx}`}
+                            content={part.content}
+                            streaming={isLast && !m.seq}
+                          />
+                        );
+                      }
+                      if (part.kind === 'text') {
+                        return (
+                          <ChatMarkdown key={`p${idx}`} source={part.content} />
+                        );
+                      }
+                      // kind === 'tool' — look up authoritative status
+                      // from msg.toolCalls so `tool_call_end` updates
+                      // reflect without disturbing render order.
+                      const tc = m.toolCalls?.find(
+                        (t) => t.id === part.toolCallId
+                      );
+                      if (!tc) return null;
                       const argsStr = formatToolArgs(tc.args);
                       const palette =
                         tc.status === 'pending'
@@ -440,13 +482,9 @@ export function UnifiedChatPanel({
                       );
                     })}
                   </div>
-                )}
-              {m.role === 'assistant' ? (
-                m.content ? (
-                  <ChatMarkdown source={m.content} />
-                ) : !(m.toolCalls && m.toolCalls.length) ? (
+                ) : (
                   <div className='whitespace-pre-wrap'>…</div>
-                ) : null
+                )
               ) : (
                 <div className='whitespace-pre-wrap'>{m.content}</div>
               )}
