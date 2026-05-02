@@ -30,11 +30,12 @@ from pydantic_ai import Agent
 from app.agents.runtime.contracts import AgentKind, RouteKind, RouterDecision
 from app.agents.runtime.history import replace_system_prompt
 from app.agents.runtime.model_settings import build_model_settings
-from app.config import GOOGLE_API_KEY, OPENAI_API_KEY, ROUTER_AGENT_MODEL, ROUTER_THINKING_LEVEL
+from app.config import DEEPSEEK_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, ROUTER_AGENT_MODEL, ROUTER_THINKING_LEVEL
 from app.models.agents.unified import AgentTurnRequest
 
 os.environ.setdefault("GOOGLE_API_KEY", GOOGLE_API_KEY or "not-configured")
 os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY or "not-configured")
+os.environ.setdefault("DEEPSEEK_API_KEY", DEEPSEEK_API_KEY or "not-configured")
 
 
 class _RouterChoice(BaseModel):

@@ -48,6 +48,7 @@ MEETING_TEXT_PLANNER_MODEL = config("MEETING_TEXT_PLANNER_MODEL", cast=str, defa
 MEETING_TEXT_PLANNER_REASONING_EFFORT = config("MEETING_TEXT_PLANNER_REASONING_EFFORT", cast=str, default="low")
 # Accept either name; google-genai SDK itself checks both.
 GOOGLE_API_KEY = config("GOOGLE_API_KEY", cast=str, default="") or config("GEMINI_API_KEY", cast=str, default="")
+DEEPSEEK_API_KEY = config("DEEPSEEK_API_KEY", cast=str, default="")
 
 # WeChat Configuration
 WECHAT_APP_ID = config("WECHAT_APP_ID", cast=str)

@@ -16,13 +16,20 @@ from app.agents.runtime.model_settings import build_model_settings
 from app.agents.statistics import tools as _tools
 from app.agents.statistics.models import StatsDeps
 from app.agents.statistics.prompts import STATS_SYSTEM_PROMPT
-from app.config import GOOGLE_API_KEY, OPENAI_API_KEY, STATISTICS_AGENT_MODEL, STATISTICS_THINKING_LEVEL
+from app.config import (
+    DEEPSEEK_API_KEY,
+    GOOGLE_API_KEY,
+    OPENAI_API_KEY,
+    STATISTICS_AGENT_MODEL,
+    STATISTICS_THINKING_LEVEL,
+)
 from app.services import meeting_lookup
 
 # Bridge .env values to os.environ — Pydantic AI providers read keys at
 # Agent() construction. Same trick as the meeting agent.
 os.environ.setdefault("GOOGLE_API_KEY", GOOGLE_API_KEY or "not-configured")
 os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY or "not-configured")
+os.environ.setdefault("DEEPSEEK_API_KEY", DEEPSEEK_API_KEY or "not-configured")
 
 USAGE_LIMITS = UsageLimits(request_limit=15, total_tokens_limit=500_000)
 

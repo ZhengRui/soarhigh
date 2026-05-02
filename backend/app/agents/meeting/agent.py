@@ -8,7 +8,7 @@ from app.agents.meeting.models import AgendaDeps
 from app.agents.meeting.prompts import MEETING_SYSTEM_PROMPT
 from app.agents.meeting.validators import run_validators
 from app.agents.runtime.model_settings import build_model_settings
-from app.config import GOOGLE_API_KEY, MEETING_AGENT_MODEL, MEETING_THINKING_LEVEL, OPENAI_API_KEY
+from app.config import DEEPSEEK_API_KEY, GOOGLE_API_KEY, MEETING_AGENT_MODEL, MEETING_THINKING_LEVEL, OPENAI_API_KEY
 
 # Pydantic AI providers read their API keys from os.environ at Agent()
 # construction time. Our config uses starlette.Config which reads .env into
@@ -19,6 +19,7 @@ from app.config import GOOGLE_API_KEY, MEETING_AGENT_MODEL, MEETING_THINKING_LEV
 # errors surface at request time, which is what we want.
 os.environ.setdefault("GOOGLE_API_KEY", GOOGLE_API_KEY or "not-configured")
 os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY or "not-configured")
+os.environ.setdefault("DEEPSEEK_API_KEY", DEEPSEEK_API_KEY or "not-configured")
 
 # request_limit (15) is the primary guard against runaway agent loops.
 # total_tokens_limit is a backstop for "something is very wrong" scenarios;
