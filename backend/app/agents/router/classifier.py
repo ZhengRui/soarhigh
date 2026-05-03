@@ -232,7 +232,7 @@ _agent: Agent[None, _RouterChoice] = Agent(
     ROUTER_AGENT_MODEL,
     output_type=_RouterChoice,
     system_prompt=_ROUTER_SYSTEM_PROMPT,
-    retries=2,
+    retries=5,
     model_settings=build_model_settings(ROUTER_AGENT_MODEL, thinking_level=ROUTER_THINKING_LEVEL),
 )
 
