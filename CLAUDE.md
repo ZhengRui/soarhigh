@@ -11,6 +11,7 @@ SoarHigh Toastmasters Club - A full-stack web application for managing Toastmast
 - **Frontend**: Next.js 15 (App Router), TypeScript, Tailwind CSS, React Query, Jotai
 - **Backend**: FastAPI, SQLAlchemy, Supabase, Python 3.12+
 - **Database**: Supabase (PostgreSQL)
+- **AI Agents**: Pydantic AI (Gemini 3.x / DeepSeek V4 / OpenAI), SSE streaming
 - **Deployment**: Vercel (both frontend and backend)
 
 ## Development Commands
@@ -38,18 +39,27 @@ SoarHigh Toastmasters Club - A full-stack web application for managing Toastmast
   - `posts/` - Blog posts
   - `vote/` - Voting system
 - `src/components/` - Reusable components
+  - `ChatPanel/` - Floating AI assistant launcher + unified chat panel (SSE consumer, markdown render, tool-call badges)
 - `src/hooks/` - Custom React hooks
 - `src/utils/` - Utility functions
 - `src/interfaces.ts` - TypeScript interfaces
 
 ### Backend (`/backend`)
 - `app/api/serv.py` - FastAPI application entry point
-- `app/api/routes/` - API route handlers (auth, meeting, post, stats)
-- `app/models/` - Pydantic models
+- `app/api/routes/` - API route handlers (auth, meeting, post, stats, timing, checkin, feedback)
+  - `agents/` - Agent endpoints (`unified.py` router, `meeting.py`, `statistics.py`, `_shared.py` helpers)
+- `app/agents/` - Pydantic AI agent implementations
+  - `runtime/` - Shared contracts, history utils, model settings, tool policy, persistent session/turn store
+  - `router/` - LLM-backed turn classifier (route to specialist / direct_answer / clarify / refuse)
+  - `meeting/` - Meeting agent (agenda edit + create-from-{text,image,template,clone} + save_draft)
+  - `statistics/` - Read-only analytics agent (attendance/role/manager/award matrices, lookups)
+- `app/services/` - Cross-agent shared services (`meeting_lookup`, `meeting_stats`, `meeting_preview_markdown`, `member_directory`)
+- `app/models/` - Pydantic models (incl. `models/agents/` request/response shapes)
 - `app/db/` - Database configuration
   - `core.py` - Core database operations
   - `stats.py` - Dashboard statistics queries
 - `app/utils/` - Utility functions
+- `supabase_migrations/` - Forward-only SQL migrations (apply manually via Supabase dashboard)
 
 ## Key Features
 
@@ -64,6 +74,7 @@ SoarHigh Toastmasters Club - A full-stack web application for managing Toastmast
 
 ### Advanced Features
 - **AI-Powered Meeting Creation**: Parse agenda images and create meetings from text using OpenAI GPT-4o
+- **AI Assistant (Multi-Agent Chat)**: Floating chat panel powered by a manager-router + meeting/statistics specialists (Pydantic AI). Supports natural-language agenda editing on the meeting form, historical stats lookups, image-attached create-from-image, and persisted multi-turn sessions. Members-only.
 - **Meeting Templates**: Pre-defined templates (Regular, Workshop, Custom) for quick meeting creation
 - **Workbook Generation**: Generate Excel-compatible meeting workbooks with proper formatting
 - **Role Management**: Support for both members and guests as meeting attendees
@@ -113,6 +124,14 @@ SoarHigh Toastmasters Club - A full-stack web application for managing Toastmast
 ### Dashboard Statistics
 - `/stats/dashboard` - GET: Retrieve dashboard statistics (member attendance, meeting attendance) for date range
 
+### Agent Endpoints (SSE streaming, members only)
+- `/agent/turn` - POST (multipart: `payload` JSON + optional `image`): Unified entry. Loads session history, runs the LLM router, then either replies directly (clarify/refuse/direct_answer) or dispatches to a specialist. Image attachments skip the router and go straight to the meeting agent's `create_from_image` tool.
+- `/meeting-agent/turn` - POST: Meeting specialist turn (agenda edit / create / save_draft). Requires `agenda_snapshot`. Tool calls and final text streamed as SSE events.
+- `/meeting-agent/revert` - POST: Roll session state back to a prior turn (undo last assistant action).
+- `/statistics-agent/turn` - POST: Read-only stats specialist turn (attendance/role/manager/award matrices, member/meeting lookups).
+
+All agent endpoints reject unbound WeChat sessions — `_shared.require_member` mandates a bound club member account; foreign session_ids 404 transparently.
+
 - `/docs` - FastAPI documentation
 - `/static/*` - Static file serving
 
@@ -129,6 +148,7 @@ The application uses Supabase with tables for:
 - **Vote Status** (voting session management)
 - **Feedbacks** (meeting feedback with experience curve methodology)
 - **Checkins** (meeting participation tracking by segment)
+- **agent_sessions / agent_turns** (unified per-user agent chat history; one row per turn carries `agent_kind`, `router_decision` JSONB, and the Pydantic AI message_history cursor)
 
 ## Frontend Routes
 
@@ -156,21 +176,34 @@ The application uses Supabase with tables for:
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
 ### Backend (environment variables)
-- Supabase configuration (service role key)
-- JWT secret for token verification
-- OpenAI API key (for AI-powered features)
+- Supabase configuration (service role key, JWT secret)
+- `WECHAT_JWT_SECRET` - Validates miniapp wechat_session JWTs (agent endpoints accept these for bound members)
+- OpenAI API key (for legacy `/meeting/parse_agenda_image` + text planner)
 - AliCloud OSS credentials (media storage)
+- Agent models / providers:
+  - `MEETING_AGENT_MODEL`, `ROUTER_AGENT_MODEL`, `STATISTICS_AGENT_MODEL` - Pydantic AI model strings (default `google-gla:gemini-3.1-flash-lite-preview`; DeepSeek V4 via `deepseek:deepseek-chat`)
+  - `MEETING_THINKING_LEVEL`, `ROUTER_THINKING_LEVEL`, `STATISTICS_THINKING_LEVEL` - Per-agent reasoning effort (mapped to provider knob in `agents/runtime/model_settings.py`)
+  - `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) - Gemini provider
+  - `DEEPSEEK_API_KEY` - DeepSeek provider; bridged into `os.environ` for pydantic-ai
+  - `MEETING_TEXT_PLANNER_MODEL`, `MEETING_TEXT_PLANNER_REASONING_EFFORT` - Inner model used by `/meeting/plan_from_text`
 
 ## Additional Notes
 
 ### AI Integration
 - **OpenAI GPT-4o** integration for parsing meeting agenda images and creating meetings from text descriptions
+- **Pydantic AI Multi-Agent System**: Three independently-tunable agents share a unified `agent_sessions`/`agent_turns` history and SSE event protocol.
+  - **Router** (`agents/router/`): Tiny structured-output classifier with no tools; sees prior history, picks `specialist_meeting` / `specialist_statistics` / `direct_answer` / `clarify`. Skipped when an image is attached.
+  - **Meeting agent** (`agents/meeting/`): ~25 tools covering set_role/title/content, segment add/remove/move/swap, time shift, validators, create-from-{text,image,template,clone}, preview, save_draft (two-turn confirm with time-gate), and revert. Tool policy enforced at the route layer.
+  - **Statistics agent** (`agents/statistics/`): Read-only matrices over historical meetings (member attendance, role participation, manager assignments, award counts) plus member/meeting lookups.
+  - Cross-specialist flows are emergent: each turn is classified independently; both specialists load the same `session_id` history, so the meeting agent on a follow-up turn naturally sees the stats agent's prior tool calls.
 - **AliCloud OSS** integration for media storage with pre-signed URLs for secure uploads
+- **Database snapshots**: `.github/workflows/db-snapshot.yml` performs a weekly `pg_dump` of the public schema to AliCloud OSS; `backend/scripts/restore-db.sh` restores from a downloaded dump.
 
 ### Access Control
-- **Members**: Can access all meetings (draft/published), create/edit content, manage awards, and control voting
-- **Non-members**: Can only view published meetings and posts, cast votes in open sessions
+- **Members**: Can access all meetings (draft/published), create/edit content, manage awards, control voting, and use the AI assistant
+- **Non-members**: Can only view published meetings and posts, cast votes in open sessions; agent endpoints reject unbound WeChat sessions
 - **Draft/Published Status**: Controls visibility of meetings and posts
+- **Agent sessions**: `agent_sessions.user_id` is checked against the caller before any model runs; foreign session_ids fail closed without leaking existence
 
 ### Development Workflow
 - Backend runs on port 5000, Frontend on port 3000
