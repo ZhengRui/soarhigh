@@ -11,7 +11,7 @@ from app.agents.runtime import store as store_module
 from app.agents.runtime.contracts import AgentKind
 from app.agents.runtime.policy import AgentPolicyError
 from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
-from app.api.routes.auth import get_current_user
+from app.api.routes.auth import get_current_extended_user
 from app.api.serv import app
 from app.models.users import User
 
@@ -56,13 +56,13 @@ def client():
 
 @pytest.fixture
 def mock_auth_dep():
-    app.dependency_overrides[get_current_user] = lambda: User(
+    app.dependency_overrides[get_current_extended_user] = lambda: User(
         uid="test-user",
         username="test",
         full_name="Test User",
     )
     yield
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_extended_user, None)
 
 
 @pytest.fixture(autouse=True)
@@ -157,3 +157,37 @@ def test_stats_route_fails_closed_when_registered_tool_blocked_by_policy(client,
     # Registered+rejected → outer except handler converts to an error event.
     assert events[-1]["event"] == "error"
     assert "blocked by policy" in events[-1]["data"]["message"]
+
+
+def test_statistics_turn_rejects_wechat_user():
+    """Mock get_current_extended_user to return a WeChatUser; expect 403
+    with the require_member gate's exact detail message.
+
+    Intentionally does NOT request the auth fixture — that fixture
+    overrides the dep with a bound User. This test needs a WeChatUser
+    instead, so it installs its own override and cleans up in finally.
+    """
+    from app.api.routes.agents import statistics as statistics_route
+    from app.models.wechat_user import WeChatUser
+
+    def fake_dep():
+        return WeChatUser(wxid="wx-1", attendee_id=None)
+
+    app.dependency_overrides[statistics_route.get_current_extended_user] = fake_dep
+    try:
+        local_client = TestClient(app)
+        # /statistics-agent/turn accepts a typed JSON body
+        # (StatisticsAgentTurnRequest) — not multipart/form. Sending JSON
+        # is the right shape; payload doesn't carry agenda_snapshot since
+        # the statistics agent is read-only.
+        r = local_client.post(
+            "/statistics-agent/turn",
+            json={
+                "session_id": "s1",
+                "user_message": "hi",
+            },
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"] == "Agent access requires a bound club member account."
+    finally:
+        app.dependency_overrides.clear()

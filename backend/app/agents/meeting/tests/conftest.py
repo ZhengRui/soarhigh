@@ -2,7 +2,7 @@ import pytest
 
 from app.agents.runtime import store as store_module
 from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
-from app.api.routes.auth import get_current_user
+from app.api.routes.auth import get_current_extended_user
 from app.api.serv import app
 from app.models.users import User
 
@@ -10,13 +10,13 @@ from app.models.users import User
 @pytest.fixture
 def mock_auth_dep():
     """Override the JWT auth dep so tests don't need a real token."""
-    app.dependency_overrides[get_current_user] = lambda: User(
+    app.dependency_overrides[get_current_extended_user] = lambda: User(
         uid="test-user",
         username="test",
         full_name="Test User",
     )
     yield
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_extended_user, None)
 
 
 @pytest.fixture(autouse=True)

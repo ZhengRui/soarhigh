@@ -48,8 +48,14 @@ from ....agents.statistics.models import StatsDeps
 from ....agents.statistics.prompts import SNAPSHOT_TEMPLATE, STATS_SYSTEM_PROMPT
 from ....models.agents.statistics import StatisticsAgentTurnRequest
 from ....services.meeting_preview_markdown import render_preview_addendum
-from ..auth import get_current_user
-from ._shared import _detect_user_language, _extract_error_info, _session_unavailable_response, _sse
+from ..auth import get_current_extended_user
+from ._shared import (
+    _detect_user_language,
+    _extract_error_info,
+    _session_unavailable_response,
+    _sse,
+    require_member,
+)
 
 log = logging.getLogger(__name__)
 statistics_agent_router = r = APIRouter(prefix="/statistics-agent")
@@ -75,13 +81,14 @@ def _build_stats_addendum(tool_trace: list[dict]) -> str:
 @r.post("/turn")
 async def stats_agent_turn(
     req: StatisticsAgentTurnRequest,
-    user=Depends(get_current_user),
+    user=Depends(get_current_extended_user),
 ):
     # Request validation is done by FastAPI on the typed `req` parameter
     # — no manual model_validate_json needed (the meeting agent does it
     # only because it parses a multipart `payload` field as a string).
+    member = require_member(user)
 
-    user_id = getattr(user, "uid", None)
+    user_id = member.uid
     if not await agent_turn_store.verify_session_access(req.session_id, user_id=user_id):
         return _session_unavailable_response()
 

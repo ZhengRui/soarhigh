@@ -13,7 +13,10 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+
+from ....models.users import User
 
 
 def _sse(event: str, data: dict) -> bytes:
@@ -84,3 +87,16 @@ def _session_unavailable_response() -> StreamingResponse:
         ),
         media_type="text/event-stream",
     )
+
+
+def require_member(user) -> User:
+    """Agent endpoints require a bound club member account.
+
+    Accepts both `User` (Supabase web member, or wechat_session JWT for a
+    bound miniapp member) and rejects `WeChatUser` (unbound wxid)."""
+    if not isinstance(user, User) or not getattr(user, "uid", None):
+        raise HTTPException(
+            status_code=403,
+            detail="Agent access requires a bound club member account.",
+        )
+    return user

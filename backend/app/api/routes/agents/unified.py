@@ -13,8 +13,8 @@ from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
 from ....models.agents.meeting import MeetingAgentTurnRequest
 from ....models.agents.statistics import StatisticsAgentTurnRequest
 from ....models.agents.unified import AgentTurnRequest
-from ..auth import get_current_user
-from ._shared import _detect_user_language, _error_only_stream, _session_unavailable_response, _sse
+from ..auth import get_current_extended_user
+from ._shared import _detect_user_language, _error_only_stream, _session_unavailable_response, _sse, require_member
 from .meeting import agent_turn as meeting_agent_turn
 from .statistics import stats_agent_turn
 
@@ -149,14 +149,15 @@ async def _terminal_stream(
 async def unified_agent_turn(
     payload: str = Form(...),
     image: UploadFile | None = File(None),
-    user=Depends(get_current_user),
+    user=Depends(get_current_extended_user),
 ):
     try:
         req = AgentTurnRequest.model_validate_json(payload)
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors()) from e
 
-    user_id = getattr(user, "uid", None)
+    member = require_member(user)
+    user_id = member.uid
     language = _detect_user_language(req.user_message)
 
     # Reject foreign-owned sessions BEFORE running any model. Without this,

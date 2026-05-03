@@ -41,8 +41,8 @@ from ....services.meeting_preview_markdown import (
     format_segment_detail_cell,
     render_preview_addendum,
 )
-from ..auth import get_current_user
-from ._shared import _detect_user_language, _extract_error_info, _session_unavailable_response, _sse
+from ..auth import get_current_extended_user
+from ._shared import _detect_user_language, _extract_error_info, _session_unavailable_response, _sse, require_member
 
 log = logging.getLogger(__name__)
 meeting_agent_router = r = APIRouter(prefix="/meeting-agent")
@@ -320,14 +320,15 @@ def _already_has_summary_table(text: str) -> bool:
 async def agent_turn(
     payload: str = Form(...),
     image: UploadFile | None = File(None),
-    user=Depends(get_current_user),
+    user=Depends(get_current_extended_user),
 ):
     try:
         req = MeetingAgentTurnRequest.model_validate_json(payload)
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors()) from e
 
-    user_id = getattr(user, "uid", None)
+    member = require_member(user)
+    user_id = member.uid
     # Ownership check runs BEFORE upload validation. Two reasons:
     # (a) don't waste read/validate work on a foreign-session probe;
     # (b) keep the response shape uniform — a foreign session always
@@ -376,7 +377,7 @@ async def agent_turn(
             deps = AgendaDeps(
                 agenda=copy.deepcopy(req.agenda_snapshot),
                 session_id=req.session_id,
-                user_id=getattr(user, "uid", None),
+                user_id=member.uid,
                 current_user_message=req.user_message,
                 image_data=image_bytes,
                 image_content_type=image_ct,
@@ -591,16 +592,18 @@ async def agent_turn(
 
 
 @r.post("/revert")
-async def agent_revert(req: MeetingAgentRevertRequest, user=Depends(get_current_user)):
+async def agent_revert(req: MeetingAgentRevertRequest, user=Depends(get_current_extended_user)):
     """Rewind a session to the state just BEFORE turn `target_seq` ran.
 
     Returns the agenda_before of target_seq and the new tail_seq (target_seq-1).
     Side effect: turns >= target_seq are deleted from the store.
     """
+    member = require_member(user)
+
     if req.target_seq < 1:
         raise HTTPException(status_code=400, detail="target_seq must be >= 1")
 
-    user_id = getattr(user, "uid", None)
+    user_id = member.uid
     turn = await agent_turn_store.load_turn(req.session_id, req.target_seq, user_id=user_id)
     if turn is None:
         raise HTTPException(status_code=404, detail=f"turn {req.target_seq} not found")

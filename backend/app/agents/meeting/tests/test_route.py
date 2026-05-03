@@ -921,3 +921,72 @@ def test_revert_bad_seq_returns_400(client, mock_auth_dep):
 def test_revert_requires_auth(client):
     r = client.post("/meeting-agent/revert", json={"session_id": "whatever", "target_seq": 1})
     assert r.status_code in (401, 403)
+
+
+def test_meeting_turn_rejects_wechat_user():
+    """Mock get_current_extended_user to return a WeChatUser; expect 403
+    with the require_member gate's exact detail message.
+
+    Intentionally does NOT request `mock_auth_dep` — that fixture overrides
+    the dep with a bound User. This test needs a WeChatUser instead, so it
+    installs its own override and cleans up in finally.
+    """
+    from app.api.routes.agents import meeting as meeting_route
+    from app.models.wechat_user import WeChatUser
+
+    def fake_dep():
+        return WeChatUser(wxid="wx-1", attendee_id=None)
+
+    app.dependency_overrides[meeting_route.get_current_extended_user] = fake_dep
+    try:
+        client = TestClient(app)
+        # /meeting-agent/turn is multipart/form-data — payload is a JSON
+        # string in the `payload` form field. Sending JSON body would 422
+        # (body parse error), hiding the 403 we want to verify.
+        r = client.post(
+            "/meeting-agent/turn",
+            data={
+                "payload": json.dumps(
+                    {
+                        "session_id": "s1",
+                        "user_message": "hi",
+                        "agenda_snapshot": {"meta": {}, "segments": []},
+                    }
+                ),
+            },
+        )
+        assert r.status_code == 403
+        # Pin the exact `detail` so a future regression that 403s for a
+        # different reason (e.g. someone reverts to get_current_user, the
+        # WeChatUser fake_dep never fires, but auth still rejects) doesn't
+        # silently pass this test.
+        assert r.json()["detail"] == "Agent access requires a bound club member account."
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_meeting_revert_rejects_wechat_user():
+    """Mock get_current_extended_user to return a WeChatUser; expect 403
+    with the require_member gate's exact detail message.
+
+    Intentionally does NOT request `mock_auth_dep` — that fixture overrides
+    the dep with a bound User. This test needs a WeChatUser instead, so it
+    installs its own override and cleans up in finally.
+    """
+    from app.api.routes.agents import meeting as meeting_route
+    from app.models.wechat_user import WeChatUser
+
+    def fake_dep():
+        return WeChatUser(wxid="wx-1", attendee_id=None)
+
+    app.dependency_overrides[meeting_route.get_current_extended_user] = fake_dep
+    try:
+        client = TestClient(app)
+        r = client.post(
+            "/meeting-agent/revert",
+            json={"session_id": "s1", "target_seq": 1},
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"] == "Agent access requires a bound club member account."
+    finally:
+        app.dependency_overrides.clear()

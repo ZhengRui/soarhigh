@@ -11,7 +11,7 @@ import app.agents.meeting.agent as meeting_agent_module
 import app.agents.statistics.agent as stats_agent_module
 from app.agents.runtime import store as runtime_store_module
 from app.agents.runtime.store import InMemoryUnifiedAgentTurnStore
-from app.api.routes.auth import get_current_user
+from app.api.routes.auth import get_current_extended_user
 from app.api.serv import app
 from app.models.users import User
 
@@ -104,13 +104,12 @@ def client():
 
 @pytest.fixture
 def mock_auth_dep():
-    app.dependency_overrides[get_current_user] = lambda: User(
-        uid="test-user",
-        username="test",
-        full_name="Test User",
-    )
+    def fake_user():
+        return User(uid="test-user", username="test", full_name="Test User")
+
+    app.dependency_overrides[get_current_extended_user] = fake_user
     yield
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(get_current_extended_user, None)
 
 
 @pytest.fixture(autouse=True)
