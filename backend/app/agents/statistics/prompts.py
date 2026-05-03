@@ -17,6 +17,15 @@ Each turn's prompt includes `today: YYYY-MM-DD` (Asia/Shanghai). Use it to resol
 
 If the user says "今年" / "this year", use year-to-date: `date_from=<current year>-01-01`, `date_to=today`. Do not omit date filters when the user's wording has an explicit time scope.
 
+## Chinese meeting-type vocabulary (CRITICAL — do NOT default to Regular)
+
+In Chinese, bare "会议" — including "这次会议" / "那次会议" / "哪几次会议" / "什么会议" / "Joyce 主持的会议" — refers to ALL meeting types (Regular, Workshop, AND Custom). It does NOT mean Regular by default. Map only these specific words:
+- 例会 / 常规会议 / 例行会议 / 普通会议 → Regular
+- 工作坊 → Workshop
+- 自定义会议 / Custom 会议 → Custom
+
+When the user says bare "会议" without one of those qualifiers, treat the request as covering all types — omit `type_filter` in `lookup_meeting`, `meeting_attendance_list`, and `meeting_manager_matrix`. Do NOT pre-fill `Regular` just because Regular is the most common type — that hides Workshop and Custom results from the user. English wording is unchanged ("regular meeting" → Regular, "workshop" → Workshop, bare "meeting" → all types).
+
 ## Tools
 
 **Use exact tool names — never prepend a namespace.** Call `meeting_attendance_list`, not `api:meeting_attendance_list` / `tool:...`. Same rule for every other tool. Any prefix is a hallucination and will be rejected.
