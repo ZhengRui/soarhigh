@@ -19,6 +19,7 @@ class AgentKind(str, Enum):
     ROUTER = "router"
     MEETING = "meeting"
     STATISTICS = "statistics"
+    GENERAL = "general"
 
 
 class AccessMode(str, Enum):
@@ -50,8 +51,8 @@ class RouterDecision(BaseModel):
     @model_validator(mode="after")
     def _validate_route_shape(self) -> Self:
         if self.route == RouteKind.SPECIALIST:
-            if self.agent_kind not in {AgentKind.MEETING, AgentKind.STATISTICS}:
-                raise ValueError("specialist route requires agent_kind meeting or statistics")
+            if self.agent_kind not in {AgentKind.MEETING, AgentKind.STATISTICS, AgentKind.GENERAL}:
+                raise ValueError("specialist route requires agent_kind meeting, statistics, or general")
         elif self.route == RouteKind.CLARIFY:
             if not (self.clarification_question or "").strip():
                 raise ValueError("clarify route requires clarification_question")

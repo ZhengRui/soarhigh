@@ -21,6 +21,9 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from app.agents.runtime.capabilities import tool_names_for_agent
+from app.agents.runtime.contracts import AgentKind
+
 MAX_TURNS_KEPT = 10
 
 # Marker used in SNAPSHOT_TEMPLATE to separate the snapshot wrapper from the
@@ -134,6 +137,164 @@ def append_router_exchange(
     ]
     new_dumped = ModelMessagesTypeAdapter.dump_python(new_messages, mode="json")
     return list(prior_history_dumped) + new_dumped
+
+
+_VIEW_SKILL_TOOL_NAME = "view_skill"
+
+# Placeholder that replaces a view_skill tool-return body once it's been
+# absorbed into a turn. The model still sees the ToolCallPart with the
+# skill name in its args, so it knows what was loaded; this placeholder
+# just tells it the body itself was dropped to save tokens, and it can
+# re-call view_skill if needed.
+_SKILL_BODY_PLACEHOLDER = (
+    "[skill body trimmed from persisted history to save tokens. "
+    "Call view_skill again with the same name if you need the content.]"
+)
+
+
+def strip_skill_bodies_from_dumped_history(dumped: list[dict]) -> list[dict]:
+    """Replace `view_skill` tool-return bodies with a short placeholder.
+
+    Rationale: a successful `view_skill` call returns the full markdown body
+    of a skill (potentially several KB). Pydantic AI's `all_messages()`
+    persists that into `history_cursor`, so every subsequent turn would
+    re-load the full body from DB whether or not it's still relevant. Over
+    a long session this defeats the whole point of on-demand skill loading.
+
+    The model still sees the original ToolCallPart (with `args.name` =
+    skill name), so it knows which skill it loaded earlier and can re-call
+    `view_skill(name)` if it needs the content again. We just blank the
+    return content.
+
+    Operates on the `dump_python(mode="json")` output (dicts), mutating in
+    place for parity with `strip_snapshots_from_dumped_history`.
+    """
+    for msg in dumped:
+        if not isinstance(msg, dict):
+            continue
+        for part in msg.get("parts", []) or []:
+            if part.get("part_kind") != "tool-return":
+                continue
+            if part.get("tool_name") != _VIEW_SKILL_TOOL_NAME:
+                continue
+            # Defensive: only string contents (skill bodies are always
+            # strings in our use, but Pydantic AI permits dicts for
+            # structured returns). Leave non-string alone.
+            if not isinstance(part.get("content"), str):
+                continue
+            part["content"] = _SKILL_BODY_PLACEHOLDER
+    return dumped
+
+
+def prepare_history_for_agent(
+    history_dumped: list[dict],
+    *,
+    current_agent: AgentKind,
+    system_prompt: str,
+) -> tuple[list[ModelMessage], list[ModelMessage]]:
+    """Build the two views a route needs in one pass:
+
+    - **model_view**: foreign tool calls stripped (so the model doesn't see
+      another agent's `view_skill` / `set_role` / etc. and try to invoke
+      them), then `replace_system_prompt` + `truncate_to_last_turns`. This
+      goes to `agent.iter(message_history=...)`.
+    - **storage_prior**: same `replace_system_prompt` + `truncate_to_last_turns`
+      pipeline but on the **unfiltered** history. This is what the route
+      should concatenate with `final_result.new_messages()` at save time so
+      that no agent's prior tool-call audit is permanently scrubbed from the
+      shared `history_cursor`.
+
+    The two views differ only in whether foreign tool parts are stripped;
+    user prompts, assistant text, and the agent's own tool calls are
+    identical between them. Returning both keeps the route call sites
+    symmetric and prevents the bug class where the filtered (model_view)
+    list is accidentally used as the save base.
+    """
+    if not history_dumped:
+        return [], []
+
+    # Storage-side view (unfiltered) — kept around for the save merge.
+    unfiltered = ModelMessagesTypeAdapter.validate_python(history_dumped)
+    unfiltered = replace_system_prompt(unfiltered, system_prompt)
+    storage_prior = truncate_to_last_turns(unfiltered)
+
+    # Model-side view (foreign tool parts stripped).
+    filtered_dumped = strip_foreign_agent_tool_calls(history_dumped, current_agent)
+    if filtered_dumped:
+        filtered = ModelMessagesTypeAdapter.validate_python(filtered_dumped)
+        filtered = replace_system_prompt(filtered, system_prompt)
+        model_view = truncate_to_last_turns(filtered)
+    else:
+        model_view = []
+
+    return model_view, storage_prior
+
+
+def strip_foreign_agent_tool_calls(
+    dumped: list[dict],
+    current_agent: AgentKind,
+) -> list[dict]:
+    """Hide tool calls / returns whose `tool_name` is not registered to
+    `current_agent` in `runtime/capabilities.py`.
+
+    Rationale: all agents in a session share the same `history_cursor`, so a
+    Statistics turn following a General turn would see General's `view_skill`
+    ToolCallParts in its loaded history. The model may then hallucinate that
+    it can call `view_skill` itself; even though `policy.py` ultimately rejects
+    the call, the failed attempt produces visible noise (an orange error card
+    in the chat UI) and pollutes reasoning. Symmetric concern for any future
+    per-agent tools.
+
+    The filter keys off the static `Capability.tool_names` registry — the same
+    source of truth that gates which tools each agent can actually call. So
+    "what this agent could have called" == "what this agent should see in
+    history". User prompts / assistant text / system prompts (none of which
+    carry `tool_name`) are always kept.
+
+    Future: when a tool name is registered to multiple agents (e.g. each
+    specialist gets its own skill registry), this owner-based filter no longer
+    distinguishes "Statistics' `view_skill('foo')` from a Statistics turn"
+    vs "General's `view_skill('foo')` from a General turn". At that point the
+    filter needs to be augmented with turn-ownership tracking
+    (each `agent_turns` row already carries `agent_kind` — we'd reconstruct
+    history by walking turn rows rather than reading the flat `history_cursor`).
+    Until then, single-owner gives an unambiguous filter and adding per-agent
+    tools in the future is a graceful additive change.
+
+    Operates on the `dump_python(mode="json")` output (dicts).
+    """
+    own_tools = tool_names_for_agent(current_agent)
+    cleaned: list[dict] = []
+    for msg in dumped:
+        if not isinstance(msg, dict):
+            cleaned.append(msg)
+            continue
+        parts = msg.get("parts")
+        if not isinstance(parts, list):
+            cleaned.append(msg)
+            continue
+        kept_parts: list = []
+        for part in parts:
+            if not isinstance(part, dict):
+                kept_parts.append(part)
+                continue
+            tool_name = part.get("tool_name")
+            if tool_name is None:
+                # Not a tool call/return (user prompt, assistant text, system
+                # prompt) — always keep.
+                kept_parts.append(part)
+                continue
+            if tool_name in own_tools:
+                kept_parts.append(part)
+            # else: drop both tool-call and tool-return parts for foreign tool
+        if not kept_parts:
+            # All parts were foreign tool parts — drop the empty wrapper
+            # message entirely so Pydantic AI doesn't see a parts-less request
+            # or response.
+            continue
+        msg["parts"] = kept_parts
+        cleaned.append(msg)
+    return cleaned
 
 
 def strip_snapshots_from_dumped_history(dumped: list[dict]) -> list[dict]:

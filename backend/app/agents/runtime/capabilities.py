@@ -67,6 +67,8 @@ STATISTICS_READ_TOOLS: tuple[str, ...] = (
     "list_members",
 )
 
+GENERAL_KNOWLEDGE_TOOLS: tuple[str, ...] = ("view_skill",)
+
 
 CAPABILITIES: tuple[Capability, ...] = (
     Capability(
@@ -181,6 +183,29 @@ CAPABILITIES: tuple[Capability, ...] = (
         example_user_requests=("现在有哪些会员?", "我们俱乐部有多少会员?"),
         expected_route=AgentKind.STATISTICS,
         eval_fixture_id="route.statistics.member_directory",
+    ),
+    Capability(
+        id="general.knowledge",
+        owner_agent=AgentKind.GENERAL,
+        access=AccessMode.READ,
+        supported_intents=(
+            "explain Toastmasters roles, terminology, or meeting protocol",
+            "answer SoarHigh club bylaw / FAQ / policy questions",
+            "explain capability boundaries of the assistant",
+        ),
+        unsupported_intents=(
+            "edit or save a meeting draft",
+            "compute historical attendance / role / award statistics",
+        ),
+        tool_names=GENERAL_KNOWLEDGE_TOOLS,
+        prompt_snippet="Use view_skill to load knowledge base markdown for general / club Q&A.",
+        example_user_requests=(
+            "TT 是什么?",
+            "我们俱乐部多久办一次例会?",
+            "What does the Grammarian do?",
+        ),
+        expected_route=AgentKind.GENERAL,
+        eval_fixture_id="route.general.knowledge",
     ),
 )
 
