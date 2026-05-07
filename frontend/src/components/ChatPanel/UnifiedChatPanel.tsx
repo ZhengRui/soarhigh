@@ -361,12 +361,17 @@ export function UnifiedChatPanel({
       <div className='text-xs text-gray-400 text-center py-10 leading-relaxed space-y-3 px-4'>
         <div>Try:</div>
         <div className='space-y-1'>
+          <div className='text-gray-500'>Edit an agenda</div>
           <div>&ldquo;clone a meeting from #451&rdquo;</div>
           <div>&ldquo;让 Helen 做 Timer&rdquo;</div>
+          <div className='text-gray-500 pt-2'>Ask about past meetings</div>
           <div>
             &ldquo;when was last meeting Joyce as the meeting manager&rdquo;
           </div>
           <div>&ldquo;按今年会员参会次数排序前三名是哪些人&rdquo;</div>
+          <div className='text-gray-500 pt-2'>Ask about Toastmasters</div>
+          <div>&ldquo;参加搜嗨例会需要准备些什么?&rdquo;</div>
+          <div>&ldquo;介绍一下 Dynamic Leadership 这条 pathway&rdquo;</div>
         </div>
         <div>…and more.</div>
       </div>
@@ -567,7 +572,7 @@ export function UnifiedChatPanel({
                 submit();
               }
             }}
-            placeholder='Chat an agenda or ask about stats'
+            placeholder='Chat the magic.'
             disabled={loading}
           />
           {loading ? (
