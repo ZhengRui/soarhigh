@@ -38,7 +38,7 @@ export type MessagePart =
   | { kind: 'text'; content: string }
   | { kind: 'tool'; toolCallId: string };
 
-export type RouterAgentKind = 'router' | 'meeting' | 'statistics';
+export type RouterAgentKind = 'router' | 'meeting' | 'statistics' | 'general';
 export type RouterRouteKind =
   | 'specialist'
   | 'clarify'
@@ -86,6 +86,9 @@ export type ChatMessage = {
   // Unified /agent/turn only: router decision emitted before specialist
   // events. Kept on the assistant bubble for lightweight route visibility.
   routerDecision?: RouterDecision;
+  // Backend-derived sources for the current turn only. The model is not
+  // trusted to write its own provenance in message text.
+  sources?: string[];
   // Meeting turns can be reverted. Stats/router-only turns also carry seq
   // values, but those belong to other stores and must not show the revert UI.
   canRevert?: boolean;
@@ -115,6 +118,7 @@ export type AgentTurnEvent =
         final_agenda?: AgendaSnapshot;
         final_text: string;
         router_only?: boolean;
+        sources?: string[];
       };
     }
   | {

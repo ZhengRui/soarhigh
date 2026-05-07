@@ -76,6 +76,7 @@ function routeLabel(decision: RouterDecision): string {
   if (decision.route === 'direct_answer') return 'Router';
   if (decision.agent_kind === 'statistics') return 'Statistics';
   if (decision.agent_kind === 'meeting') return 'Meeting';
+  if (decision.agent_kind === 'general') return 'General';
   return 'Router';
 }
 
@@ -88,6 +89,9 @@ function routePalette(decision: RouterDecision): string {
   }
   if (decision.agent_kind === 'statistics') {
     return 'bg-sky-50 border-sky-200 text-sky-800';
+  }
+  if (decision.agent_kind === 'general') {
+    return 'bg-violet-50 border-violet-200 text-violet-800';
   }
   return 'bg-emerald-50 border-emerald-200 text-emerald-800';
 }
@@ -224,6 +228,7 @@ export function UnifiedChatPanel({
         if (ev.type === 'done') {
           msg.seq = ev.data.seq;
           msg.canRevert = Boolean(ev.data.final_agenda && !ev.data.router_only);
+          msg.sources = ev.data.sources?.length ? ev.data.sources : undefined;
           const prevMsg = next[next.length - 2];
           if (prevMsg && prevMsg.role === 'user' && msg.canRevert) {
             next[next.length - 2] = {
@@ -488,6 +493,11 @@ export function UnifiedChatPanel({
               ) : (
                 <div className='whitespace-pre-wrap'>{m.content}</div>
               )}
+              {m.role === 'assistant' && m.sources?.length ? (
+                <div className='mt-1.5 pt-1.5 border-t border-gray-200 text-[11px] text-gray-500'>
+                  Sources: {m.sources.join(', ')}
+                </div>
+              ) : null}
               {m.cancelled && (
                 <div className='text-gray-400 italic text-[11px] mt-1'>
                   [Request cancelled]
