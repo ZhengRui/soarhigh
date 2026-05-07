@@ -1,3 +1,11 @@
 .DS_Store
 plans/
 **/.playwright-mcp/
+
+# SoarHigh-internal SKILL.md kept out of the public repo: it carries the
+# Meeting Manager operational handbook (default-credentials hint, internal
+# document-drive links, and other club-internal references). The General
+# agent loads it at runtime from disk; it must exist locally / in deploys
+# but never in git history. See `app/agents/general/skills/.gitkeep` for
+# why the parent directory is still tracked.
+backend/app/agents/general/skills/soarhigh-meeting-manager/

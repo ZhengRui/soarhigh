@@ -5,7 +5,9 @@
   "permissions": {
     "additionalDirectories": [
       "../soarhigh_miniapp",
-      "../lmm/chat-agenda"
+      "../lmm/chat-agenda",
+      "../nanobot",
+      "../hermes-agent"
     ]
   },
   "enabledPlugins": {
