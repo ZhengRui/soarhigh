@@ -10,11 +10,13 @@ from ....agents.router.classifier import classify_turn
 from ....agents.runtime.contracts import AgentKind, RouteKind, RouterDecision
 from ....agents.runtime.history import append_router_exchange, truncate_to_last_turns
 from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
+from ....models.agents.general import GeneralAgentTurnRequest
 from ....models.agents.meeting import MeetingAgentTurnRequest
 from ....models.agents.statistics import StatisticsAgentTurnRequest
 from ....models.agents.unified import AgentTurnRequest
 from ..auth import get_current_extended_user
 from ._shared import _detect_user_language, _error_only_stream, _session_unavailable_response, _sse, require_member
+from .general import general_agent_turn
 from .meeting import agent_turn as meeting_agent_turn
 from .statistics import stats_agent_turn
 
@@ -99,7 +101,7 @@ def _router_terminal_text(decision: RouterDecision, *, language: str) -> str:
         if language == "zh" and decision.intent == "meeting_edit_without_agenda_snapshot":
             return "我需要当前议程快照才能修改会议。请从会议草稿页面重新发送。"
         if language == "zh" and decision.intent == "ambiguous_agent_target":
-            return "你想让我修改当前会议草稿, 还是回答历史统计问题?"
+            return "你想让我修改当前会议草稿、查询历史数据、还是回答关于头马或俱乐部的一般性问题?"
         return question
     if language == "zh":
         return decision.reason or "这个请求当前无法处理。"
@@ -293,6 +295,20 @@ async def unified_agent_turn(
     if decision.agent_kind == AgentKind.STATISTICS:
         specialist_response = await stats_agent_turn(
             StatisticsAgentTurnRequest(
+                session_id=req.session_id,
+                user_message=req.user_message,
+                router_decision=decision_payload,
+            ),
+            user=user,
+        )
+        return StreamingResponse(
+            _prepend_router_event(seq, decision, specialist_response),
+            media_type="text/event-stream",
+        )
+
+    if decision.agent_kind == AgentKind.GENERAL:
+        specialist_response = await general_agent_turn(
+            GeneralAgentTurnRequest(
                 session_id=req.session_id,
                 user_message=req.user_message,
                 router_decision=decision_payload,

@@ -1,16 +1,19 @@
-"""Statistics agent SSE endpoint.
+"""General Q&A agent SSE endpoint.
 
-Read-only counterpart to /meeting-agent/turn. Same wire format (SSE
-events: assistant_text, thinking, tool_call_start, tool_call_end, done,
-error) so the frontend can reuse the existing chat-panel plumbing
-behind a mode toggle.
+Read-only counterpart to /meeting-agent/turn and /statistics-agent/turn.
+Same wire format (SSE events: assistant_text, thinking, tool_call_start,
+tool_call_end, done, error) so the frontend reuses the existing
+chat-panel plumbing.
 
-Differences from the meeting agent route:
-  - No image upload (stats agent doesn't accept attachments).
-  - No agenda_snapshot in the request payload (stats is read-only).
-  - No agenda_after / show_current addenda — there's no draft to
-    render. Historical previews still get folded meta / intro / agenda
-    blocks, shared with the meeting agent.
+Differences from the statistics route:
+  - No image upload, no agenda_snapshot (knowledge Q&A only).
+  - Composes the system prompt with skill-registry manifest + always-loaded
+    bodies + load-skill instruction before `replace_system_prompt`.
+  - Runs both `strip_snapshots_from_dumped_history` (defensive — no
+    snapshot wrapper is produced here, but composition with the unified
+    history makes it cheap insurance) and the new
+    `strip_skill_bodies_from_dumped_history` to keep view_skill bodies
+    out of the persisted history_cursor.
 """
 
 import asyncio
@@ -35,18 +38,18 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
+from ....agents.general.agent import USAGE_LIMITS, agent, skill_registry
+from ....agents.general.models import GeneralDeps
+from ....agents.general.prompts import GENERAL_SYSTEM_PROMPT, LOAD_SKILL_INSTRUCTION, SNAPSHOT_TEMPLATE
 from ....agents.runtime.contracts import AgentKind, RouteKind
 from ....agents.runtime.history import (
     prepare_history_for_agent,
+    strip_skill_bodies_from_dumped_history,
     strip_snapshots_from_dumped_history,
 )
 from ....agents.runtime.policy import AgentPolicyError, require_tool_allowed
 from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
-from ....agents.statistics.agent import USAGE_LIMITS, agent
-from ....agents.statistics.models import StatsDeps
-from ....agents.statistics.prompts import SNAPSHOT_TEMPLATE, STATS_SYSTEM_PROMPT
-from ....models.agents.statistics import StatisticsAgentTurnRequest
-from ....services.meeting_preview_markdown import render_preview_addendum
+from ....models.agents.general import GeneralAgentTurnRequest
 from ..auth import get_current_extended_user
 from ._shared import (
     _detect_user_language,
@@ -57,65 +60,73 @@ from ._shared import (
 )
 
 log = logging.getLogger(__name__)
-statistics_agent_router = r = APIRouter(prefix="/statistics-agent")
-_PREVIEW_TOOL_NAMES = {"preview_meeting"}
+general_agent_router = r = APIRouter(prefix="/general-agent")
 
 
-def _all_preview_payloads(tool_trace: list[dict]) -> list[dict]:
-    payloads: list[dict] = []
+def _compose_system_prompt() -> str:
+    """Build the per-turn system prompt = base + always-loaded skills +
+    skill manifest + load-skill instruction.
+
+    All four parts are static-per-process: skill registry is built at
+    module load. Composition is just string concat, but kept in a helper
+    so tests can swap the registry.
+    """
+    parts = [GENERAL_SYSTEM_PROMPT]
+    always = skill_registry.render_always_loaded()
+    if always:
+        parts.append(always)
+    manifest = skill_registry.render_manifest()
+    if manifest:
+        parts.append(manifest)
+        parts.append(LOAD_SKILL_INSTRUCTION)
+    return "\n\n".join(parts)
+
+
+def _current_skill_sources(tool_trace: list[dict]) -> list[str]:
+    """Return successful view_skill names from the current turn only."""
+    sources: list[str] = []
     for trace in tool_trace:
-        if trace.get("name") not in _PREVIEW_TOOL_NAMES or trace.get("status") != "ok":
+        if trace.get("name") != "view_skill" or trace.get("status") != "ok":
             continue
         result = trace.get("result")
-        if isinstance(result, dict):
-            payloads.append(result)
-    return payloads
-
-
-def _build_stats_addendum(tool_trace: list[dict]) -> str:
-    previews = _all_preview_payloads(tool_trace)
-    return render_preview_addendum(previews) if previews else ""
+        skill = result.get("skill") if isinstance(result, dict) else None
+        if not isinstance(skill, str):
+            args = trace.get("args")
+            skill = args.get("name") if isinstance(args, dict) else None
+        if isinstance(skill, str) and skill not in sources:
+            sources.append(skill)
+    return sources
 
 
 @r.post("/turn")
-async def stats_agent_turn(
-    req: StatisticsAgentTurnRequest,
+async def general_agent_turn(
+    req: GeneralAgentTurnRequest,
     user=Depends(get_current_extended_user),
 ):
-    # Request validation is done by FastAPI on the typed `req` parameter
-    # — no manual model_validate_json needed (the meeting agent does it
-    # only because it parses a multipart `payload` field as a string).
     member = require_member(user)
-
     user_id = member.uid
     if not await agent_turn_store.verify_session_access(req.session_id, user_id=user_id):
         return _session_unavailable_response()
+
+    composed_system_prompt = _compose_system_prompt()
 
     async def event_stream() -> AsyncIterator[bytes]:
         try:
             tail_seq, history_json = await agent_turn_store.load(req.session_id, user_id=user_id)
             next_seq = tail_seq + 1
 
-            # Pydantic AI only injects this agent's `_sys_parts` when
-            # message_history is empty — and a prior turn (specialist
-            # or router) may have persisted a SystemPromptPart with a
-            # different agent's prompt. The helper replaces foreign system
-            # prompts with the statistics agent's, strips tool calls owned
-            # by other agents, and caps the window at the last N user
-            # turns. `storage_prior` is the unfiltered+truncated counterpart
-            # used to rebuild the cursor at save time — see new_messages()
-            # merge below.
             history, storage_prior = prepare_history_for_agent(
                 history_json or [],
-                current_agent=AgentKind.STATISTICS,
-                system_prompt=STATS_SYSTEM_PROMPT,
+                current_agent=AgentKind.GENERAL,
+                system_prompt=composed_system_prompt,
             )
             language_hint = f"[Reply language] {_detect_user_language(req.user_message)}\n"
             today_iso = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
-            deps = StatsDeps(
+            deps = GeneralDeps(
                 session_id=req.session_id,
                 current_user_message=req.user_message,
                 today=today_iso,
+                skill_registry=skill_registry,
             )
             prompt = SNAPSHOT_TEMPLATE.format(
                 next_seq=next_seq,
@@ -158,18 +169,18 @@ async def stats_agent_turn(
                             async for tool_event in tool_stream:
                                 if isinstance(tool_event, FunctionToolCallEvent):
                                     call_part: ToolCallPart = tool_event.part
-                                    # See meeting.py for the full rationale. Registered-but-
-                                    # unauthorized tools fail closed (config mistake); names that
-                                    # aren't registered at all fall through to Pydantic AI's
+                                    # Same two-tier policy check as meeting/statistics:
+                                    # registered-but-unauthorized fails closed (config bug);
+                                    # names not registered at all fall through to Pydantic AI's
                                     # unknown-tool retry path (model hallucination).
                                     try:
-                                        require_tool_allowed(AgentKind.STATISTICS, call_part.tool_name)
+                                        require_tool_allowed(AgentKind.GENERAL, call_part.tool_name)
                                     except AgentPolicyError as policy_err:
                                         registered = {t.name for t in agent._function_toolset.tools.values()}
                                         if call_part.tool_name in registered:
                                             raise
                                         log.warning(
-                                            "statistics agent policy rejected unregistered tool %r "
+                                            "general agent policy rejected unregistered tool %r "
                                             "(likely model hallucination): %s",
                                             call_part.tool_name,
                                             policy_err,
@@ -192,54 +203,70 @@ async def stats_agent_turn(
                                     is_retry = isinstance(result_part, RetryPromptPart)
                                     call_ctx = tool_call_args.get(tool_event.tool_call_id, {})
                                     status = "retry" if is_retry else "ok"
+                                    # tool_trace is persisted to agent_turns.tool_trace; for
+                                    # view_skill the result body can be many KB. Store length
+                                    # only — the body is reproducible from disk via the
+                                    # registry, so persistence buys nothing.
+                                    if call_ctx.get("name") == "view_skill" and not is_retry:
+                                        body_len = (
+                                            len(result_part.content) if isinstance(result_part.content, str) else 0
+                                        )
+                                        traced_result: object = {
+                                            "skill": call_ctx.get("args", {}).get("name"),
+                                            "body_length": body_len,
+                                        }
+                                    else:
+                                        traced_result = result_part.content
                                     tool_trace.append(
                                         {
                                             "id": tool_event.tool_call_id,
                                             "name": call_ctx.get("name", ""),
                                             "args": call_ctx.get("args", {}),
                                             "status": status,
-                                            "result": result_part.content,
+                                            "result": traced_result,
                                         }
                                     )
+                                    # SSE to frontend: same compaction. Users don't read
+                                    # raw markdown bodies in the chat; they read the
+                                    # assistant's reply that synthesized them.
+                                    sse_result = traced_result
                                     yield _sse(
                                         "tool_call_end",
                                         {
                                             "id": tool_event.tool_call_id,
                                             "status": status,
-                                            "result": result_part.content,
+                                            "result": sse_result,
                                         },
                                     )
 
             final_result = run.result
             final_text = final_result.output if final_result else ""
             assistant_text_so_far = "".join(assistant_text_chunks)
-            stats_addendum = _build_stats_addendum(tool_trace)
-            if stats_addendum:
-                assistant_text_chunks.append(stats_addendum)
-                final_text = f"{final_text or ''}{stats_addendum}"
-                yield _sse("assistant_text", {"chunk": stats_addendum})
             # Build saved cursor from the UNFILTERED prior + this turn's
-            # new_messages, NOT from `final_result.all_messages()`. Saving
-            # all_messages() would bake the load-time foreign-tool-call
-            # filtering into the shared cursor, scrubbing other agents'
-            # tool-call audit permanently. See `prepare_history_for_agent`
-            # for the model_view vs storage_prior split.
+            # new_messages, NOT from `final_result.all_messages()`. The
+            # latter is built on top of the filtered model_view, so saving
+            # it would permanently scrub other agents' tool-call audit out
+            # of the shared `history_cursor`. Using new_messages() preserves
+            # the full cross-agent history for future turns to load.
             new_msgs = list(final_result.new_messages()) if final_result else []
             final_msgs = ModelMessagesTypeAdapter.dump_python(list(storage_prior) + new_msgs, mode="json")
             final_msgs = strip_snapshots_from_dumped_history(final_msgs)
+            final_msgs = strip_skill_bodies_from_dumped_history(final_msgs)
             assistant_text = "".join(assistant_text_chunks) or assistant_text_so_far or final_text
+            skill_sources = _current_skill_sources(tool_trace)
             await agent_turn_store.save_turn(
                 req.session_id,
                 user_id=user_id,
                 turn=AgentTurnRecord(
                     seq=next_seq,
-                    agent_kind=AgentKind.STATISTICS,
+                    agent_kind=AgentKind.GENERAL,
                     route=RouteKind.SPECIALIST,
                     user_message=req.user_message,
                     assistant_text=assistant_text,
                     tool_trace=tool_trace,
                     router_decision=req.router_decision or {},
                     history_cursor=final_msgs,
+                    domain_payload={"skill_sources": skill_sources},
                 ),
             )
             yield _sse(
@@ -247,10 +274,11 @@ async def stats_agent_turn(
                 {
                     "seq": next_seq,
                     "final_text": final_text,
+                    "sources": skill_sources,
                 },
             )
         except asyncio.CancelledError:
-            log.info("stats agent turn cancelled by client: %s", req.session_id)
+            log.info("general agent turn cancelled by client: %s", req.session_id)
             raise
         except Exception as e:
             message, recoverable = _extract_error_info(e)
@@ -261,9 +289,9 @@ async def stats_agent_turn(
             except ImportError:
                 known = False
             if known:
-                log.warning("stats agent turn failed for session %s: %s", req.session_id, message)
+                log.warning("general agent turn failed for session %s: %s", req.session_id, message)
             else:
-                log.exception("stats agent turn failed for session %s", req.session_id)
+                log.exception("general agent turn failed for session %s", req.session_id)
             yield _sse(
                 "error",
                 {"reason": "agent_error", "recoverable": recoverable, "message": message},

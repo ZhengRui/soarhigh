@@ -18,10 +18,16 @@ def test_router_prompt_clone_path_documents_all_lookup_axes():
     only `no?, name_substring?, type_filter?, limit?` — so the model
     reading the clone path saw a narrower API than the real tool, which
     can steer it away from theme/intro/date filters in clone-by-
-    description queries."""
+    description queries.
+    """
     prompt = MEETING_SYSTEM_PROMPT
-    # Find the clone-path bullet line.
-    clone_lines = [line for line in prompt.splitlines() if line.startswith("- `lookup_meeting(")]
+    # Find the clone-path bullet line. The Chinese-vocab section also
+    # opens a bullet with `- `lookup_meeting(...)``, so narrow the match
+    # to the bullet that pairs lookup with `clone_from_meeting` — that's
+    # uniquely the clone path.
+    clone_lines = [
+        line for line in prompt.splitlines() if line.startswith("- `lookup_meeting(") and "clone_from_meeting" in line
+    ]
     assert clone_lines, "clone-path bullet for lookup_meeting not found in prompt"
     clone_sig = clone_lines[0]
     for axis in (

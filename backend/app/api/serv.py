@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from ..config import CORS_ORIGINS
+from .routes.agents.general import general_agent_router
 from .routes.agents.meeting import meeting_agent_router
 from .routes.agents.statistics import statistics_agent_router
 from .routes.agents.unified import agent_router
@@ -34,6 +35,7 @@ def get_application():
 
     app.include_router(meeting_agent_router, tags=["meeting-agent"])
     app.include_router(statistics_agent_router, tags=["statistics-agent"])
+    app.include_router(general_agent_router, tags=["general-agent"])
     app.include_router(agent_router, tags=["agent"])
     app.include_router(auth_router, tags=["auth"])
     app.include_router(checkin_router, tags=["checkin"])

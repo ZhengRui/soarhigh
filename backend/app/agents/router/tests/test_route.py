@@ -7,6 +7,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import ToolDefinition
 
+import app.agents.general.agent as general_agent_module
 import app.agents.meeting.agent as meeting_agent_module
 import app.agents.statistics.agent as stats_agent_module
 from app.agents.runtime import store as runtime_store_module
@@ -118,12 +119,14 @@ def _force_in_memory_stores(monkeypatch):
 
     monkeypatch.setattr(runtime_store_module, "agent_turn_store", unified_store)
 
+    from app.api.routes.agents import general as general_route
     from app.api.routes.agents import meeting as meeting_route
     from app.api.routes.agents import statistics as stats_route
     from app.api.routes.agents import unified as unified_route
 
     monkeypatch.setattr(meeting_route, "agent_turn_store", unified_store)
     monkeypatch.setattr(stats_route, "agent_turn_store", unified_store)
+    monkeypatch.setattr(general_route, "agent_turn_store", unified_store)
     monkeypatch.setattr(unified_route, "agent_turn_store", unified_store)
     yield {"unified": unified_store}
 
@@ -174,6 +177,18 @@ def _stub_classifier(monkeypatch):
                 agent_kind=AgentKind.STATISTICS,
                 intent="historical_statistics_or_lookup",
                 reason="stub: historical lookup",
+            )
+
+        # Knowledge / FAQ questions go to the general agent. Trigger on
+        # phrases that ask about role definitions, club rules, or
+        # protocol — distinct from statistics (which queries actual past
+        # data) and meeting (which mutates the current draft).
+        if any(keyword in msg for keyword in ("tt 是什么", "what does", "grammarian", "role definition", "俱乐部")):
+            return RouterDecision(
+                route=RouteKind.SPECIALIST,
+                agent_kind=AgentKind.GENERAL,
+                intent="general_knowledge_or_faq",
+                reason="stub: knowledge / FAQ → general",
             )
 
         # User picks a candidate after stats listed them: route to
@@ -264,6 +279,96 @@ def test_unified_route_emits_router_decision_then_dispatches_to_statistics(
     assert unified_turn.route == "specialist"
     assert unified_turn.seq == events[-1]["data"]["seq"]
     assert unified_turn.router_decision["agent_kind"] == "statistics"
+
+
+def test_unified_route_emits_router_decision_then_dispatches_to_general(
+    client,
+    mock_auth_dep,
+    _force_in_memory_stores,
+):
+    """Knowledge / FAQ question → general specialist. Verifies:
+
+    - router_decision event carries agent_kind=general
+    - view_skill tool call fires and the route emits compacted SSE result
+      (skill name + body_length, NOT the full markdown body)
+    - persisted turn has agent_kind=general, route=specialist, no agenda
+    - tool_trace stores the compact result, not the body
+    - history_cursor has the placeholder string (not the body) so future
+      turns don't re-load the body from DB on every replay
+    """
+    from app.agents.runtime.history import _SKILL_BODY_PLACEHOLDER
+
+    stores = _force_in_memory_stores
+    test_model = ForcedArgsTestModel(
+        call_tools=["view_skill"],
+        forced_args={"view_skill": {"name": "toastmasters-roles"}},
+    )
+
+    with general_agent_module.agent.override(model=test_model):
+        with client.stream(
+            "POST",
+            "/agent/turn",
+            **_turn_kwargs(
+                {
+                    "session_id": "u-general",
+                    "user_message": "what does the Grammarian do?",
+                }
+            ),
+        ) as r:
+            assert r.status_code == 200
+            events = _parse_sse(r.iter_bytes())
+
+    # Router decision event first.
+    assert events[0]["event"] == "router_decision"
+    assert events[0]["data"]["decision"]["agent_kind"] == "general"
+    assert events[0]["data"]["decision"]["route"] == "specialist"
+
+    # view_skill tool call fires; SSE result is compact (no body).
+    tool_start = next(e for e in events if e["event"] == "tool_call_start")
+    assert tool_start["data"]["name"] == "view_skill"
+    assert tool_start["data"]["args"] == {"name": "toastmasters-roles"}
+
+    tool_end = next(e for e in events if e["event"] == "tool_call_end")
+    assert tool_end["data"]["status"] == "ok"
+    assert tool_end["data"]["result"] == {
+        "skill": "toastmasters-roles",
+        "body_length": tool_end["data"]["result"]["body_length"],
+    }
+    # body_length must be a positive int, NOT the markdown body string.
+    assert isinstance(tool_end["data"]["result"]["body_length"], int)
+    assert tool_end["data"]["result"]["body_length"] > 0
+
+    assert events[-1]["event"] == "done"
+    assert events[-1]["data"]["sources"] == ["toastmasters-roles"]
+
+    # Persisted turn carries the routing context + compact tool_trace.
+    unified_turn = asyncio.run(stores["unified"].load_turn("u-general", 1, user_id="test-user"))
+    assert unified_turn is not None
+    assert unified_turn.agent_kind == "general"
+    assert unified_turn.route == "specialist"
+    assert unified_turn.router_decision["agent_kind"] == "general"
+    assert unified_turn.agenda_before is None
+    assert unified_turn.agenda_after is None
+    assert unified_turn.domain_payload["skill_sources"] == ["toastmasters-roles"]
+    # tool_trace should hold the same compact shape as the SSE result.
+    view_skill_traces = [t for t in unified_turn.tool_trace if t["name"] == "view_skill"]
+    assert view_skill_traces, "view_skill should be in tool_trace"
+    trace = view_skill_traces[0]
+    assert trace["status"] == "ok"
+    assert trace["result"] == {"skill": "toastmasters-roles", "body_length": trace["result"]["body_length"]}
+
+    # history_cursor: view_skill tool-return content was replaced by the
+    # placeholder so future turns don't re-load the full body on every
+    # replay. This is the strip_skill_bodies_from_dumped_history step.
+    skill_returns = [
+        part
+        for msg in unified_turn.history_cursor
+        for part in msg.get("parts", [])
+        if part.get("part_kind") == "tool-return" and part.get("tool_name") == "view_skill"
+    ]
+    assert skill_returns, "expected at least one persisted view_skill tool-return part"
+    for part in skill_returns:
+        assert part["content"] == _SKILL_BODY_PLACEHOLDER
 
 
 def test_unified_route_emits_router_decision_then_dispatches_to_meeting(

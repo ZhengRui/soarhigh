@@ -29,9 +29,8 @@ from ....agents.meeting.prompts import MEETING_SYSTEM_PROMPT, SNAPSHOT_TEMPLATE
 from ....agents.meeting.segment_ids import shorten_agenda_dump
 from ....agents.runtime.contracts import AgentKind, RouteKind
 from ....agents.runtime.history import (
-    replace_system_prompt,
+    prepare_history_for_agent,
     strip_snapshots_from_dumped_history,
-    truncate_to_last_turns,
 )
 from ....agents.runtime.policy import AgentPolicyError, require_tool_allowed
 from ....agents.runtime.store import AgentTurnRecord, agent_turn_store
@@ -356,17 +355,20 @@ async def agent_turn(
             tail_seq, history_json = await agent_turn_store.load(req.session_id, user_id=user_id)
             next_seq = tail_seq + 1
 
-            full_history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else []
             # Pydantic AI only injects this agent's `_sys_parts` when
             # message_history is empty — and a prior turn (specialist
             # or router) may have persisted a SystemPromptPart with a
-            # different agent's prompt. Replace it with this agent's
-            # prompt so we always run with the correct identity.
-            full_history = replace_system_prompt(full_history, MEETING_SYSTEM_PROMPT)
-            # Cap context window at the last N user turns. Older turns drop off
-            # here; they remain in agent_turns (so the UI can still show the
-            # full conversation), only the portion fed to the LLM is trimmed.
-            history = truncate_to_last_turns(full_history)
+            # different agent's prompt. The helper replaces foreign system
+            # prompts with the meeting agent's, strips tool calls owned by
+            # other agents (so we don't hallucinate calling them), and caps
+            # the window at the last N user turns. `storage_prior` is the
+            # unfiltered+truncated counterpart used to rebuild the cursor
+            # at save time — see the new_messages() merge below.
+            history, storage_prior = prepare_history_for_agent(
+                history_json or [],
+                current_agent=AgentKind.MEETING,
+                system_prompt=MEETING_SYSTEM_PROMPT,
+            )
             # Eager-fetch the live members directory once per turn. The agent
             # tools (`set_role`, `add_segment`) consult this to resolve a
             # bare-name LLM arg ("Joyce Feng") to a structured `Attendee`
@@ -523,12 +525,14 @@ async def agent_turn(
                 assistant_text_chunks.append(agenda_addendum)
                 final_text = f"{final_text or ''}{agenda_addendum}"
                 yield _sse("assistant_text", {"chunk": agenda_addendum})
-            # mode="json" serializes datetimes (Pydantic AI ModelMessage.timestamp)
-            # to ISO strings so the result is valid JSONB input for supabase-py,
-            # which json.dumps the payload internally.
-            final_msgs = (
-                ModelMessagesTypeAdapter.dump_python(final_result.all_messages(), mode="json") if final_result else []
-            )
+            # Build saved cursor from the UNFILTERED prior + this turn's
+            # new_messages, NOT from `final_result.all_messages()`. The
+            # latter is built on top of the filtered model_view, so saving
+            # it would permanently scrub other agents' tool-call audit out
+            # of the shared `history_cursor`. mode="json" serializes
+            # datetimes to ISO strings for JSONB.
+            new_msgs = list(final_result.new_messages()) if final_result else []
+            final_msgs = ModelMessagesTypeAdapter.dump_python(list(storage_prior) + new_msgs, mode="json")
             # Strip SNAPSHOT_TEMPLATE wrappers from past UserPromptParts before
             # persisting. Past snapshots are stale by construction; leaving
             # them in history_cursor confuses the LLM on subsequent turns

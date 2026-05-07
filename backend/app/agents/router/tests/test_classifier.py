@@ -5,7 +5,7 @@ Live LLM behavior is covered in test_router_evals.py (marked
 LLM choice → RouterDecision, including the agenda-snapshot guard.
 """
 
-from app.agents.router.classifier import _RouterChoice, _to_decision
+from app.agents.router.classifier import _ROUTER_SYSTEM_PROMPT, _RouterChoice, _to_decision
 from app.agents.runtime.contracts import AgentKind, RouteKind
 
 
@@ -112,3 +112,9 @@ def test_direct_answer_without_response_falls_back_to_clarify():
 
     assert decision.route == RouteKind.CLARIFY
     assert decision.intent == "ambiguous_agent_target"
+
+
+def test_router_prompt_routes_meeting_manager_workflow_to_general():
+    assert "会议经理" in _ROUTER_SYSTEM_PROMPT
+    assert "MM 准备流程" in _ROUTER_SYSTEM_PROMPT
+    assert "→ general" in _ROUTER_SYSTEM_PROMPT
