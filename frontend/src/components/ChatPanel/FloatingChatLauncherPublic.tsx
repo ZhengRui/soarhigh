@@ -38,7 +38,7 @@ export function FloatingChatLauncherPublic() {
           type='button'
           onClick={onOpen}
           aria-label='Open public assistant'
-          className='fixed bottom-6 right-6 z-50 flex items-center justify-center
+          className='fixed bottom-20 right-6 sm:bottom-6 z-50 flex items-center justify-center
                      h-12 w-12 rounded-full
                      bg-indigo-600 hover:bg-indigo-700
                      text-white
@@ -54,7 +54,7 @@ export function FloatingChatLauncherPublic() {
           role='dialog'
           aria-label='Public Assistant'
           className={`fixed z-50 bg-white border border-gray-200 rounded-xl shadow-2xl
-                     flex-col overflow-hidden
+                     flex-col overflow-hidden overscroll-contain
                      right-4 bottom-4 w-96 h-[640px] max-h-[calc(100vh-7rem)]
                      max-md:inset-x-2 max-md:w-auto max-md:h-[65vh]
                      ${open ? 'flex' : 'hidden'}`}

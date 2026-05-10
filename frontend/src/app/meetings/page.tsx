@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { Pagination } from '@/components/Pagination';
 import { useMeetings } from '@/hooks/useMeetings';
 import { usePrefetchMeetings } from '@/hooks/usePrefetchMeetings';
+import { FloatingChatLauncherPublic } from '@/components/ChatPanel';
 
 export default function MeetingsPage() {
   const { isPending: isAuthPending, data: user } = useAuth();
@@ -123,6 +124,7 @@ export default function MeetingsPage() {
           </>
         )}
       </div>
+      <FloatingChatLauncherPublic />
     </div>
   );
 }

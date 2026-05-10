@@ -427,7 +427,7 @@ export function UnifiedChatPanel({
       )}
       <div
         ref={scrollRef}
-        className='flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3'
+        className='flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3 space-y-3'
       >
         {messages.length === 0 && placeholderHelp}
         {messages.map((m) => (
