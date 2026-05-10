@@ -15,7 +15,7 @@ from uuid import uuid4
 from fastapi import HTTPException, Request, Response, status
 from jose import ExpiredSignatureError, JWTError, jwt
 
-from ....config import AGENT_PUBLIC_VISITOR_SECRET
+from ....config import AGENT_PUBLIC_COOKIE_SECURE, AGENT_PUBLIC_VISITOR_SECRET
 from ....models.users import User
 from ....models.wechat_user import WeChatUser
 
@@ -65,7 +65,7 @@ def ensure_visitor_cookie_public(request: Request, response: Response) -> str:
             token,
             max_age=_VISITOR_MAX_AGE_SECONDS,
             httponly=True,
-            secure=True,
+            secure=AGENT_PUBLIC_COOKIE_SECURE,
             samesite="lax",
         )
     return visitor_id

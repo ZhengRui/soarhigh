@@ -17,6 +17,7 @@ import {
 import Image from 'next/image';
 import Link from 'next/link';
 import { getNextWednesday } from '@/utils/utils';
+import { FloatingChatLauncherPublic } from '@/components/ChatPanel';
 
 const SLIDER_IMAGES = [
   {
@@ -475,6 +476,7 @@ const Landing = () => {
           </div>
         </div>
       </div>
+      <FloatingChatLauncherPublic />
     </div>
   );
 };

@@ -721,6 +721,15 @@ BEGIN
 END;
 $$;
 
+ALTER FUNCTION public.increment_agent_rate_limit_public(TEXT, TEXT, TIMESTAMPTZ, INT)
+    SET search_path = public;
+
+REVOKE ALL ON FUNCTION public.increment_agent_rate_limit_public(TEXT, TEXT, TIMESTAMPTZ, INT)
+    FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION public.increment_agent_rate_limit_public(TEXT, TEXT, TIMESTAMPTZ, INT)
+    TO service_role;
+
 -- =============================================
 -- POTENTIAL FUTURE CHANGES
 -- =============================================

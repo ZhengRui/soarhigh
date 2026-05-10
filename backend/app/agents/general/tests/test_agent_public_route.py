@@ -10,6 +10,7 @@ import app.agents.general.agent_public as agent_public_module
 from app.agents.runtime.history import _SKILL_BODY_PLACEHOLDER
 from app.agents.runtime.store_public import InMemoryAgentTurnStorePublic
 from app.api.routes.agents import agent_public as route_module
+from app.api.routes.agents import identity_public as identity_module
 from app.api.serv import app
 from app.models.users import User
 from app.models.wechat_user import WeChatUser
@@ -78,12 +79,36 @@ def _clear_overrides():
 def test_agent_public_rejects_bound_member(client):
     _override_user(User(uid="u1", username="u", full_name="User"))
     try:
-        res = client.post("/agent-public/turn", json={"session_id": "s1", "user_message": "hi"})
+        res = client.post(
+            "/agent-public/turn",
+            json={"session_id": "agent-public:web:member-test", "user_message": "hi"},
+        )
     finally:
         _clear_overrides()
 
     assert res.status_code == 403
     assert "Bound members" in res.json()["detail"]
+
+
+def test_agent_public_rejects_invalid_session_id_before_stream(client):
+    res = client.post(
+        "/agent-public/turn",
+        json={"session_id": "member-session", "user_message": "hi"},
+    )
+
+    assert res.status_code == 422
+
+
+def test_agent_public_rejects_oversized_message_before_stream(client):
+    res = client.post(
+        "/agent-public/turn",
+        json={
+            "session_id": "agent-public:web:oversized-message",
+            "user_message": "x" * 4001,
+        },
+    )
+
+    assert res.status_code == 422
 
 
 def test_agent_public_guest_streams_and_saves_compact_skill_trace(client, _public_route_fakes):
@@ -214,3 +239,13 @@ def test_agent_public_web_visitor_cookie_streams(_public_route_fakes):
         )
     )
     assert turn is not None
+
+
+def test_agent_public_visitor_cookie_secure_flag_is_configurable(monkeypatch):
+    monkeypatch.setattr(identity_module, "AGENT_PUBLIC_COOKIE_SECURE", False)
+    client = TestClient(app, base_url="http://testserver")
+
+    res = client.post("/agent-public/visitor")
+
+    assert res.status_code == 200
+    assert "secure" not in res.headers["set-cookie"].lower()

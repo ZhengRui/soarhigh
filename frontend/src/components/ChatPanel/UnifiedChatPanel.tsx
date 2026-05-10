@@ -24,10 +24,12 @@ import { ChatMarkdown } from './ChatMarkdown';
 import { ChatError, ErrorBanner } from './ErrorBanner';
 import { ThinkingBlock } from './ThinkingBlock';
 import { useMeetingAgentRevert } from './useMeetingAgentRevert';
+import { usePublicAgentTurn } from './usePublicAgentTurn';
 import { useUnifiedAgentTurn } from './useUnifiedAgentTurn';
 import {
   AgendaSnapshot,
   AgentTurnEvent,
+  ChatPanelMode,
   ChatMessage,
   MessagePart,
   RouterDecision,
@@ -70,6 +72,8 @@ function uuid() {
     : Math.random().toString(36).slice(2);
 }
 
+const EMPTY_AGENDA_SNAPSHOT: AgendaSnapshot = { meta: {}, segments: [] };
+
 function routeLabel(decision: RouterDecision): string {
   if (decision.route === 'clarify') return 'Clarify';
   if (decision.route === 'refuse') return 'Refused';
@@ -100,11 +104,14 @@ export function UnifiedChatPanel({
   sessionKey,
   agendaSnapshot,
   onAgendaAfter,
+  mode = 'member',
 }: {
   sessionKey: string;
-  agendaSnapshot: AgendaSnapshot;
-  onAgendaAfter: (a: AgendaSnapshot) => void;
+  agendaSnapshot?: AgendaSnapshot;
+  onAgendaAfter?: (a: AgendaSnapshot) => void;
+  mode?: ChatPanelMode;
 }) {
+  const isPublic = mode === 'public';
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -164,10 +171,10 @@ export function UnifiedChatPanel({
 
   const onEvent = useCallback(
     (ev: AgentTurnEvent) => {
-      if (ev.type === 'tool_call_end' && ev.data.agenda_after) {
-        onAgendaAfter(ev.data.agenda_after);
-      } else if (ev.type === 'done' && ev.data.final_agenda) {
-        onAgendaAfter(ev.data.final_agenda);
+      if (!isPublic && ev.type === 'tool_call_end' && ev.data.agenda_after) {
+        onAgendaAfter?.(ev.data.agenda_after);
+      } else if (!isPublic && ev.type === 'done' && ev.data.final_agenda) {
+        onAgendaAfter?.(ev.data.final_agenda);
       }
 
       setMessages((prev) => {
@@ -227,7 +234,9 @@ export function UnifiedChatPanel({
         }
         if (ev.type === 'done') {
           msg.seq = ev.data.seq;
-          msg.canRevert = Boolean(ev.data.final_agenda && !ev.data.router_only);
+          msg.canRevert = Boolean(
+            !isPublic && ev.data.final_agenda && !ev.data.router_only
+          );
           msg.sources = ev.data.sources?.length ? ev.data.sources : undefined;
           const prevMsg = next[next.length - 2];
           if (prevMsg && prevMsg.role === 'user' && msg.canRevert) {
@@ -255,15 +264,21 @@ export function UnifiedChatPanel({
       if (ev.type === 'done' || ev.type === 'error' || ev.type === 'cancelled')
         setLoading(false);
     },
-    [onAgendaAfter]
+    [isPublic, onAgendaAfter]
   );
 
-  const { send, stop } = useUnifiedAgentTurn({ onEvent });
+  const { send: sendMember, stop: stopMember } = useUnifiedAgentTurn({
+    onEvent,
+  });
+  const { send: sendPublic, stop: stopPublic } = usePublicAgentTurn({
+    onEvent,
+  });
+  const stop = isPublic ? stopPublic : stopMember;
   const revert = useMeetingAgentRevert();
 
   const handleRevert = useCallback(
     async (targetSeq: number, userContent: string) => {
-      if (loading) return;
+      if (isPublic || loading) return;
       try {
         const { agenda } = await revert(sessionKey, targetSeq);
         setMessages((prev) => {
@@ -272,18 +287,19 @@ export function UnifiedChatPanel({
           );
           return cutIdx === -1 ? prev : prev.slice(0, cutIdx);
         });
-        onAgendaAfter(agenda);
+        onAgendaAfter?.(agenda);
         setInput(userContent);
         textareaRef.current?.focus();
       } catch (e) {
         console.error('revert failed', e);
       }
     },
-    [loading, revert, sessionKey, onAgendaAfter]
+    [isPublic, loading, revert, sessionKey, onAgendaAfter]
   );
 
   const runTurn = useCallback(
     async (message: string, image: File | null, includeUserBubble: boolean) => {
+      const imageForTurn = isPublic ? null : image;
       const asstMsg: ChatMessage = {
         id: uuid(),
         role: 'assistant',
@@ -306,17 +322,24 @@ export function UnifiedChatPanel({
       setError(null);
       setLoading(true);
       try {
-        await send({
-          session_id: sessionKey,
-          user_message: message,
-          agenda_snapshot: agendaSnapshot,
-          image,
-        });
+        if (isPublic) {
+          await sendPublic({
+            session_id: sessionKey,
+            user_message: message,
+          });
+        } else {
+          await sendMember({
+            session_id: sessionKey,
+            user_message: message,
+            agenda_snapshot: agendaSnapshot || EMPTY_AGENDA_SNAPSHOT,
+            image: imageForTurn,
+          });
+        }
       } catch {
         setLoading(false);
       }
     },
-    [send, sessionKey, agendaSnapshot]
+    [agendaSnapshot, isPublic, sendMember, sendPublic, sessionKey]
   );
 
   const sendMessage = useCallback(
@@ -325,9 +348,9 @@ export function UnifiedChatPanel({
   );
 
   const submit = () => {
-    if ((!input.trim() && !pendingImage) || loading) return;
+    if ((!input.trim() && (!pendingImage || isPublic)) || loading) return;
     const message = input;
-    const image = pendingImage;
+    const image = isPublic ? null : pendingImage;
     setInput('');
     setPendingImage(null);
     void sendMessage(message, image);
@@ -338,7 +361,10 @@ export function UnifiedChatPanel({
     void runTurn(lastSentRef.current, lastImageRef.current, false);
   }, [loading, runTurn]);
 
-  const handleAttach = () => fileInputRef.current?.click();
+  const handleAttach = () => {
+    if (isPublic) return;
+    fileInputRef.current?.click();
+  };
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -360,23 +386,34 @@ export function UnifiedChatPanel({
     () => (
       <div className='text-xs text-gray-400 text-center py-10 leading-relaxed space-y-3 px-4'>
         <div>Try:</div>
-        <div className='space-y-1'>
-          <div className='text-gray-500'>Edit an agenda</div>
-          <div>&ldquo;clone a meeting from #451&rdquo;</div>
-          <div>&ldquo;让 Helen 做 Timer&rdquo;</div>
-          <div className='text-gray-500 pt-2'>Ask about past meetings</div>
-          <div>
-            &ldquo;when was last meeting Joyce as the meeting manager&rdquo;
+        {isPublic ? (
+          <div className='space-y-1'>
+            <div className='text-gray-500'>Ask about SoarHigh meetings</div>
+            <div>&ldquo;参加搜嗨例会需要准备些什么?&rdquo;</div>
+            <div>&ldquo;今年上半年和情感相关的会议有哪些?&rdquo;</div>
+            <div className='text-gray-500 pt-2'>Ask about Toastmasters</div>
+            <div>&ldquo;Timer 的职责是什么?&rdquo;</div>
+            <div>&ldquo;Pathways 是什么，怎么选第一条路径?&rdquo;</div>
           </div>
-          <div>&ldquo;按今年会员参会次数排序前三名是哪些人&rdquo;</div>
-          <div className='text-gray-500 pt-2'>Ask about Toastmasters</div>
-          <div>&ldquo;参加搜嗨例会需要准备些什么?&rdquo;</div>
-          <div>&ldquo;介绍一下 Dynamic Leadership 这条 pathway&rdquo;</div>
-        </div>
+        ) : (
+          <div className='space-y-1'>
+            <div className='text-gray-500'>Edit an agenda</div>
+            <div>&ldquo;clone a meeting from #451&rdquo;</div>
+            <div>&ldquo;让 Helen 做 Timer&rdquo;</div>
+            <div className='text-gray-500 pt-2'>Ask about past meetings</div>
+            <div>
+              &ldquo;when was last meeting Joyce as the meeting manager&rdquo;
+            </div>
+            <div>&ldquo;按今年会员参会次数排序前三名是哪些人&rdquo;</div>
+            <div className='text-gray-500 pt-2'>Ask about Toastmasters</div>
+            <div>&ldquo;参加搜嗨例会需要准备些什么?&rdquo;</div>
+            <div>&ldquo;介绍一下 Dynamic Leadership 这条 pathway&rdquo;</div>
+          </div>
+        )}
         <div>…and more.</div>
       </div>
     ),
-    []
+    [isPublic]
   );
 
   return (
@@ -398,20 +435,23 @@ export function UnifiedChatPanel({
             key={m.id}
             className={`flex items-center gap-1.5 group ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
-            {m.role === 'user' && m.seq !== undefined && m.canRevert && (
-              <button
-                type='button'
-                onClick={() => handleRevert(m.seq!, m.content)}
-                disabled={loading}
-                title='Revert to the state before this turn'
-                className='shrink-0 h-6 w-6 flex items-center justify-center rounded-full
+            {!isPublic &&
+              m.role === 'user' &&
+              m.seq !== undefined &&
+              m.canRevert && (
+                <button
+                  type='button'
+                  onClick={() => handleRevert(m.seq!, m.content)}
+                  disabled={loading}
+                  title='Revert to the state before this turn'
+                  className='shrink-0 h-6 w-6 flex items-center justify-center rounded-full
                            text-gray-400 hover:text-gray-700 hover:bg-gray-100
                            disabled:opacity-30 disabled:cursor-not-allowed
                            opacity-0 group-hover:opacity-100 transition-opacity'
-              >
-                <RotateCcw className='w-3.5 h-3.5' />
-              </button>
-            )}
+                >
+                  <RotateCcw className='w-3.5 h-3.5' />
+                </button>
+              )}
             <div
               className={`max-w-[85%] px-3 py-2 rounded-lg text-sm text-left ${
                 m.role === 'user'
@@ -517,7 +557,7 @@ export function UnifiedChatPanel({
       </div>
 
       <div className='border-t border-gray-200 p-3 bg-white'>
-        {pendingImage && pendingImageUrl && (
+        {!isPublic && pendingImage && pendingImageUrl && (
           <div className='mb-2 flex items-center gap-2 px-2 py-1 rounded-md bg-gray-100 text-xs text-gray-700'>
             <div
               aria-label='attached image preview'
@@ -547,17 +587,19 @@ export function UnifiedChatPanel({
             className='hidden'
             onChange={handleFileChange}
           />
-          <button
-            type='button'
-            onClick={handleAttach}
-            aria-label='Attach image'
-            disabled={loading}
-            className='shrink-0 flex items-center justify-center h-8 w-8 rounded-full
-                       text-gray-500 hover:text-gray-800 hover:bg-gray-100
-                       disabled:opacity-40 disabled:cursor-not-allowed transition-colors'
-          >
-            <Paperclip className='w-4 h-4' />
-          </button>
+          {!isPublic && (
+            <button
+              type='button'
+              onClick={handleAttach}
+              aria-label='Attach image'
+              disabled={loading}
+              className='shrink-0 flex items-center justify-center h-8 w-8 rounded-full
+                         text-gray-500 hover:text-gray-800 hover:bg-gray-100
+                         disabled:opacity-40 disabled:cursor-not-allowed transition-colors'
+            >
+              <Paperclip className='w-4 h-4' />
+            </button>
+          )}
           <textarea
             ref={textareaRef}
             rows={1}
@@ -572,7 +614,11 @@ export function UnifiedChatPanel({
                 submit();
               }
             }}
-            placeholder='Chat the magic.'
+            placeholder={
+              isPublic
+                ? 'Ask about meetings or Toastmasters.'
+                : 'Chat the magic.'
+            }
             disabled={loading}
           />
           {loading ? (
@@ -590,7 +636,7 @@ export function UnifiedChatPanel({
               type='button'
               onClick={submit}
               aria-label='Send'
-              disabled={!input.trim() && !pendingImage}
+              disabled={!input.trim() && (!pendingImage || isPublic)}
               className='shrink-0 flex items-center justify-center h-8 w-8 rounded-full
                          bg-indigo-600 text-white hover:bg-indigo-700
                          disabled:bg-gray-200 disabled:text-gray-400

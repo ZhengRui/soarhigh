@@ -28,6 +28,8 @@ export type AgendaSnapshot = {
 
 export type ToolCallStatus = 'pending' | 'ok' | 'retry';
 
+export type ChatPanelMode = 'member' | 'public';
+
 // Ordered timeline element. The reducer pushes a new part when the SSE
 // stream emits something new; same-kind chunks (text/text or
 // thinking/thinking) coalesce into the trailing part. Tool parts hold
