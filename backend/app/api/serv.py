@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from ..config import CORS_ORIGINS
+from .routes.agents.agent_public import agent_public_router
 from .routes.agents.general import general_agent_router
 from .routes.agents.meeting import meeting_agent_router
 from .routes.agents.statistics import statistics_agent_router
@@ -33,6 +34,7 @@ def get_application():
 
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
+    app.include_router(agent_public_router, tags=["agent-public"])
     app.include_router(meeting_agent_router, tags=["meeting-agent"])
     app.include_router(statistics_agent_router, tags=["statistics-agent"])
     app.include_router(general_agent_router, tags=["general-agent"])

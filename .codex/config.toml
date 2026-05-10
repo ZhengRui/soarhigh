@@ -1,0 +1,8 @@
+# Project-level Codex configuration for soarhigh.
+
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = [
+  "/Users/zerry/Work/Projects/funs/soarhigh_miniapp",
+]

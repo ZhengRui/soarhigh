@@ -139,7 +139,7 @@ def append_router_exchange(
     return list(prior_history_dumped) + new_dumped
 
 
-_VIEW_SKILL_TOOL_NAME = "view_skill"
+_VIEW_SKILL_TOOL_NAMES = {"view_skill", "view_skill_public"}
 
 # Placeholder that replaces a view_skill tool-return body once it's been
 # absorbed into a turn. The model still sees the ToolCallPart with the
@@ -175,7 +175,7 @@ def strip_skill_bodies_from_dumped_history(dumped: list[dict]) -> list[dict]:
         for part in msg.get("parts", []) or []:
             if part.get("part_kind") != "tool-return":
                 continue
-            if part.get("tool_name") != _VIEW_SKILL_TOOL_NAME:
+            if part.get("tool_name") not in _VIEW_SKILL_TOOL_NAMES:
                 continue
             # Defensive: only string contents (skill bodies are always
             # strings in our use, but Pydantic AI permits dicts for

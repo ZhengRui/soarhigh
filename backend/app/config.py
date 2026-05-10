@@ -61,6 +61,14 @@ WECHAT_APP_ID = config("WECHAT_APP_ID", cast=str)
 WECHAT_APP_SECRET = config("WECHAT_APP_SECRET", cast=str)
 WECHAT_JWT_SECRET = config("WECHAT_JWT_SECRET", cast=str)
 
+# Public Agent visitor identity / rate limiting.
+# The visitor secret signs the future Web public visitor cookie. Defaulting to
+# WECHAT_JWT_SECRET keeps local/test imports working, but production should set
+# a dedicated value.
+AGENT_PUBLIC_VISITOR_SECRET = config("AGENT_PUBLIC_VISITOR_SECRET", cast=str, default=WECHAT_JWT_SECRET)
+AGENT_PUBLIC_LIMIT_PER_MINUTE = config("AGENT_PUBLIC_LIMIT_PER_MINUTE", cast=int, default=10)
+AGENT_PUBLIC_LIMIT_PER_DAY = config("AGENT_PUBLIC_LIMIT_PER_DAY", cast=int, default=80)
+
 # AliCloud OSS Configuration
 ALICLOUD_ACCESS_KEY_ID = config("ALICLOUD_ACCESS_KEY_ID", cast=str)
 ALICLOUD_ACCESS_KEY_SECRET = config("ALICLOUD_ACCESS_KEY_SECRET", cast=str)

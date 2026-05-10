@@ -28,6 +28,7 @@ error, not something to defer until first use.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -132,6 +133,22 @@ class SkillRegistry:
         """Sorted list of skill names. For tests/debug; agents should not
         rely on iterating this."""
         return sorted(self._skills.keys())
+
+    def restricted(self, names: Iterable[str]) -> "SkillRegistry":
+        """Return a read-only registry view containing only `names`.
+
+        Used by AgentPublic so excluded member-only skills do not appear in
+        the public manifest or tool schema. The underlying SkillEntry objects
+        are immutable, so sharing them is safe.
+        """
+        allowed = set(names)
+        missing = allowed - set(self._skills)
+        if missing:
+            raise ValueError(f"Unknown skill names for restricted registry: {sorted(missing)}")
+        clone = object.__new__(SkillRegistry)
+        clone._dir = self._dir
+        clone._skills = {name: self._skills[name] for name in sorted(allowed)}
+        return clone
 
     def __len__(self) -> int:
         return len(self._skills)

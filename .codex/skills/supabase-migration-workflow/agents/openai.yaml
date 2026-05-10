@@ -1,0 +1,4 @@
+interface:
+  display_name: "Supabase Migration Workflow"
+  short_description: "Run Supabase CLI migrations safely for this project."
+  default_prompt: "Use the project Supabase migration workflow to inspect, repair, dry-run, apply, and verify database migrations safely."
