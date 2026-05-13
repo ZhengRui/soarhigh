@@ -1,6 +1,6 @@
 ---
 name: soarhigh-faq
-description: SoarHigh club FAQ — common questions from new members, returning members, and guests. How to attend a meeting, what to prepare, what to bring, first-visit expectations, 注意事项, the SoarHigh 邀请函 / Playbook link, how to sign up for a role, what tools the club uses, contact and platform pointers, what's covered by which agent in this assistant. Load this skill when the user asks "how do I X" / "怎么 X" type questions about participating in SoarHigh, or when their question is more about practical participation than about formal bylaws (which live in `soarhigh-bylaws`).
+description: "SoarHigh club FAQ — common questions from new members, returning members, and guests. Club identity and language status (English / Chinese / bilingual): SoarHigh is a 100% English / fully English-speaking Toastmasters club, not a bilingual club. How to attend a meeting, what to prepare, what to bring, first-visit expectations, 注意事项, the SoarHigh 邀请函 / Playbook link, how to sign up for a role, what tools the club uses, contact and platform pointers, what's covered by which agent in this assistant. Load this skill when the user asks \"how do I X\" / \"怎么 X\" type questions about participating in SoarHigh, or when their question is more about practical participation than about formal bylaws (which live in `soarhigh-bylaws`)."
 ---
 
 # SoarHigh Club FAQ
@@ -8,6 +8,13 @@ description: SoarHigh club FAQ — common questions from new members, returning 
 A practical Q&A reference for SoarHigh members and guests. For formal policy or bylaws-level questions, load `soarhigh-bylaws` instead. For Toastmasters knowledge that isn't club-specific, load `toastmasters-roles` or `meeting-protocol`.
 
 Anything not explicitly answered here should be deferred to the **VP Education**, **VP Membership**, or club officers — do not guess.
+
+## Club identity and language
+
+### Q: Is SoarHigh an English, Chinese, or bilingual club?
+- SoarHigh Toastmasters Club is a **100% English / fully English-speaking Toastmasters club**. It became fully English-speaking in 2024 and remains the only English-speaking Toastmasters club in Bao'an.
+- The club's meeting language and public positioning are English, not bilingual. Regular meeting speeches, Table Topics, evaluations, and main stage roles are expected to be in English.
+- Chinese may still appear in practical operations or quick explanations for guests and members, such as WeChat logistics, venue directions, or brief clarifications, but that does not make the club bilingual.
 
 ## Attending a meeting
 
