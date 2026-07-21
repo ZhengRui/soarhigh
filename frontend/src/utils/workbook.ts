@@ -1104,7 +1104,7 @@ const createTeam = (
             font: { color: { argb: 'FFFFFFFF' }, bold: true }, // White text
           },
         },
-        { text: 'Amy Fang', style: { alignment: { horizontal: 'center' } } },
+        { text: 'Alice Song', style: { alignment: { horizontal: 'center' } } },
         {
           text: 'DL-Dynamic leadership\nMS-Motivational Strategies\nPl-Persuasive Influence\nPM-Presentation Mastery\nVC-Visionary Communication\nEH-Engaging Humor\n\nDL-动态领导力\nMS-激励策略\nPl-有说服力的影响\nPM-精通演讲\nVC-愿景沟通\nEH-善用幽默',
           style: {
@@ -1162,7 +1162,7 @@ const createTeam = (
             },
           },
         },
-        { text: 'Helen Chen', style: { alignment: { horizontal: 'center' } } },
+        { text: 'Liz Huang', style: { alignment: { horizontal: 'center' } } },
         '',
         '',
         '',
@@ -1184,7 +1184,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Joyce Feng',
+          text: 'Simmy Li',
           style: { alignment: { horizontal: 'center' } },
         },
         '',
@@ -1208,7 +1208,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Jenny Li',
+          text: 'Jessica Peng',
           style: { alignment: { horizontal: 'center' } },
         },
         '',
@@ -1232,7 +1232,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Rui Zheng',
+          text: 'Selina Zhang',
           style: { alignment: { horizontal: 'center' } },
         },
         '',
@@ -1255,7 +1255,7 @@ const createTeam = (
             },
           },
         },
-        { text: 'Frank Zeng', style: { alignment: { horizontal: 'center' } } },
+        { text: 'Victory Liu', style: { alignment: { horizontal: 'center' } } },
         '',
         '',
         '',
@@ -1277,7 +1277,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Shelly Qu',
+          text: 'Catherine Yang',
           style: { alignment: { horizontal: 'center' } },
         },
         '',
@@ -1301,7 +1301,7 @@ const createTeam = (
           },
         },
         {
-          text: 'Rui Zheng',
+          text: 'Amy Fang',
           style: { alignment: { horizontal: 'center' } },
         },
         '',

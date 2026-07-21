@@ -721,7 +721,7 @@ async def apply_create_from_text(ctx, raw_text: str) -> dict:
 
 # Soarhigh Regular meeting standard structure — 22 segments, 2 prepared
 # speeches, 19:15 warmup → 21:15 closing. President defaults follow the
-# planner prompt convention (Amy Fang for Opening Remarks / Awards /
+# planner prompt convention (Alice Song for Opening Remarks / Awards /
 # Closing Remarks); user re-assigns via subsequent chat edits.
 _REGULAR_2PS_SEGMENTS: tuple[tuple[str, str, int, str], ...] = (
     # (type, start_time, duration_min, role_taker)
@@ -751,7 +751,7 @@ _REGULAR_2PS_SEGMENTS: tuple[tuple[str, str, int, str], ...] = (
     ("Voting Section (TOM)", "21:02", 2, ""),
     ("Moment of Truth", "21:04", 7, ""),
     ("Awards (President)", "21:11", 3, ""),
-    ("Closing Remarks (President)", "21:14", 1, "Amy Fang"),
+    ("Closing Remarks (President)", "21:14", 1, "Alice Song"),
 )
 
 
@@ -771,7 +771,7 @@ def _build_template_regular_2ps(members_directory: list[dict]) -> Agenda:
     decide rather than picking one for them).
 
     `members_directory` is the live members list eager-fetched at turn
-    boundary by the route. Static defaults like "Amy Fang" (the current
+    boundary by the route. Static defaults like "Alice Song" (the current
     president) are resolved through `_resolve_role_taker` so they carry a
     real DB `member_id` — without this, the chat addendum would render
     those default-presider rows as `(guest)` until the frontend re-resolved

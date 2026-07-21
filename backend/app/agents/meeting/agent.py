@@ -524,7 +524,7 @@ async def create_from_template(ctx: RunContext[AgendaDeps], template: str) -> di
 
     Regular/Workshop templates populate structure + a few default role takers
     (warmup="All", Opening / Awards / Closing default to current president
-    "Amy Fang"). Custom is intentionally bare — no warmup, no defaults. The
+    "Alice Song"). Custom is intentionally bare — no warmup, no defaults. The
     user fills theme / manager / date / location and remaining roles via
     subsequent chat edits in either case."""
     return await _tools.apply_create_from_template(ctx, template=template)

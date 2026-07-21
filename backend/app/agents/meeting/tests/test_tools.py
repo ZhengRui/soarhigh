@@ -612,10 +612,10 @@ async def test_apply_create_from_template_regular_2ps_replaces_agenda():
     assert deps.agenda.segments[0].role_taker.name == "All"
     # Second segment: SAA at 19:30 (back-to-back from warmup end).
     assert deps.agenda.segments[1].start_time == "19:30"
-    # Last segment: Closing Remarks at 21:14, default president Amy Fang.
+    # Last segment: Closing Remarks at 21:14, default president Alice Song.
     last = deps.agenda.segments[-1]
     assert "Closing Remarks" in last.type
-    assert last.role_taker.name == "Amy Fang"
+    assert last.role_taker.name == "Alice Song"
     # Meeting type is set; meta.start_time matches the first segment (19:15)
     # so a later set_duration / add_segment doesn't re-anchor the warmup
     # forward by 15 min via recompute_start_times. end_time is left blank

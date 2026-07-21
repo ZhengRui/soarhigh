@@ -110,15 +110,14 @@ For the election-day meeting format, the nomination process, candidate speeches,
 
 The current SoarHigh officers:
 
-- **President** — Amy Fang
-- **VP Education (VPE)** — Helen Chen
-- **VP Membership (VPM)** — Joyce Feng
-- **VP Public Relations (VPPR)** — Jenny Li
-- **Secretary** — Rui Zheng
-- **Treasurer** — Frank Zeng
-- **Sergeant At Arms (SAA)** — Shelly Qu
-
-(The Immediate Past President role is not separately listed in the current term roster.)
+- **President** — Alice Song
+- **VP Education (VPE)** — Liz Huang
+- **VP Membership (VPM)** — Simmy Li
+- **VP Public Relations (VPPR)** — Jessica Peng
+- **Secretary** — Selina Zhang
+- **Treasurer** — Victory Liu
+- **Sergeant At Arms (SAA)** — Catherine Yang
+- **Immediate Past President (IPP)** — Amy Fang
 
 When asked "who is the current president / VPE / etc." and the answer is in this list, give the name. When asked about a role NOT in this list, decline to guess and direct the user to confirm with the club.
 

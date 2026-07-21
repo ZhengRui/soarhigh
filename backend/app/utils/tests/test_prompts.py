@@ -6,10 +6,13 @@ from app.utils.prompts import (
 )
 
 
-def test_developer_prompt_lists_all_19_club_members():
+def test_developer_prompt_lists_club_members():
     prompt = plan_meeting_from_text_developer_prompt
     assert "Victory Liu" in prompt
     assert "Albert Ding" in prompt
+    assert "Simmy Li" in prompt
+    assert "Selina Zhang" in prompt
+    assert "Catherine Yang" in prompt
 
 
 def test_user_prompt_forbids_buffer_pseudo_segments():
@@ -47,9 +50,10 @@ def test_developer_prompt_describes_warmup_segment():
     assert '"type": "Guests Registration"' not in prompt
 
 
-def test_user_prompt_default_president_is_amy_fang():
+def test_user_prompt_default_president_is_alice_song():
     prompt = plan_meeting_from_text_user_prompt
-    assert "Amy Fang" in prompt
+    assert "Alice Song" in prompt
+    assert "Amy Fang" not in prompt
     assert "Libra Lee" not in prompt
 
 

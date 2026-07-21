@@ -52,6 +52,8 @@ CLUB_MEMBERS: list[str] = [
     "Victory Liu",
     "Albert Ding",
     "Libra Lee",
+    "Simmy Li",
+    "Selina Zhang",
 ]
 
 

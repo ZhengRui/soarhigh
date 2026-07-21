@@ -1,6 +1,7 @@
 .DS_Store
 plans/
 **/.playwright-mcp/
+.codex/config.toml
 
 # SoarHigh-internal SKILL.md kept out of the public repo: it carries the
 # Meeting Manager operational handbook (default-credentials hint, internal

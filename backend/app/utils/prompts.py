@@ -518,7 +518,7 @@ be expressed ONLY by pushing the NEXT real segment's start_time later. NEVER out
 "buffer" / "Buffer" / "间隔" / "gap" — buffers are not segments, they are time gaps between segments.
 3. Above segments are ordered by time, you can add or remove some segments according to how many people registered but \
 DO NOT change their orders.
-4. Role taker for Opening Remarks, Awards, and Closing Remarks defaults to the current club president Amy Fang. If \
+4. Role taker for Opening Remarks, Awards, and Closing Remarks defaults to the current club president Alice Song. If \
 the registration text explicitly names someone for the role, use that name instead of the default. Note: "Opening \
 Remarks" is sometimes labelled "Club Intro" in the registration text — treat them as the same segment.
 5. Role taker for Voting Section is always the TOM (Toastmaster of Meeting Introduction).
