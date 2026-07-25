@@ -13,6 +13,9 @@
 # testing
 /coverage
 
+# local visual design comparisons
+/.visual-comparisons/
+
 # next.js
 /.next/
 /out/
