@@ -2,6 +2,8 @@
 plans/
 **/.playwright-mcp/
 .codex/config.toml
+claws/hermes/.env.local
+claws/hermes/.env.local.tmp.*
 
 # SoarHigh-internal SKILL.md kept out of the public repo: it carries the
 # Meeting Manager operational handbook (default-credentials hint, internal

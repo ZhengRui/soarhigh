@@ -1,0 +1,23 @@
+name: soarhigh-hermes
+
+services:
+  gateway:
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+    container_name: ${HERMES_CONTAINER_NAME:-soarhigh-hermes}
+    restart: unless-stopped
+    working_dir: /workspace
+    command: ["gateway", "run"]
+    environment:
+      HERMES_UID: "${HERMES_UID:-10000}"
+      HERMES_GID: "${HERMES_GID:-10000}"
+    volumes:
+      - type: bind
+        source: ${HERMES_HOME_DIR:?Set HERMES_HOME_DIR in .env.local}
+        target: /opt/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${HERMES_WORKSPACE_DIR:?Set HERMES_WORKSPACE_DIR in .env.local}
+        target: /workspace
+        bind:
+          create_host_path: false
