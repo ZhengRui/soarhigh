@@ -15,6 +15,7 @@ from .routes.meeting import meeting_router
 from .routes.post import post_router
 from .routes.stats import stats_router
 from .routes.timing import timing_router
+from .routes.wepost import wepost_router
 
 
 def get_application():
@@ -43,6 +44,7 @@ def get_application():
     app.include_router(checkin_router, tags=["checkin"])
     app.include_router(feedback_router, tags=["feedback"])
     app.include_router(meeting_router, tags=["meeting"])
+    app.include_router(wepost_router, tags=["wepost"])
     app.include_router(post_router, tags=["post"])
     app.include_router(stats_router, tags=["stats"])
     app.include_router(timing_router, tags=["timing"])

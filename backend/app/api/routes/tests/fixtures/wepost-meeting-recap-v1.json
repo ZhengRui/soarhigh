@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "title": "The Courage to Try the Next Sentence",
+  "slug": "the-courage-to-try-the-next-sentence",
+  "excerpt": "At SoarHigh's 236th meeting, one small second attempt showed how learning becomes visible.",
+  "byline": "SoarHigh Toastmasters Editorial Team",
+  "articleType": "meeting-recap",
+  "sourceMeetingId": "meeting-236",
+  "bodyMarkdown": "The room became quiet when Maya reached the front. She had prepared an opening, but the next sentence had disappeared.\n\nWhat happened after that mattered more than a polished speech. ==She stayed in the room and tried again.==\n\n:::info-grid\ntitle: Meeting at a glance\nitems:\n  - label: Theme\n    value: Learning in public\n  - label: Date\n    value: July 18, 2026\n  - label: Place\n    value: SoarHigh Club\n:::\n\n## First, make the attempt visible\n\nThe evening opened with three speakers sharing how they protect time for deeper work. Their methods differed, but each one turned an abstract intention into something observable.\n\n:::timeline\ntitle: How the evening unfolded\nitems:\n  - label: \"19:30\"\n    title: Put the thought on paper\n    description: Members captured distracting ideas before returning to the task.\n  - label: \"20:05\"\n    title: Say the unfinished version\n    description: Maya delivered the opening she had, then paused.\n  - label: \"20:20\"\n    title: Use feedback for another attempt\n    description: She returned with two clearer sentences.\n:::\n\n:::gallery\nitems:\n  - M01\n  - M02\n  - M03\ncaption: Three moments of members listening, responding, and trying again\n:::\n\n## Then, make feedback usable\n\nThe evaluator did not decide whether Maya was a good speaker. He offered one visible next move: slow down in the middle of the stage, keep the opening, and add the example she had told us during the break.\n\n:::pull-quote\ntext: I think I can add two more sentences.\nattribution: Maya, after her first attempt\n:::\n\n:::person\nname: Maya Chen\nrole: First-time Table Topics speaker\nmedia: M04\nsummary: She returned to the stage after feedback and completed the thought she had left unfinished.\nquote: I did not need a new speech. I needed one more try.\n:::\n\nThe second version was still brief. It was also more specific, more relaxed, and unmistakably hers. ==Useful feedback leaves the learner with somewhere to begin.==\n\n:::video\nmedia: V01\ncaption: Maya returns to the stage and completes her example\n:::\n\n## What we can take into the next meeting\n\nLearning did not look like collecting every idea from the evening. It looked like speaking, being heard, receiving a concrete suggestion, and choosing to try once more.\n\n:::takeaway\ntitle: A small practice for this week\ntext: Capture the unfinished thought, ask for one concrete next move, and make a second attempt before judging the first.\n:::\n\nWe will remember the talks, photographs, and laughter. More importantly, we will remember that ==progress became visible when someone chose the next sentence.==\n",
+  "media": [
+    {
+      "id": "M01",
+      "kind": "image",
+      "sourceUrl": "https://cdn.example.com/weposts/meeting-236/listening.jpg",
+      "description": "Members lean forward while listening to the first prepared speaker.",
+      "credit": "SoarHigh Toastmasters",
+      "people": [
+        "Club members"
+      ],
+      "include": true,
+      "order": 0,
+      "descriptionSource": "user",
+      "descriptionStatus": "confirmed"
+    },
+    {
+      "id": "M02",
+      "kind": "image",
+      "sourceUrl": "https://cdn.example.com/weposts/meeting-236/notes.jpg",
+      "description": "A notebook holds short ideas captured during the workshop.",
+      "credit": "SoarHigh Toastmasters",
+      "people": [],
+      "include": true,
+      "order": 1,
+      "descriptionSource": "user",
+      "descriptionStatus": "confirmed"
+    },
+    {
+      "id": "M03",
+      "kind": "image",
+      "sourceUrl": "https://cdn.example.com/weposts/meeting-236/feedback.jpg",
+      "description": "An evaluator offers one specific suggestion from the side of the room.",
+      "credit": "SoarHigh Toastmasters",
+      "people": [
+        "Meeting evaluator"
+      ],
+      "include": true,
+      "order": 2,
+      "descriptionSource": "ai",
+      "descriptionStatus": "confirmed"
+    },
+    {
+      "id": "M04",
+      "kind": "image",
+      "sourceUrl": "https://cdn.example.com/weposts/meeting-236/maya.jpg",
+      "description": "Maya smiles after completing her second attempt.",
+      "credit": "SoarHigh Toastmasters",
+      "people": [
+        "Maya Chen"
+      ],
+      "include": true,
+      "order": 3,
+      "descriptionSource": "user",
+      "descriptionStatus": "confirmed"
+    },
+    {
+      "id": "V01",
+      "kind": "video",
+      "sourceUrl": "https://cdn.example.com/weposts/meeting-236/maya-second-attempt.mp4",
+      "posterUrl": "https://cdn.example.com/weposts/meeting-236/maya-second-attempt-poster.jpg",
+      "description": "A short video of Maya returning to the stage for her second attempt.",
+      "credit": "SoarHigh Toastmasters",
+      "people": [
+        "Maya Chen"
+      ],
+      "include": true,
+      "order": 4,
+      "descriptionSource": "user",
+      "descriptionStatus": "confirmed"
+    }
+  ],
+  "coverMediaId": "M01",
+  "presentation": {
+    "layout": "brand-default",
+    "palette": "paper-neutral",
+    "appearance": "light",
+    "typeface": "editorial-serif"
+  }
+}
