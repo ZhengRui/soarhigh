@@ -3,18 +3,18 @@
 import { useState } from 'react';
 
 import {
-  WEPOST_FIXTURES,
-  WEPOST_FIXTURE_CONTEXT_LABELS,
-  WEPOST_FIXTURE_IDS,
-  type WePostFixtureId,
-} from '@/components/wepost/fixtures';
+  WXPOST_FIXTURES,
+  WXPOST_FIXTURE_CONTEXT_LABELS,
+  WXPOST_FIXTURE_IDS,
+  type WxPostFixtureId,
+} from '@/components/wxpost/fixtures';
 import {
-  WePostPresentationControls,
-  type WePostPresentationSelection,
-} from '@/components/wepost/WePostPresentationControls';
-import { WePostRenderer } from '@/components/wepost/WePostRenderer';
+  WxPostPresentationControls,
+  type WxPostPresentationSelection,
+} from '@/components/wxpost/WxPostPresentationControls';
+import { WxPostRenderer } from '@/components/wxpost/WxPostRenderer';
 
-const DEFAULT_SELECTION: WePostPresentationSelection = {
+const DEFAULT_SELECTION: WxPostPresentationSelection = {
   layout: 'brand-default',
   palette: 'paper-neutral',
   appearance: 'light',
@@ -22,32 +22,32 @@ const DEFAULT_SELECTION: WePostPresentationSelection = {
   previewSize: 'mobile-390',
 };
 
-const FIXTURE_LABELS: Record<WePostFixtureId, string> = {
+const FIXTURE_LABELS: Record<WxPostFixtureId, string> = {
   'meeting-recap': 'Meeting Recap',
   'member-story': 'Member Story',
   'event-preview': 'Event Preview',
 };
 
-export function WePostRendererShowcase() {
-  const [fixtureId, setFixtureId] = useState<WePostFixtureId>('meeting-recap');
+export function WxPostRendererShowcase() {
+  const [fixtureId, setFixtureId] = useState<WxPostFixtureId>('meeting-recap');
   const [selection, setSelection] =
-    useState<WePostPresentationSelection>(DEFAULT_SELECTION);
+    useState<WxPostPresentationSelection>(DEFAULT_SELECTION);
 
-  const article = WEPOST_FIXTURES[fixtureId];
+  const article = WXPOST_FIXTURES[fixtureId];
 
   return (
     <div className='min-h-screen bg-slate-100 px-4 py-10 sm:px-6'>
       <div className='mx-auto max-w-6xl'>
         <header className='mb-8 grid gap-3'>
           <span className='text-xs font-semibold uppercase tracking-[0.18em] text-blue-700'>
-            WePost Renderer Lab
+            WXPost Renderer Lab
           </span>
           <h1 className='text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl'>
             One article, every presentation choice
           </h1>
           <p className='max-w-3xl text-slate-600'>
             Three backend-generated article shapes exercise the complete
-            WePostRenderDocument v1 renderer. Controls change only this local
+            WxPostRenderDocument v1 renderer. Controls change only this local
             preview.
           </p>
         </header>
@@ -59,7 +59,7 @@ export function WePostRendererShowcase() {
           <span className='mr-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500'>
             Fixture
           </span>
-          {WEPOST_FIXTURE_IDS.map((id) => (
+          {WXPOST_FIXTURE_IDS.map((id) => (
             <button
               key={id}
               className={`rounded-full border px-3 py-1.5 text-sm font-medium transition ${
@@ -77,13 +77,13 @@ export function WePostRendererShowcase() {
           ))}
         </section>
 
-        <WePostPresentationControls
+        <WxPostPresentationControls
           value={selection}
           onChange={setSelection}
           onReset={() => setSelection(DEFAULT_SELECTION)}
         />
 
-        <WePostRenderer
+        <WxPostRenderer
           article={article}
           presentation={{
             layout: selection.layout,
@@ -92,7 +92,7 @@ export function WePostRendererShowcase() {
             typeface: selection.typeface,
           }}
           previewSize={selection.previewSize}
-          contextLabel={WEPOST_FIXTURE_CONTEXT_LABELS[fixtureId]}
+          contextLabel={WXPOST_FIXTURE_CONTEXT_LABELS[fixtureId]}
         />
       </div>
     </div>

@@ -7,40 +7,40 @@ export const ARTICLE_TYPES = [
   'custom',
 ] as const;
 
-export type WePostArticleType = (typeof ARTICLE_TYPES)[number];
+export type WxPostArticleType = (typeof ARTICLE_TYPES)[number];
 
-export const WEPOST_LAYOUTS = [
+export const WXPOST_LAYOUTS = [
   'brand-default',
   'field-notes',
   'editorial-feature',
 ] as const;
-export const WEPOST_PALETTES = [
+export const WXPOST_PALETTES = [
   'brand-blue',
   'paper-neutral',
   'warm-terracotta',
 ] as const;
-export const WEPOST_APPEARANCES = ['light', 'dark'] as const;
-export const WEPOST_TYPEFACES = [
+export const WXPOST_APPEARANCES = ['light', 'dark'] as const;
+export const WXPOST_TYPEFACES = [
   'modern-sans',
   'editorial-serif',
   'humanist-mix',
 ] as const;
-export const WEPOST_PREVIEW_SIZES = ['mobile-390', 'desktop-760'] as const;
+export const WXPOST_PREVIEW_SIZES = ['mobile-390', 'desktop-760'] as const;
 
-export type WePostLayout = (typeof WEPOST_LAYOUTS)[number];
-export type WePostPalette = (typeof WEPOST_PALETTES)[number];
-export type WePostAppearance = (typeof WEPOST_APPEARANCES)[number];
-export type WePostTypeface = (typeof WEPOST_TYPEFACES)[number];
-export type WePostPreviewSize = (typeof WEPOST_PREVIEW_SIZES)[number];
+export type WxPostLayout = (typeof WXPOST_LAYOUTS)[number];
+export type WxPostPalette = (typeof WXPOST_PALETTES)[number];
+export type WxPostAppearance = (typeof WXPOST_APPEARANCES)[number];
+export type WxPostTypeface = (typeof WXPOST_TYPEFACES)[number];
+export type WxPostPreviewSize = (typeof WXPOST_PREVIEW_SIZES)[number];
 
-export interface WePostPresentation {
-  layout: WePostLayout;
-  palette: WePostPalette;
-  appearance: WePostAppearance;
-  typeface: WePostTypeface;
+export interface WxPostPresentation {
+  layout: WxPostLayout;
+  palette: WxPostPalette;
+  appearance: WxPostAppearance;
+  typeface: WxPostTypeface;
 }
 
-export interface WePostMediaAsset {
+export interface WxPostMediaAsset {
   id: string;
   kind: 'image' | 'video';
   sourceUrl: string;
@@ -54,24 +54,24 @@ export interface WePostMediaAsset {
   descriptionStatus: 'confirmed' | 'needs_confirmation';
 }
 
-export interface WePostArticleMetadata {
+export interface WxPostArticleMetadata {
   schemaVersion: 1;
   title: string;
   slug?: string | null;
   excerpt?: string | null;
   byline?: string | null;
-  articleType: WePostArticleType;
+  articleType: WxPostArticleType;
   customArticleType?: string | null;
   /** Opaque association ID. Resolve user-facing meeting copy separately. */
   sourceMeetingId?: string | null;
-  media: WePostMediaAsset[];
+  media: WxPostMediaAsset[];
   coverMediaId?: string | null;
-  presentation: WePostPresentation;
+  presentation: WxPostPresentation;
 }
 
-export interface WePostRenderDocument extends WePostArticleMetadata {
+export interface WxPostRenderDocument extends WxPostArticleMetadata {
   renderVersion: 1;
-  body: WePostBodyNode[];
+  body: WxPostBodyNode[];
 }
 
 export interface GalleryDirectivePayload {
@@ -119,7 +119,7 @@ export interface PullQuoteDirectivePayload {
   attribution?: string;
 }
 
-export interface WePostDirectivePayloadMap {
+export interface WxPostDirectivePayloadMap {
   gallery: GalleryDirectivePayload;
   video: VideoDirectivePayload;
   takeaway: TakeawayDirectivePayload;
@@ -129,21 +129,21 @@ export interface WePostDirectivePayloadMap {
   'pull-quote': PullQuoteDirectivePayload;
 }
 
-export type WePostDirectiveName = keyof WePostDirectivePayloadMap;
+export type WxPostDirectiveName = keyof WxPostDirectivePayloadMap;
 
-export type WePostDirectiveNode = {
-  [Name in WePostDirectiveName]: {
+export type WxPostDirectiveNode = {
+  [Name in WxPostDirectiveName]: {
     kind: 'directive';
     name: Name;
-    payload: WePostDirectivePayloadMap[Name];
+    payload: WxPostDirectivePayloadMap[Name];
     line: number;
   };
-}[WePostDirectiveName];
+}[WxPostDirectiveName];
 
-export interface WePostMarkdownNode {
+export interface WxPostMarkdownNode {
   kind: 'markdown';
   source: string;
   line: number;
 }
 
-export type WePostBodyNode = WePostMarkdownNode | WePostDirectiveNode;
+export type WxPostBodyNode = WxPostMarkdownNode | WxPostDirectiveNode;

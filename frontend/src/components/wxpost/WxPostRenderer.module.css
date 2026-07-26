@@ -367,7 +367,7 @@
   background: var(--article-soft);
 }
 
-.markdown :global(.wepost-key-point) {
+.markdown :global(.wxpost-key-point) {
   font-style: normal;
   font-weight: 600;
   text-decoration-line: underline;

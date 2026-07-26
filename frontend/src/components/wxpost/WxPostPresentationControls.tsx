@@ -3,31 +3,31 @@
 import { RotateCcw } from 'lucide-react';
 
 import {
-  WEPOST_APPEARANCES,
-  WEPOST_LAYOUTS,
-  WEPOST_PALETTES,
-  WEPOST_PREVIEW_SIZES,
-  WEPOST_TYPEFACES,
-  type WePostAppearance,
-  type WePostLayout,
-  type WePostPalette,
-  type WePostPresentation,
-  type WePostPreviewSize,
-  type WePostTypeface,
+  WXPOST_APPEARANCES,
+  WXPOST_LAYOUTS,
+  WXPOST_PALETTES,
+  WXPOST_PREVIEW_SIZES,
+  WXPOST_TYPEFACES,
+  type WxPostAppearance,
+  type WxPostLayout,
+  type WxPostPalette,
+  type WxPostPresentation,
+  type WxPostPreviewSize,
+  type WxPostTypeface,
 } from './types';
 
-export interface WePostPresentationSelection extends WePostPresentation {
-  previewSize: WePostPreviewSize;
+export interface WxPostPresentationSelection extends WxPostPresentation {
+  previewSize: WxPostPreviewSize;
 }
 
-type WePostPresentationOption =
-  | WePostLayout
-  | WePostPalette
-  | WePostAppearance
-  | WePostTypeface
-  | WePostPreviewSize;
+type WxPostPresentationOption =
+  | WxPostLayout
+  | WxPostPalette
+  | WxPostAppearance
+  | WxPostTypeface
+  | WxPostPreviewSize;
 
-const LABELS: Record<WePostPresentationOption, string> = {
+const LABELS: Record<WxPostPresentationOption, string> = {
   'brand-default': 'Brand Default',
   'field-notes': 'Field Notes',
   'editorial-feature': 'Editorial Feature',
@@ -43,7 +43,7 @@ const LABELS: Record<WePostPresentationOption, string> = {
   'desktop-760': 'Desktop 760px',
 };
 
-function Control<Option extends WePostPresentationOption>({
+function Control<Option extends WxPostPresentationOption>({
   id,
   label,
   value,
@@ -81,15 +81,15 @@ function Control<Option extends WePostPresentationOption>({
   );
 }
 
-export function WePostPresentationControls({
+export function WxPostPresentationControls({
   value,
   disabled = false,
   onChange,
   onReset,
 }: {
-  value: WePostPresentationSelection;
+  value: WxPostPresentationSelection;
   disabled?: boolean;
-  onChange: (value: WePostPresentationSelection) => void;
+  onChange: (value: WxPostPresentationSelection) => void;
   onReset: () => void;
 }) {
   return (
@@ -99,42 +99,42 @@ export function WePostPresentationControls({
     >
       <div className='flex flex-wrap items-end gap-4'>
         <Control
-          id='wepost-layout'
+          id='wxpost-layout'
           label='Layout'
           value={value.layout}
-          options={WEPOST_LAYOUTS}
+          options={WXPOST_LAYOUTS}
           disabled={disabled}
           onChange={(layout) => onChange({ ...value, layout })}
         />
         <Control
-          id='wepost-palette'
+          id='wxpost-palette'
           label='Color palette'
           value={value.palette}
-          options={WEPOST_PALETTES}
+          options={WXPOST_PALETTES}
           disabled={disabled}
           onChange={(palette) => onChange({ ...value, palette })}
         />
         <Control
-          id='wepost-appearance'
+          id='wxpost-appearance'
           label='Appearance'
           value={value.appearance}
-          options={WEPOST_APPEARANCES}
+          options={WXPOST_APPEARANCES}
           disabled={disabled}
           onChange={(appearance) => onChange({ ...value, appearance })}
         />
         <Control
-          id='wepost-typeface'
+          id='wxpost-typeface'
           label='Typeface'
           value={value.typeface}
-          options={WEPOST_TYPEFACES}
+          options={WXPOST_TYPEFACES}
           disabled={disabled}
           onChange={(typeface) => onChange({ ...value, typeface })}
         />
         <Control
-          id='wepost-preview-size'
+          id='wxpost-preview-size'
           label='Preview size'
           value={value.previewSize}
-          options={WEPOST_PREVIEW_SIZES}
+          options={WXPOST_PREVIEW_SIZES}
           disabled={disabled}
           onChange={(previewSize) => onChange({ ...value, previewSize })}
         />

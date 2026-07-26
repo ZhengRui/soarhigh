@@ -4,10 +4,10 @@ This directory runs the Hermes Gateway in the official Hermes Agent container.
 It keeps Hermes state and article working files in two separate host
 directories:
 
-| Host setting | Container path | Purpose |
-| --- | --- | --- |
-| `HERMES_HOME_DIR` | `/opt/data` | Configuration, credentials, memory, sessions, skills, and gateway state |
-| `HERMES_WORKSPACE_DIR` | `/workspace` | WePost sources, working files, and exports |
+| Host setting           | Container path | Purpose                                                                 |
+| ---------------------- | -------------- | ----------------------------------------------------------------------- |
+| `HERMES_HOME_DIR`      | `/opt/data`    | Configuration, credentials, memory, sessions, skills, and gateway state |
+| `HERMES_WORKSPACE_DIR` | `/workspace`   | WXPost sources, working files, and exports                              |
 
 The SoarHigh repository, host home directory, Docker socket, SSH credentials,
 and Git credentials are not mounted into the container.

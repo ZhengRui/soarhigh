@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 import app.api.routes.post as post_route
 from app.api.serv import app
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "wepost-meeting-recap-v1.json"
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "wxpost-meeting-recap-v1.json"
 
 
 @pytest.fixture
@@ -45,7 +45,7 @@ def _plain_article(*, article_type: str = "custom", custom_type: str | None = "F
 
 
 def test_capabilities_describe_the_versioned_authoring_contract(client: TestClient) -> None:
-    response = client.get("/posts/weposts/capabilities")
+    response = client.get("/posts/wxposts/capabilities")
 
     assert response.status_code == 200
     payload = response.json()
@@ -94,7 +94,7 @@ def test_complete_english_article_validates_end_to_end(
     client: TestClient,
     complete_article: dict,
 ) -> None:
-    response = client.post("/posts/weposts/validate", json=complete_article)
+    response = client.post("/posts/wxposts/validate", json=complete_article)
 
     assert response.status_code == 200
     payload = response.json()
@@ -169,7 +169,7 @@ def test_complete_english_article_validates_end_to_end(
 
 
 def test_custom_article_accepts_plain_markdown_without_directives(client: TestClient) -> None:
-    response = client.post("/posts/weposts/validate", json=_plain_article())
+    response = client.post("/posts/wxposts/validate", json=_plain_article())
 
     assert response.status_code == 200
     assert response.json()["articleType"] == "custom"
@@ -188,7 +188,7 @@ def test_body_markdown_rejects_a_duplicate_level_one_title(client: TestClient) -
     article = _plain_article()
     article["bodyMarkdown"] = "# A Duplicate Title\n\nThe article body begins here."
 
-    response = client.post("/posts/weposts/validate", json=article)
+    response = client.post("/posts/wxposts/validate", json=article)
 
     assert response.status_code == 422
     assert response.json()["errors"] == [
@@ -206,7 +206,7 @@ def test_canonical_markdown_whitespace_is_not_normalized_during_validation(clien
     article = _plain_article()
     article["bodyMarkdown"] = "\n:::takeaway\ntext: Leading whitespace remains part of the source.\n:::\n"
 
-    response = client.post("/posts/weposts/validate", json=article)
+    response = client.post("/posts/wxposts/validate", json=article)
 
     assert response.status_code == 200
     assert response.json()["directives"][0]["line"] == 2
@@ -231,9 +231,9 @@ def test_article_types_do_not_impose_modules_or_order(
         "A custom article can end without a prescribed closing module."
     )
 
-    custom_response = client.post("/posts/weposts/validate", json=custom)
+    custom_response = client.post("/posts/wxposts/validate", json=custom)
     standard_response = client.post(
-        "/posts/weposts/validate",
+        "/posts/wxposts/validate",
         json=_plain_article(article_type="member-story", custom_type=None),
     )
 
@@ -258,7 +258,7 @@ def test_every_standard_article_type_accepts_freeform_markdown(
     article_type: str,
 ) -> None:
     response = client.post(
-        "/posts/weposts/validate",
+        "/posts/wxposts/validate",
         json=_plain_article(article_type=article_type, custom_type=None),
     )
 
@@ -291,14 +291,14 @@ def test_every_advertised_presentation_value_is_accepted(
     article = _plain_article()
     article["presentation"][field] = value
 
-    response = client.post("/posts/weposts/validate", json=article)
+    response = client.post("/posts/wxposts/validate", json=article)
 
     assert response.status_code == 200
 
 
 def test_custom_article_requires_a_meaningful_label(client: TestClient) -> None:
     response = client.post(
-        "/posts/weposts/validate",
+        "/posts/wxposts/validate",
         json=_plain_article(custom_type=None),
     )
 
@@ -319,7 +319,7 @@ def test_custom_article_requires_a_meaningful_label(client: TestClient) -> None:
 
 def test_standard_article_rejects_a_custom_type_label(client: TestClient) -> None:
     response = client.post(
-        "/posts/weposts/validate",
+        "/posts/wxposts/validate",
         json=_plain_article(article_type="event-preview", custom_type="Should not be present"),
     )
 
@@ -357,7 +357,7 @@ def test_markdown_failures_return_repairable_errors(
     article = _plain_article()
     article["bodyMarkdown"] = body
 
-    response = client.post("/posts/weposts/validate", json=article)
+    response = client.post("/posts/wxposts/validate", json=article)
 
     assert response.status_code == 422
     assert response.json()["valid"] is False
@@ -396,7 +396,7 @@ def test_directive_payload_failures_identify_the_repair_location(
     article = _plain_article()
     article["bodyMarkdown"] = body
 
-    response = client.post("/posts/weposts/validate", json=article)
+    response = client.post("/posts/wxposts/validate", json=article)
 
     assert response.status_code == 422
     matching = next(error for error in response.json()["errors"] if error["code"] == expected_code)
@@ -415,7 +415,7 @@ def test_directive_media_must_exist_be_included_and_have_the_right_kind(
     )
     article["media"][1]["include"] = False
 
-    response = client.post("/posts/weposts/validate", json=article)
+    response = client.post("/posts/wxposts/validate", json=article)
 
     assert response.status_code == 422
     errors = response.json()["errors"]
@@ -438,7 +438,7 @@ def test_media_manifest_and_cover_failures_are_structured(
     article["media"][2]["order"] = 0
     article["coverMediaId"] = "V01"
 
-    response = client.post("/posts/weposts/validate", json=article)
+    response = client.post("/posts/wxposts/validate", json=article)
 
     assert response.status_code == 422
     errors = response.json()["errors"]
@@ -460,7 +460,7 @@ def test_document_contract_rejects_invalid_presentation_and_unknown_fields(clien
     article["presentation"]["palette"] = "neon-rainbow"
     article["modules"] = []
 
-    response = client.post("/posts/weposts/validate", json=article)
+    response = client.post("/posts/wxposts/validate", json=article)
 
     assert response.status_code == 422
     errors = response.json()["errors"]
@@ -475,7 +475,7 @@ def test_document_contract_rejects_an_unsupported_schema_version(client: TestCli
     article = _plain_article()
     article["schemaVersion"] = 2
 
-    response = client.post("/posts/weposts/validate", json=article)
+    response = client.post("/posts/wxposts/validate", json=article)
 
     assert response.status_code == 422
     assert response.json()["errors"][0]["code"] == "literal_error"

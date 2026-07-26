@@ -7,14 +7,14 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { remarkKeyPoints } from './remarkKeyPoints';
-import styles from './WePostRenderer.module.css';
+import styles from './WxPostRenderer.module.css';
 import type {
-  WePostBodyNode,
-  WePostDirectiveNode,
-  WePostMediaAsset,
-  WePostPresentation,
-  WePostPreviewSize,
-  WePostRenderDocument,
+  WxPostBodyNode,
+  WxPostDirectiveNode,
+  WxPostMediaAsset,
+  WxPostPresentation,
+  WxPostPreviewSize,
+  WxPostRenderDocument,
 } from './types';
 
 const LAYOUT_CLASSES = {
@@ -40,24 +40,24 @@ const TYPEFACE_CLASSES = {
   'humanist-mix': styles.typefaceHumanistMix,
 } as const;
 
-interface WePostRendererProps {
-  article: WePostRenderDocument;
-  presentation?: WePostPresentation;
-  previewSize?: WePostPreviewSize;
+interface WxPostRendererProps {
+  article: WxPostRenderDocument;
+  presentation?: WxPostPresentation;
+  previewSize?: WxPostPreviewSize;
   contextLabel?: string;
   className?: string;
 }
 
 interface DirectiveProps {
-  node: WePostDirectiveNode;
-  mediaById: Map<string, WePostMediaAsset>;
+  node: WxPostDirectiveNode;
+  mediaById: Map<string, WxPostMediaAsset>;
 }
 
 function MediaFigure({
   media,
   fallback,
 }: {
-  media?: WePostMediaAsset;
+  media?: WxPostMediaAsset;
   fallback: string;
 }) {
   return (
@@ -80,13 +80,13 @@ function GalleryBlock({
   node,
   mediaById,
 }: {
-  node: Extract<WePostDirectiveNode, { name: 'gallery' }>;
-  mediaById: Map<string, WePostMediaAsset>;
+  node: Extract<WxPostDirectiveNode, { name: 'gallery' }>;
+  mediaById: Map<string, WxPostMediaAsset>;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const items = node.payload.items
     .map((id) => mediaById.get(id))
-    .filter((item): item is WePostMediaAsset => Boolean(item));
+    .filter((item): item is WxPostMediaAsset => Boolean(item));
 
   const move = (direction: -1 | 1) => {
     const track = trackRef.current;
@@ -164,7 +164,7 @@ function DirectiveBlock({ node, mediaById }: DirectiveProps) {
                 preload='metadata'
                 poster={media.posterUrl ?? undefined}
                 aria-label={media.description}
-                data-testid='wepost-video'
+                data-testid='wxpost-video'
               >
                 <source src={media.sourceUrl} />
                 Your browser does not support embedded video.
@@ -284,7 +284,7 @@ function DirectiveBlock({ node, mediaById }: DirectiveProps) {
 function MarkdownBlock({
   node,
 }: {
-  node: Extract<WePostBodyNode, { kind: 'markdown' }>;
+  node: Extract<WxPostBodyNode, { kind: 'markdown' }>;
 }) {
   const normalizedSource = node.source.trimStart();
   const leadingHeading = normalizedSource.match(
@@ -312,7 +312,7 @@ function MarkdownBlock({
               </ReactMarkdown>
             </div>
             {copySource && (
-              <div className={styles.sectionCopy} data-wepost-section-copy>
+              <div className={styles.sectionCopy} data-wxpost-section-copy>
                 <ReactMarkdown remarkPlugins={[remarkGfm, remarkKeyPoints]}>
                   {copySource}
                 </ReactMarkdown>
@@ -329,13 +329,13 @@ function MarkdownBlock({
   );
 }
 
-export function WePostRenderer({
+export function WxPostRenderer({
   article,
   presentation = article.presentation,
   previewSize = 'mobile-390',
   contextLabel,
   className = '',
-}: WePostRendererProps) {
+}: WxPostRendererProps) {
   const mediaById = useMemo(
     () =>
       new Map(
@@ -361,12 +361,12 @@ export function WePostRenderer({
           ? styles.previewMobile
           : styles.previewDesktop
       } ${className}`}
-      data-testid='wepost-stage'
+      data-testid='wxpost-stage'
       data-preview-size={previewSize}
     >
       <article
         className={articleClasses}
-        data-testid='wepost-article'
+        data-testid='wxpost-article'
         data-layout={presentation.layout}
         data-palette={presentation.palette}
         data-appearance={presentation.appearance}
@@ -399,7 +399,7 @@ export function WePostRenderer({
           </div>
         </header>
 
-        <div className={styles.body} data-testid='wepost-body'>
+        <div className={styles.body} data-testid='wxpost-body'>
           {article.body.map((node, index) =>
             node.kind === 'markdown' ? (
               <MarkdownBlock

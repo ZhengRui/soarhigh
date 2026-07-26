@@ -11,7 +11,7 @@
     {
       "id": "M01",
       "kind": "image",
-      "sourceUrl": "https://cdn.example.com/weposts/meeting-236/listening.jpg",
+      "sourceUrl": "https://cdn.example.com/wxposts/meeting-236/listening.jpg",
       "description": "Members lean forward while listening to the first prepared speaker.",
       "credit": "SoarHigh Toastmasters",
       "people": [
@@ -25,7 +25,7 @@
     {
       "id": "M02",
       "kind": "image",
-      "sourceUrl": "https://cdn.example.com/weposts/meeting-236/notes.jpg",
+      "sourceUrl": "https://cdn.example.com/wxposts/meeting-236/notes.jpg",
       "description": "A notebook holds short ideas captured during the workshop.",
       "credit": "SoarHigh Toastmasters",
       "people": [],
@@ -37,7 +37,7 @@
     {
       "id": "M03",
       "kind": "image",
-      "sourceUrl": "https://cdn.example.com/weposts/meeting-236/feedback.jpg",
+      "sourceUrl": "https://cdn.example.com/wxposts/meeting-236/feedback.jpg",
       "description": "An evaluator offers one specific suggestion from the side of the room.",
       "credit": "SoarHigh Toastmasters",
       "people": [
@@ -51,7 +51,7 @@
     {
       "id": "M04",
       "kind": "image",
-      "sourceUrl": "https://cdn.example.com/weposts/meeting-236/maya.jpg",
+      "sourceUrl": "https://cdn.example.com/wxposts/meeting-236/maya.jpg",
       "description": "Maya smiles after completing her second attempt.",
       "credit": "SoarHigh Toastmasters",
       "people": [
@@ -65,8 +65,8 @@
     {
       "id": "V01",
       "kind": "video",
-      "sourceUrl": "https://cdn.example.com/weposts/meeting-236/maya-second-attempt.mp4",
-      "posterUrl": "https://cdn.example.com/weposts/meeting-236/maya-second-attempt-poster.jpg",
+      "sourceUrl": "https://cdn.example.com/wxposts/meeting-236/maya-second-attempt.mp4",
+      "posterUrl": "https://cdn.example.com/wxposts/meeting-236/maya-second-attempt-poster.jpg",
       "description": "A short video of Maya returning to the stage for her second attempt.",
       "credit": "SoarHigh Toastmasters",
       "people": [

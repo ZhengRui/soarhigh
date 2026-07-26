@@ -1,4 +1,4 @@
-"""Versioned wire contracts for Hermes-authored WePost articles."""
+"""Versioned wire contracts for Hermes-authored WXPost articles."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _to_camel(value: str) -> str:
 
 
 class WireModel(BaseModel):
-    """Strict camelCase JSON model used by the WePost authoring protocol."""
+    """Strict camelCase JSON model used by the WXPost authoring protocol."""
 
     model_config = ConfigDict(
         alias_generator=_to_camel,
@@ -134,7 +134,7 @@ class DirectiveBodyNode(WireModel):
 RenderBodyNode = MarkdownBodyNode | DirectiveBodyNode
 
 
-class WePostRenderDocument(ArticleMetadata):
+class WxPostRenderDocument(ArticleMetadata):
     """Backend-owned, versioned input shared by browser and WeChat renderers."""
 
     render_version: Literal[1] = 1
@@ -160,17 +160,17 @@ class ValidationIssue(WireModel):
     directive: str | None = None
 
 
-class WePostValidationSuccess(WireModel):
+class WxPostValidationSuccess(WireModel):
     valid: Literal[True] = True
     schema_version: Literal[1] = 1
     article_type: ArticleType
     custom_article_type: str | None = None
     directives: list[DirectiveSummary]
     inline_extensions: list[InlineExtensionSummary]
-    render_document: WePostRenderDocument
+    render_document: WxPostRenderDocument
 
 
-class WePostValidationFailure(WireModel):
+class WxPostValidationFailure(WireModel):
     valid: Literal[False] = False
     errors: list[ValidationIssue]
 
@@ -190,7 +190,7 @@ class DirectiveCapability(WireModel):
     payload_schema: dict[str, Any]
 
 
-class WePostCapabilities(WireModel):
+class WxPostCapabilities(WireModel):
     schema_version: Literal[1] = 1
     render_version: Literal[1] = 1
     document_schema: dict[str, Any]

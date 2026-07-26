@@ -1,6 +1,6 @@
-import type { WePostRenderDocument } from '../types';
+import type { WxPostRenderDocument } from '../types';
 
-export const meetingRecapFixture: WePostRenderDocument = {
+export const meetingRecapFixture: WxPostRenderDocument = {
   schemaVersion: 1,
   renderVersion: 1,
   title: 'The Courage to Try the Next Sentence',

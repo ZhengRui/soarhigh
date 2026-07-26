@@ -38,7 +38,7 @@ function replaceKeyPoints(node: MarkdownNode): void {
         data: {
           hName: 'span',
           hProperties: {
-            className: ['wepost-key-point'],
+            className: ['wxpost-key-point'],
           },
         },
       });

@@ -1,6 +1,6 @@
-import type { WePostRenderDocument } from '../types';
+import type { WxPostRenderDocument } from '../types';
 
-export const memberStoryFixture: WePostRenderDocument = {
+export const memberStoryFixture: WxPostRenderDocument = {
   schemaVersion: 1,
   renderVersion: 1,
   title: 'Finding Her Voice Between the Prepared Lines',

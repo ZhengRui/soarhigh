@@ -1,4 +1,4 @@
-"""Parse and validate the canonical Markdown body of a WePost document."""
+"""Parse and validate the canonical Markdown body of a WXPost document."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import yaml
 from markdown_it import MarkdownIt
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from ..models.wepost import (
+from ..models.wxpost import (
     Appearance,
     ArticleDocument,
     ArticleType,
@@ -28,8 +28,8 @@ from ..models.wepost import (
     RenderBodyNode,
     Typeface,
     ValidationIssue,
-    WePostCapabilities,
-    WePostRenderDocument,
+    WxPostCapabilities,
+    WxPostRenderDocument,
 )
 
 _DIRECTIVE_OPEN = re.compile(r"^:::([a-z][a-z0-9-]*)[ \t]*$")
@@ -213,8 +213,8 @@ class ParsedArticle:
     def inline_summaries(self) -> list[InlineExtensionSummary]:
         return [InlineExtensionSummary(name="key-point", count=self.key_point_count)]
 
-    def render_document(self, document: ArticleDocument) -> WePostRenderDocument:
-        return WePostRenderDocument(
+    def render_document(self, document: ArticleDocument) -> WxPostRenderDocument:
+        return WxPostRenderDocument(
             schema_version=document.schema_version,
             render_version=1,
             title=document.title,
@@ -234,13 +234,13 @@ class ParsedArticle:
 class ArticleDocumentValidationError(Exception):
     def __init__(self, errors: list[ValidationIssue]):
         self.errors = errors
-        super().__init__("WePost ArticleDocument validation failed")
+        super().__init__("WXPost ArticleDocument validation failed")
 
 
-def capabilities() -> WePostCapabilities:
-    return WePostCapabilities(
+def capabilities() -> WxPostCapabilities:
+    return WxPostCapabilities(
         document_schema=ArticleDocument.model_json_schema(by_alias=True),
-        render_document_schema=WePostRenderDocument.model_json_schema(by_alias=True),
+        render_document_schema=WxPostRenderDocument.model_json_schema(by_alias=True),
         article_types=[item.value for item in ArticleType],
         directives=list(_DIRECTIVE_REGISTRY),
         inline_extensions=["key-point"],
@@ -473,7 +473,7 @@ def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
                     code="unsafe_html",
                     path=["bodyMarkdown"],
                     line=(token.map[0] + 1) if token.map else None,
-                    message="Raw HTML is not allowed in WePost Markdown.",
+                    message="Raw HTML is not allowed in WXPost Markdown.",
                 )
             )
         if token.children:
@@ -484,7 +484,7 @@ def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
                             code="unsafe_html",
                             path=["bodyMarkdown"],
                             line=(token.map[0] + 1) if token.map else None,
-                            message="Raw HTML is not allowed in WePost Markdown.",
+                            message="Raw HTML is not allowed in WXPost Markdown.",
                         )
                     )
 

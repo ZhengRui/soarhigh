@@ -1,6 +1,6 @@
-import type { WePostRenderDocument } from '../types';
+import type { WxPostRenderDocument } from '../types';
 
-export const eventPreviewFixture: WePostRenderDocument = {
+export const eventPreviewFixture: WxPostRenderDocument = {
   schemaVersion: 1,
   renderVersion: 1,
   title: 'An Evening for Stories That Move',
