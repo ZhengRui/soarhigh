@@ -93,7 +93,7 @@ class MediaAsset(WireModel):
     description_status: DescriptionStatus
 
 
-class ArticleDocument(WireModel):
+class ArticleMetadata(WireModel):
     schema_version: Literal[1]
     title: TrimmedText
     slug: TrimmedText | None = None
@@ -102,10 +102,13 @@ class ArticleDocument(WireModel):
     article_type: ArticleType
     custom_article_type: TrimmedText | None = None
     source_meeting_id: TrimmedText | None = None
-    body_markdown: str
     media: list[MediaAsset]
     cover_media_id: TrimmedText | None = None
     presentation: Presentation
+
+
+class ArticleDocument(ArticleMetadata):
+    body_markdown: str
 
     @field_validator("body_markdown")
     @classmethod
@@ -113,6 +116,29 @@ class ArticleDocument(WireModel):
         if not value.strip():
             raise ValueError("bodyMarkdown must contain visible Markdown.")
         return value
+
+
+class MarkdownBodyNode(WireModel):
+    kind: Literal["markdown"] = "markdown"
+    source: str
+    line: int = Field(ge=1)
+
+
+class DirectiveBodyNode(WireModel):
+    kind: Literal["directive"] = "directive"
+    name: str
+    payload: dict[str, Any]
+    line: int = Field(ge=1)
+
+
+RenderBodyNode = MarkdownBodyNode | DirectiveBodyNode
+
+
+class WePostRenderDocument(ArticleMetadata):
+    """Backend-owned, versioned input shared by browser and WeChat renderers."""
+
+    render_version: Literal[1] = 1
+    body: list[RenderBodyNode]
 
 
 class DirectiveSummary(WireModel):
@@ -141,6 +167,7 @@ class WePostValidationSuccess(WireModel):
     custom_article_type: str | None = None
     directives: list[DirectiveSummary]
     inline_extensions: list[InlineExtensionSummary]
+    render_document: WePostRenderDocument
 
 
 class WePostValidationFailure(WireModel):
@@ -165,7 +192,9 @@ class DirectiveCapability(WireModel):
 
 class WePostCapabilities(WireModel):
     schema_version: Literal[1] = 1
+    render_version: Literal[1] = 1
     document_schema: dict[str, Any]
+    render_document_schema: dict[str, Any]
     article_types: list[str]
     directives: list[str]
     inline_extensions: list[str]

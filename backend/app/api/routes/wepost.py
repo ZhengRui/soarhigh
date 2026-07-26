@@ -54,4 +54,5 @@ async def r_validate_wepost(payload: Any = Body(...)) -> WePostValidationSuccess
         custom_article_type=document.custom_article_type,
         directives=parsed.directive_summaries(),
         inline_extensions=parsed.inline_summaries(),
+        render_document=parsed.render_document(document),
     )

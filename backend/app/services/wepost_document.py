@@ -14,18 +14,22 @@ from ..models.wepost import (
     Appearance,
     ArticleDocument,
     ArticleType,
+    DirectiveBodyNode,
     DirectiveCapability,
     DirectiveSummary,
     InlineExtensionSummary,
     Layout,
+    MarkdownBodyNode,
     MediaAsset,
     MediaKind,
     Palette,
     Presentation,
     PresentationCapabilities,
+    RenderBodyNode,
     Typeface,
     ValidationIssue,
     WePostCapabilities,
+    WePostRenderDocument,
 )
 
 _DIRECTIVE_OPEN = re.compile(r"^:::([a-z][a-z0-9-]*)[ \t]*$")
@@ -199,6 +203,7 @@ class ParsedDirective:
 
 @dataclass(frozen=True)
 class ParsedArticle:
+    body: list[RenderBodyNode]
     directives: list[ParsedDirective]
     key_point_count: int
 
@@ -207,6 +212,23 @@ class ParsedArticle:
 
     def inline_summaries(self) -> list[InlineExtensionSummary]:
         return [InlineExtensionSummary(name="key-point", count=self.key_point_count)]
+
+    def render_document(self, document: ArticleDocument) -> WePostRenderDocument:
+        return WePostRenderDocument(
+            schema_version=document.schema_version,
+            render_version=1,
+            title=document.title,
+            slug=document.slug,
+            excerpt=document.excerpt,
+            byline=document.byline,
+            article_type=document.article_type,
+            custom_article_type=document.custom_article_type,
+            source_meeting_id=document.source_meeting_id,
+            media=document.media,
+            cover_media_id=document.cover_media_id,
+            presentation=document.presentation,
+            body=self.body,
+        )
 
 
 class ArticleDocumentValidationError(Exception):
@@ -218,6 +240,7 @@ class ArticleDocumentValidationError(Exception):
 def capabilities() -> WePostCapabilities:
     return WePostCapabilities(
         document_schema=ArticleDocument.model_json_schema(by_alias=True),
+        render_document_schema=WePostRenderDocument.model_json_schema(by_alias=True),
         article_types=[item.value for item in ArticleType],
         directives=list(_DIRECTIVE_REGISTRY),
         inline_extensions=["key-point"],
@@ -337,8 +360,20 @@ def _validate_document_shape(document: ArticleDocument, errors: list[ValidationI
 def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
     lines = body.splitlines()
     markdown_lines = list(lines)
+    render_body: list[RenderBodyNode] = []
     directives: list[ParsedDirective] = []
+    markdown_start = 0
     index = 0
+
+    def flush_markdown(end: int) -> None:
+        source = "\n".join(lines[markdown_start:end])
+        if source.strip():
+            render_body.append(
+                MarkdownBodyNode(
+                    source=source,
+                    line=markdown_start + 1,
+                )
+            )
 
     while index < len(lines):
         line = lines[index]
@@ -356,6 +391,7 @@ def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
             index += 1
             continue
 
+        flush_markdown(index)
         name = opening.group(1)
         closing_index = index + 1
         while closing_index < len(lines) and not _DIRECTIVE_CLOSE.fullmatch(lines[closing_index]):
@@ -383,6 +419,7 @@ def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
             )
             for line_index in range(index, len(lines)):
                 markdown_lines[line_index] = ""
+            markdown_start = len(lines)
             break
 
         for line_index in range(index, closing_index + 1):
@@ -399,17 +436,37 @@ def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
                 )
             )
             index = closing_index + 1
+            markdown_start = index
             continue
 
         payload_text = "\n".join(lines[index + 1 : closing_index])
         payload = _load_directive_payload(name, payload_text, index + 1, errors)
         if payload is not None:
             directives.append(ParsedDirective(name=name, line=index + 1, payload=payload))
+            render_body.append(
+                DirectiveBodyNode(
+                    name=name,
+                    line=index + 1,
+                    payload=payload.model_dump(mode="json", exclude_none=True),
+                )
+            )
         index = closing_index + 1
+        markdown_start = index
+
+    flush_markdown(len(lines))
 
     markdown = "\n".join(markdown_lines)
     tokens = _MARKDOWN.parse(markdown)
     for token in tokens:
+        if token.type == "heading_open" and token.tag == "h1":
+            errors.append(
+                ValidationIssue(
+                    code="body_h1_not_allowed",
+                    path=["bodyMarkdown"],
+                    line=(token.map[0] + 1) if token.map else None,
+                    message="ArticleDocument.title is the only title; bodyMarkdown must start with prose or H2.",
+                )
+            )
         if token.type in {"html_block", "html_inline"}:
             errors.append(
                 ValidationIssue(
@@ -438,7 +495,11 @@ def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
         for child in token.children
         if child.type == "text"
     )
-    return ParsedArticle(directives=directives, key_point_count=key_point_count)
+    return ParsedArticle(
+        body=render_body,
+        directives=directives,
+        key_point_count=key_point_count,
+    )
 
 
 def _load_directive_payload(

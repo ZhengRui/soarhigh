@@ -50,6 +50,7 @@ def test_capabilities_describe_the_versioned_authoring_contract(client: TestClie
     assert response.status_code == 200
     payload = response.json()
     assert payload["schemaVersion"] == 1
+    assert payload["renderVersion"] == 1
     assert payload["articleTypes"] == [
         "meeting-recap",
         "member-story",
@@ -71,6 +72,8 @@ def test_capabilities_describe_the_versioned_authoring_contract(client: TestClie
     assert payload["inlineSyntax"] == {"key-point": "==important phrase=="}
     assert payload["documentSchema"]["properties"]["bodyMarkdown"]["type"] == "string"
     assert payload["documentSchema"]["properties"]["customArticleType"]["anyOf"][0]["type"] == "string"
+    assert payload["renderDocumentSchema"]["properties"]["renderVersion"]["const"] == 1
+    assert payload["renderDocumentSchema"]["properties"]["body"]["type"] == "array"
     assert payload["presentation"] == {
         "layouts": ["brand-default", "field-notes", "editorial-feature"],
         "palettes": ["brand-blue", "paper-neutral", "warm-terracotta"],
@@ -94,7 +97,9 @@ def test_complete_english_article_validates_end_to_end(
     response = client.post("/posts/weposts/validate", json=complete_article)
 
     assert response.status_code == 200
-    assert response.json() == {
+    payload = response.json()
+    render_document = payload.pop("renderDocument")
+    assert payload == {
         "valid": True,
         "schemaVersion": 1,
         "articleType": "meeting-recap",
@@ -110,6 +115,57 @@ def test_complete_english_article_validates_end_to_end(
         ],
         "inlineExtensions": [{"name": "key-point", "count": 3}],
     }
+    assert render_document["renderVersion"] == 1
+    assert render_document["title"] == complete_article["title"]
+    assert render_document["sourceMeetingId"] == "meeting-236"
+    assert render_document["presentation"] == complete_article["presentation"]
+    assert [node["kind"] for node in render_document["body"]] == [
+        "markdown",
+        "directive",
+        "markdown",
+        "directive",
+        "directive",
+        "markdown",
+        "directive",
+        "directive",
+        "markdown",
+        "directive",
+        "markdown",
+        "directive",
+        "markdown",
+    ]
+    assert [node["name"] for node in render_document["body"] if node["kind"] == "directive"] == [
+        "info-grid",
+        "timeline",
+        "gallery",
+        "pull-quote",
+        "person",
+        "video",
+        "takeaway",
+    ]
+    assert render_document["body"][0] == {
+        "kind": "markdown",
+        "source": (
+            "The room became quiet when Maya reached the front. "
+            "She had prepared an opening, but the next sentence had disappeared.\n\n"
+            "What happened after that mattered more than a polished speech. "
+            "==She stayed in the room and tried again.==\n"
+        ),
+        "line": 1,
+    }
+    assert render_document["body"][1] == {
+        "kind": "directive",
+        "name": "info-grid",
+        "payload": {
+            "title": "Meeting at a glance",
+            "items": [
+                {"label": "Theme", "value": "Learning in public"},
+                {"label": "Date", "value": "July 18, 2026"},
+                {"label": "Place", "value": "SoarHigh Club"},
+            ],
+        },
+        "line": 5,
+    }
 
 
 def test_custom_article_accepts_plain_markdown_without_directives(client: TestClient) -> None:
@@ -119,6 +175,31 @@ def test_custom_article_accepts_plain_markdown_without_directives(client: TestCl
     assert response.json()["articleType"] == "custom"
     assert response.json()["customArticleType"] == "Field Reflection"
     assert response.json()["directives"] == []
+    assert response.json()["renderDocument"]["body"] == [
+        {
+            "kind": "markdown",
+            "source": _plain_article()["bodyMarkdown"],
+            "line": 1,
+        }
+    ]
+
+
+def test_body_markdown_rejects_a_duplicate_level_one_title(client: TestClient) -> None:
+    article = _plain_article()
+    article["bodyMarkdown"] = "# A Duplicate Title\n\nThe article body begins here."
+
+    response = client.post("/posts/weposts/validate", json=article)
+
+    assert response.status_code == 422
+    assert response.json()["errors"] == [
+        {
+            "code": "body_h1_not_allowed",
+            "path": ["bodyMarkdown"],
+            "message": "ArticleDocument.title is the only title; bodyMarkdown must start with prose or H2.",
+            "line": 1,
+            "directive": None,
+        }
+    ]
 
 
 def test_canonical_markdown_whitespace_is_not_normalized_during_validation(client: TestClient) -> None:
