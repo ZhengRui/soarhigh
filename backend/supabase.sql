@@ -83,6 +83,66 @@ CREATE TABLE posts (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- WXPosts table - stores WeChat article source documents
+CREATE TABLE wxposts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title TEXT NOT NULL
+        CONSTRAINT wxposts_title_not_blank CHECK (title ~ '[^[:space:]]'),
+    slug TEXT NOT NULL
+        CONSTRAINT wxposts_slug_not_blank CHECK (slug ~ '[^[:space:]]'),
+    content TEXT NOT NULL
+        CONSTRAINT wxposts_content_not_blank CHECK (content ~ '[^[:space:]]'),
+    is_public BOOLEAN NOT NULL DEFAULT TRUE,
+    schema_version INTEGER NOT NULL DEFAULT 1
+        CONSTRAINT wxposts_schema_version_v1 CHECK (schema_version = 1),
+    article_type TEXT NOT NULL
+        CONSTRAINT wxposts_article_type_valid CHECK (
+            article_type IN (
+                'meeting-recap',
+                'member-story',
+                'event-preview',
+                'meeting-review',
+                'action-guide',
+                'custom'
+            )
+        ),
+    custom_article_type TEXT,
+    source_meeting_id UUID REFERENCES meetings(id) ON DELETE SET NULL,
+    excerpt TEXT,
+    byline TEXT,
+    media_manifest JSONB NOT NULL DEFAULT '[]'::jsonb
+        CONSTRAINT wxposts_media_manifest_is_array CHECK (
+            jsonb_typeof(media_manifest) = 'array'
+        ),
+    cover_media_id TEXT,
+    default_presentation JSONB NOT NULL
+        CONSTRAINT wxposts_default_presentation_is_object CHECK (
+            jsonb_typeof(default_presentation) = 'object'
+        ),
+    article_revision INTEGER NOT NULL DEFAULT 1
+        CONSTRAINT wxposts_article_revision_positive CHECK (
+            article_revision >= 1
+        ),
+    render_version INTEGER NOT NULL DEFAULT 1
+        CONSTRAINT wxposts_render_version_v1 CHECK (render_version = 1),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT wxposts_slug_key UNIQUE (slug),
+    CONSTRAINT wxposts_custom_article_type_valid CHECK (
+        (
+            article_type = 'custom'
+            AND COALESCE(
+                custom_article_type ~ '[^[:space:]]',
+                FALSE
+            )
+        )
+        OR (
+            article_type <> 'custom'
+            AND custom_article_type IS NULL
+        )
+    )
+);
+
 -- Votes table - stores votes
 CREATE TABLE votes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -154,6 +214,15 @@ CREATE UNIQUE INDEX unique_type_no_not_null ON meetings(type, no) WHERE no IS NO
 -- Ensures post slugs are unique
 CREATE UNIQUE INDEX unique_slug ON posts(slug);
 
+-- Supports public WXPost listings and optional meeting lookup
+CREATE INDEX wxposts_public_created_at_idx
+    ON wxposts (created_at DESC)
+    WHERE is_public = TRUE;
+
+CREATE INDEX wxposts_source_meeting_id_idx
+    ON wxposts (source_meeting_id)
+    WHERE source_meeting_id IS NOT NULL;
+
 -- Ensures meeting_id, category, and name are unique
 CREATE UNIQUE INDEX unique_meeting_category_name ON votes(meeting_id, category, name);
 
@@ -180,6 +249,7 @@ ALTER TABLE attendees ENABLE ROW LEVEL SECURITY;
 ALTER TABLE meetings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE segments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wxposts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE votes_status ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feedbacks ENABLE ROW LEVEL SECURITY;
@@ -351,6 +421,16 @@ CREATE POLICY "Members or admin can delete posts"
 ON posts FOR DELETE
 TO authenticated
 USING (author_id = auth.uid() OR is_admin(auth.uid()));
+
+-- WXPosts table policies
+CREATE POLICY wxposts_public_read
+ON wxposts FOR SELECT
+TO anon, authenticated
+USING (is_public = TRUE);
+
+REVOKE ALL ON TABLE wxposts FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON TABLE wxposts TO anon, authenticated;
+GRANT ALL ON TABLE wxposts TO service_role;
 
 -- Votes table policies
 CREATE POLICY "Members can view votes"

@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-25
 
-**Status:** Phase 0 complete; Phase 1 persistence implementation ready.
+**Status:** Phase 0 complete; Phase 1 migration complete.
 **Scope:** End-to-end creation, public preview, presentation experimentation,
 and authenticated saving to the WeChat Official Account draft box.
 
@@ -771,7 +771,7 @@ type ContentListItem = {
   title: string;
   slug: string;
   excerpt: string | null;
-  author: Author;
+  author: Author; // member for Post; configured Official Account for WXPost
   createdAt: string;
 };
 ```
@@ -779,6 +779,8 @@ type ContentListItem = {
 `All` merges both sources before applying the final ordering and pagination;
 `Posts` and `WXPost` query only their corresponding source. A future SQL view
 or RPC may optimize the union without making WXPost a subtype of `posts`.
+The WXPost author is synthesized from the configured Official Account; it is
+not loaded from an `wxposts.author_id` column or a member relationship.
 
 No WXPost or WeChat Preview item is added to the Operations menu.
 
@@ -972,12 +974,11 @@ lifecycle, and future WeChat state, so it is persisted independently:
 
 ```sql
 CREATE TABLE public.wxposts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  title TEXT NOT NULL CHECK (BTRIM(title) <> ''),
-  slug TEXT NOT NULL UNIQUE CHECK (BTRIM(slug) <> ''),
-  content TEXT NOT NULL CHECK (BTRIM(content) <> ''),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL CHECK (title ~ '[^[:space:]]'),
+  slug TEXT NOT NULL UNIQUE CHECK (slug ~ '[^[:space:]]'),
+  content TEXT NOT NULL CHECK (content ~ '[^[:space:]]'),
   is_public BOOLEAN NOT NULL DEFAULT TRUE,
-  author_id UUID NOT NULL REFERENCES members(id),
   schema_version INTEGER NOT NULL DEFAULT 1
     CHECK (schema_version = 1),
   article_type TEXT NOT NULL
@@ -992,7 +993,7 @@ CREATE TABLE public.wxposts (
       )
     ),
   custom_article_type TEXT NULL,
-  source_meeting_id UUID NULL REFERENCES meetings(id),
+  source_meeting_id UUID NULL REFERENCES meetings(id) ON DELETE SET NULL,
   excerpt TEXT NULL,
   byline TEXT NULL,
   media_manifest JSONB NOT NULL DEFAULT '[]'::jsonb
@@ -1009,7 +1010,7 @@ CREATE TABLE public.wxposts (
   CONSTRAINT wxposts_custom_article_type_check CHECK (
     (
       article_type = 'custom'
-      AND NULLIF(BTRIM(custom_article_type), '') IS NOT NULL
+      AND COALESCE(custom_article_type ~ '[^[:space:]]', FALSE)
     )
     OR (
       article_type <> 'custom'
@@ -1042,15 +1043,15 @@ rows where `is_public = true`. Do not add direct browser insert, update, or
 delete policies: the backend writes with its service role after enforcing the
 scoped Hermes credential. Hermes never receives Supabase credentials.
 
-### 14.3 Automated author/byline
+### 14.3 Publisher identity and optional byline
 
-The Hermes Agent request must provide a valid `author_member_id` when the
-initiating Feishu identity maps to a SoarHigh member. If no mapping exists, MVP
-uses a configured SoarHigh editorial member identity so ownership remains
-explicit.
+`wxposts` has no member owner or author foreign key. SoarHigh membership
+controls who may perform protected operations, but it does not define the
+article author. The WeChat publisher/author identity comes from the configured
+Official Account and its draft adapter.
 
-The article's visible `byline` may be different from the database owner and is
-stored in `wxposts.byline`.
+The optional `wxposts.byline` is article content, such as "SoarHigh Editorial
+Team". It is not an account identity or an ownership field.
 
 ### 14.4 Deferred WeChat draft persistence and audit
 
@@ -1179,7 +1180,6 @@ Request:
 
 ```json
 {
-  "author_member_id": "uuid",
   "document": {
     "schemaVersion": 1,
     "title": "What We Learned by Speaking Again",
@@ -1526,7 +1526,8 @@ Before calling WeChat:
 - expected revision is current;
 - explicit confirmation is present;
 - Official Account credentials and access token are available;
-- title, author/byline, summary, and cover satisfy the adapter contract;
+- title, configured WeChat author identity/byline, summary, and cover satisfy
+  the adapter contract;
 - all image/media transformations succeeded;
 - the final HTML passes size and compatibility checks;
 - draft add/update mode is unambiguous.
@@ -1855,16 +1856,14 @@ Before writing the implementation plan:
 1. confirm the target Official Account has the required draft and media API
    permissions and deployment-network access;
 2. confirm the Hermes Agent service authentication mechanism with SoarHigh;
-3. choose the configured editorial member identity used when a Feishu user
-   cannot map to a SoarHigh member;
-4. finalize and version the Markdown directive grammar and parsed AST;
-5. verify the WeChat video export path and lock the fallback behavior;
-6. decide the exact renderer-version string and fixture set;
-7. inspect the effective Supabase schema and write the migration against the
+3. finalize and version the Markdown directive grammar and parsed AST;
+4. verify the WeChat video export path and lock the fallback behavior;
+5. decide the exact renderer-version string and fixture set;
+6. inspect the effective Supabase schema and write the migration against the
    current production migration history;
-8. confirm Docker Desktop/Engine is available and choose the exact host
+7. confirm Docker Desktop/Engine is available and choose the exact host
    `hermes-workspace` path in `claws/hermes/.env.local`;
-9. back up the host Hermes home, stop the host Gateway, and verify the official
+8. back up the host Hermes home, stop the host Gateway, and verify the official
    container reads the mounted state at `/opt/data`;
-10. define workspace retention, size limits, and cleanup behavior for Feishu
+9. define workspace retention, size limits, and cleanup behavior for Feishu
     source files and media-processing intermediates.
