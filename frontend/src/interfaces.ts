@@ -67,6 +67,23 @@ export interface PostIF {
   updated_at?: string;
 }
 
+export type ContentKind = 'all' | 'post' | 'wxpost';
+
+export interface ContentListItemIF {
+  kind: Exclude<ContentKind, 'all'>;
+  id: string;
+  title: string;
+  slug: string;
+  excerpt?: string | null;
+  author: {
+    member_id?: string | null;
+    name: string;
+  };
+  is_public: boolean;
+  cover_image_url?: string | null;
+  created_at: string;
+}
+
 export interface CandidateIF {
   name: string;
   segment?: string;
@@ -107,7 +124,7 @@ export interface PaginatedResponse<T> {
 }
 
 export type PaginatedMeetings = PaginatedResponse<MeetingIF>;
-export type PaginatedPosts = PaginatedResponse<PostIF>;
+export type PaginatedContentItems = PaginatedResponse<ContentListItemIF>;
 
 // Dashboard Stats Interfaces
 export interface MemberMeetingRecordIF {

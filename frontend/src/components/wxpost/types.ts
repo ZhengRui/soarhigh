@@ -74,6 +74,17 @@ export interface WxPostRenderDocument extends WxPostArticleMetadata {
   body: WxPostBodyNode[];
 }
 
+export interface WxPostPublicDetail {
+  id: string;
+  slug: string;
+  is_public: true;
+  article_revision: number;
+  context_label: string;
+  created_at: string;
+  updated_at: string;
+  render_document: WxPostRenderDocument;
+}
+
 export interface GalleryDirectivePayload {
   items: string[];
   caption?: string;

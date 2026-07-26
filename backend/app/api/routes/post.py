@@ -1,27 +1,28 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
+from ...db.content import get_content_items
 from ...db.core import (
     create_post,
     delete_post,
     get_post_by_slug,
-    get_posts,
     update_post,
 )
-from ...models.post import PaginatedPosts, Post
+from ...models.post import PaginatedContentItems, Post
 from ...models.users import User
 from .auth import get_current_user, get_optional_user
 
 post_router = r = APIRouter()
 
 
-@r.get("/posts", response_model=PaginatedPosts)
+@r.get("/posts", response_model=PaginatedContentItems)
 async def r_list_posts(
     user: Optional[User] = Depends(get_optional_user),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, le=50, description="Items per page"),
-) -> PaginatedPosts:
+    kind: Literal["all", "post", "wxpost"] = Query("all", description="Content source filter"),
+) -> PaginatedContentItems:
     """
     Get a paginated list of posts.
 
@@ -29,8 +30,8 @@ async def r_list_posts(
     Authenticated users can see all posts.
     """
     user_id = user.uid if user else None
-    result = get_posts(user_id=user_id, page=page, page_size=page_size)
-    return PaginatedPosts(**result)
+    result = get_content_items(kind=kind, user_id=user_id, page=page, page_size=page_size)
+    return PaginatedContentItems(**result)
 
 
 @r.get("/posts/{slug}", response_model=Post)

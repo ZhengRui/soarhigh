@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
@@ -93,7 +95,7 @@ class MediaAsset(WireModel):
     description_status: DescriptionStatus
 
 
-class ArticleMetadata(WireModel):
+class ArticleMetadataFields(WireModel):
     schema_version: Literal[1]
     title: TrimmedText
     slug: TrimmedText | None = None
@@ -104,10 +106,27 @@ class ArticleMetadata(WireModel):
     source_meeting_id: TrimmedText | None = None
     media: list[MediaAsset]
     cover_media_id: TrimmedText | None = None
+
+
+class ArticleMetadata(ArticleMetadataFields):
     presentation: Presentation
 
 
 class ArticleDocument(ArticleMetadata):
+    body_markdown: str
+
+    @field_validator("body_markdown")
+    @classmethod
+    def _require_non_empty_markdown(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("bodyMarkdown must contain visible Markdown.")
+        return value
+
+
+class ArticleDocumentUpdate(ArticleMetadataFields):
+    """A complete content revision that may retain the stored presentation."""
+
+    presentation: Presentation | None = None
     body_markdown: str
 
     @field_validator("body_markdown")
@@ -204,3 +223,36 @@ class WxPostCapabilities(WireModel):
     directive_syntax: str
     directive_schemas: list[DirectiveCapability]
     inline_syntax: dict[str, str]
+
+
+class WxPostPersistenceModel(BaseModel):
+    """Strict snake_case envelope around camelCase article documents."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class WxPostCreateRequest(WxPostPersistenceModel):
+    document: ArticleDocument
+
+
+class WxPostUpdateRequest(WxPostPersistenceModel):
+    expected_revision: int = Field(ge=1)
+    document: ArticleDocumentUpdate
+
+
+class WxPostMutationResult(WxPostPersistenceModel):
+    id: UUID
+    slug: str
+    article_revision: int
+    preview_url: str
+
+
+class WxPostPublicDetail(WxPostPersistenceModel):
+    id: UUID
+    slug: str
+    is_public: Literal[True]
+    article_revision: int
+    context_label: str
+    created_at: datetime
+    updated_at: datetime
+    render_document: WxPostRenderDocument

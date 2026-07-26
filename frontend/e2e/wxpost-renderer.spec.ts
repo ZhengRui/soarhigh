@@ -1,8 +1,10 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 import {
   WXPOST_FIXTURES,
+  WXPOST_FIXTURE_CONTEXT_LABELS,
   WXPOST_FIXTURE_IDS,
+  type WxPostFixtureId,
 } from '../src/components/wxpost/fixtures';
 import {
   WXPOST_APPEARANCES,
@@ -12,19 +14,71 @@ import {
   WXPOST_TYPEFACES,
 } from '../src/components/wxpost/types';
 
-test('renders every v1 directive and key-point in the complete article', async ({
-  page,
-}) => {
-  await page.goto('/posts/wxposts/renderer-preview');
+async function mockWxPostApi(page: Page) {
+  await page.route(/\/posts\/wxposts\/[^/?]+$/, async (route) => {
+    if (route.request().resourceType() === 'document') {
+      await route.continue();
+      return;
+    }
 
+    const fixtureId = new URL(route.request().url()).pathname
+      .split('/')
+      .at(-1) as WxPostFixtureId;
+    const fixture = WXPOST_FIXTURES[fixtureId];
+    if (!fixture) {
+      await route.fulfill({ status: 404, json: { detail: 'Not found' } });
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      json: {
+        id: `00000000-0000-4000-8000-${fixtureId.padEnd(12, '0').slice(0, 12)}`,
+        slug: fixtureId,
+        is_public: true,
+        article_revision: 3,
+        context_label: WXPOST_FIXTURE_CONTEXT_LABELS[fixtureId],
+        created_at: '2026-07-18T12:00:00+00:00',
+        updated_at: '2026-07-19T12:00:00+00:00',
+        render_document: fixture,
+      },
+    });
+  });
+}
+
+async function openFixture(
+  page: Page,
+  fixtureId: WxPostFixtureId = 'meeting-recap'
+) {
+  await page.goto(`/posts/wxposts/${fixtureId}`);
   await expect(
     page.getByRole('heading', {
       level: 1,
-      name: 'The Courage to Try the Next Sentence',
+      name: WXPOST_FIXTURES[fixtureId].title,
     })
   ).toBeVisible();
-  await expect(page.getByText('Meeting 236', { exact: true })).toBeVisible();
+}
+
+function presentationOption(page: Page, group: string, option: string) {
+  return page.locator(`[data-testid="wxpost-${group}-${option}"]:visible`);
+}
+
+test.beforeEach(async ({ page }) => {
+  await mockWxPostApi(page);
+});
+
+test('renders the formal public page and every v1 directive', async ({
+  page,
+}) => {
+  await openFixture(page);
+
+  await expect(page.getByText('WxPost', { exact: true })).toBeVisible();
+  await expect(page.getByText('Revision 3', { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('wxpost-article').getByText('Meeting 236', { exact: true })
+  ).toBeVisible();
   await expect(page.getByText('meeting-236', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('WXPost Renderer Lab')).toHaveCount(0);
 
   for (const directive of [
     'info-grid',
@@ -54,15 +108,9 @@ test('renders every v1 directive and key-point in the complete article', async (
     'src',
     /interactive-examples\.mdn\.mozilla\.net/
   );
-  await expect(
-    page.getByText(
-      'A short video placeholder representing Maya returning to the stage.',
-      { exact: true }
-    )
-  ).toBeVisible();
 });
 
-test('starts with the agreed defaults and changes presentation locally', async ({
+test('starts with stored defaults and changes presentation only locally', async ({
   page,
 }) => {
   const mutationRequests: string[] = [];
@@ -72,29 +120,39 @@ test('starts with the agreed defaults and changes presentation locally', async (
     }
   });
 
-  await page.goto('/posts/wxposts/renderer-preview');
+  await openFixture(page);
 
   const stage = page.getByTestId('wxpost-stage');
   const article = page.getByTestId('wxpost-article');
 
-  await expect(page.locator('#wxpost-layout')).toHaveValue('brand-default');
-  await expect(page.locator('#wxpost-palette')).toHaveValue('paper-neutral');
-  await expect(page.locator('#wxpost-appearance')).toHaveValue('light');
-  await expect(page.locator('#wxpost-typeface')).toHaveValue('editorial-serif');
-  await expect(page.locator('#wxpost-preview-size')).toHaveValue('mobile-390');
+  await expect(
+    presentationOption(page, 'layout', 'brand-default')
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    presentationOption(page, 'palette', 'paper-neutral')
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(presentationOption(page, 'appearance', 'light')).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  await expect(
+    presentationOption(page, 'typeface', 'editorial-serif')
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    presentationOption(page, 'preview-size', 'mobile-390')
+  ).toHaveAttribute('aria-pressed', 'true');
   await expect(stage).toHaveAttribute('data-preview-size', 'mobile-390');
-  await expect(page.locator('#wxpost-layout')).toBeEnabled();
 
   const mobileWidth = await stage.evaluate(
     (element) => element.getBoundingClientRect().width
   );
   expect(mobileWidth).toBeLessThanOrEqual(390);
 
-  await page.locator('#wxpost-layout').selectOption('editorial-feature');
-  await page.locator('#wxpost-palette').selectOption('brand-blue');
-  await page.locator('#wxpost-appearance').selectOption('dark');
-  await page.locator('#wxpost-typeface').selectOption('humanist-mix');
-  await page.locator('#wxpost-preview-size').selectOption('desktop-760');
+  await presentationOption(page, 'layout', 'editorial-feature').click();
+  await presentationOption(page, 'palette', 'brand-blue').click();
+  await presentationOption(page, 'appearance', 'dark').click();
+  await presentationOption(page, 'typeface', 'humanist-mix').click();
+  await presentationOption(page, 'preview-size', 'desktop-760').click();
 
   await expect(article).toHaveAttribute('data-layout', 'editorial-feature');
   await expect(article).toHaveAttribute('data-palette', 'brand-blue');
@@ -127,9 +185,8 @@ test('renders every layout, palette, appearance, and typeface combination', asyn
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
 
-  await page.goto('/posts/wxposts/renderer-preview');
-  await expect(page.locator('#wxpost-layout')).toBeEnabled();
-  await page.locator('#wxpost-preview-size').selectOption('desktop-760');
+  await openFixture(page);
+  await presentationOption(page, 'preview-size', 'desktop-760').click();
 
   const article = page.getByTestId('wxpost-article');
   const expectedBackgrounds = {
@@ -153,7 +210,7 @@ test('renders every layout, palette, appearance, and typeface combination', asyn
   } as const;
 
   for (const layout of WXPOST_LAYOUTS) {
-    await page.locator('#wxpost-layout').selectOption(layout);
+    await presentationOption(page, 'layout', layout).click();
     await expect(article).toHaveAttribute('data-layout', layout);
     const heroColumnCount = await article
       .locator('header')
@@ -165,11 +222,11 @@ test('renders every layout, palette, appearance, and typeface combination', asyn
     expect(heroColumnCount).toBe(layout === 'brand-default' ? 1 : 2);
 
     for (const palette of WXPOST_PALETTES) {
-      await page.locator('#wxpost-palette').selectOption(palette);
+      await presentationOption(page, 'palette', palette).click();
       await expect(article).toHaveAttribute('data-palette', palette);
 
       for (const appearance of WXPOST_APPEARANCES) {
-        await page.locator('#wxpost-appearance').selectOption(appearance);
+        await presentationOption(page, 'appearance', appearance).click();
         await expect(article).toHaveAttribute('data-appearance', appearance);
         await expect(article).toHaveCSS(
           'background-color',
@@ -177,7 +234,7 @@ test('renders every layout, palette, appearance, and typeface combination', asyn
         );
 
         for (const typeface of WXPOST_TYPEFACES) {
-          await page.locator('#wxpost-typeface').selectOption(typeface);
+          await presentationOption(page, 'typeface', typeface).click();
           await expect(article).toHaveAttribute('data-typeface', typeface);
           const titleFont = await article
             .locator('h1')
@@ -196,27 +253,18 @@ test('keeps three article shapes readable in every layout and preview size', asy
 }) => {
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto('/posts/wxposts/renderer-preview');
-  await expect(page.locator('#wxpost-layout')).toBeEnabled();
-
-  const article = page.getByTestId('wxpost-article');
-  const stage = page.getByTestId('wxpost-stage');
 
   for (const fixtureId of WXPOST_FIXTURE_IDS) {
-    await page.getByTestId(`fixture-option-${fixtureId}`).click();
-    await expect(
-      page.getByRole('heading', {
-        level: 1,
-        name: WXPOST_FIXTURES[fixtureId].title,
-      })
-    ).toBeVisible();
+    await openFixture(page, fixtureId);
+    const article = page.getByTestId('wxpost-article');
+    const stage = page.getByTestId('wxpost-stage');
 
     for (const layout of WXPOST_LAYOUTS) {
-      await page.locator('#wxpost-layout').selectOption(layout);
+      await presentationOption(page, 'layout', layout).click();
       await expect(article).toHaveAttribute('data-layout', layout);
 
       for (const previewSize of WXPOST_PREVIEW_SIZES) {
-        await page.locator('#wxpost-preview-size').selectOption(previewSize);
+        await presentationOption(page, 'preview-size', previewSize).click();
         await expect(stage).toHaveAttribute('data-preview-size', previewSize);
 
         const geometry = await article.evaluate((element) => {
@@ -342,7 +390,7 @@ test('keeps three article shapes readable in every layout and preview size', asy
 test('uses a horizontally scrollable gallery in the mobile preview', async ({
   page,
 }) => {
-  await page.goto('/posts/wxposts/renderer-preview');
+  await openFixture(page);
 
   const track = page.getByTestId('gallery-track');
   const initial = await track.evaluate((element) => ({
@@ -360,21 +408,98 @@ test('uses a horizontally scrollable gallery in the mobile preview', async ({
     .toBeGreaterThan(0);
 });
 
-test('collapses the renderer cleanly in a real narrow viewport', async ({
+test('customizes the mobile preview in a bottom drawer', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFixture(page);
+
+  const article = page.getByTestId('wxpost-article');
+  const trigger = page.getByRole('button', {
+    name: /Customize article appearance/,
+  });
+
+  await expect(trigger).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: 'Article presentation' })
+  ).toBeHidden();
+
+  await page.evaluate(() => window.scrollTo(0, 700));
+  const scrollPosition = await page.evaluate(() => window.scrollY);
+
+  await trigger.click();
+  const dialog = page.getByRole('dialog', {
+    name: 'Customize appearance',
+  });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
+
+  const closeButton = page.getByRole('button', {
+    name: 'Close appearance settings',
+  });
+  const doneButton = page.getByRole('button', { name: 'Done' });
+  await expect(closeButton).toBeFocused();
+  await doneButton.focus();
+  await page.keyboard.press('Tab');
+  await expect(closeButton).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(doneButton).toBeFocused();
+
+  await presentationOption(page, 'palette', 'brand-blue').click();
+  await expect(article).toHaveAttribute('data-palette', 'brand-blue');
+  await presentationOption(page, 'typeface', 'humanist-mix').click();
+  await expect(article).toHaveAttribute('data-typeface', 'humanist-mix');
+
+  await doneButton.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId('mobile-style-summary')).toContainText(
+    'Brand Blue'
+  );
+  await expect(page.locator('body')).not.toHaveCSS('overflow', 'hidden');
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollPosition);
+});
+
+test('closes the mobile drawer when the viewport crosses the desktop breakpoint', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFixture(page);
+
+  await page
+    .getByRole('button', { name: /Customize article appearance/ })
+    .click();
+  await expect(
+    page.getByRole('dialog', { name: 'Customize appearance' })
+  ).toBeVisible();
+  await expect(page.locator('body')).toHaveCSS('overflow', 'hidden');
+
+  await page.setViewportSize({ width: 760, height: 844 });
+
+  await expect(
+    page.getByRole('dialog', { name: 'Customize appearance' })
+  ).toHaveCount(0);
+  await expect(page.locator('body')).not.toHaveCSS('overflow', 'hidden');
+  await expect(
+    page.getByRole('region', { name: 'Article presentation' })
+  ).toBeVisible();
+});
+
+test('collapses the formal page cleanly in a real narrow viewport', async ({
   page,
 }) => {
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/posts/wxposts/renderer-preview');
-
-  const article = page.getByTestId('wxpost-article');
-  await expect(page.locator('#wxpost-layout')).toBeEnabled();
 
   for (const fixtureId of WXPOST_FIXTURE_IDS) {
-    await page.getByTestId(`fixture-option-${fixtureId}`).click();
+    await openFixture(page, fixtureId);
+    const article = page.getByTestId('wxpost-article');
+    await page
+      .getByRole('button', { name: /Customize article appearance/ })
+      .click();
+    await expect(
+      page.getByRole('dialog', { name: 'Customize appearance' })
+    ).toBeVisible();
 
     for (const layout of WXPOST_LAYOUTS) {
-      await page.locator('#wxpost-layout').selectOption(layout);
+      await presentationOption(page, 'layout', layout).click();
       await expect(article).toHaveAttribute('data-layout', layout);
       await expect(article).toBeVisible();
 
@@ -388,5 +513,7 @@ test('collapses the renderer cleanly in a real narrow viewport', async ({
       );
       expect(overflow).toBeLessThanOrEqual(1);
     }
+
+    await page.getByRole('button', { name: 'Done' }).click();
   }
 });

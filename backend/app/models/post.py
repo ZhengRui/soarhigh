@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -23,12 +23,27 @@ class Post(BaseModel):
     author: Optional[Author] = Field(default=None, description="The author of the post.")
 
 
-class PaginatedPosts(BaseModel):
-    """
-    Model for paginated list of posts.
-    """
+class ContentAuthor(BaseModel):
+    name: str
+    member_id: Optional[str] = None
 
-    items: List[Post]
+
+class ContentListItem(BaseModel):
+    """Shared card data for ordinary Posts and public WXPosts."""
+
+    kind: Literal["post", "wxpost"]
+    id: str
+    title: str
+    slug: str
+    excerpt: Optional[str] = None
+    author: ContentAuthor
+    is_public: bool
+    cover_image_url: Optional[str] = None
+    created_at: str
+
+
+class PaginatedContentItems(BaseModel):
+    items: List[ContentListItem]
     total: int
     page: int
     page_size: int

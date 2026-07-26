@@ -62,6 +62,17 @@ WECHAT_APP_ID = config("WECHAT_APP_ID", cast=str)
 WECHAT_APP_SECRET = config("WECHAT_APP_SECRET", cast=str)
 WECHAT_JWT_SECRET = config("WECHAT_JWT_SECRET", cast=str)
 
+# WXPost ingestion is intentionally separate from member authentication and
+# WeChat draft credentials. Local development links point at the existing
+# Next.js server; deployed environments default to the public site.
+WXPOST_SERVICE_TOKEN = config("WXPOST_SERVICE_TOKEN", cast=str, default="")
+WXPOST_PUBLIC_BASE_URL = config(
+    "WXPOST_PUBLIC_BASE_URL",
+    cast=str,
+    default="http://localhost:3000" if _local_env_file else "https://soarhigh.top",
+).rstrip("/")
+WXPOST_PUBLISHER_NAME = config("WXPOST_PUBLISHER_NAME", cast=str, default="SoarHigh Toastmasters")
+
 # Public Agent visitor identity / rate limiting.
 # The visitor secret signs the future Web public visitor cookie. Defaulting to
 # WECHAT_JWT_SECRET keeps local/test imports working, but production should set

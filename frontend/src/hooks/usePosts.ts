@@ -1,10 +1,11 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { getPosts } from '@/utils/posts';
-import { PaginatedPosts } from '@/interfaces';
+import type { ContentKind, PaginatedContentItems } from '@/interfaces';
 
 export interface UsePostsOptions {
   page?: number;
   pageSize?: number;
+  kind?: ContentKind;
 }
 
 /**
@@ -13,12 +14,11 @@ export interface UsePostsOptions {
  * @returns Query result with paginated posts data
  */
 export function usePosts(options: UsePostsOptions = {}) {
-  const { page = 1, pageSize = 10 } = options;
+  const { page = 1, pageSize = 10, kind = 'all' } = options;
 
-  const query = useQuery<PaginatedPosts>({
-    queryKey: ['posts', { page, pageSize }],
-    queryFn: () => getPosts({ page, pageSize }),
-    placeholderData: keepPreviousData,
+  const query = useQuery<PaginatedContentItems>({
+    queryKey: ['posts', { page, pageSize, kind }],
+    queryFn: () => getPosts({ page, pageSize, kind }),
     staleTime: 60 * 1000, // 1 minute
   });
 

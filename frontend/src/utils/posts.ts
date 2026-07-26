@@ -1,14 +1,16 @@
 import { requestTemplate, responseHandlerTemplate } from './requestTemplate';
+import type { ContentKind } from '@/interfaces';
 
 const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT;
 
 // Get all posts (public ones for anon, all for authenticated)
 export const getPosts = requestTemplate(
-  (options: { page?: number; page_size?: number } = {}) => {
+  (options: { page?: number; pageSize?: number; kind?: ContentKind } = {}) => {
     const page = options.page || 1;
-    const page_size = options.page_size || 10;
+    const pageSize = options.pageSize || 10;
+    const kind = options.kind || 'all';
 
-    const url = `${apiEndpoint}/posts?page=${page}&page_size=${page_size}`;
+    const url = `${apiEndpoint}/posts?page=${page}&page_size=${pageSize}&kind=${kind}`;
 
     return {
       url,

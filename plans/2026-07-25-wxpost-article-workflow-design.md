@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-25
 
-**Status:** Phase 0 complete; Phase 1 migration complete.
+**Status:** Phase 0 and Phase 1 complete.
 **Scope:** End-to-end creation, public preview, presentation experimentation,
 and authenticated saving to the WeChat Official Account draft box.
 
@@ -1335,6 +1335,16 @@ Every stored asset must have:
 The WeChat AppID/AppSecret and access-token cache remain backend-only secrets.
 The browser and Hermes Agent receive neither.
 
+Phase 1 uses three backend environment values:
+
+- `WXPOST_SERVICE_TOKEN`: scoped bearer token for Hermes create/update calls;
+  an empty value disables ingestion with `503`;
+- `WXPOST_PUBLIC_BASE_URL`: origin used to construct stable preview links
+  (`http://localhost:3000` for a local env file, otherwise
+  `https://soarhigh.top` by default);
+- `WXPOST_PUBLISHER_NAME`: Official Account display name synthesized for the
+  shared Posts index.
+
 Of the SoarHigh credentials, the Hermes container receives only the scoped
 service credential required for article context, asset ingestion, and WXPost
 create/update calls. It does not receive Official Account draft credentials.
@@ -1356,20 +1366,16 @@ The gitignored visual-comparison artifact is a design and interaction
 reference. Production must not iframe it or copy the entire static page into a
 route.
 
-`/posts/wxposts/renderer-preview` is a temporary, `noindex` renderer lab used
-only while the production renderer and fixture matrix are being built. It is
-not a public information-architecture destination and must not be linked from
-Posts or Operations. Once `/posts/wxposts/[slug]` renders real API data,
-provides the production presentation controls, and passes the same renderer
-fixture and browser-acceptance suite, delete the lab route and its showcase
-shell. Keep the reusable `WxPostRenderer`, presentation controls, and fixture
-documents as production and regression-test assets.
+The temporary `/posts/wxposts/renderer-preview` lab and
+`WxPostRendererShowcase` were removed after the formal
+`/posts/wxposts/[slug]` route reached renderer, presentation-control, fixture,
+and browser-acceptance parity. Reusable `WxPostRenderer` components and fixture
+documents remain as production and regression-test assets.
 
-The temporary `WxPostRendererShowcase` stays beside its route under
-`frontend/src/app/posts/wxposts/renderer-preview/`. Reusable presentation
-controls stay under `frontend/src/components/wxpost/`. `sourceMeetingId` is an
-opaque relationship field; the public page resolves a separate context or
-folio label before passing it to the renderer.
+Reusable presentation controls stay under
+`frontend/src/components/wxpost/`. `sourceMeetingId` is an opaque relationship
+field; the public page resolves a separate context or folio label before
+passing it to the renderer.
 
 Extract or reimplement its proven concepts as typed frontend and renderer
 components:
@@ -1556,8 +1562,13 @@ second draft-add request.
 - Current choice summary.
 - Immediate visual update without a network request.
 - Reset action.
-- Controls remain usable on mobile; a compact drawer or horizontally scrollable
-  segmented control is acceptable.
+- Desktop keeps the complete presentation card above the preview.
+- Mobile is preview-first: a compact, sticky current-style summary opens a
+  bottom drawer containing the complete controls, `Reset`, and `Done`.
+- Opening and closing the mobile drawer preserves the article scroll position.
+- The drawer remains presentation-only. A future authenticated content editor
+  uses a separate mode or route rather than adding content fields to this
+  drawer.
 - Changing article type is not offered.
 
 ### 20.3 Draft confirmation
@@ -1683,25 +1694,27 @@ create duplicates by retrying the same request.
 
 ### Public discovery and preview
 
-- [ ] `/posts` can filter `All`, `Posts`, and `WXPost`.
-- [ ] WXPost cards are visibly labeled.
-- [ ] `/posts/wxposts/{slug}` loads without authentication.
-- [ ] The URL remains stable after a Hermes Agent content revision.
-- [ ] Full articles scroll naturally on desktop and mobile.
-- [ ] Mobile galleries scroll horizontally.
-- [ ] Browser video renders with poster, controls, and description.
+- [x] `/posts` can filter `All`, `Posts`, and `WXPost`.
+- [x] WXPost cards are visibly labeled.
+- [x] `/posts/wxposts/{slug}` loads without authentication.
+- [x] The URL remains stable after a content revision.
+- [x] Full articles scroll naturally on desktop and mobile.
+- [x] Mobile galleries scroll horizontally.
+- [x] Browser video renders with poster, controls, and description.
 
 ### Presentation
 
-- [ ] Every visitor can change layout, palette, appearance, typeface, and
+- [x] Every visitor can change layout, palette, appearance, typeface, and
       preview size.
-- [ ] These changes make no server write.
-- [ ] A second visitor is unaffected.
-- [ ] Reset restores the stored article presentation.
-- [ ] Article type/content structure cannot be changed from the presentation
+- [x] These changes make no server write.
+- [x] A second visitor is unaffected.
+- [x] Reset restores the stored article presentation.
+- [x] Article type/content structure cannot be changed from the presentation
       controls.
-- [ ] Defaults are Brand Default, Paper Neutral, Light, Editorial Serif, and
+- [x] Defaults are Brand Default, Paper Neutral, Light, Editorial Serif, and
       Mobile 390px preview.
+- [x] Mobile shows the article before its settings and exposes all presentation
+      controls through a bottom drawer without losing the reading position.
 
 ### Hermes Agent workflow
 
@@ -1758,9 +1771,9 @@ create duplicates by retrying the same request.
 
 ### Regression
 
-- [ ] Ordinary Post routes and Markdown rendering remain unchanged.
-- [ ] Existing public/private Post visibility continues to work.
-- [ ] No WXPost item is added to the Operations menu.
+- [x] Ordinary Post routes and Markdown rendering remain unchanged.
+- [x] Existing public/private Post visibility continues to work.
+- [x] No WXPost item is added to the Operations menu.
 
 ## 24. Test strategy
 
@@ -1866,4 +1879,4 @@ Before writing the implementation plan:
 8. back up the host Hermes home, stop the host Gateway, and verify the official
    container reads the mounted state at `/opt/data`;
 9. define workspace retention, size limits, and cleanup behavior for Feishu
-    source files and media-processing intermediates.
+   source files and media-processing intermediates.
