@@ -21,3 +21,9 @@ services:
         target: /workspace
         bind:
           create_host_path: false
+      - type: bind
+        source: ./wxpost_controller
+        target: /opt/soarhigh/wxpost_controller
+        read_only: true
+        bind:
+          create_host_path: false

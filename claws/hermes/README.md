@@ -7,10 +7,12 @@ directories:
 | Host setting           | Container path | Purpose                                                                 |
 | ---------------------- | -------------- | ----------------------------------------------------------------------- |
 | `HERMES_HOME_DIR`      | `/opt/data`    | Configuration, credentials, memory, sessions, skills, and gateway state |
-| `HERMES_WORKSPACE_DIR` | `/workspace`   | WXPost sources, working files, and exports                              |
+| `HERMES_WORKSPACE_DIR` | `/workspace`   | WXPost article workspaces and their local source files                  |
 
-The SoarHigh repository, host home directory, Docker socket, SSH credentials,
-and Git credentials are not mounted into the container.
+The Compose file mounts only the small `wxpost_controller` package read-only at
+`/opt/soarhigh/wxpost_controller`. The rest of the SoarHigh repository, the
+complete host home directory, Docker socket, SSH credentials, and Git
+credentials are not mounted into the container.
 
 ## First startup
 
@@ -126,3 +128,59 @@ docker compose \
 
 Back up `HERMES_HOME_DIR` before upgrading. Hermes may migrate its persistent
 configuration when a newer image starts.
+
+## WXPost controller architecture probe
+
+The tracked `wxpost_controller` package is a bounded experiment for sharing one
+WXPost authoring workspace between structured web operations and Hermes. It
+implements three domain operations:
+
+```text
+wxpost_get_context
+wxpost_update_sources
+wxpost_save_draft
+```
+
+The HTTP and MCP servers are thin adapters over the same controller core. The
+probe's HTTP surface exposes context reads and source updates; MCP exposes all
+three operations, including draft saves. The core accepts opaque workspace IDs
+below `/workspace/inbox`, rejects symlink and path traversal, uses a
+per-workspace file lock and expected version, validates JSON, and writes by
+atomic replacement.
+
+Configure the stdio MCP server once in the dedicated SoarHigh Hermes home:
+
+```bash
+docker exec \
+  --user hermes \
+  --env HOME=/opt/data \
+  --workdir /workspace \
+  soarhigh-hermes \
+  hermes mcp add soarhigh-wxpost \
+    --command /opt/hermes/.venv/bin/python \
+    --env PYTHONPATH=/opt/soarhigh WXPOST_WORKSPACE_ROOT=/workspace \
+    --args -m wxpost_controller.mcp_server
+```
+
+Then verify discovery:
+
+```bash
+docker exec \
+  --user hermes \
+  --env HOME=/opt/data \
+  soarhigh-hermes \
+  hermes mcp test soarhigh-wxpost
+```
+
+For the architecture probe, run the HTTP adapter on the host against the same
+host workspace mount. It binds to loopback and requires a bearer token:
+
+```bash
+PYTHONPATH=claws/hermes \
+WXPOST_WORKSPACE_ROOT=/absolute/path/to/hermes-workspace \
+WXPOST_CONTROLLER_TOKEN=replace-with-a-local-secret \
+backend/.venv/bin/python -m wxpost_controller.http_server
+```
+
+This experiment does not implement a production web page, public-preview
+synchronization, Supabase writes, OSS uploads, or WeChat draft operations.
