@@ -58,6 +58,31 @@ export const getMeetings = requestTemplate(
 );
 
 /**
+ * Fetches the compact meeting data used by selectors.
+ */
+export const getMeetingOptions = requestTemplate(
+  (options: { page?: number; pageSize?: number; status?: string } = {}) => {
+    const page = options.page || 1;
+    const pageSize = options.pageSize || 10;
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(pageSize),
+    });
+
+    if (options.status) params.set('status', options.status);
+
+    return {
+      url: `${apiEndpoint}/meetings/options?${params.toString()}`,
+      method: 'GET',
+    };
+  },
+  responseHandlerTemplate,
+  null,
+  true,
+  true
+);
+
+/**
  * Fetches a specific meeting by ID
  * @param meetingId The ID of the meeting to fetch
  * @returns The meeting data

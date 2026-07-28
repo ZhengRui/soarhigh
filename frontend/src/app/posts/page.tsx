@@ -65,13 +65,23 @@ export default function PostsPage() {
           </div>
 
           {user && (
-            <Link
-              href='/posts/new'
-              className='inline-flex self-start items-center gap-1.5 whitespace-nowrap rounded-md bg-gradient-to-r from-blue-600 to-purple-600 px-3 py-1.5 text-sm text-white shadow-sm transition hover:from-blue-700 hover:to-purple-700 hover:shadow-md sm:self-center'
-            >
-              <Plus className='h-4 w-4' />
-              <span className='font-medium'>New Post</span>
-            </Link>
+            <div className='flex flex-wrap items-center gap-2 sm:justify-end'>
+              <Link
+                href='/posts/new'
+                className='inline-flex self-start items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 sm:self-center'
+              >
+                <Plus className='h-4 w-4' />
+                <span className='font-medium'>New Post</span>
+              </Link>
+              <Link
+                href='/posts/wxposts/new'
+                className='inline-flex self-start items-center gap-1.5 whitespace-nowrap rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 px-3 py-1.5 text-sm text-white shadow-sm transition hover:from-blue-700 hover:to-purple-700 hover:shadow-md sm:self-center'
+                data-testid='new-wxpost-link'
+              >
+                <Newspaper className='h-4 w-4' />
+                <span className='font-medium'>New WXPost</span>
+              </Link>
+            </div>
           )}
         </div>
 

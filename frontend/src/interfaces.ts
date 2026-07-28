@@ -47,6 +47,14 @@ export interface MeetingIF {
   media?: MediaIF[];
 }
 
+export interface MeetingOptionIF {
+  id: string;
+  type: string;
+  no?: number;
+  theme: string;
+  date: string;
+}
+
 export interface AwardIF {
   meeting_id: string;
   category: string;
@@ -124,6 +132,7 @@ export interface PaginatedResponse<T> {
 }
 
 export type PaginatedMeetings = PaginatedResponse<MeetingIF>;
+export type PaginatedMeetingOptions = PaginatedResponse<MeetingOptionIF>;
 export type PaginatedContentItems = PaginatedResponse<ContentListItemIF>;
 
 // Dashboard Stats Interfaces

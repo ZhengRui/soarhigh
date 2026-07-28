@@ -196,6 +196,51 @@ def create_meeting(meeting_data: Dict) -> Dict:
     return meeting
 
 
+def _apply_meeting_list_filters(query, user_id: Optional[str], status: Optional[str]):
+    """Apply the visibility rules shared by full and lightweight meeting lists."""
+    if user_id is None:
+        return query.eq("status", "published")
+    if status is not None:
+        return query.eq("status", status)
+    return query
+
+
+def _meeting_page_metadata(total_count: int, page: int, page_size: int) -> Dict[str, int]:
+    return {
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "pages": (total_count + page_size - 1) // page_size if total_count > 0 else 1,
+    }
+
+
+def get_meeting_options(
+    user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+) -> Dict[str, Any]:
+    """Return a lightweight, paginated meeting list for selection controls."""
+    offset = (page - 1) * page_size
+
+    count_query = supabase.table("meetings").select("id", count="exact")  # type: ignore
+    count_result = _apply_meeting_list_filters(count_query, user_id, status).execute()
+    total_count = count_result.count or 0
+
+    query = supabase.table("meetings").select("id,no,type,theme,date")
+    result = (
+        _apply_meeting_list_filters(query, user_id, status)
+        .order("date", desc=True)
+        .range(offset, offset + page_size - 1)
+        .execute()
+    )
+
+    return {
+        "items": result.data or [],
+        **_meeting_page_metadata(total_count, page, page_size),
+    }
+
+
 def get_meetings(
     user_id: Optional[str] = None, status: Optional[str] = None, page: int = 1, page_size: int = 10
 ) -> Dict[str, Any]:
@@ -214,26 +259,14 @@ def get_meetings(
     # Calculate offset for pagination
     offset = (page - 1) * page_size
 
-    # Base query with select first, then filters
-    query = supabase.table("meetings").select("*")
-
-    # Apply filters after select
-    if user_id is None:
-        query = query.eq("status", "published")
-    elif status is not None:
-        query = query.eq("status", status)
+    # Base query with select first, then the shared visibility filters
+    query = _apply_meeting_list_filters(supabase.table("meetings").select("*"), user_id, status)
 
     # Get total count first for pagination metadata
     # Create a separate count query
     count_query = supabase.table("meetings").select("id", count="exact")  # type: ignore
 
-    # Apply the same filters to the count query
-    if user_id is None:
-        count_query = count_query.eq("status", "published")
-    elif status is not None:
-        count_query = count_query.eq("status", status)
-
-    count_result = count_query.execute()
+    count_result = _apply_meeting_list_filters(count_query, user_id, status).execute()
     total_count = count_result.count or 0
 
     # Now get paginated data
@@ -243,10 +276,7 @@ def get_meetings(
     if not meetings:
         return {
             "items": [],
-            "total": total_count,
-            "page": page,
-            "page_size": page_size,
-            "pages": (total_count + page_size - 1) // page_size if total_count > 0 else 1,
+            **_meeting_page_metadata(total_count, page, page_size),
         }
 
     # Process the meetings data as in the original function
@@ -353,10 +383,7 @@ def get_meetings(
     # Return paginated meetings with metadata
     return {
         "items": meetings,
-        "total": total_count,
-        "page": page,
-        "page_size": page_size,
-        "pages": (total_count + page_size - 1) // page_size if total_count > 0 else 1,
+        **_meeting_page_metadata(total_count, page, page_size),
     }
 
 

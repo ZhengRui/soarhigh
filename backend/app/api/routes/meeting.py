@@ -19,6 +19,7 @@ from ...db.core import (
     delete_meeting,
     get_awards_by_meeting,
     get_meeting_by_id,
+    get_meeting_options,
     get_meetings,
     get_votes_by_meeting,
     get_votes_status,
@@ -28,7 +29,7 @@ from ...db.core import (
     update_meeting_status,
     update_votes_status,
 )
-from ...models.meeting import Award, Meeting, PaginatedMeetings, Vote, VotesStatus
+from ...models.meeting import Award, Meeting, PaginatedMeetingOptions, PaginatedMeetings, Vote, VotesStatus
 from ...models.users import User
 from ...utils.meeting import parse_meeting_agenda_image, plan_meeting_from_text
 from .auth import get_current_user, get_optional_user, verify_access_token
@@ -186,6 +187,26 @@ async def r_list_meetings(
     try:
         meetings_db = get_meetings(user_id=user.uid if user else None, status=status, page=page, page_size=page_size)
         return PaginatedMeetings(**meetings_db)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@r.get("/meetings/options", response_model=PaginatedMeetingOptions)
+async def r_list_meeting_options(
+    user: Optional[User] = Depends(get_optional_user),
+    status: Optional[str] = Query(None, description="Filter by status (draft or published)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Items per page"),
+) -> PaginatedMeetingOptions:
+    """List lightweight meeting options with the same visibility rules as `/meetings`."""
+    try:
+        options = get_meeting_options(
+            user_id=user.uid if user else None,
+            status=status,
+            page=page,
+            page_size=page_size,
+        )
+        return PaginatedMeetingOptions(**options)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

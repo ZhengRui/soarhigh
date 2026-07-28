@@ -252,3 +252,17 @@ class PaginatedResponse(BaseModel, Generic[T]):
 
 class PaginatedMeetings(PaginatedResponse[Meeting]):
     pass
+
+
+class MeetingOption(BaseModel):
+    """Minimal meeting data needed by selectors and other compact lists."""
+
+    id: str
+    no: Optional[int] = None
+    type: str
+    theme: str
+    date: str
+
+
+class PaginatedMeetingOptions(PaginatedResponse[MeetingOption]):
+    pass
