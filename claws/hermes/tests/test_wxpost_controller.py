@@ -5,6 +5,7 @@ import os
 import sys
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Generator, Mapping
 from http import HTTPStatus
@@ -196,6 +197,31 @@ def _json_request(
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def _upload_request(
+    url: str,
+    *,
+    filename: str,
+    expected_manifest_version: int,
+    data: bytes,
+    mime_type: str,
+) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(
+        f"{url}?{urllib.parse.urlencode({'filename': filename})}",
+        data=data,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": mime_type,
+            "X-Expected-Manifest-Version": str(expected_manifest_version),
         },
     )
     try:
@@ -779,6 +805,161 @@ async def test_http_and_mcp_share_auth_contract_state_and_raw_draft(
             (root / "inbox" / workspace_id / "draft" / "article.json").read_text()
         )
         assert raw == _canonical_document(_article_document())
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_http_and_mcp_share_the_complete_material_operation_state(
+    tmp_path: Path,
+    validation_url: str,
+) -> None:
+    workspace_id = "transport-materials"
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        status, created = _json_request(
+            f"{base_url}/workspaces/{workspace_id}",
+            method="PUT",
+            payload={
+                "meetingId": None,
+                "editorial": {
+                    "articleType": "meeting-recap",
+                    "customArticleType": None,
+                },
+            },
+        )
+        assert status == 200
+        assert created["manifest"]["manifestVersion"] == 1
+        assert created["manifest"]["sources"] == []
+
+        status, uploaded = _upload_request(
+            f"{base_url}/workspaces/{workspace_id}/uploads",
+            filename="网页照片.jpg",
+            expected_manifest_version=1,
+            data=b"web-photo",
+            mime_type="image/jpeg",
+        )
+        assert status == 200
+        assert uploaded["sources"][0]["id"] == "M01"
+        assert uploaded["sources"][0]["origin"] == {"type": "web-upload"}
+
+        incoming = tmp_path / "incoming"
+        incoming.mkdir()
+        clip_path = incoming / "clip.mp4"
+        clip_path.write_bytes(b"feishu-video")
+
+        async with stdio_client(_mcp_parameters(tmp_path, validation_url)) as (
+            read,
+            write,
+        ):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = {tool.name for tool in (await session.list_tools()).tools}
+                assert {
+                    "wxpost_bootstrap_workspace",
+                    "wxpost_import_source",
+                    "wxpost_set_source_included",
+                    "wxpost_upload_source",
+                    "wxpost_delete_source_preflight",
+                    "wxpost_delete_source",
+                }.issubset(tools)
+
+                mcp_uploaded = _mcp_value(
+                    await session.call_tool(
+                        "wxpost_upload_source",
+                        {
+                            "workspace_id": workspace_id,
+                            "expected_manifest_version": 2,
+                            "source_path": str(clip_path),
+                        },
+                    )
+                )
+                assert mcp_uploaded["manifestVersion"] == 3
+                assert mcp_uploaded["sources"][1]["id"] == "M02"
+                assert mcp_uploaded["sources"][1]["origin"] == {"type": "feishu-upload"}
+
+                status, http_conflict = _json_request(
+                    f"{base_url}/workspaces/{workspace_id}/sources/M01/inclusion",
+                    method="PUT",
+                    payload={
+                        "expectedManifestVersion": 1,
+                        "included": True,
+                    },
+                )
+                assert status == 409
+                mcp_conflict = await session.call_tool(
+                    "wxpost_set_source_included",
+                    {
+                        "workspace_id": workspace_id,
+                        "expected_manifest_version": 1,
+                        "source_id": "M01",
+                        "included": True,
+                    },
+                )
+                assert mcp_conflict.isError
+                mcp_error_text = mcp_conflict.content[0].text
+                assert (
+                    json.loads(mcp_error_text[mcp_error_text.index("{") :])
+                    == http_conflict
+                )
+                assert http_conflict["error"] == {
+                    "code": "version_conflict",
+                    "message": (
+                        "expected manifest version 1, " "current manifest version is 3"
+                    ),
+                    "versionKind": "manifest",
+                    "expectedVersion": 1,
+                    "actualVersion": 3,
+                }
+
+                status, included = _json_request(
+                    f"{base_url}/workspaces/{workspace_id}/sources/M01/inclusion",
+                    method="PUT",
+                    payload={
+                        "expectedManifestVersion": 3,
+                        "included": True,
+                    },
+                )
+                assert status == 200
+                assert included["manifestVersion"] == 4
+                assert included["sources"][0]["included"] is True
+
+                status, preflight = _json_request(
+                    f"{base_url}/workspaces/{workspace_id}/sources/"
+                    "M02/delete-preflight"
+                )
+                assert status == 200
+                assert preflight["referenced"] is False
+                assert preflight["manifestVersion"] == 4
+
+                deleted = _mcp_value(
+                    await session.call_tool(
+                        "wxpost_delete_source",
+                        {
+                            "workspace_id": workspace_id,
+                            "expected_manifest_version": 4,
+                            "source_id": "M02",
+                        },
+                    )
+                )
+                assert deleted["manifestVersion"] == 5
+                assert [source["id"] for source in deleted["sources"]] == ["M01"]
+
+        status, final_context = _json_request(
+            f"{base_url}/workspaces/{workspace_id}/context"
+        )
+        assert status == 200
+        assert final_context["manifest"] == deleted
     finally:
         server.shutdown()
         server.server_close()

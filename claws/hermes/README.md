@@ -132,21 +132,28 @@ configuration when a newer image starts.
 ## WXPost workspace controller
 
 The tracked `wxpost_controller` package is the shared boundary for one
-canonical WXPost authoring workspace. It currently implements the three
-operations proven by the architecture probe:
+canonical WXPost authoring workspace. Its MCP surface implements the complete
+material-controller and draft operations:
 
 ```text
 wxpost_get_context
+wxpost_bootstrap_workspace
+wxpost_import_source
+wxpost_set_source_included
+wxpost_upload_source
 wxpost_update_sources
+wxpost_delete_source_preflight
+wxpost_delete_source
 wxpost_save_draft
 ```
 
 The HTTP and MCP servers are thin adapters over the same controller core and
-return the same version-conflict details. HTTP exposes context reads and source
-updates; MCP exposes all three operations, including draft saves.
+return the same error and version-conflict details. HTTP exposes the material
+operations needed by the authoring page; MCP exposes those same operations plus
+draft saves for Hermes.
 
 `contracts.py` defines the single supported `source-manifest v2` shape plus the
-two operations implemented in this slice. A complete example lives at
+operation inputs. A complete manifest example lives at
 `tests/fixtures/source-manifest-v2.json`. Important invariants include:
 
 - each collected source receives the next workspace-local material ID
@@ -161,6 +168,12 @@ two operations implemented in this slice. A complete example lives at
   snapshot, while editorial media wording may be refined for the article;
 - meeting-library sources may remain references with
   `workspaceReady=false, included=false`;
+- workspace bootstrap registers current meeting media without downloading it;
+  a later refresh appends newly discovered `fileKey` values but never renumbers
+  or silently removes an existing source;
+- importing copies one meeting-library source to its derived local path;
+  including a non-ready meeting source performs that import and inclusion in
+  one versioned operation;
 - web and article-scoped Feishu uploads are already materialized and must start
   workspace-ready;
 - inclusion requires a workspace-ready source;
@@ -169,6 +182,10 @@ two operations implemented in this slice. A complete example lives at
   one source and shifts the surrounding entries without persisting a duplicate
   `order` field;
 - material changes advance only `manifestVersion`;
+- delete preflight reports references in the latest saved draft; deleting a
+  referenced source requires explicit confirmation, direct uploads lose their
+  manifest record, and meeting-library sources retain their `fileKey` so they
+  can be imported again;
 - `draft/article.json` is always the raw canonical `ArticleDocument`;
 - draft version, source-manifest version, and hash live in the manifest,
   outside the article document;
@@ -179,13 +196,17 @@ two operations implemented in this slice. A complete example lives at
   article media ID and kind must match the manifest snapshot being saved.
 
 The core accepts opaque workspace IDs below `/workspace/inbox`, rejects symlink
-and path traversal, checks every workspace-ready file and declared size, uses a
-per-workspace file lock and operation-specific expected version, validates
-stored and incoming JSON, and writes by atomic replacement. Later material
-operations are added when their controller behavior is implemented rather than
-being frozen here as unused request models. A short-lived pending record makes
-the two-file draft/manifest update recoverable if the process stops between
-the two atomic replacements.
+and path traversal, limits collected files to 50 MiB, checks every
+workspace-ready file and declared size, uses a per-workspace file lock and
+operation-specific expected version, validates stored and incoming data, and
+writes by atomic replacement. A short-lived pending record makes the two-file
+draft/manifest update recoverable if the process stops between the two atomic
+replacements.
+
+Linked workspaces read `/meetings/{meetingId}/media` from
+`SOARHIGH_API_BASE_URL`. Set the same non-empty `WXPOST_SERVICE_TOKEN` in the
+backend and Hermes environments when draft-meeting media must be visible. The
+token is sent only to the SoarHigh media-list endpoint, never to an asset URL.
 
 Configure the stdio MCP server once in the dedicated SoarHigh Hermes home:
 
@@ -220,6 +241,23 @@ WXPOST_WORKSPACE_ROOT=/absolute/path/to/hermes-workspace \
 WXPOST_CONTROLLER_TOKEN=replace-with-a-local-secret \
 backend/.venv/bin/python -m wxpost_controller.http_server
 ```
+
+HTTP routes are:
+
+```text
+PUT    /workspaces/{workspaceId}
+GET    /workspaces/{workspaceId}/context
+PATCH  /workspaces/{workspaceId}/sources
+POST   /workspaces/{workspaceId}/sources/{sourceId}/import
+PUT    /workspaces/{workspaceId}/sources/{sourceId}/inclusion
+POST   /workspaces/{workspaceId}/uploads?filename=...
+GET    /workspaces/{workspaceId}/sources/{sourceId}/delete-preflight
+DELETE /workspaces/{workspaceId}/sources/{sourceId}
+```
+
+The upload route accepts the source bytes as its body, the MIME type in
+`Content-Type`, and the compare-and-swap version in
+`X-Expected-Manifest-Version`.
 
 The controller is not yet connected to the authoring page and does not implement
 public-preview synchronization, Supabase writes, OSS uploads, or WeChat draft

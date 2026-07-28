@@ -79,6 +79,23 @@ class DescriptionStatus(str, Enum):
     MISSING = "missing"
 
 
+def _validate_description_state(
+    description: str,
+    source: DescriptionSource | None,
+    status: DescriptionStatus,
+) -> None:
+    if status == DescriptionStatus.MISSING:
+        if description != "" or source is not None:
+            raise ValueError("missing descriptions must be empty and have no source")
+    elif not description.strip() or source is None:
+        raise ValueError("non-missing descriptions require text and descriptionSource")
+    elif (
+        status == DescriptionStatus.NEEDS_CONFIRMATION
+        and source != DescriptionSource.AI
+    ):
+        raise ValueError("needs_confirmation is reserved for AI-proposed descriptions")
+
+
 class MeetingLibraryOrigin(ContractModel):
     type: Literal["meeting-library"]
     file_key: TrimmedText
@@ -146,23 +163,11 @@ class SourceRecord(ContractModel):
         ):
             raise ValueError("direct uploads must be workspace-ready")
 
-        visible_description = bool(self.description.strip())
-        if self.description_status == DescriptionStatus.MISSING:
-            if self.description != "" or self.description_source is not None:
-                raise ValueError(
-                    "missing descriptions must be empty and have no source"
-                )
-        elif not visible_description or self.description_source is None:
-            raise ValueError(
-                "non-missing descriptions require text and descriptionSource"
-            )
-        elif (
-            self.description_status == DescriptionStatus.NEEDS_CONFIRMATION
-            and self.description_source != DescriptionSource.AI
-        ):
-            raise ValueError(
-                "needs_confirmation is reserved for AI-proposed descriptions"
-            )
+        _validate_description_state(
+            self.description,
+            self.description_source,
+            self.description_status,
+        )
         return self
 
 
@@ -276,6 +281,70 @@ class UpdateSourcesRequest(ContractModel):
         if len(ids) != len(set(ids)):
             raise ValueError("each source may be updated only once per request")
         return self
+
+
+class BootstrapWorkspaceRequest(ContractModel):
+    meeting_id: TrimmedText | None = None
+    editorial: EditorialSettings
+
+
+class SourceActionRequest(ContractModel):
+    expected_manifest_version: int = Field(ge=1, strict=True)
+    source_id: SourceId
+
+
+class SourceLookupRequest(ContractModel):
+    source_id: SourceId
+
+
+class SetSourceInclusionRequest(SourceActionRequest):
+    included: bool = Field(strict=True)
+
+
+class UploadSourceRequest(ContractModel):
+    expected_manifest_version: int = Field(ge=1, strict=True)
+    origin: Literal["web-upload", "feishu-upload"]
+    filename: TrimmedText
+    mime_type: TrimmedText
+    description: str = ""
+    description_source: DescriptionSource | None = None
+    description_status: DescriptionStatus = DescriptionStatus.MISSING
+
+    @field_validator("filename")
+    @classmethod
+    def _validate_filename(cls, value: str) -> str:
+        if value in {".", ".."} or "/" in value or "\\" in value:
+            raise ValueError("filename must be a basename")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_description(self) -> UploadSourceRequest:
+        _validate_description_state(
+            self.description,
+            self.description_source,
+            self.description_status,
+        )
+        return self
+
+
+class DeleteSourceRequest(SourceActionRequest):
+    confirm_referenced: bool = Field(default=False, strict=True)
+
+
+class MeetingMediaReference(ContractModel):
+    filename: TrimmedText
+    url: TrimmedText
+    file_key: TrimmedText
+    uploaded_at: TrimmedText
+    mime_type: TrimmedText
+    size_bytes: int = Field(gt=0, strict=True)
+
+    @field_validator("filename")
+    @classmethod
+    def _validate_filename(cls, value: str) -> str:
+        if value in {".", ".."} or "/" in value or "\\" in value:
+            raise ValueError("filename must be a basename")
+        return value
 
 
 class SaveDraftRequest(ContractModel):

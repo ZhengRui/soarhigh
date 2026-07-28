@@ -11,6 +11,7 @@ services:
       HERMES_UID: "${HERMES_UID:-10000}"
       HERMES_GID: "${HERMES_GID:-10000}"
       SOARHIGH_API_BASE_URL: "${SOARHIGH_API_BASE_URL:-http://host.docker.internal:5000}"
+      WXPOST_SERVICE_TOKEN: "${WXPOST_SERVICE_TOKEN:-}"
     volumes:
       - type: bind
         source: ${HERMES_HOME_DIR:?Set HERMES_HOME_DIR in .env.local}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import mimetypes
 import os
 import re
 import tempfile
@@ -11,20 +12,34 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ValidationError
 
 from .contracts import (
+    BootstrapWorkspaceRequest,
+    DeleteSourceRequest,
     DraftEnvelope,
+    MeetingLibraryOrigin,
+    MeetingMediaReference,
     SaveDraftRequest,
+    SetSourceInclusionRequest,
+    SourceActionRequest,
+    SourceKind,
+    SourceLookupRequest,
     SourceManifest,
+    SourceRecord,
     SourceUpdate,
+    UploadSourceRequest,
     UpdateSourcesRequest,
 )
 
 WORKSPACE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+MAX_SOURCE_BYTES = 50 * 1024 * 1024
 ArticleValidator = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+MeetingMediaLoader = Callable[[str], list[Mapping[str, Any]]]
+SourceLoader = Callable[[str], bytes]
 RequestModel = TypeVar("RequestModel", bound=BaseModel)
 
 
@@ -59,6 +74,32 @@ class ValidationUnavailable(WorkspaceError):
     """The authoritative SoarHigh ArticleDocument validator is unavailable."""
 
     code = "validation_unavailable"
+
+
+class UpstreamUnavailable(WorkspaceError):
+    """SoarHigh meeting media or its source file cannot be read safely."""
+
+    code = "upstream_unavailable"
+
+
+class ConfirmationRequired(WorkspaceError):
+    """A destructive source operation needs explicit draft-reference consent."""
+
+    code = "confirmation_required"
+
+    def __init__(self, source_id: str, references: list[str]):
+        super().__init__(
+            f"source {source_id} is referenced by the saved draft; "
+            "explicit confirmation is required"
+        )
+        self.source_id = source_id
+        self.references = references
+
+    def error_details(self) -> dict[str, Any]:
+        return {
+            "sourceId": self.source_id,
+            "references": self.references,
+        }
 
 
 class VersionConflict(WorkspaceError):
@@ -110,6 +151,9 @@ class WorkspaceController:
         *,
         article_validator: ArticleValidator | None = None,
         soarhigh_api_base_url: str | None = None,
+        soarhigh_service_token: str | None = None,
+        meeting_media_loader: MeetingMediaLoader | None = None,
+        source_loader: SourceLoader | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.inbox_root = self.workspace_root / "inbox"
@@ -123,17 +167,374 @@ class WorkspaceController:
             if soarhigh_api_base_url is not None
             else os.environ.get("SOARHIGH_API_BASE_URL", "")
         ).rstrip("/")
+        self._soarhigh_service_token = (
+            soarhigh_service_token
+            if soarhigh_service_token is not None
+            else os.environ.get("WXPOST_SERVICE_TOKEN", "")
+        )
+        self._meeting_media_loader = meeting_media_loader
+        self._source_loader = source_loader
+
+    def bootstrap_workspace(
+        self,
+        workspace_id: str,
+        *,
+        meeting_id: str | None,
+        editorial: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        self._validate_workspace_id(workspace_id)
+        request = self._validate_request(
+            BootstrapWorkspaceRequest,
+            {
+                "meetingId": meeting_id,
+                "editorial": editorial,
+            },
+            label="workspace bootstrap",
+        )
+        meeting_media = (
+            self._load_meeting_media(request.meeting_id)
+            if request.meeting_id is not None
+            else []
+        )
+        workspace = self._resolve_workspace(workspace_id, create=True)
+        with self._workspace_lock(workspace):
+            manifest_path = workspace / "source-manifest.json"
+            if manifest_path.exists() or manifest_path.is_symlink():
+                manifest = self._read_manifest(workspace, workspace_id)
+                if manifest.meeting_id != request.meeting_id:
+                    raise InvalidRequest(
+                        "meetingId cannot change after a workspace is created"
+                    )
+                manifest = self._register_meeting_media(
+                    workspace,
+                    manifest,
+                    meeting_media,
+                )
+            else:
+                unexpected = [
+                    path.name
+                    for path in workspace.iterdir()
+                    if path.name != ".source-manifest.lock"
+                ]
+                if unexpected:
+                    raise InvalidWorkspace("workspace has files but no source manifest")
+                manifest = self._new_manifest(
+                    workspace_id,
+                    request,
+                    meeting_media,
+                )
+                self._atomic_write_json(manifest_path, manifest.to_wire())
+            draft = self._read_draft(workspace, manifest)
+        return self._context_response(workspace_id, manifest, draft)
 
     def get_context(self, workspace_id: str) -> dict[str, Any]:
         workspace = self._resolve_workspace(workspace_id)
         with self._workspace_lock(workspace):
             manifest = self._read_manifest(workspace, workspace_id)
             draft = self._read_draft(workspace, manifest)
+        return self._context_response(workspace_id, manifest, draft)
+
+    def import_source(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        source_id: str,
+    ) -> dict[str, Any]:
+        request = self._validate_request(
+            SourceActionRequest,
+            {
+                "expectedManifestVersion": expected_manifest_version,
+                "sourceId": source_id,
+            },
+            label="source import",
+        )
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(
+                manifest,
+                request.expected_manifest_version,
+            )
+            source = self._find_source(manifest, request.source_id)
+            if not isinstance(source.origin, MeetingLibraryOrigin):
+                raise InvalidRequest(
+                    f"source {source.id} is not a meeting-library reference"
+                )
+            if source.workspace_ready:
+                return manifest.to_wire()
+            manifest = self._materialize_meeting_source(
+                workspace,
+                manifest,
+                source,
+                include=False,
+            )
+        return manifest.to_wire()
+
+    def set_source_included(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        source_id: str,
+        included: bool,
+    ) -> dict[str, Any]:
+        request = self._validate_request(
+            SetSourceInclusionRequest,
+            {
+                "expectedManifestVersion": expected_manifest_version,
+                "sourceId": source_id,
+                "included": included,
+            },
+            label="source inclusion",
+        )
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(
+                manifest,
+                request.expected_manifest_version,
+            )
+            source = self._find_source(manifest, request.source_id)
+            if request.included and not source.workspace_ready:
+                if not isinstance(source.origin, MeetingLibraryOrigin):
+                    raise InvalidWorkspace(
+                        f"non-ready direct source is invalid: {source.id}"
+                    )
+                manifest = self._materialize_meeting_source(
+                    workspace,
+                    manifest,
+                    source,
+                    include=True,
+                )
+            elif source.included != request.included:
+                manifest_data = manifest.to_wire()
+                source_data = self._find_source_data(
+                    manifest_data["sources"],
+                    request.source_id,
+                )
+                source_data["included"] = request.included
+                manifest = self._write_changed_manifest(
+                    workspace,
+                    manifest_data,
+                    manifest.manifest_version,
+                )
+        return manifest.to_wire()
+
+    def upload_source(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        origin: str,
+        filename: str,
+        mime_type: str,
+        data: bytes,
+        description: str = "",
+        description_source: str | None = None,
+        description_status: str = "missing",
+    ) -> dict[str, Any]:
+        request = self._validate_request(
+            UploadSourceRequest,
+            {
+                "expectedManifestVersion": expected_manifest_version,
+                "origin": origin,
+                "filename": filename,
+                "mimeType": mime_type,
+                "description": description,
+                "descriptionSource": description_source,
+                "descriptionStatus": description_status,
+            },
+            label="source upload",
+        )
+        if not isinstance(data, bytes):
+            raise InvalidRequest("uploaded source must be bytes")
+        if not data:
+            raise InvalidRequest("uploaded source must not be empty")
+        if len(data) > MAX_SOURCE_BYTES:
+            raise InvalidRequest(f"uploaded source exceeds {MAX_SOURCE_BYTES} bytes")
+
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(
+                manifest,
+                request.expected_manifest_version,
+            )
+            source_id = self._material_id(manifest.next_material_number)
+            source = SourceRecord.model_validate(
+                {
+                    "id": source_id,
+                    "kind": self._source_kind(request.mime_type),
+                    "origin": {"type": request.origin},
+                    "filename": request.filename,
+                    "mimeType": request.mime_type,
+                    "sizeBytes": len(data),
+                    "workspaceReady": True,
+                    "included": False,
+                    "description": request.description,
+                    "descriptionSource": request.description_source,
+                    "descriptionStatus": request.description_status,
+                }
+            )
+            sources_root = self._ensure_sources_directory(workspace)
+            source_path = self._source_path(sources_root, source)
+            self._atomic_write_bytes(source_path, data)
+            manifest_data = manifest.to_wire()
+            manifest_data["sources"].append(source.to_wire())
+            manifest_data["nextMaterialNumber"] += 1
+            try:
+                manifest = self._write_changed_manifest(
+                    workspace,
+                    manifest_data,
+                    manifest.manifest_version,
+                )
+            except WorkspaceError:
+                self._remove_source_file_unless_claimed(
+                    workspace,
+                    source,
+                    source_path,
+                )
+                raise
+        return manifest.to_wire()
+
+    def upload_source_from_path(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        source_path: str,
+        origin: str,
+        filename: str | None = None,
+        mime_type: str | None = None,
+        description: str = "",
+        description_source: str | None = None,
+        description_status: str = "missing",
+    ) -> dict[str, Any]:
+        path = Path(source_path).expanduser()
+        if path.is_symlink() or not path.is_file():
+            raise InvalidRequest("sourcePath must be a regular file")
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise InvalidRequest(f"cannot resolve sourcePath: {exc}") from exc
+        if not resolved.is_relative_to(self.workspace_root):
+            raise InvalidRequest("sourcePath must be below WXPOST_WORKSPACE_ROOT")
+        try:
+            size = resolved.stat().st_size
+            if size <= 0:
+                raise InvalidRequest("uploaded source must not be empty")
+            if size > MAX_SOURCE_BYTES:
+                raise InvalidRequest(
+                    f"uploaded source exceeds {MAX_SOURCE_BYTES} bytes"
+                )
+            data = resolved.read_bytes()
+        except OSError as exc:
+            raise InvalidRequest(f"cannot read sourcePath: {exc}") from exc
+        effective_filename = filename or resolved.name
+        effective_mime = (
+            mime_type
+            or mimetypes.guess_type(effective_filename)[0]
+            or "application/octet-stream"
+        )
+        return self.upload_source(
+            workspace_id,
+            expected_manifest_version=expected_manifest_version,
+            origin=origin,
+            filename=effective_filename,
+            mime_type=effective_mime,
+            data=data,
+            description=description,
+            description_source=description_source,
+            description_status=description_status,
+        )
+
+    def delete_source_preflight(
+        self,
+        workspace_id: str,
+        *,
+        source_id: str,
+    ) -> dict[str, Any]:
+        request = self._validate_request(
+            SourceLookupRequest,
+            {
+                "sourceId": source_id,
+            },
+            label="source delete preflight",
+        )
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            self._find_source(manifest, request.source_id)
+            draft = self._read_draft(workspace, manifest)
+            references = self._draft_references(draft, request.source_id)
         return {
-            "workspaceId": workspace_id,
-            "manifest": manifest.to_wire(),
-            "draft": draft.to_wire() if draft is not None else None,
+            "sourceId": request.source_id,
+            "manifestVersion": manifest.manifest_version,
+            "draftVersion": draft.draft_version if draft is not None else 0,
+            "referenced": bool(references),
+            "requiresConfirmation": bool(references),
+            "references": references,
         }
+
+    def delete_source(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        source_id: str,
+        confirm_referenced: bool = False,
+    ) -> dict[str, Any]:
+        request = self._validate_request(
+            DeleteSourceRequest,
+            {
+                "expectedManifestVersion": expected_manifest_version,
+                "sourceId": source_id,
+                "confirmReferenced": confirm_referenced,
+            },
+            label="source delete",
+        )
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(
+                manifest,
+                request.expected_manifest_version,
+            )
+            source = self._find_source(manifest, request.source_id)
+            meeting_reference = isinstance(
+                source.origin,
+                MeetingLibraryOrigin,
+            )
+            if meeting_reference and not source.workspace_ready and not source.included:
+                return manifest.to_wire()
+
+            draft = self._read_draft(workspace, manifest)
+            references = self._draft_references(draft, request.source_id)
+            if references and not request.confirm_referenced:
+                raise ConfirmationRequired(request.source_id, references)
+
+            manifest_data = manifest.to_wire()
+            source_data = self._find_source_data(
+                manifest_data["sources"],
+                request.source_id,
+            )
+            if meeting_reference:
+                source_data["workspaceReady"] = False
+                source_data["included"] = False
+            else:
+                manifest_data["sources"].remove(source_data)
+            manifest = self._write_changed_manifest(
+                workspace,
+                manifest_data,
+                manifest.manifest_version,
+            )
+            if source.workspace_ready:
+                self._remove_regular_file(
+                    self._source_path(workspace / "sources", source),
+                    tolerate_failure=True,
+                )
+        return manifest.to_wire()
 
     def update_sources(
         self,
@@ -264,13 +665,452 @@ class WorkspaceController:
 
         return saved.to_wire()
 
-    def _resolve_workspace(self, workspace_id: str) -> Path:
-        if not isinstance(workspace_id, str) or not WORKSPACE_ID_PATTERN.fullmatch(
-            workspace_id
+    @staticmethod
+    def _context_response(
+        workspace_id: str,
+        manifest: SourceManifest,
+        draft: DraftEnvelope | None,
+    ) -> dict[str, Any]:
+        return {
+            "workspaceId": workspace_id,
+            "manifest": manifest.to_wire(),
+            "draft": draft.to_wire() if draft is not None else None,
+        }
+
+    def _new_manifest(
+        self,
+        workspace_id: str,
+        request: BootstrapWorkspaceRequest,
+        meeting_media: list[MeetingMediaReference],
+    ) -> SourceManifest:
+        sources = [
+            self._meeting_source_record(index, media).to_wire()
+            for index, media in enumerate(meeting_media, start=1)
+        ]
+        return SourceManifest.model_validate(
+            {
+                "schemaVersion": 2,
+                "workspaceId": workspace_id,
+                "manifestVersion": 1,
+                "nextMaterialNumber": len(sources) + 1,
+                "meetingId": request.meeting_id,
+                "draft": None,
+                "editorial": request.editorial.to_wire(),
+                "sources": sources,
+            }
+        )
+
+    def _register_meeting_media(
+        self,
+        workspace: Path,
+        manifest: SourceManifest,
+        meeting_media: list[MeetingMediaReference],
+    ) -> SourceManifest:
+        if manifest.meeting_id is None or not meeting_media:
+            return manifest
+        manifest_data = manifest.to_wire()
+        existing = {
+            source.origin.file_key: source
+            for source in manifest.sources
+            if isinstance(source.origin, MeetingLibraryOrigin)
+        }
+        changed = False
+        for media in meeting_media:
+            current = existing.get(media.file_key)
+            if current is None:
+                source = self._meeting_source_record(
+                    manifest_data["nextMaterialNumber"],
+                    media,
+                )
+                manifest_data["sources"].append(source.to_wire())
+                manifest_data["nextMaterialNumber"] += 1
+                changed = True
+                continue
+            if current.workspace_ready:
+                continue
+            source_data = self._find_source_data(
+                manifest_data["sources"],
+                current.id,
+            )
+            refreshed = {
+                "kind": self._meeting_source_kind(media.mime_type),
+                "filename": media.filename,
+                "mimeType": media.mime_type,
+                "sizeBytes": media.size_bytes,
+            }
+            for field, value in refreshed.items():
+                if source_data[field] != value:
+                    source_data[field] = value
+                    changed = True
+        if not changed:
+            return manifest
+        return self._write_changed_manifest(
+            workspace,
+            manifest_data,
+            manifest.manifest_version,
+        )
+
+    def _meeting_source_record(
+        self,
+        material_number: int,
+        media: MeetingMediaReference,
+    ) -> SourceRecord:
+        return SourceRecord.model_validate(
+            {
+                "id": self._material_id(material_number),
+                "kind": self._meeting_source_kind(media.mime_type),
+                "origin": {
+                    "type": "meeting-library",
+                    "fileKey": media.file_key,
+                },
+                "filename": media.filename,
+                "mimeType": media.mime_type,
+                "sizeBytes": media.size_bytes,
+                "workspaceReady": False,
+                "included": False,
+                "description": "",
+                "descriptionSource": None,
+                "descriptionStatus": "missing",
+            }
+        )
+
+    def _load_meeting_media(
+        self,
+        meeting_id: str,
+    ) -> list[MeetingMediaReference]:
+        raw_items: Any
+        if self._meeting_media_loader is not None:
+            try:
+                raw_items = self._meeting_media_loader(meeting_id)
+            except WorkspaceError:
+                raise
+            except Exception as exc:
+                raise UpstreamUnavailable(f"cannot list meeting media: {exc}") from exc
+        else:
+            if not self._soarhigh_api_base_url:
+                raise UpstreamUnavailable(
+                    "SOARHIGH_API_BASE_URL is required to list meeting media"
+                )
+            headers = {}
+            if self._soarhigh_service_token:
+                headers["Authorization"] = f"Bearer {self._soarhigh_service_token}"
+            request = Request(
+                f"{self._soarhigh_api_base_url}/meetings/"
+                f"{quote(meeting_id, safe='')}/media",
+                headers=headers,
+                method="GET",
+            )
+            try:
+                with urlopen(request, timeout=15) as response:
+                    payload = json.loads(response.read())
+            except HTTPError as exc:
+                if exc.code in {401, 403, 404}:
+                    raise InvalidRequest(
+                        "meeting is unavailable to the WXPost controller"
+                    ) from exc
+                raise UpstreamUnavailable(
+                    f"meeting media API returned HTTP {exc.code}"
+                ) from exc
+            except (
+                OSError,
+                URLError,
+                TimeoutError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ) as exc:
+                raise UpstreamUnavailable(
+                    f"cannot reach meeting media API: {exc}"
+                ) from exc
+            raw_items = payload.get("items") if isinstance(payload, dict) else None
+
+        if not isinstance(raw_items, list):
+            raise UpstreamUnavailable("meeting media API returned an invalid response")
+        parsed: list[MeetingMediaReference] = []
+        try:
+            for item in raw_items:
+                parsed.append(MeetingMediaReference.model_validate(item))
+        except ValidationError as exc:
+            raise UpstreamUnavailable(
+                "meeting media API returned invalid media metadata: "
+                f"{self._validation_message(exc)}"
+            ) from exc
+        file_keys = [item.file_key for item in parsed]
+        if len(file_keys) != len(set(file_keys)):
+            raise UpstreamUnavailable(
+                "meeting media API returned duplicate fileKey values"
+            )
+        for media in parsed:
+            self._meeting_source_kind(media.mime_type)
+            parsed_url = urlparse(media.url)
+            if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+                raise UpstreamUnavailable(
+                    "meeting media API returned an invalid source URL"
+                )
+        return sorted(parsed, key=lambda item: (item.uploaded_at, item.file_key))
+
+    def _materialize_meeting_source(
+        self,
+        workspace: Path,
+        manifest: SourceManifest,
+        source: SourceRecord,
+        *,
+        include: bool,
+    ) -> SourceManifest:
+        if manifest.meeting_id is None or not isinstance(
+            source.origin,
+            MeetingLibraryOrigin,
         ):
-            raise InvalidRequest("workspaceId must be a lowercase slug")
+            raise InvalidWorkspace(
+                f"meeting source has invalid provenance: {source.id}"
+            )
+        media_by_key = {
+            media.file_key: media
+            for media in self._load_meeting_media(manifest.meeting_id)
+        }
+        media = media_by_key.get(source.origin.file_key)
+        if media is None:
+            raise InvalidRequest(
+                f"meeting-library source is no longer available: {source.id}"
+            )
+        data = self._download_source(media)
+        sources_root = self._ensure_sources_directory(workspace)
+        updated = SourceRecord.model_validate(
+            {
+                **source.to_wire(),
+                "kind": self._meeting_source_kind(media.mime_type),
+                "filename": media.filename,
+                "mimeType": media.mime_type,
+                "sizeBytes": media.size_bytes,
+                "workspaceReady": True,
+                "included": include,
+            }
+        )
+        old_path = self._source_path(sources_root, source)
+        new_path = self._source_path(sources_root, updated)
+        self._atomic_write_bytes(new_path, data)
+        manifest_data = manifest.to_wire()
+        source_data = self._find_source_data(
+            manifest_data["sources"],
+            source.id,
+        )
+        source_data.update(updated.to_wire())
+        try:
+            manifest = self._write_changed_manifest(
+                workspace,
+                manifest_data,
+                manifest.manifest_version,
+            )
+        except WorkspaceError:
+            self._remove_source_file_unless_claimed(
+                workspace,
+                updated,
+                new_path,
+            )
+            raise
+        if old_path != new_path:
+            self._remove_regular_file(old_path, tolerate_failure=True)
+        return manifest
+
+    def _download_source(self, media: MeetingMediaReference) -> bytes:
+        if self._source_loader is not None:
+            try:
+                data = self._source_loader(media.url)
+            except WorkspaceError:
+                raise
+            except Exception as exc:
+                raise UpstreamUnavailable(
+                    f"cannot download meeting source: {exc}"
+                ) from exc
+        else:
+            request = Request(media.url, method="GET")
+            try:
+                with urlopen(request, timeout=30) as response:
+                    data = response.read(MAX_SOURCE_BYTES + 1)
+            except HTTPError as exc:
+                raise UpstreamUnavailable(
+                    f"meeting source returned HTTP {exc.code}"
+                ) from exc
+            except (OSError, URLError, TimeoutError) as exc:
+                raise UpstreamUnavailable(
+                    f"cannot download meeting source: {exc}"
+                ) from exc
+        if not isinstance(data, bytes):
+            raise UpstreamUnavailable("meeting source loader returned invalid bytes")
+        if len(data) > MAX_SOURCE_BYTES:
+            raise InvalidRequest(f"meeting source exceeds {MAX_SOURCE_BYTES} bytes")
+        if len(data) != media.size_bytes:
+            raise UpstreamUnavailable(
+                "meeting source size does not match the current metadata"
+            )
+        return data
+
+    @staticmethod
+    def _source_kind(mime_type: str) -> SourceKind:
+        normalized = mime_type.split(";", 1)[0].strip().lower()
+        if normalized.startswith("image/"):
+            return SourceKind.IMAGE
+        if normalized.startswith("video/"):
+            return SourceKind.VIDEO
+        if normalized.startswith("audio/"):
+            return SourceKind.AUDIO
+        if normalized.startswith("text/"):
+            return SourceKind.TRANSCRIPT
+        return SourceKind.DOCUMENT
+
+    @classmethod
+    def _meeting_source_kind(cls, mime_type: str) -> SourceKind:
+        kind = cls._source_kind(mime_type)
+        if kind not in {SourceKind.IMAGE, SourceKind.VIDEO}:
+            raise UpstreamUnavailable(
+                "meeting media API returned a non-image/video source"
+            )
+        return kind
+
+    @staticmethod
+    def _material_id(number: int) -> str:
+        return f"M{number:02d}"
+
+    @staticmethod
+    def _find_source(
+        manifest: SourceManifest,
+        source_id: str,
+    ) -> SourceRecord:
+        for source in manifest.sources:
+            if source.id == source_id:
+                return source
+        raise InvalidRequest(f"unknown source id: {source_id}")
+
+    @staticmethod
+    def _find_source_data(
+        sources: list[dict[str, Any]],
+        source_id: str,
+    ) -> dict[str, Any]:
+        for source in sources:
+            if source["id"] == source_id:
+                return source
+        raise InvalidRequest(f"unknown source id: {source_id}")
+
+    @staticmethod
+    def _check_manifest_version(
+        manifest: SourceManifest,
+        expected: int,
+    ) -> None:
+        if expected != manifest.manifest_version:
+            raise VersionConflict(
+                resource="manifest",
+                expected=expected,
+                actual=manifest.manifest_version,
+            )
+
+    def _write_changed_manifest(
+        self,
+        workspace: Path,
+        manifest_data: dict[str, Any],
+        previous_version: int,
+    ) -> SourceManifest:
+        manifest_data["manifestVersion"] = previous_version + 1
+        manifest = self._validate_manifest_data(
+            manifest_data,
+            label="updated source manifest",
+            request_error=True,
+        )
+        self._atomic_write_json(
+            workspace / "source-manifest.json",
+            manifest.to_wire(),
+        )
+        return manifest
+
+    @staticmethod
+    def _draft_references(
+        draft: DraftEnvelope | None,
+        source_id: str,
+    ) -> list[str]:
+        if draft is None:
+            return []
+        document = draft.document
+        references = [
+            f"media.{index}"
+            for index, item in enumerate(document.get("media", []))
+            if isinstance(item, Mapping) and item.get("id") == source_id
+        ]
+        if document.get("coverMediaId") == source_id:
+            references.append("coverMediaId")
+        body = document.get("bodyMarkdown")
+        if isinstance(body, str) and re.search(
+            rf"(?<![A-Za-z0-9_-]){re.escape(source_id)}(?![A-Za-z0-9_-])",
+            body,
+        ):
+            references.append("bodyMarkdown")
+        return references
+
+    @staticmethod
+    def _source_path(
+        sources_root: Path,
+        source: SourceRecord,
+    ) -> Path:
+        return sources_root / f"{source.id}{Path(source.filename).suffix}"
+
+    def _ensure_sources_directory(self, workspace: Path) -> Path:
+        sources_root = workspace / "sources"
+        self._ensure_child_directory(
+            workspace,
+            sources_root,
+            label="sources",
+        )
+        return sources_root
+
+    def _remove_source_file_unless_claimed(
+        self,
+        workspace: Path,
+        source: SourceRecord,
+        path: Path,
+    ) -> None:
+        try:
+            persisted = self._validate_manifest_data(
+                self._read_json_file(
+                    workspace / "source-manifest.json",
+                    label="source manifest",
+                ),
+                label="source manifest",
+            )
+            persisted_source = next(
+                (
+                    candidate
+                    for candidate in persisted.sources
+                    if candidate.id == source.id
+                ),
+                None,
+            )
+            claimed = (
+                persisted_source is not None
+                and persisted_source.workspace_ready
+                and self._source_path(
+                    workspace / "sources",
+                    persisted_source,
+                )
+                == path
+            )
+        except WorkspaceError:
+            claimed = True
+        if not claimed:
+            self._remove_regular_file(path, tolerate_failure=True)
+
+    def _resolve_workspace(
+        self,
+        workspace_id: str,
+        *,
+        create: bool = False,
+    ) -> Path:
+        self._validate_workspace_id(workspace_id)
 
         candidate = self.inbox_root / workspace_id
+        if create and not candidate.exists() and not candidate.is_symlink():
+            try:
+                candidate.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                raise InvalidWorkspace(f"cannot create workspace: {exc}") from exc
         if not candidate.exists() or not candidate.is_dir():
             raise WorkspaceNotFound(f"workspace does not exist: {workspace_id}")
         if candidate.is_symlink():
@@ -280,6 +1120,13 @@ class WorkspaceController:
         if resolved.parent != self._resolved_inbox or resolved != candidate.absolute():
             raise InvalidWorkspace("workspace escapes the configured inbox")
         return resolved
+
+    @staticmethod
+    def _validate_workspace_id(workspace_id: str) -> None:
+        if not isinstance(workspace_id, str) or not WORKSPACE_ID_PATTERN.fullmatch(
+            workspace_id
+        ):
+            raise InvalidRequest("workspaceId must be a lowercase slug")
 
     @contextmanager
     def _workspace_lock(self, workspace: Path):
@@ -681,14 +1528,19 @@ class WorkspaceController:
         return f"{location}: {first['msg']}"
 
     @staticmethod
-    def _ensure_child_directory(workspace: Path, directory: Path) -> None:
+    def _ensure_child_directory(
+        workspace: Path,
+        directory: Path,
+        *,
+        label: str = "draft",
+    ) -> None:
         if directory.exists():
             if directory.is_symlink() or not directory.is_dir():
-                raise InvalidWorkspace("draft path must be a regular directory")
+                raise InvalidWorkspace(f"{label} path must be a regular directory")
         else:
             directory.mkdir(mode=0o700)
         if directory.resolve().parent != workspace:
-            raise InvalidWorkspace("draft directory escapes the workspace")
+            raise InvalidWorkspace(f"{label} directory escapes the workspace")
 
     @staticmethod
     def _remove_regular_file(
@@ -713,21 +1565,28 @@ class WorkspaceController:
 
     @staticmethod
     def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
+        payload = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        WorkspaceController._atomic_write(path, payload.encode("utf-8"))
+
+    @staticmethod
+    def _atomic_write_bytes(path: Path, value: bytes) -> None:
+        WorkspaceController._atomic_write(path, value)
+
+    @staticmethod
+    def _atomic_write(path: Path, value: bytes) -> None:
         if path.exists() and (path.is_symlink() or not path.is_file()):
             raise InvalidWorkspace(f"refusing to replace non-file path: {path.name}")
-        payload = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         temporary_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
+                mode="wb",
                 dir=path.parent,
                 prefix=f".{path.name}.",
                 suffix=".tmp",
                 delete=False,
             ) as temporary:
                 temporary_path = Path(temporary.name)
-                temporary.write(payload)
+                temporary.write(value)
                 temporary.flush()
                 os.fsync(temporary.fileno())
             os.replace(temporary_path, path)

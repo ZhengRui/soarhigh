@@ -1,5 +1,8 @@
-from datetime import datetime
+import mimetypes
+import secrets
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
+from urllib.parse import quote
 
 import oss2  # type: ignore
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Query, UploadFile
@@ -12,6 +15,7 @@ from ...config import (
     ALICLOUD_OSS_BUCKET,
     ALICLOUD_OSS_ENDPOINT,
     ALICLOUD_OSS_MEETING_MEDIA_PREFIX,
+    WXPOST_SERVICE_TOKEN,
 )
 from ...db.core import (
     cast_votes,
@@ -35,6 +39,7 @@ from ...utils.meeting import parse_meeting_agenda_image, plan_meeting_from_text
 from .auth import get_current_user, get_optional_user, verify_access_token
 
 http_scheme = HTTPBearer()
+meeting_media_scheme = HTTPBearer(auto_error=False)
 
 meeting_router = r = APIRouter()
 
@@ -83,6 +88,8 @@ class MediaFile(BaseModel):
     url: str
     fileKey: str
     uploadedAt: str
+    mimeType: str
+    sizeBytes: int
 
 
 class MediaFileList(BaseModel):
@@ -110,6 +117,23 @@ class MediaUploadUrlResponse(BaseModel):
 
 class MediaDeleteRequest(BaseModel):
     fileKeys: List[str]
+
+
+def get_meeting_media_user_id(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(meeting_media_scheme),
+) -> Optional[str]:
+    """Resolve public, member, or scoped WXPost service access."""
+
+    if (
+        credentials is not None
+        and credentials.scheme.lower() == "bearer"
+        and WXPOST_SERVICE_TOKEN
+        and secrets.compare_digest(credentials.credentials, WXPOST_SERVICE_TOKEN)
+    ):
+        return "wxpost-service"
+
+    user = get_optional_user(credentials)
+    return user.uid if user else None
 
 
 @r.post("/meeting/parse_agenda_image")
@@ -571,13 +595,13 @@ async def r_cast_vote(
 @r.get("/meetings/{meeting_id}/media", response_model=MediaFileList)
 async def r_get_meeting_media(
     meeting_id: str = Path(..., description="The ID of the meeting"),
-    user: Optional[User] = Depends(get_optional_user),
+    user_id: Optional[str] = Depends(get_meeting_media_user_id),
 ) -> MediaFileList:
     """
     List all media files for a meeting directly from the storage bucket.
     """
     try:
-        meeting = get_meeting_by_id(meeting_id, user.uid if user else None)
+        meeting = get_meeting_by_id(meeting_id, user_id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
 
@@ -592,18 +616,31 @@ async def r_get_meeting_media(
         for obj in oss2.ObjectIterator(bucket, prefix=prefix):
             if obj.key != prefix:  # Skip the directory itself
                 filename = obj.key.split("/")[-1]
-                public_url = f"https://{ALICLOUD_OSS_BUCKET}.{ALICLOUD_OSS_ENDPOINT}/{obj.key}"
+                public_url = f"https://{ALICLOUD_OSS_BUCKET}.{ALICLOUD_OSS_ENDPOINT}/" f"{quote(obj.key, safe='/')}"
 
-                modified_time = datetime.fromtimestamp(obj.last_modified)
+                modified_time = datetime.fromtimestamp(
+                    obj.last_modified,
+                    tz=timezone.utc,
+                )
                 formatted_time = modified_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
                 object_list.append(
-                    MediaFile(filename=filename, url=public_url, fileKey=obj.key, uploadedAt=formatted_time)
+                    MediaFile(
+                        filename=filename,
+                        url=public_url,
+                        fileKey=obj.key,
+                        uploadedAt=formatted_time,
+                        mimeType=mime_type,
+                        sizeBytes=obj.size,
+                    )
                 )
 
         object_list.sort(key=lambda x: datetime.fromisoformat(x.uploadedAt.replace("Z", "+00:00")), reverse=False)
 
         return MediaFileList(items=object_list)
+    except HTTPException:
+        raise
     except oss2.exceptions.OssError as e:
         raise HTTPException(status_code=500, detail=f"AliCloud OSS error: {e!s}")
     except Exception as e:

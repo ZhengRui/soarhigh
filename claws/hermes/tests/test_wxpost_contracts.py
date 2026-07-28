@@ -7,9 +7,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 from wxpost_controller.contracts import (
+    BootstrapWorkspaceRequest,
     MANIFEST_SCHEMA_VERSION,
+    MeetingMediaReference,
+    SetSourceInclusionRequest,
     SourceManifest,
     SourceUpdate,
+    UploadSourceRequest,
     UpdateSourcesRequest,
 )
 
@@ -199,5 +203,89 @@ def test_update_request_rejects_duplicate_source_ids() -> None:
                     {"sourceId": WEB_IMAGE_ID, "included": False},
                     {"sourceId": WEB_IMAGE_ID, "included": True},
                 ],
+            }
+        )
+
+
+def test_material_operation_contracts_are_strict_and_camel_case_only() -> None:
+    BootstrapWorkspaceRequest.model_validate(
+        {
+            "meetingId": None,
+            "editorial": {
+                "articleType": "meeting-recap",
+                "customArticleType": None,
+            },
+        }
+    )
+    SetSourceInclusionRequest.model_validate(
+        {
+            "expectedManifestVersion": 1,
+            "sourceId": "M01",
+            "included": True,
+        }
+    )
+
+    with pytest.raises(ValidationError):
+        SetSourceInclusionRequest.model_validate(
+            {
+                "expected_manifest_version": 1,
+                "sourceId": "M01",
+                "included": True,
+            }
+        )
+    with pytest.raises(ValidationError):
+        SetSourceInclusionRequest.model_validate(
+            {
+                "expectedManifestVersion": True,
+                "sourceId": "M01",
+                "included": 1,
+            }
+        )
+
+
+def test_upload_contract_rejects_paths_and_incomplete_description_provenance() -> None:
+    with pytest.raises(ValidationError, match="basename"):
+        UploadSourceRequest.model_validate(
+            {
+                "expectedManifestVersion": 1,
+                "origin": "web-upload",
+                "filename": "../photo.jpg",
+                "mimeType": "image/jpeg",
+            }
+        )
+    with pytest.raises(ValidationError, match="descriptionSource"):
+        UploadSourceRequest.model_validate(
+            {
+                "expectedManifestVersion": 1,
+                "origin": "feishu-upload",
+                "filename": "photo.jpg",
+                "mimeType": "image/jpeg",
+                "description": "A photo.",
+                "descriptionStatus": "confirmed",
+            }
+        )
+
+
+def test_meeting_media_reference_requires_import_metadata() -> None:
+    reference = MeetingMediaReference.model_validate(
+        {
+            "filename": "photo.jpg",
+            "url": "https://assets.example/photo.jpg",
+            "fileKey": "meetings/462/photo.jpg",
+            "uploadedAt": "2026-07-20T09:00:00Z",
+            "mimeType": "image/jpeg",
+            "sizeBytes": 5,
+        }
+    )
+    assert reference.file_key == "meetings/462/photo.jpg"
+
+    with pytest.raises(ValidationError, match="sizeBytes"):
+        MeetingMediaReference.model_validate(
+            {
+                "filename": "photo.jpg",
+                "url": "https://assets.example/photo.jpg",
+                "fileKey": "meetings/462/photo.jpg",
+                "uploadedAt": "2026-07-20T09:00:00Z",
+                "mimeType": "image/jpeg",
             }
         )
