@@ -62,7 +62,11 @@ draft box.
 7. **WXPost is a separate content resource presented inside Posts.** The
    visible label is `WXPost`, but persistence uses an independent `wxposts`
    table so ordinary Post CRUD and permissions remain unchanged.
-8. **Every ready WXPost is public.** Its public URL is stable across revisions.
+8. **Every ready WXPost is an editable public preview.** Its public URL is
+   stable across revisions. Readiness means that the current revision can be
+   rendered; it does not lock the article or its assets. Newly uploaded assets
+   stay outside the current public article until they are ready and referenced
+   by a later validated article revision.
 9. **Presentation controls are public and local.** Anonymous and authenticated
    visitors may change layout, palette, appearance, typeface, and preview size
    without mutating server state.

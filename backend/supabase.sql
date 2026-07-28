@@ -414,41 +414,6 @@ CREATE UNIQUE INDEX unique_checkin_person_segment ON checkins(meeting_id, wxid, 
 -- Index for efficient timing queries
 CREATE INDEX idx_timings_meeting_id ON timings(meeting_id);
 
-CREATE FUNCTION enforce_wxpost_asset_parent_assembling()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-    parent_status TEXT;
-BEGIN
-    SELECT status
-    INTO parent_status
-    FROM wxposts
-    WHERE id = NEW.wxpost_id
-    FOR UPDATE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'WXPost % does not exist', NEW.wxpost_id
-            USING ERRCODE = '23503';
-    END IF;
-
-    IF parent_status <> 'assembling' THEN
-        RAISE EXCEPTION 'WXPost % is not assembling', NEW.wxpost_id
-            USING ERRCODE = '55000';
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER wxpost_assets_parent_assembling
-    BEFORE INSERT OR UPDATE OF status
-    ON wxpost_assets
-    FOR EACH ROW
-    EXECUTE FUNCTION enforce_wxpost_asset_parent_assembling();
-
 CREATE FUNCTION block_wxpost_finalize_with_pending_assets()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -677,8 +642,6 @@ GRANT ALL ON TABLE wxposts TO service_role;
 REVOKE ALL ON TABLE wxpost_assets FROM PUBLIC, anon, authenticated;
 GRANT ALL ON TABLE wxpost_assets TO service_role;
 
-REVOKE ALL ON FUNCTION enforce_wxpost_asset_parent_assembling()
-FROM PUBLIC;
 REVOKE ALL ON FUNCTION block_wxpost_finalize_with_pending_assets()
 FROM PUBLIC;
 
