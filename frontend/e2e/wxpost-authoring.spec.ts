@@ -148,7 +148,7 @@ const MEETING_449 = {
   theme: 'Beyond the Mask: Authenticity in Connection',
 };
 
-const FIRST_MATERIAL_ID = 'meetings/462/meeting-room.jpg';
+const FIRST_SOURCE_KEY = 'meetings/462/meeting-room.jpg';
 
 const MEETING_OPTIONS = [
   MEETING_462,
@@ -439,10 +439,10 @@ test('edits material descriptions, previews images, and changes article type wit
 
   await openAuthoringPage(page);
   await page.getByTestId('continue-to-materials').click();
-  await expect(page.getByTestId(`material-${FIRST_MATERIAL_ID}`)).toBeVisible();
+  await expect(page.getByTestId(`material-${FIRST_SOURCE_KEY}`)).toBeVisible();
 
   const materialsStage = page.getByTestId('materials-stage');
-  const firstMaterial = page.getByTestId(`material-${FIRST_MATERIAL_ID}`);
+  const firstMaterial = page.getByTestId(`material-${FIRST_SOURCE_KEY}`);
   await expect(firstMaterial.getByText('Meeting Library')).toHaveCount(1);
   await expect(firstMaterial.getByText('meeting-room.jpg')).toHaveCount(1);
   await expect(
@@ -460,7 +460,7 @@ test('edits material descriptions, previews images, and changes article type wit
     materialsStage.getByTestId('article-type-action-guide')
   ).toHaveAttribute('aria-pressed', 'true');
 
-  const description = page.getByTestId(`description-${FIRST_MATERIAL_ID}`);
+  const description = page.getByTestId(`description-${FIRST_SOURCE_KEY}`);
   await description.fill(
     'Members arrive early and make space for one another.'
   );
@@ -486,17 +486,17 @@ test('edits material descriptions, previews images, and changes article type wit
 
   await page.getByRole('button', { name: 'Change setup' }).click();
   await page.getByRole('button', { name: '2 Materials', exact: true }).click();
-  await expect(
-    page.getByTestId(`description-${FIRST_MATERIAL_ID}`)
-  ).toHaveValue('Members arrive early and make space for one another.');
+  await expect(page.getByTestId(`description-${FIRST_SOURCE_KEY}`)).toHaveValue(
+    'Members arrive early and make space for one another.'
+  );
   await expect(
     materialsStage.getByTestId('article-type-action-guide')
   ).toHaveAttribute('aria-pressed', 'true');
 
   await expect(
-    page.getByTestId(`workspace-${FIRST_MATERIAL_ID}`)
+    page.getByTestId(`workspace-${FIRST_SOURCE_KEY}`)
   ).toBeDisabled();
-  await expect(page.getByTestId(`include-${FIRST_MATERIAL_ID}`)).toBeDisabled();
+  await expect(page.getByTestId(`include-${FIRST_SOURCE_KEY}`)).toBeDisabled();
 
   await page.getByTestId('writing-approach-image-driven').click();
   await expect(
@@ -549,7 +549,7 @@ test('shows the meeting error instead of staying in a loading state', async ({
                 {
                   filename: 'meeting-room.jpg',
                   url: '/images/toastmasters.png',
-                  fileKey: FIRST_MATERIAL_ID,
+                  fileKey: FIRST_SOURCE_KEY,
                   uploadedAt: '2026-07-15T12:00:00Z',
                 },
               ],
@@ -573,7 +573,7 @@ test('shows the meeting error instead of staying in a loading state', async ({
 
   mediaShouldFail = false;
   await page.getByTestId('retry-materials-load').click();
-  await expect(page.getByTestId(`material-${FIRST_MATERIAL_ID}`)).toBeVisible();
+  await expect(page.getByTestId(`material-${FIRST_SOURCE_KEY}`)).toBeVisible();
 });
 
 test('retries the meeting options request without reloading the page', async ({
@@ -650,7 +650,7 @@ test('keeps the full materials workflow readable on a 390px mobile viewport', as
   await page.getByTestId('continue-to-materials').click();
 
   await expect(page.getByTestId('materials-stage')).toBeVisible();
-  await expect(page.getByTestId(`material-${FIRST_MATERIAL_ID}`)).toBeVisible();
+  await expect(page.getByTestId(`material-${FIRST_SOURCE_KEY}`)).toBeVisible();
 
   const geometry = await page.evaluate(() => ({
     viewportWidth: window.innerWidth,

@@ -10,10 +10,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, cast
 
 from .core import (
+    InvalidRequest,
     InvalidWorkspace,
+    ValidationUnavailable,
     VersionConflict,
     WorkspaceController,
+    WorkspaceError,
     WorkspaceNotFound,
+    error_response,
 )
 
 CONTEXT_PATH = re.compile(r"^/workspaces/([^/]+)/context$")
@@ -51,10 +55,28 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         payload = self._read_json_body()
         if payload is None:
             return
+        unknown_fields = set(payload) - {
+            "expectedManifestVersion",
+            "updates",
+        }
+        if unknown_fields:
+            self._send_json(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                error_response(
+                    InvalidRequest(
+                        "unsupported source update fields: "
+                        + ", ".join(sorted(unknown_fields))
+                    )
+                ),
+            )
+            return
         self._run_controller(
             lambda: self.server.controller.update_sources(
                 match.group(1),
-                expected_version=cast(int, payload.get("expectedVersion")),
+                expected_manifest_version=cast(
+                    int,
+                    payload.get("expectedManifestVersion"),
+                ),
                 updates=cast(
                     list[dict[str, Any]],
                     payload.get("updates"),
@@ -107,24 +129,18 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
     def _run_controller(self, operation) -> None:
         try:
             result = operation()
-        except VersionConflict as exc:
-            self._send_json(
-                HTTPStatus.CONFLICT,
-                {
-                    "error": {
-                        "code": "version_conflict",
-                        "message": str(exc),
-                        "expectedVersion": exc.expected,
-                        "actualVersion": exc.actual,
-                    }
-                },
-            )
-        except WorkspaceNotFound as exc:
-            self._send_error(HTTPStatus.NOT_FOUND, "workspace_not_found", str(exc))
-        except (InvalidWorkspace, TypeError) as exc:
-            self._send_error(
-                HTTPStatus.UNPROCESSABLE_ENTITY, "invalid_workspace", str(exc)
-            )
+        except WorkspaceError as exc:
+            if isinstance(exc, VersionConflict):
+                status = HTTPStatus.CONFLICT
+            elif isinstance(exc, WorkspaceNotFound):
+                status = HTTPStatus.NOT_FOUND
+            elif isinstance(exc, ValidationUnavailable):
+                status = HTTPStatus.SERVICE_UNAVAILABLE
+            elif isinstance(exc, (InvalidRequest, InvalidWorkspace)):
+                status = HTTPStatus.UNPROCESSABLE_ENTITY
+            else:
+                status = HTTPStatus.BAD_REQUEST
+            self._send_json(status, error_response(exc))
         except Exception:
             self._send_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,

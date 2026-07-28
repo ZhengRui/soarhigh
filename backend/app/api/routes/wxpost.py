@@ -109,6 +109,7 @@ async def r_validate_wxpost(payload: Any = Body(...)) -> WxPostValidationSuccess
         return JSONResponse(status_code=422, content=failure.model_dump(by_alias=True, mode="json"))
 
     return WxPostValidationSuccess(
+        document=document,
         article_type=document.article_type,
         custom_article_type=document.custom_article_type,
         directives=parsed.directive_summaries(),

@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 import app.api.routes.post as post_route
 from app.api.serv import app
+from app.models.wxpost import ArticleDocument
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "wxpost-meeting-recap-v1.json"
 
@@ -98,6 +99,7 @@ def test_complete_english_article_validates_end_to_end(
 
     assert response.status_code == 200
     payload = response.json()
+    document = payload.pop("document")
     render_document = payload.pop("renderDocument")
     assert payload == {
         "valid": True,
@@ -115,6 +117,10 @@ def test_complete_english_article_validates_end_to_end(
         ],
         "inlineExtensions": [{"name": "key-point", "count": 3}],
     }
+    assert document == ArticleDocument.model_validate(complete_article).model_dump(
+        by_alias=True,
+        mode="json",
+    )
     assert render_document["renderVersion"] == 1
     assert render_document["title"] == complete_article["title"]
     assert render_document["sourceMeetingId"] == "meeting-236"
@@ -182,6 +188,27 @@ def test_custom_article_accepts_plain_markdown_without_directives(client: TestCl
             "line": 1,
         }
     ]
+
+
+def test_validation_returns_the_canonical_camel_case_document(
+    client: TestClient,
+    complete_article: dict,
+) -> None:
+    article = copy.deepcopy(complete_article)
+    article["title"] = "  Canonical title  "
+    article["body_markdown"] = article.pop("bodyMarkdown")
+    article["media"][0]["include"] = 1
+    article["media"][0]["order"] = "0"
+
+    response = client.post("/posts/wxposts/validate", json=article)
+
+    assert response.status_code == 200
+    document = response.json()["document"]
+    assert document["title"] == "Canonical title"
+    assert document["bodyMarkdown"] == complete_article["bodyMarkdown"]
+    assert "body_markdown" not in document
+    assert document["media"][0]["include"] is True
+    assert document["media"][0]["order"] == 0
 
 
 def test_body_markdown_rejects_a_duplicate_level_one_title(client: TestClient) -> None:

@@ -15,7 +15,7 @@ export type WxPostWritingApproach =
   | 'Highlights first';
 
 export interface WxPostMaterial {
-  id: string;
+  sourceKey: string;
   source: 'Meeting Library' | 'Web upload' | 'Feishu upload';
   kind: 'image' | 'video';
   url: string;

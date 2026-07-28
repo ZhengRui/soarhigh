@@ -182,6 +182,7 @@ class ValidationIssue(WireModel):
 class WxPostValidationSuccess(WireModel):
     valid: Literal[True] = True
     schema_version: Literal[1] = 1
+    document: ArticleDocument
     article_type: ArticleType
     custom_article_type: str | None = None
     directives: list[DirectiveSummary]

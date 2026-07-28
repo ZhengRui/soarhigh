@@ -65,7 +65,7 @@ function MaterialCard({
       className={`min-w-0 overflow-hidden rounded-[14px] border bg-white ${
         material.included ? 'border-[#7da1f2]' : 'border-[#d8e1ed]'
       }`}
-      data-testid={`material-${material.id}`}
+      data-testid={`material-${material.sourceKey}`}
     >
       <div className='relative h-[220px] overflow-hidden bg-[#e8edf4] max-[480px]:h-[205px]'>
         {isImage ? (
@@ -121,7 +121,7 @@ function MaterialCard({
               : 'Import into workspace'
           }
           disabled
-          data-testid={`workspace-${material.id}`}
+          data-testid={`workspace-${material.sourceKey}`}
         >
           {material.uploading ? (
             <Loader2 className='animate-spin' aria-hidden='true' />
@@ -139,7 +139,7 @@ function MaterialCard({
             onChange={(event) => onDescriptionChange(event.target.value)}
             placeholder='Add a description'
             className='block min-h-[92px] w-full resize-y rounded-[10px] border border-[#cad5e4] bg-white pb-12 pl-3 pr-[54px] pt-[11px] text-[15px] font-normal leading-[1.55] text-[#172033] outline-none placeholder:font-normal placeholder:text-[#93a0b2] hover:border-[#9fb1c8] focus:border-blue-600'
-            data-testid={`description-${material.id}`}
+            data-testid={`description-${material.sourceKey}`}
           />
           <button
             type='button'
@@ -162,7 +162,7 @@ function MaterialCard({
               : 'border-[#cad5e4] bg-white text-[#40506a]'
           }`}
           disabled
-          data-testid={`include-${material.id}`}
+          data-testid={`include-${material.sourceKey}`}
         >
           {material.included ? <Check /> : <FileCheck2 />}
           {material.included ? 'Included' : 'Use material'}
@@ -201,10 +201,10 @@ export function MaterialsPanel({
     setDescriptions((current) =>
       Object.fromEntries(
         materials.map((material) => [
-          material.id,
+          material.sourceKey,
           collectionChanged
             ? material.description
-            : (current[material.id] ?? material.description),
+            : (current[material.sourceKey] ?? material.description),
         ])
       )
     );
@@ -265,13 +265,13 @@ export function MaterialsPanel({
             <div className='grid grid-cols-2 gap-[18px] max-[760px]:grid-cols-1'>
               {materials.map((material) => (
                 <MaterialCard
-                  key={material.id}
+                  key={material.sourceKey}
                   material={material}
-                  description={descriptions[material.id] || ''}
+                  description={descriptions[material.sourceKey] || ''}
                   onDescriptionChange={(value) =>
                     setDescriptions((current) => ({
                       ...current,
-                      [material.id]: value,
+                      [material.sourceKey]: value,
                     }))
                   }
                   onPreview={() => setPreviewMaterial(material)}
@@ -309,7 +309,10 @@ export function MaterialsPanel({
           <div className='relative h-[min(72vh,780px)] w-[min(1100px,90vw)]'>
             <Image
               src={previewMaterial.url}
-              alt={descriptions[previewMaterial.id] || previewMaterial.filename}
+              alt={
+                descriptions[previewMaterial.sourceKey] ||
+                previewMaterial.filename
+              }
               fill
               sizes='90vw'
               className='object-contain'
@@ -318,9 +321,9 @@ export function MaterialsPanel({
           </div>
           <div className='absolute bottom-6 left-8 right-8 flex items-baseline justify-center gap-3 text-center text-sm text-white max-[480px]:bottom-[18px] max-[480px]:left-[18px] max-[480px]:right-[18px] max-[480px]:flex-col max-[480px]:items-center max-[480px]:gap-1'>
             <strong>{previewMaterial.filename}</strong>
-            {descriptions[previewMaterial.id] && (
+            {descriptions[previewMaterial.sourceKey] && (
               <span className='text-slate-300'>
-                {descriptions[previewMaterial.id]}
+                {descriptions[previewMaterial.sourceKey]}
               </span>
             )}
           </div>

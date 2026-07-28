@@ -519,7 +519,7 @@ function MaterialsStage({
   const materials = useMemo<WxPostMaterial[]>(
     () =>
       (mediaQuery.data?.items ?? []).map((file) => ({
-        id: file.fileKey,
+        sourceKey: file.fileKey,
         source: 'Meeting Library',
         kind: isVideoFile(file.filename) ? 'video' : 'image',
         url: file.url,

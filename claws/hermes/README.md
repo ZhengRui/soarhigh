@@ -129,11 +129,11 @@ docker compose \
 Back up `HERMES_HOME_DIR` before upgrading. Hermes may migrate its persistent
 configuration when a newer image starts.
 
-## WXPost controller architecture probe
+## WXPost workspace controller
 
-The tracked `wxpost_controller` package is a bounded experiment for sharing one
-WXPost authoring workspace between structured web operations and Hermes. It
-implements three domain operations:
+The tracked `wxpost_controller` package is the shared boundary for one
+canonical WXPost authoring workspace. It currently implements the three
+operations proven by the architecture probe:
 
 ```text
 wxpost_get_context
@@ -141,12 +141,51 @@ wxpost_update_sources
 wxpost_save_draft
 ```
 
-The HTTP and MCP servers are thin adapters over the same controller core. The
-probe's HTTP surface exposes context reads and source updates; MCP exposes all
-three operations, including draft saves. The core accepts opaque workspace IDs
-below `/workspace/inbox`, rejects symlink and path traversal, uses a
-per-workspace file lock and expected version, validates JSON, and writes by
-atomic replacement.
+The HTTP and MCP servers are thin adapters over the same controller core and
+return the same version-conflict details. HTTP exposes context reads and source
+updates; MCP exposes all three operations, including draft saves.
+
+`contracts.py` defines the single supported `source-manifest v2` shape plus the
+two operations implemented in this slice. A complete example lives at
+`tests/fixtures/source-manifest-v2.json`. Important invariants include:
+
+- each collected source receives the next workspace-local material ID
+  (`M01`, `M02`, and so on) when it enters the manifest; the ID is persisted,
+  never recalculated from source order, and never reused after deletion;
+  `nextMaterialNumber` persists that high-water mark;
+- meeting-library provenance keeps the backend `fileKey`, while the local file
+  path is derived as `sources/{sourceId}{originalSuffix}`;
+- generated `ArticleDocument.media` keeps the same material IDs so its body and
+  cover references point back to the corresponding manifest sources; saved
+  media inclusion, order, and description provenance must match that manifest
+  snapshot, while editorial media wording may be refined for the article;
+- meeting-library sources may remain references with
+  `workspaceReady=false, included=false`;
+- web and article-scoped Feishu uploads are already materialized and must start
+  workspace-ready;
+- inclusion requires a workspace-ready source;
+- description text, provenance, and confirmation status change atomically;
+- source array position is the only stored material order; `moveToIndex` moves
+  one source and shifts the surrounding entries without persisting a duplicate
+  `order` field;
+- material changes advance only `manifestVersion`;
+- `draft/article.json` is always the raw canonical `ArticleDocument`;
+- draft version, source-manifest version, and hash live in the manifest,
+  outside the article document;
+- draft saves use the backend-owned `/posts/wxposts/validate` endpoint instead
+  of maintaining a second ArticleDocument validator in the controller; the
+  normalized document returned by that endpoint is the one stored on disk;
+- draft saves require both expected manifest and draft versions, and every
+  article media ID and kind must match the manifest snapshot being saved.
+
+The core accepts opaque workspace IDs below `/workspace/inbox`, rejects symlink
+and path traversal, checks every workspace-ready file and declared size, uses a
+per-workspace file lock and operation-specific expected version, validates
+stored and incoming JSON, and writes by atomic replacement. Later material
+operations are added when their controller behavior is implemented rather than
+being frozen here as unused request models. A short-lived pending record makes
+the two-file draft/manifest update recoverable if the process stops between
+the two atomic replacements.
 
 Configure the stdio MCP server once in the dedicated SoarHigh Hermes home:
 
@@ -172,8 +211,8 @@ docker exec \
   hermes mcp test soarhigh-wxpost
 ```
 
-For the architecture probe, run the HTTP adapter on the host against the same
-host workspace mount. It binds to loopback and requires a bearer token:
+Run the HTTP adapter on the host against the same host workspace mount. It
+binds to loopback and requires a bearer token:
 
 ```bash
 PYTHONPATH=claws/hermes \
@@ -182,5 +221,6 @@ WXPOST_CONTROLLER_TOKEN=replace-with-a-local-secret \
 backend/.venv/bin/python -m wxpost_controller.http_server
 ```
 
-This experiment does not implement a production web page, public-preview
-synchronization, Supabase writes, OSS uploads, or WeChat draft operations.
+The controller is not yet connected to the authoring page and does not implement
+public-preview synchronization, Supabase writes, OSS uploads, or WeChat draft
+operations.

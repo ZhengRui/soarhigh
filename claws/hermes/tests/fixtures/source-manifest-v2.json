@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 2,
+  "workspaceId": "meeting-462-contract",
+  "manifestVersion": 1,
+  "nextMaterialNumber": 6,
+  "meetingId": "1cf40bec-f94d-45f4-b5df-18e3a9bffac8",
+  "draft": null,
+  "editorial": {
+    "articleType": "meeting-recap",
+    "customArticleType": null,
+    "writingApproach": "chronological",
+    "transcript": "",
+    "extraNotes": "Mention the first-time guests.",
+    "writingGuidance": "Lead with the strongest human moment."
+  },
+  "sources": [
+    {
+      "id": "M01",
+      "kind": "image",
+      "origin": {
+        "type": "meeting-library",
+        "fileKey": "meetings/462/group-photo.jpg"
+      },
+      "filename": "group-photo.jpg",
+      "mimeType": "image/jpeg",
+      "sizeBytes": 11,
+      "workspaceReady": false,
+      "included": false,
+      "description": "Members gather after Meeting 462.",
+      "descriptionSource": "user",
+      "descriptionStatus": "confirmed"
+    },
+    {
+      "id": "M02",
+      "kind": "image",
+      "origin": {
+        "type": "meeting-library",
+        "fileKey": "meetings/462/speaker.jpg"
+      },
+      "filename": "speaker.jpg",
+      "mimeType": "image/jpeg",
+      "sizeBytes": 12,
+      "workspaceReady": true,
+      "included": false,
+      "description": "",
+      "descriptionSource": null,
+      "descriptionStatus": "missing"
+    },
+    {
+      "id": "M03",
+      "kind": "image",
+      "origin": {
+        "type": "web-upload"
+      },
+      "filename": "welcome-desk.jpg",
+      "mimeType": "image/jpeg",
+      "sizeBytes": 13,
+      "workspaceReady": true,
+      "included": true,
+      "description": "Members welcome guests before the meeting.",
+      "descriptionSource": "user",
+      "descriptionStatus": "confirmed"
+    },
+    {
+      "id": "M04",
+      "kind": "video",
+      "origin": {
+        "type": "feishu-upload"
+      },
+      "filename": "table-topics-highlight.mp4",
+      "mimeType": "video/mp4",
+      "sizeBytes": 14,
+      "workspaceReady": true,
+      "included": false,
+      "description": "A guest tries Table Topics for the first time.",
+      "descriptionSource": "ai",
+      "descriptionStatus": "needs_confirmation"
+    },
+    {
+      "id": "M05",
+      "kind": "transcript",
+      "origin": {
+        "type": "web-upload"
+      },
+      "filename": "meeting-transcript.txt",
+      "mimeType": "text/plain",
+      "sizeBytes": 15,
+      "workspaceReady": true,
+      "included": true,
+      "description": "",
+      "descriptionSource": null,
+      "descriptionStatus": "missing"
+    }
+  ]
+}
