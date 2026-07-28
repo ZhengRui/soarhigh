@@ -108,8 +108,10 @@ def test_create_suffixes_only_after_a_real_slug_collision(monkeypatch) -> None:
     assert result == created
     assert collision.inserted is not None
     assert collision.inserted["slug"] == "the-courage-to-try"
+    assert collision.inserted["status"] == "ready"
     assert retry.inserted is not None
     assert retry.inserted["slug"] == "the-courage-to-try-abcdef"
+    assert retry.inserted["status"] == "ready"
 
 
 def test_update_is_a_single_compare_and_swap_write(

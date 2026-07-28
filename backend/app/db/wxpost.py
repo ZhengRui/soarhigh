@@ -61,7 +61,7 @@ def create_wxpost(document: ArticleDocument) -> dict:
     for attempt in range(5):
         slug = base_slug if attempt == 0 else f"{base_slug}-{uuid4().hex[:6]}"
         try:
-            response = supabase.table("wxposts").insert({**values, "slug": slug}).execute()
+            response = supabase.table("wxposts").insert({**values, "slug": slug, "status": "ready"}).execute()
         except APIError as error:
             if _is_slug_collision(error):
                 continue

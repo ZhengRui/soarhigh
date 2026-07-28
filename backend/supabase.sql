@@ -90,9 +90,15 @@ CREATE TABLE wxposts (
         CONSTRAINT wxposts_title_not_blank CHECK (title ~ '[^[:space:]]'),
     slug TEXT NOT NULL
         CONSTRAINT wxposts_slug_not_blank CHECK (slug ~ '[^[:space:]]'),
-    content TEXT NOT NULL
+    content TEXT
         CONSTRAINT wxposts_content_not_blank CHECK (content ~ '[^[:space:]]'),
-    is_public BOOLEAN NOT NULL DEFAULT TRUE,
+    is_public BOOLEAN NOT NULL DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'assembling'
+        CONSTRAINT wxposts_status_valid
+        CHECK (status IN ('assembling', 'ready')),
+    prepare_idempotency_key_hash TEXT,
+    prepare_request_hash TEXT,
+    finalize_request_hash TEXT,
     schema_version INTEGER NOT NULL DEFAULT 1
         CONSTRAINT wxposts_schema_version_v1 CHECK (schema_version = 1),
     article_type TEXT NOT NULL
@@ -140,7 +146,169 @@ CREATE TABLE wxposts (
             article_type <> 'custom'
             AND custom_article_type IS NULL
         )
+    ),
+    CONSTRAINT wxposts_ready_content_valid CHECK (
+        status = 'assembling'
+        OR COALESCE(content ~ '[^[:space:]]', FALSE)
+    ),
+    CONSTRAINT wxposts_visibility_matches_status CHECK (
+        is_public = (status = 'ready')
+    ),
+    CONSTRAINT wxposts_prepare_hashes_valid CHECK (
+        (
+            prepare_idempotency_key_hash IS NULL
+            AND prepare_request_hash IS NULL
+        )
+        OR (
+            prepare_idempotency_key_hash ~ '^[0-9a-f]{64}$'
+            AND prepare_request_hash ~ '^[0-9a-f]{64}$'
+        )
+    ),
+    CONSTRAINT wxposts_finalize_hash_valid CHECK (
+        finalize_request_hash IS NULL
+        OR finalize_request_hash ~ '^[0-9a-f]{64}$'
     )
+);
+
+-- WXPost assets - owns direct-to-OSS media selected for one article
+CREATE TABLE wxpost_assets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    wxpost_id UUID NOT NULL REFERENCES wxposts(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CONSTRAINT wxpost_assets_status_valid
+        CHECK (status IN ('pending', 'ready', 'failed', 'abandoned')),
+    kind TEXT NOT NULL
+        CONSTRAINT wxpost_assets_kind_valid
+        CHECK (kind IN ('image', 'video')),
+    object_key TEXT NOT NULL UNIQUE,
+    original_filename TEXT NOT NULL
+        CONSTRAINT wxpost_assets_filename_not_blank
+        CHECK (original_filename ~ '[^[:space:]]'),
+    mime_type TEXT NOT NULL
+        CONSTRAINT wxpost_assets_mime_not_blank
+        CHECK (mime_type ~ '[^[:space:]]'),
+    size_bytes BIGINT NOT NULL
+        CONSTRAINT wxpost_assets_size_positive
+        CHECK (size_bytes > 0),
+    content_sha256 TEXT,
+    content_md5 TEXT,
+    upload_idempotency_key_hash TEXT NOT NULL
+        CONSTRAINT wxpost_assets_idempotency_key_hash_valid
+        CHECK (upload_idempotency_key_hash ~ '^[0-9a-f]{64}$'),
+    upload_request_hash TEXT NOT NULL
+        CONSTRAINT wxpost_assets_request_hash_valid
+        CHECK (upload_request_hash ~ '^[0-9a-f]{64}$'),
+    source_type TEXT NOT NULL DEFAULT 'feishu'
+        CONSTRAINT wxpost_assets_source_type_valid
+        CHECK (source_type IN ('feishu', 'workspace', 'meeting')),
+    source_metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+        CONSTRAINT wxpost_assets_source_metadata_is_object
+        CHECK (jsonb_typeof(source_metadata) = 'object'),
+    etag TEXT,
+    poster_object_key TEXT UNIQUE,
+    poster_original_filename TEXT,
+    poster_mime_type TEXT,
+    poster_size_bytes BIGINT,
+    poster_content_sha256 TEXT,
+    poster_content_md5 TEXT,
+    poster_etag TEXT,
+    ready_at TIMESTAMPTZ,
+    abandoned_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT wxpost_assets_source_hashes_valid CHECK (
+        (
+            source_type IN ('feishu', 'workspace')
+            AND content_sha256 IS NOT NULL
+            AND content_sha256 ~ '^[0-9a-f]{64}$'
+            AND content_md5 IS NOT NULL
+            AND content_md5 ~ '[^[:space:]]'
+        )
+        OR (
+            source_type = 'meeting'
+            AND content_sha256 IS NULL
+            AND content_md5 IS NULL
+        )
+    ),
+    CONSTRAINT wxpost_assets_kind_mime_valid CHECK (
+        (
+            kind = 'image'
+            AND mime_type IN (
+                'image/jpeg',
+                'image/png',
+                'image/webp',
+                'image/gif'
+            )
+        )
+        OR (
+            kind = 'video'
+            AND mime_type IN (
+                'video/mp4',
+                'video/quicktime',
+                'video/webm'
+            )
+        )
+    ),
+    CONSTRAINT wxpost_assets_object_key_owned CHECK (
+        object_key = (
+            'public/wxposts/'
+            || wxpost_id::TEXT
+            || '/assets/'
+            || id::TEXT
+            || '/original.'
+            || CASE mime_type
+                WHEN 'image/jpeg' THEN 'jpg'
+                WHEN 'image/png' THEN 'png'
+                WHEN 'image/webp' THEN 'webp'
+                WHEN 'image/gif' THEN 'gif'
+                WHEN 'video/mp4' THEN 'mp4'
+                WHEN 'video/quicktime' THEN 'mov'
+                WHEN 'video/webm' THEN 'webm'
+                ELSE ''
+            END
+        )
+    ),
+    CONSTRAINT wxpost_assets_poster_fields_valid CHECK (
+        (
+            poster_object_key IS NULL
+            AND poster_original_filename IS NULL
+            AND poster_mime_type IS NULL
+            AND poster_size_bytes IS NULL
+            AND poster_content_sha256 IS NULL
+            AND poster_content_md5 IS NULL
+            AND poster_etag IS NULL
+        )
+        OR (
+            kind = 'video'
+            AND poster_object_key = (
+                'public/wxposts/'
+                || wxpost_id::TEXT
+                || '/assets/'
+                || id::TEXT
+                || '/poster.jpg'
+            )
+            AND COALESCE(poster_original_filename ~ '[^[:space:]]', FALSE)
+            AND poster_mime_type = 'image/jpeg'
+            AND poster_size_bytes > 0
+            AND poster_content_sha256 ~ '^[0-9a-f]{64}$'
+            AND COALESCE(poster_content_md5 ~ '[^[:space:]]', FALSE)
+        )
+    ),
+    CONSTRAINT wxpost_assets_ready_timestamp_valid CHECK (
+        status <> 'ready'
+        OR (
+            ready_at IS NOT NULL
+            AND COALESCE(etag ~ '[^[:space:]]', FALSE)
+            AND (
+                poster_object_key IS NULL
+                OR COALESCE(poster_etag ~ '[^[:space:]]', FALSE)
+            )
+        )
+    ),
+    CONSTRAINT wxpost_assets_abandoned_timestamp_valid CHECK (
+        (status = 'abandoned') = (abandoned_at IS NOT NULL)
+    ),
+    CONSTRAINT wxpost_assets_upload_idempotency_key
+        UNIQUE (wxpost_id, upload_idempotency_key_hash)
 );
 
 -- Votes table - stores votes
@@ -217,11 +385,18 @@ CREATE UNIQUE INDEX unique_slug ON posts(slug);
 -- Supports public WXPost listings and optional meeting lookup
 CREATE INDEX wxposts_public_created_at_idx
     ON wxposts (created_at DESC)
-    WHERE is_public = TRUE;
+    WHERE status = 'ready' AND is_public = TRUE;
 
 CREATE INDEX wxposts_source_meeting_id_idx
     ON wxposts (source_meeting_id)
     WHERE source_meeting_id IS NOT NULL;
+
+CREATE UNIQUE INDEX wxposts_prepare_idempotency_key_hash_idx
+    ON wxposts (prepare_idempotency_key_hash)
+    WHERE prepare_idempotency_key_hash IS NOT NULL;
+
+CREATE INDEX wxpost_assets_wxpost_id_idx
+    ON wxpost_assets (wxpost_id);
 
 -- Ensures meeting_id, category, and name are unique
 CREATE UNIQUE INDEX unique_meeting_category_name ON votes(meeting_id, category, name);
@@ -239,6 +414,72 @@ CREATE UNIQUE INDEX unique_checkin_person_segment ON checkins(meeting_id, wxid, 
 -- Index for efficient timing queries
 CREATE INDEX idx_timings_meeting_id ON timings(meeting_id);
 
+CREATE FUNCTION enforce_wxpost_asset_parent_assembling()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    parent_status TEXT;
+BEGIN
+    SELECT status
+    INTO parent_status
+    FROM wxposts
+    WHERE id = NEW.wxpost_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'WXPost % does not exist', NEW.wxpost_id
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF parent_status <> 'assembling' THEN
+        RAISE EXCEPTION 'WXPost % is not assembling', NEW.wxpost_id
+            USING ERRCODE = '55000';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER wxpost_assets_parent_assembling
+    BEFORE INSERT OR UPDATE OF status
+    ON wxpost_assets
+    FOR EACH ROW
+    EXECUTE FUNCTION enforce_wxpost_asset_parent_assembling();
+
+CREATE FUNCTION block_wxpost_finalize_with_pending_assets()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF (
+        OLD.status = 'assembling'
+        AND NEW.status = 'ready'
+        AND EXISTS (
+            SELECT 1
+            FROM wxpost_assets
+            WHERE wxpost_id = NEW.id
+              AND status = 'pending'
+        )
+    ) THEN
+        RAISE EXCEPTION 'WXPost % still has pending assets', NEW.id
+            USING ERRCODE = '55000';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER wxposts_no_pending_assets_on_finalize
+    BEFORE UPDATE OF status
+    ON wxposts
+    FOR EACH ROW
+    EXECUTE FUNCTION block_wxpost_finalize_with_pending_assets();
+
 -- =============================================
 -- ROW LEVEL SECURITY POLICIES
 -- =============================================
@@ -250,6 +491,7 @@ ALTER TABLE meetings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE segments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wxposts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wxpost_assets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE votes_status ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feedbacks ENABLE ROW LEVEL SECURITY;
@@ -426,11 +668,19 @@ USING (author_id = auth.uid() OR is_admin(auth.uid()));
 CREATE POLICY wxposts_public_read
 ON wxposts FOR SELECT
 TO anon, authenticated
-USING (is_public = TRUE);
+USING (status = 'ready' AND is_public = TRUE);
 
 REVOKE ALL ON TABLE wxposts FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON TABLE wxposts TO anon, authenticated;
 GRANT ALL ON TABLE wxposts TO service_role;
+
+REVOKE ALL ON TABLE wxpost_assets FROM PUBLIC, anon, authenticated;
+GRANT ALL ON TABLE wxpost_assets TO service_role;
+
+REVOKE ALL ON FUNCTION enforce_wxpost_asset_parent_assembling()
+FROM PUBLIC;
+REVOKE ALL ON FUNCTION block_wxpost_finalize_with_pending_assets()
+FROM PUBLIC;
 
 -- Votes table policies
 CREATE POLICY "Members can view votes"
