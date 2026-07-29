@@ -11,13 +11,47 @@ services:
       HERMES_UID: "${HERMES_UID:-10000}"
       HERMES_GID: "${HERMES_GID:-10000}"
       SOARHIGH_API_BASE_URL: "${SOARHIGH_API_BASE_URL:-http://host.docker.internal:5000}"
-      WXPOST_SERVICE_TOKEN: "${WXPOST_SERVICE_TOKEN:-}"
+      WXPOST_SERVICE_TOKEN: "${SOARHIGH_WXPOST_SERVICE_TOKEN:?Set SOARHIGH_WXPOST_SERVICE_TOKEN in .env.local}"
     volumes:
       - type: bind
         source: ${HERMES_HOME_DIR:?Set HERMES_HOME_DIR in .env.local}
         target: /opt/data
         bind:
           create_host_path: false
+      - type: bind
+        source: ${HERMES_WORKSPACE_DIR:?Set HERMES_WORKSPACE_DIR in .env.local}
+        target: /workspace
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./wxpost_controller
+        target: /opt/soarhigh/wxpost_controller
+        read_only: true
+        bind:
+          create_host_path: false
+
+  controller:
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+    restart: unless-stopped
+    working_dir: /workspace
+    command:
+      - /opt/hermes/.venv/bin/python
+      - -m
+      - wxpost_controller.http_server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8787"
+    environment:
+      HERMES_UID: "${HERMES_UID:-10000}"
+      HERMES_GID: "${HERMES_GID:-10000}"
+      PYTHONPATH: /opt/soarhigh
+      SOARHIGH_API_BASE_URL: "${SOARHIGH_API_BASE_URL:-http://host.docker.internal:5000}"
+      WXPOST_SERVICE_TOKEN: "${SOARHIGH_WXPOST_SERVICE_TOKEN:?Set SOARHIGH_WXPOST_SERVICE_TOKEN in .env.local}"
+      WXPOST_WORKSPACE_ROOT: /workspace
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
       - type: bind
         source: ${HERMES_WORKSPACE_DIR:?Set HERMES_WORKSPACE_DIR in .env.local}
         target: /workspace

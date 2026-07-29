@@ -25,6 +25,7 @@ from .core import (
 )
 
 WORKSPACE_PATH = re.compile(r"^/workspaces/([^/]+)$")
+WORKSPACES_PATH = "/workspaces"
 CONTEXT_PATH = re.compile(r"^/workspaces/([^/]+)/context$")
 SOURCES_PATH = re.compile(r"^/workspaces/([^/]+)/sources$")
 SOURCE_IMPORT_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)/import$")
@@ -32,6 +33,7 @@ SOURCE_INCLUSION_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)/inclus
 SOURCE_DELETE_PREFLIGHT_PATH = re.compile(
     r"^/workspaces/([^/]+)/sources/([^/]+)/delete-preflight$"
 )
+SOURCE_CONTENT_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)/content$")
 SOURCE_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)$")
 UPLOADS_PATH = re.compile(r"^/workspaces/([^/]+)/uploads$")
 MAX_REQUEST_BYTES = 1_000_000
@@ -52,10 +54,22 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             return
         if not self._authorized():
             return
+        if path == WORKSPACES_PATH:
+            self._run_controller(self.server.controller.list_workspaces)
+            return
         context_match = CONTEXT_PATH.fullmatch(path)
         if context_match is not None:
             self._run_controller(
                 lambda: self.server.controller.get_context(context_match.group(1))
+            )
+            return
+        content_match = SOURCE_CONTENT_PATH.fullmatch(path)
+        if content_match is not None:
+            self._run_source_read(
+                lambda: self.server.controller.read_source(
+                    content_match.group(1),
+                    source_id=content_match.group(2),
+                )
             )
             return
         preflight_match = SOURCE_DELETE_PREFLIGHT_PATH.fullmatch(path)
@@ -72,7 +86,50 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
     def do_PATCH(self) -> None:
         if not self._authorized():
             return
-        match = SOURCES_PATH.fullmatch(urlsplit(self.path).path)
+        path = urlsplit(self.path).path
+        workspace_match = WORKSPACE_PATH.fullmatch(path)
+        if workspace_match is not None:
+            payload = self._read_json_body()
+            required_fields = {
+                "expectedManifestVersion",
+                "meetingId",
+                "editorial",
+            }
+            if payload is None or not self._accept_fields(
+                payload,
+                required_fields,
+                "workspace update",
+            ):
+                return
+            missing_fields = required_fields - set(payload)
+            if missing_fields:
+                self._send_json(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    error_response(
+                        InvalidRequest(
+                            "missing workspace update fields: "
+                            + ", ".join(sorted(missing_fields))
+                        )
+                    ),
+                )
+                return
+            self._run_controller(
+                lambda: self.server.controller.update_workspace(
+                    workspace_match.group(1),
+                    expected_manifest_version=cast(
+                        int,
+                        payload.get("expectedManifestVersion"),
+                    ),
+                    meeting_id=cast(str | None, payload.get("meetingId")),
+                    editorial=cast(
+                        dict[str, Any],
+                        payload.get("editorial"),
+                    ),
+                )
+            )
+            return
+
+        match = SOURCES_PATH.fullmatch(path)
         if match is None:
             self._send_error(HTTPStatus.NOT_FOUND, "not_found", "route not found")
             return
@@ -117,7 +174,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             payload = self._read_json_body()
             if payload is None or not self._accept_fields(
                 payload,
-                {"meetingId", "editorial"},
+                {"meetingId", "editorial", "createdBy"},
                 "workspace bootstrap",
             ):
                 return
@@ -128,6 +185,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     editorial=cast(
                         dict[str, Any],
                         payload.get("editorial"),
+                    ),
+                    created_by=cast(
+                        dict[str, Any],
+                        payload.get("createdBy"),
                     ),
                 )
             )
@@ -191,15 +252,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     "one filename query parameter is required",
                 )
                 return
-            raw_version = self.headers.get("X-Expected-Manifest-Version")
-            try:
-                expected_version = int(raw_version or "")
-            except ValueError:
-                self._send_error(
-                    HTTPStatus.UNPROCESSABLE_ENTITY,
-                    "invalid_request",
-                    "X-Expected-Manifest-Version must be an integer",
-                )
+            expected_version = self._read_expected_manifest_version()
+            if expected_version is None:
                 return
             data = self._read_body(MAX_SOURCE_BYTES)
             if data is None:
@@ -223,7 +277,20 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         if not self._authorized():
             return
-        match = SOURCE_PATH.fullmatch(urlsplit(self.path).path)
+        path = urlsplit(self.path).path
+        workspace_match = WORKSPACE_PATH.fullmatch(path)
+        if workspace_match is not None:
+            expected_version = self._read_expected_manifest_version()
+            if expected_version is None:
+                return
+            self._run_controller(
+                lambda: self.server.controller.delete_workspace(
+                    workspace_match.group(1),
+                    expected_manifest_version=expected_version,
+                )
+            )
+            return
+        match = SOURCE_PATH.fullmatch(path)
         if match is None:
             self._send_error(HTTPStatus.NOT_FOUND, "not_found", "route not found")
             return
@@ -282,6 +349,18 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             )
             return None
         return payload
+
+    def _read_expected_manifest_version(self) -> int | None:
+        raw_version = self.headers.get("X-Expected-Manifest-Version")
+        try:
+            return int(raw_version or "")
+        except ValueError:
+            self._send_error(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "invalid_request",
+                "X-Expected-Manifest-Version must be an integer",
+            )
+            return None
 
     def _read_body(self, maximum: int) -> bytes | None:
         raw_length = self.headers.get("Content-Length")
@@ -355,6 +434,31 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         else:
             self._send_json(HTTPStatus.OK, result)
 
+    def _run_source_read(self, operation) -> None:
+        try:
+            data, mime_type = operation()
+        except WorkspaceError as exc:
+            if isinstance(exc, WorkspaceNotFound):
+                status = HTTPStatus.NOT_FOUND
+            elif isinstance(exc, (InvalidRequest, InvalidWorkspace)):
+                status = HTTPStatus.UNPROCESSABLE_ENTITY
+            else:
+                status = HTTPStatus.BAD_REQUEST
+            self._send_json(status, error_response(exc))
+        except Exception:
+            self._send_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "controller operation failed",
+            )
+        else:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "private, no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
     def _send_error(self, status: HTTPStatus, code: str, message: str) -> None:
         self._send_json(status, {"error": {"code": code, "message": message}})
 
@@ -391,9 +495,7 @@ def main() -> None:
         "--workspace-root",
         default=os.environ.get("WXPOST_WORKSPACE_ROOT", "/workspace"),
     )
-    parser.add_argument(
-        "--token", default=os.environ.get("WXPOST_CONTROLLER_TOKEN", "")
-    )
+    parser.add_argument("--token", default=os.environ.get("WXPOST_SERVICE_TOKEN", ""))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
     args = parser.parse_args()

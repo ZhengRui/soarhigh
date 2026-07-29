@@ -13,12 +13,14 @@ import pytest
 from wxpost_controller.core import (
     ConfirmationRequired,
     InvalidRequest,
+    InvalidWorkspace,
     UpstreamUnavailable,
     VersionConflict,
     WorkspaceController,
 )
 
 MEETING_ID = "meeting-462"
+SECOND_MEETING_ID = "meeting-461"
 EDITORIAL = {
     "articleType": "meeting-recap",
     "customArticleType": None,
@@ -27,6 +29,7 @@ EDITORIAL = {
     "extraNotes": "",
     "writingGuidance": "",
 }
+CREATOR = {"id": "member-123", "name": "Test Member"}
 
 
 class _MeetingMediaHandler(BaseHTTPRequestHandler):
@@ -129,6 +132,7 @@ def _bootstrap(
         workspace_id,
         meeting_id=MEETING_ID,
         editorial=EDITORIAL,
+        created_by=CREATOR,
     )
 
 
@@ -223,7 +227,68 @@ def test_bootstrap_registers_stable_references_and_resumes_idempotently(
     assert refreshed["sources"][2]["origin"]["fileKey"].endswith("new-earliest.jpg")
 
 
-def test_bootstrap_rejects_meeting_change_and_bad_upstream_metadata(
+def test_workspace_list_and_delete_expose_collaboration_metadata(
+    tmp_path: Path,
+) -> None:
+    controller = _controller(tmp_path, [], {})
+    workspace_id = "wxpost-m462-meeting-recap-abcdef12"
+
+    created = _bootstrap(controller, workspace_id)["manifest"]
+    assert created["schemaVersion"] == 3
+    assert created["createdBy"] == CREATOR
+    assert created["createdAt"] == created["updatedAt"]
+
+    listing = controller.list_workspaces()
+    assert listing["items"] == [
+        {
+            "workspaceId": workspace_id,
+            "createdBy": CREATOR,
+            "createdAt": created["createdAt"],
+            "updatedAt": created["updatedAt"],
+            "meetingId": MEETING_ID,
+            "articleType": "meeting-recap",
+            "customArticleType": None,
+            "manifestVersion": 1,
+            "sourceCount": 0,
+            "readySourceCount": 0,
+            "includedSourceCount": 0,
+            "hasDraft": False,
+        }
+    ]
+
+    deleted = controller.delete_workspace(
+        workspace_id,
+        expected_manifest_version=created["manifestVersion"],
+    )
+    assert deleted["workspaceId"] == workspace_id
+    assert deleted["deleted"] is True
+    assert not (tmp_path / "inbox" / workspace_id).exists()
+    assert controller.list_workspaces() == {"items": []}
+
+
+def test_workspace_list_skips_unreadable_entries_and_delete_rejects_stale_version(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    controller = _controller(tmp_path, [], {})
+    workspace_id = "wxpost-readable"
+    created = _bootstrap(controller, workspace_id)["manifest"]
+    (tmp_path / "inbox" / "wxpost-incomplete").mkdir()
+
+    assert [item["workspaceId"] for item in controller.list_workspaces()["items"]] == [
+        workspace_id
+    ]
+    assert "Skipping unreadable WXPost workspace wxpost-incomplete" in caplog.text
+
+    with pytest.raises(VersionConflict):
+        controller.delete_workspace(
+            workspace_id,
+            expected_manifest_version=created["manifestVersion"] + 1,
+        )
+    assert (tmp_path / "inbox" / workspace_id).exists()
+
+
+def test_bootstrap_requires_explicit_update_and_rejects_bad_upstream_metadata(
     tmp_path: Path,
 ) -> None:
     media = [
@@ -237,11 +302,12 @@ def test_bootstrap_rejects_meeting_change_and_bad_upstream_metadata(
     controller = _controller(tmp_path, media, {})
     _bootstrap(controller)
 
-    with pytest.raises(InvalidRequest, match="meetingId cannot change"):
+    with pytest.raises(InvalidRequest, match="workspace update operation"):
         controller.bootstrap_workspace(
             "material-workspace",
             meeting_id=None,
             editorial=EDITORIAL,
+            created_by=CREATOR,
         )
 
     media.append(dict(media[0]))
@@ -250,8 +316,109 @@ def test_bootstrap_rejects_meeting_change_and_bad_upstream_metadata(
             "another-workspace",
             meeting_id=MEETING_ID,
             editorial=EDITORIAL,
+            created_by=CREATOR,
         )
     assert not (tmp_path / "inbox" / "another-workspace").exists()
+
+
+def test_workspace_update_changes_meeting_in_place_and_preserves_uploads(
+    tmp_path: Path,
+) -> None:
+    media_by_meeting = {
+        MEETING_ID: [
+            _media(
+                "meetings/462/photo.jpg",
+                "photo.jpg",
+                size=5,
+                uploaded_at="2026-07-20T09:00:00Z",
+            )
+        ],
+        SECOND_MEETING_ID: [
+            _media(
+                "meetings/461/workshop.jpg",
+                "workshop.jpg",
+                size=8,
+                uploaded_at="2026-07-13T09:00:00Z",
+            )
+        ],
+    }
+    controller = WorkspaceController(
+        tmp_path,
+        article_validator=lambda document: document,
+        meeting_media_loader=lambda meeting_id: list(
+            media_by_meeting.get(meeting_id, [])
+        ),
+        source_loader=lambda url: {"https://assets.example/photo.jpg": b"photo"}[url],
+    )
+    created = _bootstrap(controller)["manifest"]
+    assert created["workspaceId"] == "material-workspace"
+
+    imported = controller.import_source(
+        "material-workspace",
+        expected_manifest_version=1,
+        source_id="M01",
+    )
+    uploaded = controller.upload_source(
+        "material-workspace",
+        expected_manifest_version=imported["manifestVersion"],
+        origin="web-upload",
+        filename="member-note.png",
+        mime_type="image/png",
+        data=b"member-note",
+    )
+    assert [source["id"] for source in uploaded["sources"]] == ["M01", "M02"]
+
+    updated = controller.update_workspace(
+        "material-workspace",
+        expected_manifest_version=uploaded["manifestVersion"],
+        meeting_id=SECOND_MEETING_ID,
+        editorial={
+            **EDITORIAL,
+            "articleType": "member-story",
+        },
+    )
+    manifest = updated["manifest"]
+
+    assert updated["workspaceId"] == "material-workspace"
+    assert manifest["meetingId"] == SECOND_MEETING_ID
+    assert manifest["editorial"]["articleType"] == "member-story"
+    assert manifest["manifestVersion"] == 4
+    assert manifest["nextMaterialNumber"] == 4
+    assert [
+        (source["id"], source["origin"]["type"]) for source in manifest["sources"]
+    ] == [
+        ("M02", "web-upload"),
+        ("M03", "meeting-library"),
+    ]
+    assert manifest["sources"][1]["origin"]["fileKey"] == (
+        "meetings/461/workshop.jpg"
+    )
+    workspace = tmp_path / "inbox" / "material-workspace"
+    assert not (workspace / "sources" / "M01.jpg").exists()
+    assert (workspace / "sources" / "M02.png").read_bytes() == b"member-note"
+
+
+def test_workspace_update_uses_manifest_version_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    controller = _controller(tmp_path, [], {})
+    created = _bootstrap(controller)
+
+    unchanged = controller.update_workspace(
+        "material-workspace",
+        expected_manifest_version=1,
+        meeting_id=MEETING_ID,
+        editorial=EDITORIAL,
+    )
+    assert unchanged == created
+
+    with pytest.raises(VersionConflict):
+        controller.update_workspace(
+            "material-workspace",
+            expected_manifest_version=2,
+            meeting_id=None,
+            editorial=EDITORIAL,
+        )
 
 
 def test_import_and_include_materialize_exactly_once(
@@ -478,6 +645,54 @@ def test_web_and_feishu_uploads_use_high_water_ids_and_canonical_paths(
             )
     finally:
         outside.unlink()
+
+
+def test_workspace_ready_source_can_be_read_with_its_declared_mime_type(
+    tmp_path: Path,
+) -> None:
+    controller = _controller(tmp_path, [], {})
+    _bootstrap(controller)
+    controller.upload_source(
+        "material-workspace",
+        expected_manifest_version=1,
+        origin="web-upload",
+        filename="cover.jpg",
+        mime_type="image/jpeg",
+        data=b"cover",
+    )
+
+    assert controller.read_source(
+        "material-workspace",
+        source_id="M01",
+    ) == (b"cover", "image/jpeg")
+
+    manifest = json.loads(
+        (tmp_path / "inbox/material-workspace/source-manifest.json").read_text()
+    )
+    manifest["sources"][0]["sizeBytes"] = 99
+    (tmp_path / "inbox/material-workspace/source-manifest.json").write_text(
+        json.dumps(manifest)
+    )
+    with pytest.raises(InvalidWorkspace, match="size"):
+        controller.read_source("material-workspace", source_id="M01")
+
+
+def test_nonready_meeting_reference_cannot_be_read_from_workspace(
+    tmp_path: Path,
+) -> None:
+    media = [
+        _media(
+            "meetings/462/photo.jpg",
+            "photo.jpg",
+            size=5,
+            uploaded_at="2026-07-20T09:00:00Z",
+        )
+    ]
+    controller = _controller(tmp_path, media, {})
+    _bootstrap(controller)
+
+    with pytest.raises(InvalidRequest, match="not available"):
+        controller.read_source("material-workspace", source_id="M01")
 
 
 def test_delete_requires_confirmation_and_preserves_draft(

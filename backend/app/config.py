@@ -66,6 +66,11 @@ WECHAT_JWT_SECRET = config("WECHAT_JWT_SECRET", cast=str)
 # WeChat draft credentials. Local development links point at the existing
 # Next.js server; deployed environments default to the public site.
 WXPOST_SERVICE_TOKEN = config("WXPOST_SERVICE_TOKEN", cast=str, default="")
+WXPOST_CONTROLLER_URL = config(
+    "WXPOST_CONTROLLER_URL",
+    cast=str,
+    default="http://127.0.0.1:8787" if _local_env_file else "",
+).rstrip("/")
 WXPOST_PUBLIC_BASE_URL = config(
     "WXPOST_PUBLIC_BASE_URL",
     cast=str,

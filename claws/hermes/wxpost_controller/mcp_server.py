@@ -52,6 +52,25 @@ def wxpost_bootstrap_workspace(
             workspace_id,
             meeting_id=meeting_id,
             editorial=editorial,
+            created_by={"id": "hermes", "name": "Hermes"},
+        )
+    )
+
+
+@mcp.tool()
+def wxpost_update_workspace(
+    workspace_id: str,
+    expected_manifest_version: int,
+    meeting_id: str | None,
+    editorial: dict[str, Any],
+) -> dict[str, Any]:
+    """Update one workspace's meeting and editorial settings in place."""
+    return _run(
+        lambda: _controller().update_workspace(
+            workspace_id,
+            expected_manifest_version=expected_manifest_version,
+            meeting_id=meeting_id,
+            editorial=editorial,
         )
     )
 

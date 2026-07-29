@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
 
@@ -14,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-MANIFEST_SCHEMA_VERSION: Literal[2] = 2
+MANIFEST_SCHEMA_VERSION: Literal[3] = 3
 
 TrimmedText = Annotated[
     str,
@@ -121,12 +122,10 @@ class EditorialSettings(ContractModel):
 
     @model_validator(mode="after")
     def _validate_custom_article_type(self) -> EditorialSettings:
-        if self.article_type == ArticleType.CUSTOM:
-            if self.custom_article_type is None:
-                raise ValueError(
-                    "customArticleType is required when articleType is custom"
-                )
-        elif self.custom_article_type is not None:
+        if (
+            self.article_type != ArticleType.CUSTOM
+            and self.custom_article_type is not None
+        ):
             raise ValueError(
                 "customArticleType must be null unless articleType is custom"
             )
@@ -177,11 +176,19 @@ class DraftState(ContractModel):
     sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 
+class WorkspaceCreator(ContractModel):
+    id: TrimmedText
+    name: TrimmedText
+
+
 class SourceManifest(ContractModel):
-    schema_version: Literal[2]
+    schema_version: Literal[3]
     workspace_id: TrimmedText
     manifest_version: int = Field(ge=1, strict=True)
     next_material_number: int = Field(ge=1, strict=True)
+    created_by: WorkspaceCreator
+    created_at: datetime
+    updated_at: datetime
     meeting_id: TrimmedText | None = None
     draft: DraftState | None = None
     editorial: EditorialSettings
@@ -195,11 +202,16 @@ class SourceManifest(ContractModel):
             or isinstance(value, bool)
             or value != MANIFEST_SCHEMA_VERSION
         ):
-            raise ValueError("schemaVersion must be the integer 2")
+            raise ValueError("schemaVersion must be the integer 3")
         return value
 
     @model_validator(mode="after")
     def _validate_manifest(self) -> SourceManifest:
+        if self.created_at.tzinfo is None or self.updated_at.tzinfo is None:
+            raise ValueError("workspace timestamps must include a timezone")
+        if self.updated_at < self.created_at:
+            raise ValueError("updatedAt cannot be earlier than createdAt")
+
         ids = [source.id for source in self.sources]
         if len(ids) != len(set(ids)):
             raise ValueError("source ids must be unique")
@@ -285,6 +297,13 @@ class UpdateSourcesRequest(ContractModel):
 
 class BootstrapWorkspaceRequest(ContractModel):
     meeting_id: TrimmedText | None = None
+    editorial: EditorialSettings
+    created_by: WorkspaceCreator
+
+
+class UpdateWorkspaceRequest(ContractModel):
+    expected_manifest_version: int = Field(ge=1, strict=True)
+    meeting_id: TrimmedText | None
     editorial: EditorialSettings
 
 

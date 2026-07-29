@@ -1,8 +1,14 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "workspaceId": "meeting-462-contract",
   "manifestVersion": 1,
   "nextMaterialNumber": 6,
+  "createdBy": {
+    "id": "member-123",
+    "name": "Test Member"
+  },
+  "createdAt": "2026-07-28T09:00:00Z",
+  "updatedAt": "2026-07-28T09:00:00Z",
   "meetingId": "1cf40bec-f94d-45f4-b5df-18e3a9bffac8",
   "draft": null,
   "editorial": {

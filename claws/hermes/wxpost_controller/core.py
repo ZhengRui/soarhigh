@@ -3,12 +3,15 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.error import HTTPError, URLError
@@ -33,6 +36,7 @@ from .contracts import (
     SourceUpdate,
     UploadSourceRequest,
     UpdateSourcesRequest,
+    UpdateWorkspaceRequest,
 )
 
 WORKSPACE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -41,6 +45,7 @@ ArticleValidator = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 MeetingMediaLoader = Callable[[str], list[Mapping[str, Any]]]
 SourceLoader = Callable[[str], bytes]
 RequestModel = TypeVar("RequestModel", bound=BaseModel)
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceError(Exception):
@@ -181,6 +186,7 @@ class WorkspaceController:
         *,
         meeting_id: str | None,
         editorial: Mapping[str, Any],
+        created_by: Mapping[str, Any],
     ) -> dict[str, Any]:
         self._validate_workspace_id(workspace_id)
         request = self._validate_request(
@@ -188,6 +194,7 @@ class WorkspaceController:
             {
                 "meetingId": meeting_id,
                 "editorial": editorial,
+                "createdBy": created_by,
             },
             label="workspace bootstrap",
         )
@@ -203,7 +210,11 @@ class WorkspaceController:
                 manifest = self._read_manifest(workspace, workspace_id)
                 if manifest.meeting_id != request.meeting_id:
                     raise InvalidRequest(
-                        "meetingId cannot change after a workspace is created"
+                        "workspace settings changed; use the workspace update operation"
+                    )
+                if manifest.editorial != request.editorial:
+                    raise InvalidRequest(
+                        "workspace settings changed; use the workspace update operation"
                     )
                 manifest = self._register_meeting_media(
                     workspace,
@@ -227,12 +238,167 @@ class WorkspaceController:
             draft = self._read_draft(workspace, manifest)
         return self._context_response(workspace_id, manifest, draft)
 
+    def update_workspace(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        meeting_id: str | None,
+        editorial: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        request = self._validate_request(
+            UpdateWorkspaceRequest,
+            {
+                "expectedManifestVersion": expected_manifest_version,
+                "meetingId": meeting_id,
+                "editorial": editorial,
+            },
+            label="workspace update",
+        )
+        workspace = self._resolve_workspace(workspace_id)
+
+        with self._workspace_lock(workspace):
+            current = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(
+                current,
+                request.expected_manifest_version,
+            )
+        meeting_changed = current.meeting_id != request.meeting_id
+        meeting_media = (
+            self._load_meeting_media(request.meeting_id)
+            if meeting_changed and request.meeting_id is not None
+            else []
+        )
+
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(
+                manifest,
+                request.expected_manifest_version,
+            )
+            meeting_changed = manifest.meeting_id != request.meeting_id
+            editorial_changed = manifest.editorial != request.editorial
+            draft = self._read_draft(workspace, manifest)
+            if not meeting_changed and not editorial_changed:
+                return self._context_response(workspace_id, manifest, draft)
+
+            manifest_data = manifest.to_wire()
+            removed_sources: list[SourceRecord] = []
+            if meeting_changed:
+                removed_sources = [
+                    source
+                    for source in manifest.sources
+                    if isinstance(source.origin, MeetingLibraryOrigin)
+                ]
+                manifest_data["sources"] = [
+                    source.to_wire()
+                    for source in manifest.sources
+                    if not isinstance(source.origin, MeetingLibraryOrigin)
+                ]
+                manifest_data["meetingId"] = request.meeting_id
+                for media in meeting_media:
+                    source = self._meeting_source_record(
+                        manifest_data["nextMaterialNumber"],
+                        media,
+                    )
+                    manifest_data["sources"].append(source.to_wire())
+                    manifest_data["nextMaterialNumber"] += 1
+            manifest_data["editorial"] = request.editorial.to_wire()
+            manifest_data["draft"] = None
+
+            updated_manifest = self._write_workspace_update(
+                workspace,
+                manifest_data,
+                manifest,
+                draft,
+            )
+            for source in removed_sources:
+                if source.workspace_ready:
+                    self._remove_regular_file(
+                        self._source_path(workspace / "sources", source),
+                        tolerate_failure=True,
+                    )
+
+        return self._context_response(workspace_id, updated_manifest, None)
+
+    def list_workspaces(self) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        try:
+            candidates = sorted(self.inbox_root.iterdir(), key=lambda path: path.name)
+        except OSError as exc:
+            raise InvalidWorkspace(f"cannot list workspaces: {exc}") from exc
+        for candidate in candidates:
+            if not candidate.name.startswith("wxpost-"):
+                continue
+            try:
+                workspace = self._resolve_workspace(candidate.name)
+                with self._workspace_lock(workspace):
+                    manifest = self._read_manifest(workspace, candidate.name)
+                    items.append(self._workspace_summary(manifest))
+            except (WorkspaceError, OSError) as exc:
+                logger.warning(
+                    "Skipping unreadable WXPost workspace %s: %s",
+                    candidate.name,
+                    exc,
+                )
+        items.sort(key=lambda item: item["updatedAt"], reverse=True)
+        return {"items": items}
+
+    def delete_workspace(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+    ) -> dict[str, Any]:
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(manifest, expected_manifest_version)
+            summary = self._workspace_summary(manifest)
+            try:
+                shutil.rmtree(workspace)
+            except OSError as exc:
+                raise InvalidWorkspace(f"cannot delete workspace: {exc}") from exc
+        return {"workspaceId": workspace_id, "deleted": True, "workspace": summary}
+
     def get_context(self, workspace_id: str) -> dict[str, Any]:
         workspace = self._resolve_workspace(workspace_id)
         with self._workspace_lock(workspace):
             manifest = self._read_manifest(workspace, workspace_id)
             draft = self._read_draft(workspace, manifest)
         return self._context_response(workspace_id, manifest, draft)
+
+    def read_source(
+        self,
+        workspace_id: str,
+        *,
+        source_id: str,
+    ) -> tuple[bytes, str]:
+        request = self._validate_request(
+            SourceLookupRequest,
+            {"sourceId": source_id},
+            label="source read",
+        )
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            source = self._find_source(manifest, request.source_id)
+            if not source.workspace_ready:
+                raise InvalidRequest(
+                    f"source is not available in the workspace: {source.id}"
+                )
+            source_path = self._source_path(workspace / "sources", source)
+            if source_path.is_symlink() or not source_path.is_file():
+                raise InvalidWorkspace(f"source file is missing: {source.id}")
+            try:
+                data = source_path.read_bytes()
+            except OSError as exc:
+                raise InvalidWorkspace(
+                    f"cannot read source file {source.id}: {exc}"
+                ) from exc
+            if len(data) != source.size_bytes:
+                raise InvalidWorkspace(f"source file size is invalid: {source.id}")
+        return data, source.mime_type
 
     def import_source(
         self,
@@ -567,15 +733,10 @@ class WorkspaceController:
                 manifest_data["sources"],
                 request.updates,
             ):
-                manifest_data["manifestVersion"] = actual_version + 1
-                manifest = self._validate_manifest_data(
+                manifest = self._write_changed_manifest(
+                    workspace,
                     manifest_data,
-                    label="updated source manifest",
-                    request_error=True,
-                )
-                self._atomic_write_json(
-                    workspace / "source-manifest.json",
-                    manifest.to_wire(),
+                    actual_version,
                 )
 
         return manifest.to_wire()
@@ -627,6 +788,7 @@ class WorkspaceController:
                 "sourceManifestVersion": actual_manifest_version,
                 "sha256": document_hash,
             }
+            manifest_data["updatedAt"] = datetime.now(UTC)
             updated_manifest = self._validate_manifest_data(
                 manifest_data,
                 label="updated source manifest",
@@ -683,16 +845,20 @@ class WorkspaceController:
         request: BootstrapWorkspaceRequest,
         meeting_media: list[MeetingMediaReference],
     ) -> SourceManifest:
+        created_at = datetime.now(UTC)
         sources = [
             self._meeting_source_record(index, media).to_wire()
             for index, media in enumerate(meeting_media, start=1)
         ]
         return SourceManifest.model_validate(
             {
-                "schemaVersion": 2,
+                "schemaVersion": 3,
                 "workspaceId": workspace_id,
                 "manifestVersion": 1,
                 "nextMaterialNumber": len(sources) + 1,
+                "createdBy": request.created_by.to_wire(),
+                "createdAt": created_at,
+                "updatedAt": created_at,
                 "meetingId": request.meeting_id,
                 "draft": None,
                 "editorial": request.editorial.to_wire(),
@@ -1009,6 +1175,7 @@ class WorkspaceController:
         previous_version: int,
     ) -> SourceManifest:
         manifest_data["manifestVersion"] = previous_version + 1
+        manifest_data["updatedAt"] = datetime.now(UTC)
         manifest = self._validate_manifest_data(
             manifest_data,
             label="updated source manifest",
@@ -1019,6 +1186,67 @@ class WorkspaceController:
             manifest.to_wire(),
         )
         return manifest
+
+    def _write_workspace_update(
+        self,
+        workspace: Path,
+        manifest_data: dict[str, Any],
+        previous_manifest: SourceManifest,
+        draft: DraftEnvelope | None,
+    ) -> SourceManifest:
+        manifest_data["manifestVersion"] = previous_manifest.manifest_version + 1
+        manifest_data["updatedAt"] = datetime.now(UTC)
+        updated = self._validate_manifest_data(
+            manifest_data,
+            label="updated source manifest",
+            request_error=True,
+        )
+        if draft is None:
+            self._atomic_write_json(
+                workspace / "source-manifest.json",
+                updated.to_wire(),
+            )
+            return updated
+
+        draft_dir = workspace / "draft"
+        self._ensure_child_directory(workspace, draft_dir)
+        pending_path = draft_dir / ".article-save-pending.json"
+        self._atomic_write_json(
+            pending_path,
+            {"previousDocument": draft.document},
+        )
+        try:
+            self._atomic_write_json(
+                workspace / "source-manifest.json",
+                updated.to_wire(),
+            )
+            self._remove_regular_file(draft_dir / "article.json")
+        except WorkspaceError:
+            persisted = self._read_manifest(workspace, previous_manifest.workspace_id)
+            self._recover_pending_draft(workspace, persisted)
+            raise
+        self._remove_regular_file(pending_path, tolerate_failure=True)
+        return updated
+
+    @staticmethod
+    def _workspace_summary(manifest: SourceManifest) -> dict[str, Any]:
+        wire = manifest.to_wire()
+        return {
+            "workspaceId": manifest.workspace_id,
+            "createdBy": manifest.created_by.to_wire(),
+            "createdAt": wire["createdAt"],
+            "updatedAt": wire["updatedAt"],
+            "meetingId": manifest.meeting_id,
+            "articleType": manifest.editorial.article_type.value,
+            "customArticleType": manifest.editorial.custom_article_type,
+            "manifestVersion": manifest.manifest_version,
+            "sourceCount": len(manifest.sources),
+            "readySourceCount": sum(
+                source.workspace_ready for source in manifest.sources
+            ),
+            "includedSourceCount": sum(source.included for source in manifest.sources),
+            "hasDraft": manifest.draft is not None,
+        }
 
     @staticmethod
     def _draft_references(
@@ -1252,7 +1480,7 @@ class WorkspaceController:
         except ValidationError as exc:
             error_type = InvalidRequest if request_error else InvalidWorkspace
             raise error_type(
-                f"{label} does not satisfy source-manifest v2: "
+                f"{label} does not satisfy source-manifest v3: "
                 f"{cls._validation_message(exc)}"
             ) from exc
 

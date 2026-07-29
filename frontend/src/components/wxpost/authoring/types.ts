@@ -15,13 +15,12 @@ export type WxPostWritingApproach =
   | 'Highlights first';
 
 export interface WxPostMaterial {
-  sourceKey: string;
+  sourceId: string;
   source: 'Meeting Library' | 'Web upload' | 'Feishu upload';
   kind: 'image' | 'video';
-  url: string;
+  previewUrl: string | null;
   filename: string;
   description: string;
   workspaceReady: boolean;
-  uploading?: boolean;
   included: boolean;
 }

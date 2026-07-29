@@ -5,6 +5,18 @@ plans/
 claws/hermes/.env.local
 claws/hermes/.env.local.tmp.*
 
+# Python runtime and test-tool output outside backend/.
+**/__pycache__/
+*.py[cod]
+*$py.class
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
 # SoarHigh-internal SKILL.md kept out of the public repo: it carries the
 # Meeting Manager operational handbook (default-credentials hint, internal
 # document-drive links, and other club-internal references). The General

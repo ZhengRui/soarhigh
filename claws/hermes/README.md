@@ -1,8 +1,8 @@
 # Hermes container
 
-This directory runs the Hermes Gateway in the official Hermes Agent container.
-It keeps Hermes state and article working files in two separate host
-directories:
+This directory runs the Hermes Gateway and WXPost HTTP controller as two
+services in one Compose project. It keeps Hermes state and article working
+files in two separate host directories:
 
 | Host setting           | Container path | Purpose                                                                 |
 | ---------------------- | -------------- | ----------------------------------------------------------------------- |
@@ -16,8 +16,8 @@ credentials are not mounted into the container.
 
 ## First startup
 
-The first interactive `up` asks for the Hermes home, workspace, image, and
-container name:
+The first interactive `up` asks for the Hermes home, workspace, image,
+container name, and the existing Backend WXPost service token:
 
 ```bash
 ./claws/hermes/hermes.sh up
@@ -35,6 +35,7 @@ HERMES_HOME_DIR=/Users/example/.hermes
 HERMES_WORKSPACE_DIR=/Users/example/hermes-workspace
 HERMES_IMAGE=nousresearch/hermes-agent:latest
 HERMES_CONTAINER_NAME=soarhigh-hermes
+SOARHIGH_WXPOST_SERVICE_TOKEN=use-the-value-from-backend-WXPOST_SERVICE_TOKEN
 ```
 
 The setup accepts `~` in an answer but stores the resolved absolute path. It
@@ -80,9 +81,9 @@ Run the wrapper from any working directory:
 ```
 
 The wrapper supplies the current host UID and GID, validates the Compose
-configuration, and delegates to Docker Compose. Only the first interactive
-`up` starts the configuration prompt; the other commands never create
-configuration.
+configuration, and delegates to Docker Compose. `up` starts both the Gateway
+and the HTTP controller. Only the first interactive `up` starts the
+configuration prompt; the other commands never create configuration.
 
 `shell` opens Bash as the non-root `hermes` user, sets `HOME=/opt/data`, and
 starts in `/workspace`. The Gateway is already started by `up`; do not run a
@@ -152,9 +153,9 @@ return the same error and version-conflict details. HTTP exposes the material
 operations needed by the authoring page; MCP exposes those same operations plus
 draft saves for Hermes.
 
-`contracts.py` defines the single supported `source-manifest v2` shape plus the
+`contracts.py` defines the single supported `source-manifest v3` shape plus the
 operation inputs. A complete manifest example lives at
-`tests/fixtures/source-manifest-v2.json`. Important invariants include:
+`tests/fixtures/source-manifest-v3.json`. Important invariants include:
 
 - each collected source receives the next workspace-local material ID
   (`M01`, `M02`, and so on) when it enters the manifest; the ID is persisted,
@@ -204,9 +205,11 @@ draft/manifest update recoverable if the process stops between the two atomic
 replacements.
 
 Linked workspaces read `/meetings/{meetingId}/media` from
-`SOARHIGH_API_BASE_URL`. Set the same non-empty `WXPOST_SERVICE_TOKEN` in the
-backend and Hermes environments when draft-meeting media must be visible. The
-token is sent only to the SoarHigh media-list endpoint, never to an asset URL.
+`SOARHIGH_API_BASE_URL`. Compose maps
+`SOARHIGH_WXPOST_SERVICE_TOKEN` to `WXPOST_SERVICE_TOKEN` inside both
+containers; its value must equal Backend's existing `WXPOST_SERVICE_TOKEN`.
+The token is sent only between Backend and the controller, never to the browser
+or an asset URL.
 
 Configure the stdio MCP server once in the dedicated SoarHigh Hermes home:
 
@@ -232,24 +235,24 @@ docker exec \
   hermes mcp test soarhigh-wxpost
 ```
 
-Run the HTTP adapter on the host against the same host workspace mount. It
-binds to loopback and requires a bearer token:
-
-```bash
-PYTHONPATH=claws/hermes \
-WXPOST_WORKSPACE_ROOT=/absolute/path/to/hermes-workspace \
-WXPOST_CONTROLLER_TOKEN=replace-with-a-local-secret \
-backend/.venv/bin/python -m wxpost_controller.http_server
-```
+The `controller` Compose service runs the HTTP adapter automatically, mounts
+the same workspace at `/workspace`, and publishes it only on
+`127.0.0.1:8787`. Local Backend uses that address by default and authenticates
+with its existing `WXPOST_SERVICE_TOKEN`; no separate controller credential is
+configured.
 
 HTTP routes are:
 
 ```text
+GET    /workspaces
 PUT    /workspaces/{workspaceId}
+PATCH  /workspaces/{workspaceId}
+DELETE /workspaces/{workspaceId}
 GET    /workspaces/{workspaceId}/context
 PATCH  /workspaces/{workspaceId}/sources
 POST   /workspaces/{workspaceId}/sources/{sourceId}/import
 PUT    /workspaces/{workspaceId}/sources/{sourceId}/inclusion
+GET    /workspaces/{workspaceId}/sources/{sourceId}/content
 POST   /workspaces/{workspaceId}/uploads?filename=...
 GET    /workspaces/{workspaceId}/sources/{sourceId}/delete-preflight
 DELETE /workspaces/{workspaceId}/sources/{sourceId}
@@ -259,6 +262,6 @@ The upload route accepts the source bytes as its body, the MIME type in
 `Content-Type`, and the compare-and-swap version in
 `X-Expected-Manifest-Version`.
 
-The controller is not yet connected to the authoring page and does not implement
-public-preview synchronization, Supabase writes, OSS uploads, or WeChat draft
-operations.
+The HTTP controller is connected to the authoring page's Materials stage. It
+does not implement later public-preview synchronization, Supabase writes, OSS
+uploads, or WeChat draft operations.

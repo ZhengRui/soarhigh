@@ -49,7 +49,7 @@ from app.services.wxpost_document import (  # noqa: E402
 
 
 def _manifest_fixture() -> dict[str, Any]:
-    return json.loads((FIXTURES / "source-manifest-v2.json").read_text())
+    return json.loads((FIXTURES / "source-manifest-v3.json").read_text())
 
 
 def _seed_workspace(root: Path, workspace_id: str) -> None:
@@ -188,16 +188,19 @@ def _json_request(
     method: str = "GET",
     payload: dict[str, Any] | None = None,
     token: str = TOKEN,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     body = None if payload is None else json.dumps(payload).encode()
+    request_headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    request_headers.update(headers or {})
     request = urllib.request.Request(
         url,
         data=body,
         method=method,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
+        headers=request_headers,
     )
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
@@ -238,6 +241,62 @@ def _mcp_value(result) -> dict[str, Any]:
     return json.loads(result.content[0].text)
 
 
+def test_http_workspace_delete_requires_the_current_manifest_version(
+    tmp_path: Path,
+) -> None:
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}/workspaces/delete-versioned"
+    try:
+        status, created = _json_request(
+            url,
+            method="PUT",
+            payload={
+                "meetingId": None,
+                "editorial": {
+                    "articleType": "meeting-recap",
+                    "customArticleType": None,
+                },
+                "createdBy": {"id": "member-123", "name": "Test Member"},
+            },
+        )
+        assert status == 200
+
+        status, missing = _json_request(url, method="DELETE")
+        assert status == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert missing["error"]["code"] == "invalid_request"
+
+        status, stale = _json_request(
+            url,
+            method="DELETE",
+            headers={"X-Expected-Manifest-Version": "2"},
+        )
+        assert status == HTTPStatus.CONFLICT
+        assert stale["error"]["code"] == "version_conflict"
+
+        status, deleted = _json_request(
+            url,
+            method="DELETE",
+            headers={
+                "X-Expected-Manifest-Version": str(
+                    created["manifest"]["manifestVersion"]
+                )
+            },
+        )
+        assert status == 200
+        assert deleted["deleted"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def _mcp_parameters(root: Path, validation_url: str) -> StdioServerParameters:
     return StdioServerParameters(
         command=sys.executable,
@@ -259,7 +318,7 @@ def test_manifest_and_draft_versions_advance_independently(
     controller = _controller(root)
 
     context = controller.get_context(workspace_id)
-    assert context["manifest"]["schemaVersion"] == 2
+    assert context["manifest"]["schemaVersion"] == 3
     assert context["manifest"]["manifestVersion"] == 1
     assert context["manifest"]["draft"] is None
     assert context["draft"] is None
@@ -702,7 +761,7 @@ def test_v1_manifest_is_rejected_without_runtime_compatibility(
     manifest["schemaVersion"] = 1
     path.write_text(json.dumps(manifest))
 
-    with pytest.raises(InvalidWorkspace, match="source-manifest v2"):
+    with pytest.raises(InvalidWorkspace, match="source-manifest v3"):
         _controller(root).get_context(workspace_id)
 
 
@@ -721,6 +780,40 @@ def test_workspace_identifier_and_symlink_escape_are_rejected(
     symlink.symlink_to(outside, target_is_directory=True)
     with pytest.raises(InvalidWorkspace):
         controller.get_context("linked-workspace")
+
+
+def test_workspace_update_invalidates_a_saved_draft_without_replacing_workspace(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    saved = controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    assert saved["draftVersion"] == 1
+
+    current = controller.get_context(workspace_id)
+    editorial = {
+        **current["manifest"]["editorial"],
+        "articleType": "member-story",
+    }
+    updated = controller.update_workspace(
+        workspace_id,
+        expected_manifest_version=1,
+        meeting_id=current["manifest"]["meetingId"],
+        editorial=editorial,
+    )
+
+    assert updated["workspaceId"] == workspace_id
+    assert updated["manifest"]["manifestVersion"] == 2
+    assert updated["manifest"]["editorial"]["articleType"] == "member-story"
+    assert updated["manifest"]["draft"] is None
+    assert updated["draft"] is None
+    assert not (root / "inbox" / workspace_id / "draft" / "article.json").exists()
+    assert updated["manifest"]["sources"] == current["manifest"]["sources"]
 
 
 @pytest.mark.asyncio
@@ -836,6 +929,10 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
                     "articleType": "meeting-recap",
                     "customArticleType": None,
                 },
+                "createdBy": {
+                    "id": "member-123",
+                    "name": "Test Member",
+                },
             },
         )
         assert status == 200
@@ -853,6 +950,16 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
         assert uploaded["sources"][0]["id"] == "M01"
         assert uploaded["sources"][0]["origin"] == {"type": "web-upload"}
 
+        request = urllib.request.Request(
+            f"{base_url}/workspaces/{workspace_id}/sources/M01/content",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.status == 200
+            assert response.headers["Content-Type"] == "image/jpeg"
+            assert response.headers["Cache-Control"] == "private, no-store"
+            assert response.read() == b"web-photo"
+
         incoming = tmp_path / "incoming"
         incoming.mkdir()
         clip_path = incoming / "clip.mp4"
@@ -867,6 +974,7 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
                 tools = {tool.name for tool in (await session.list_tools()).tools}
                 assert {
                     "wxpost_bootstrap_workspace",
+                    "wxpost_update_workspace",
                     "wxpost_import_source",
                     "wxpost_set_source_included",
                     "wxpost_upload_source",

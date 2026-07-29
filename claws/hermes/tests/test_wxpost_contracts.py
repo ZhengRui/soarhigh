@@ -15,6 +15,7 @@ from wxpost_controller.contracts import (
     SourceUpdate,
     UploadSourceRequest,
     UpdateSourcesRequest,
+    UpdateWorkspaceRequest,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -23,10 +24,10 @@ WEB_IMAGE_ID = "M03"
 
 @pytest.fixture
 def manifest_data() -> dict[str, Any]:
-    return json.loads((FIXTURES / "source-manifest-v2.json").read_text())
+    return json.loads((FIXTURES / "source-manifest-v3.json").read_text())
 
 
-def test_source_manifest_v2_fixture_is_complete(
+def test_source_manifest_v3_fixture_is_complete(
     manifest_data: dict[str, Any],
 ) -> None:
     manifest = SourceManifest.model_validate(manifest_data)
@@ -48,8 +49,8 @@ def test_source_manifest_v2_fixture_is_complete(
     }
 
 
-@pytest.mark.parametrize("invalid_version", [None, 1, True, 2.0, "2"])
-def test_manifest_requires_strict_schema_version_2(
+@pytest.mark.parametrize("invalid_version", [None, 2, True, 3.0, "3"])
+def test_manifest_requires_strict_schema_version_3(
     manifest_data: dict[str, Any],
     invalid_version: object,
 ) -> None:
@@ -207,9 +208,41 @@ def test_update_request_rejects_duplicate_source_ids() -> None:
         )
 
 
+def test_workspace_custom_article_type_label_is_optional() -> None:
+    request = BootstrapWorkspaceRequest.model_validate(
+        {
+            "meetingId": None,
+            "editorial": {
+                "articleType": "custom",
+                "customArticleType": None,
+            },
+            "createdBy": {
+                "id": "member-123",
+                "name": "Test Member",
+            },
+        }
+    )
+
+    assert request.editorial.custom_article_type is None
+
+
 def test_material_operation_contracts_are_strict_and_camel_case_only() -> None:
     BootstrapWorkspaceRequest.model_validate(
         {
+            "meetingId": None,
+            "editorial": {
+                "articleType": "meeting-recap",
+                "customArticleType": None,
+            },
+            "createdBy": {
+                "id": "member-123",
+                "name": "Test Member",
+            },
+        }
+    )
+    UpdateWorkspaceRequest.model_validate(
+        {
+            "expectedManifestVersion": 1,
             "meetingId": None,
             "editorial": {
                 "articleType": "meeting-recap",
@@ -225,6 +258,14 @@ def test_material_operation_contracts_are_strict_and_camel_case_only() -> None:
         }
     )
 
+    with pytest.raises(ValidationError):
+        UpdateWorkspaceRequest.model_validate(
+            {
+                "expected_manifest_version": 1,
+                "meetingId": None,
+                "editorial": {"articleType": "meeting-recap"},
+            }
+        )
     with pytest.raises(ValidationError):
         SetSourceInclusionRequest.model_validate(
             {

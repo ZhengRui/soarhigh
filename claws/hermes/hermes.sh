@@ -27,6 +27,17 @@ prompt() {
   PROMPT_VALUE="${input:-${default_value}}"
 }
 
+prompt_secret() {
+  local label="$1"
+  local input
+
+  if ! IFS= read -r -s -p "${label}: " input; then
+    fail "Setup cancelled."
+  fi
+  printf '\n'
+  PROMPT_VALUE="${input}"
+}
+
 expand_home() {
   case "$1" in
     "~")
@@ -104,6 +115,7 @@ configure_first_run() {
   local workspace
   local image
   local container_name
+  local wxpost_service_token
   local confirmation
   local temp_file
 
@@ -133,6 +145,11 @@ configure_first_run() {
   container_name="${PROMPT_VALUE}"
   [[ "${container_name}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] ||
     fail "Container name may contain letters, numbers, _, ., and -."
+
+  prompt_secret "Existing backend WXPOST service token"
+  wxpost_service_token="${PROMPT_VALUE}"
+  [[ -n "${wxpost_service_token}" ]] ||
+    fail "WXPost service token must not be empty."
 
   printf '\nConfiguration:\n'
   printf '  Hermes home:      %s\n' "${hermes_home}"
@@ -167,6 +184,8 @@ configure_first_run() {
     printf 'HERMES_IMAGE=%s\n' "$(dotenv_quote "${image}")"
     printf 'HERMES_CONTAINER_NAME=%s\n' \
       "$(dotenv_quote "${container_name}")"
+    printf 'SOARHIGH_WXPOST_SERVICE_TOKEN=%s\n' \
+      "$(dotenv_quote "${wxpost_service_token}")"
   } >"${temp_file}"
   mv -- "${temp_file}" "${ENV_FILE}"
 
