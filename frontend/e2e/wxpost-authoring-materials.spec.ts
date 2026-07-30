@@ -753,11 +753,22 @@ test('keeps Setup and Materials single-column on narrow phones', async ({
       document.querySelectorAll<HTMLElement>('[data-testid^="association-"]')
     ).map((element) => {
       const rect = element.getBoundingClientRect();
-      return { x: rect.x, y: rect.y };
+      return { x: rect.x, y: rect.y, height: rect.height };
     })
   );
   expect(sourceGeometry[1].x).toBe(sourceGeometry[0].x);
   expect(sourceGeometry[1].y).toBeGreaterThan(sourceGeometry[0].y);
+  expect(sourceGeometry[0].height).toBe(40);
+  expect(sourceGeometry[1].height).toBe(40);
+  expect(sourceGeometry[1].y - sourceGeometry[0].y).toBe(50);
+  await expect(page.getByTestId('meeting-select-trigger')).toHaveCSS(
+    'height',
+    '40px'
+  );
+  await expect(page.getByTestId('create-workspace')).toHaveCSS(
+    'height',
+    '44px'
+  );
 
   await page.getByTestId('create-workspace').click();
   const articleTypes = page.locator('button[data-testid^="article-type-"]');
@@ -771,14 +782,29 @@ test('keeps Setup and Materials single-column on narrow phones', async ({
     return {
       viewportWidth: window.innerWidth,
       documentWidth: document.documentElement.scrollWidth,
-      first: { x: options[0].x, y: options[0].y },
+      stageHeight:
+        document
+          .querySelector<HTMLElement>(
+            'nav[aria-label="WxPost authoring progress"] button'
+          )
+          ?.getBoundingClientRect().height ?? 0,
+      panelHeaderHeight:
+        document
+          .querySelector<HTMLElement>(
+            '[data-testid="article-type-panel"] > div'
+          )
+          ?.getBoundingClientRect().height ?? 0,
+      first: { x: options[0].x, y: options[0].y, height: options[0].height },
       second: { x: options[1].x, y: options[1].y },
       third: { x: options[2].x, y: options[2].y },
     };
   });
   expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.stageHeight).toBe(52);
+  expect(geometry.panelHeaderHeight).toBe(52);
+  expect(geometry.first.height).toBe(40);
   expect(geometry.second.x).toBe(geometry.first.x);
-  expect(geometry.second.y).toBeGreaterThan(geometry.first.y);
+  expect(geometry.second.y - geometry.first.y).toBe(50);
   expect(geometry.third.x).toBe(geometry.first.x);
   expect(geometry.third.y).toBeGreaterThan(geometry.second.y);
 });
@@ -794,11 +820,48 @@ test('keeps the full Materials workflow readable on a 390px viewport', async ({
   const geometry = await page.evaluate(() => ({
     viewportWidth: window.innerWidth,
     documentWidth: document.documentElement.scrollWidth,
+    materialImageHeight:
+      document
+        .querySelector<HTMLElement>('[data-testid^="material-"] > div')
+        ?.getBoundingClientRect().height ?? 0,
+    descriptionHeight:
+      document
+        .querySelector<HTMLElement>('[data-testid^="description-"]')
+        ?.getBoundingClientRect().height ?? 0,
+    transcriptHeight:
+      document
+        .querySelector<HTMLElement>('[data-testid="meeting-transcript"]')
+        ?.getBoundingClientRect().height ?? 0,
+    addFilesHeight:
+      Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent?.includes('Add files'))
+        ?.getBoundingClientRect().height ?? 0,
+    useMaterialHeight:
+      document
+        .querySelector<HTMLElement>('[data-testid^="include-"]')
+        ?.getBoundingClientRect().height ?? 0,
+    approachHeight:
+      document
+        .querySelector<HTMLElement>(
+          '[data-testid="writing-approach-chronological"]'
+        )
+        ?.getBoundingClientRect().height ?? 0,
+    toneHeight:
+      document
+        .querySelector<HTMLElement>('[data-testid="voice-tone-encouraging"]')
+        ?.getBoundingClientRect().height ?? 0,
     materialWidths: Array.from(
       document.querySelectorAll<HTMLElement>('[data-testid^="material-"]')
     ).map((material) => material.getBoundingClientRect().width),
   }));
   expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.materialImageHeight).toBe(185);
+  expect(geometry.descriptionHeight).toBe(84);
+  expect(geometry.transcriptHeight).toBe(108);
+  expect(geometry.addFilesHeight).toBe(38);
+  expect(geometry.useMaterialHeight).toBe(36);
+  expect(geometry.approachHeight).toBe(34);
+  expect(geometry.toneHeight).toBe(34);
   expect(geometry.materialWidths.length).toBeGreaterThan(0);
   expect(
     geometry.materialWidths.every(

@@ -388,7 +388,7 @@ export function WxPostMaterialsStage({
   }
 
   return (
-    <div className='grid gap-5' data-testid='materials-stage'>
+    <div className='grid gap-5 max-[480px]:gap-3' data-testid='materials-stage'>
       <ArticleTypePanel
         value={workingCopy.articleType}
         onChange={(articleType) => updateWorkingCopy({ articleType })}

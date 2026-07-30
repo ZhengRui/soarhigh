@@ -186,7 +186,7 @@ export function VoiceToneField({
   };
 
   return (
-    <fieldset className='mb-5 min-w-0 border-0 p-0'>
+    <fieldset className='mb-5 min-w-0 border-0 p-0 max-[480px]:mb-4'>
       <legend className='sr-only'>Voice &amp; tone</legend>
       <div className='mb-[9px] flex items-baseline justify-between gap-3'>
         <span className='text-sm font-bold text-slate-700'>
@@ -205,7 +205,7 @@ export function VoiceToneField({
             <button
               key={preset.id}
               type='button'
-              className={`inline-flex min-h-10 items-center gap-1.5 rounded-full border px-[14px] py-[9px] text-sm font-semibold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600 ${
+              className={`inline-flex min-h-10 items-center gap-1.5 rounded-full border px-[14px] py-[9px] text-sm font-semibold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600 max-[480px]:min-h-[34px] max-[480px]:px-2.5 max-[480px]:py-1.5 max-[480px]:text-[13px] ${
                 selected
                   ? 'border-[#4b7df0] bg-[#eaf2ff] text-[#1749bb]'
                   : 'border-[#d3dce8] bg-white text-[#516079] hover:border-[#9fb8e7] hover:bg-[#f8fbff] disabled:cursor-not-allowed disabled:opacity-45'
@@ -227,7 +227,7 @@ export function VoiceToneField({
           return (
             <span
               key={`${profile.name}-${index}`}
-              className={`inline-flex min-h-10 overflow-hidden rounded-full border ${
+              className={`inline-flex min-h-10 overflow-hidden rounded-full border max-[480px]:min-h-[34px] ${
                 profile.selected
                   ? 'border-[#4b7df0] bg-[#eaf2ff] text-[#1749bb]'
                   : 'border-[#d3dce8] bg-white text-[#516079]'
@@ -235,7 +235,7 @@ export function VoiceToneField({
             >
               <button
                 type='button'
-                className='inline-flex items-center gap-1.5 px-3 py-[9px] text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-45'
+                className='inline-flex items-center gap-1.5 px-3 py-[9px] text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-45 max-[480px]:px-2.5 max-[480px]:py-1.5 max-[480px]:text-[13px]'
                 aria-pressed={profile.selected}
                 disabled={disabled}
                 title={profile.instruction}
@@ -261,7 +261,7 @@ export function VoiceToneField({
 
         <button
           type='button'
-          className='inline-flex min-h-10 items-center gap-1.5 rounded-full border border-dashed border-[#afbdd0] bg-white px-[14px] py-[9px] text-sm font-semibold text-[#46556f] transition hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600 disabled:cursor-not-allowed disabled:opacity-45'
+          className='inline-flex min-h-10 items-center gap-1.5 rounded-full border border-dashed border-[#afbdd0] bg-white px-[14px] py-[9px] text-sm font-semibold text-[#46556f] transition hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600 disabled:cursor-not-allowed disabled:opacity-45 max-[480px]:min-h-[34px] max-[480px]:px-2.5 max-[480px]:py-1.5 max-[480px]:text-[13px]'
           disabled={selectedCount >= 3}
           onClick={openNewProfile}
           data-testid='add-custom-voice-tone'
@@ -272,7 +272,7 @@ export function VoiceToneField({
       </div>
 
       <div
-        className='mt-3 min-h-5 space-y-1.5 text-xs leading-5 text-slate-500'
+        className='mt-3 min-h-5 space-y-1.5 text-xs leading-5 text-slate-500 max-[480px]:mt-2'
         data-testid='voice-tone-details'
       >
         {selectedDetails.length === 0 ? (
@@ -299,18 +299,18 @@ export function VoiceToneField({
           aria-labelledby='voice-tone-dialog-title'
           data-testid='voice-tone-dialog'
         >
-          <div className='w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl'>
+          <div className='w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl max-[480px]:p-4'>
             <div className='flex items-start justify-between gap-4'>
               <div>
                 <h2
                   id='voice-tone-dialog-title'
-                  className='m-0 text-lg font-bold text-slate-900'
+                  className='m-0 text-lg font-bold text-slate-900 max-[480px]:text-base'
                 >
                   {editingIndex === null
                     ? 'Add a custom voice & tone'
                     : 'Edit custom voice & tone'}
                 </h2>
-                <p className='mb-0 mt-1 text-sm leading-5 text-slate-500'>
+                <p className='mb-0 mt-1 text-sm leading-5 text-slate-500 max-[480px]:text-[13px]'>
                   This profile belongs only to the current workspace.
                 </p>
               </div>
@@ -325,7 +325,7 @@ export function VoiceToneField({
               </button>
             </div>
 
-            <div className='mt-5 grid gap-4'>
+            <div className='mt-5 grid gap-4 max-[480px]:mt-4 max-[480px]:gap-3'>
               <label className='grid gap-2 text-sm font-bold text-slate-700'>
                 Name
                 <input

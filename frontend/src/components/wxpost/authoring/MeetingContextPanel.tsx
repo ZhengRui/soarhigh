@@ -83,16 +83,16 @@ export function MeetingContextPanel({ meeting }: { meeting: MeetingIF }) {
     >
       <button
         type='button'
-        className='flex min-h-[72px] w-full items-center justify-between gap-5 border-0 bg-white px-[22px] py-[17px] text-left text-[#172033] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600 max-[480px]:px-4 max-[480px]:py-[15px]'
+        className='flex min-h-[72px] w-full items-center justify-between gap-5 border-0 bg-white px-[22px] py-[17px] text-left text-[#172033] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600 max-[480px]:min-h-[60px] max-[480px]:gap-3 max-[480px]:px-3 max-[480px]:py-3'
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
         data-testid='meeting-context-toggle'
       >
         <span className='grid min-w-0 gap-[5px]'>
-          <strong className='text-[19px] leading-[1.3] max-[480px]:text-lg'>
+          <strong className='text-[19px] leading-[1.3] max-[480px]:text-base'>
             Meeting context
           </strong>
-          <small className='overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-[1.45] text-slate-500'>
+          <small className='overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-[1.45] text-slate-500 max-[480px]:text-[13px]'>
             {meeting.type}
             {meeting.no ? ` · #${meeting.no}` : ''} · {meeting.date} ·{' '}
             {meeting.theme}
@@ -110,8 +110,8 @@ export function MeetingContextPanel({ meeting }: { meeting: MeetingIF }) {
       </button>
 
       {open && (
-        <div className='grid gap-3 border-t border-[#e4e9f1] px-[22px] pb-[22px] max-[480px]:px-4 max-[480px]:pb-4'>
-          <div className='mt-[22px] grid grid-cols-[0.7fr_1fr_1.5fr_1.4fr] overflow-hidden rounded-xl border border-[#d8e1ed] bg-[#f7f9fc] max-[760px]:grid-cols-2 max-[480px]:grid-cols-1'>
+        <div className='grid gap-3 border-t border-[#e4e9f1] px-[22px] pb-[22px] max-[480px]:px-3 max-[480px]:pb-3'>
+          <div className='mt-[22px] grid grid-cols-[0.7fr_1fr_1.5fr_1.4fr] overflow-hidden rounded-xl border border-[#d8e1ed] bg-[#f7f9fc] max-[760px]:grid-cols-2 max-[480px]:mt-3 max-[480px]:grid-cols-1'>
             {[
               ['Meeting', meeting.no ? `#${meeting.no}` : meeting.type],
               ['Date', meeting.date],
@@ -120,7 +120,7 @@ export function MeetingContextPanel({ meeting }: { meeting: MeetingIF }) {
             ].map(([label, value], index) => (
               <div
                 key={label}
-                className={`grid min-w-0 gap-[6px] border-[#dfe6ef] px-4 py-[14px] max-[480px]:border-b max-[480px]:border-r-0 max-[480px]:last:border-b-0 ${
+                className={`grid min-w-0 gap-[6px] border-[#dfe6ef] px-4 py-[14px] max-[480px]:gap-1 max-[480px]:border-b max-[480px]:border-r-0 max-[480px]:px-3 max-[480px]:py-2.5 max-[480px]:last:border-b-0 ${
                   index < 3 ? 'border-r' : ''
                 } ${
                   index < 2 ? 'max-[760px]:border-b' : 'max-[760px]:border-b-0'

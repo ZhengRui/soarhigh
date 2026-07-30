@@ -206,7 +206,7 @@ function MaterialCard({
       }`}
       data-testid={`material-${material.sourceId}`}
     >
-      <div className='relative h-[220px] overflow-hidden bg-[#e8edf4] max-[480px]:h-[205px]'>
+      <div className='relative h-[220px] overflow-hidden bg-[#e8edf4] max-[480px]:h-[185px]'>
         {material.kind === 'image' ? (
           <MaterialImage
             workspaceId={workspaceId}
@@ -272,14 +272,15 @@ function MaterialCard({
         </button>
       </div>
 
-      <label className='grid gap-[7px] px-4 pt-[15px] text-sm font-bold text-slate-700 max-[480px]:px-[14px]'>
+      <label className='grid gap-[7px] px-4 pt-[15px] text-sm font-bold text-slate-700 max-[480px]:gap-1.5 max-[480px]:px-3 max-[480px]:pt-3'>
         <span>Description</span>
         <span className='relative block'>
           <ResizableTextarea
+            rows={1}
             value={material.description}
             onChange={(event) => onDescriptionChange(event.target.value)}
             placeholder='Add a description'
-            className='block min-h-[92px] w-full rounded-[10px] border border-[#cad5e4] bg-white pb-12 pl-3 pr-[54px] pt-[11px] text-[15px] font-normal leading-[1.55] text-[#172033] outline-none placeholder:font-normal placeholder:text-[#93a0b2] hover:border-[#9fb1c8] focus:border-blue-600'
+            className='block min-h-[92px] w-full rounded-[10px] border border-[#cad5e4] bg-white pb-12 pl-3 pr-[54px] pt-[11px] text-[15px] font-normal leading-[1.55] text-[#172033] outline-none placeholder:font-normal placeholder:text-[#93a0b2] hover:border-[#9fb1c8] focus:border-blue-600 max-[480px]:min-h-[84px] max-[480px]:pt-2.5 max-[480px]:text-sm'
             data-testid={`description-${material.sourceId}`}
             resizeHandleTestId={`description-${material.sourceId}-resize-handle`}
           />
@@ -296,10 +297,10 @@ function MaterialCard({
         </span>
       </label>
 
-      <div className='flex items-center gap-3 px-4 pb-4 pt-[14px] max-[480px]:px-[14px]'>
+      <div className='flex items-center gap-3 px-4 pb-4 pt-[14px] max-[480px]:px-3 max-[480px]:pb-3 max-[480px]:pt-3'>
         <button
           type='button'
-          className={`inline-flex min-h-[38px] items-center gap-2 rounded-[10px] border px-3 py-2 text-[13px] font-bold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-[17px] [&_svg]:w-[17px] ${
+          className={`inline-flex min-h-[38px] items-center gap-2 rounded-[10px] border px-3 py-2 text-[13px] font-bold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600 disabled:cursor-not-allowed disabled:opacity-50 max-[480px]:!h-9 max-[480px]:!min-h-9 max-[480px]:px-2.5 max-[480px]:py-1.5 [&_svg]:h-[17px] [&_svg]:w-[17px] ${
             material.included
               ? 'border-[#7da1f2] bg-[#eef4ff] text-[#2456c7]'
               : 'border-[#cad5e4] bg-white text-[#40506a]'
@@ -378,8 +379,8 @@ export function MaterialsPanel({
   return (
     <>
       <section className={PANEL_CLASS} data-testid='materials-panel'>
-        <div className='flex min-h-[66px] items-center justify-between gap-[18px] border-b border-[#e4e9f1] px-[22px] py-[18px] max-[480px]:min-h-[60px] max-[480px]:p-4'>
-          <h2 className='m-0 text-[19px] font-bold leading-[1.35] tracking-[-0.012em] text-[#172033] max-[480px]:text-lg'>
+        <div className='flex min-h-[66px] items-center justify-between gap-[18px] border-b border-[#e4e9f1] px-[22px] py-[18px] max-[480px]:min-h-[60px] max-[480px]:gap-3 max-[480px]:px-3 max-[480px]:py-2'>
+          <h2 className='m-0 text-[19px] font-bold leading-[1.35] tracking-[-0.012em] text-[#172033] max-[480px]:text-base'>
             Images and video
           </h2>
           <div className='flex items-center gap-3'>
@@ -400,7 +401,7 @@ export function MaterialsPanel({
             />
             <button
               type='button'
-              className={SECONDARY_BUTTON_CLASS}
+              className={`${SECONDARY_BUTTON_CLASS} max-[480px]:!h-[38px] max-[480px]:!min-h-[38px] max-[480px]:px-3 max-[480px]:py-2`}
               disabled={busy}
               onClick={() => fileInput.current?.click()}
             >
@@ -414,9 +415,9 @@ export function MaterialsPanel({
           </div>
         </div>
 
-        <div className='p-[22px] max-[480px]:p-4'>
+        <div className='p-[22px] max-[480px]:p-3'>
           {materials.length > 0 ? (
-            <div className='grid grid-cols-2 items-start gap-[18px] max-[760px]:grid-cols-1'>
+            <div className='grid grid-cols-2 items-start gap-[18px] max-[760px]:grid-cols-1 max-[480px]:gap-3'>
               {materials.map((material) => (
                 <MaterialCard
                   key={material.sourceId}
@@ -436,7 +437,7 @@ export function MaterialsPanel({
               ))}
             </div>
           ) : (
-            <div className='grid min-h-[180px] place-content-center justify-items-center gap-[10px] rounded-xl border border-dashed border-[#cbd6e4] bg-slate-50 text-[15px] text-[#718096] [&_svg]:h-7 [&_svg]:w-7'>
+            <div className='grid min-h-[180px] place-content-center justify-items-center gap-[10px] rounded-xl border border-dashed border-[#cbd6e4] bg-slate-50 text-[15px] text-[#718096] max-[480px]:min-h-[140px] max-[480px]:gap-2 max-[480px]:text-sm [&_svg]:h-7 [&_svg]:w-7 max-[480px]:[&_svg]:h-6 max-[480px]:[&_svg]:w-6'>
               <ImageIcon aria-hidden='true' />
               <span>No media</span>
             </div>

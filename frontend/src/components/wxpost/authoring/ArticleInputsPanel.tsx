@@ -23,7 +23,7 @@ const WRITING_APPROACHES: WorkspaceWritingApproach[] = [
 ];
 
 const FIELD_CLASS =
-  'grid gap-2 text-sm font-bold text-slate-700 [&_textarea]:block [&_textarea]:min-h-[132px] [&_textarea]:w-full [&_textarea]:rounded-[10px] [&_textarea]:border [&_textarea]:border-[#cad5e4] [&_textarea]:bg-white [&_textarea]:px-[13px] [&_textarea]:pb-8 [&_textarea]:pt-3 [&_textarea]:text-[15px] [&_textarea]:font-normal [&_textarea]:leading-[1.55] [&_textarea]:text-[#172033] [&_textarea]:outline-none [&_textarea]:placeholder:font-normal [&_textarea]:placeholder:text-[#93a0b2] [&_textarea]:hover:border-[#9fb1c8] [&_textarea]:focus:border-blue-600';
+  'grid gap-2 text-sm font-bold text-slate-700 max-[480px]:gap-1.5 [&_textarea]:block [&_textarea]:min-h-[132px] [&_textarea]:w-full [&_textarea]:rounded-[10px] [&_textarea]:border [&_textarea]:border-[#cad5e4] [&_textarea]:bg-white [&_textarea]:px-[13px] [&_textarea]:pb-8 [&_textarea]:pt-3 [&_textarea]:text-[15px] [&_textarea]:font-normal [&_textarea]:leading-[1.55] [&_textarea]:text-[#172033] [&_textarea]:outline-none [&_textarea]:placeholder:font-normal [&_textarea]:placeholder:text-[#93a0b2] [&_textarea]:hover:border-[#9fb1c8] [&_textarea]:focus:border-blue-600 max-[480px]:[&_textarea]:min-h-[108px] max-[480px]:[&_textarea]:px-3 max-[480px]:[&_textarea]:pt-2.5 max-[480px]:[&_textarea]:text-sm';
 
 export function ArticleInputsPanel({
   workspaceId,
@@ -62,7 +62,7 @@ export function ArticleInputsPanel({
         <div className={PANEL_HEADER_CLASS}>
           <h2 className={PANEL_TITLE_CLASS}>Transcript and notes</h2>
         </div>
-        <div className='grid gap-[18px] p-[22px] max-[480px]:p-4'>
+        <div className='grid gap-[18px] p-[22px] max-[480px]:gap-3.5 max-[480px]:p-3'>
           <label className={FIELD_CLASS}>
             <span>Meeting transcript</span>
             <ResizableTextarea
@@ -90,8 +90,8 @@ export function ArticleInputsPanel({
         <div className={PANEL_HEADER_CLASS}>
           <h2 className={PANEL_TITLE_CLASS}>Writing brief</h2>
         </div>
-        <div className='p-[22px] max-[480px]:p-4'>
-          <fieldset className='mb-5 min-w-0 border-0 p-0'>
+        <div className='p-[22px] max-[480px]:p-3'>
+          <fieldset className='mb-5 min-w-0 border-0 p-0 max-[480px]:mb-4'>
             <legend className='mb-[9px] text-sm font-bold text-slate-700'>
               Writing approach
             </legend>
@@ -102,7 +102,7 @@ export function ArticleInputsPanel({
                   <button
                     key={approach}
                     type='button'
-                    className={`min-h-10 cursor-pointer rounded-full border px-[14px] py-[9px] text-sm font-semibold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600 ${
+                    className={`min-h-10 cursor-pointer rounded-full border px-[14px] py-[9px] text-sm font-semibold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600 max-[480px]:min-h-[34px] max-[480px]:px-2.5 max-[480px]:py-1.5 max-[480px]:text-[13px] ${
                       selected
                         ? 'border-[#4b7df0] bg-[#eaf2ff] text-[#1749bb]'
                         : 'border-[#d3dce8] bg-white text-[#516079] hover:border-[#9fb8e7] hover:bg-[#f8fbff]'

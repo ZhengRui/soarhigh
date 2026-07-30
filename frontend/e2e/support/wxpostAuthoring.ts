@@ -580,7 +580,7 @@ export async function openAuthoringPage(page: Page) {
   );
   await expect(page.getByRole('heading', { name: 'New WxPost' })).toHaveCSS(
     'font-size',
-    (page.viewportSize()?.width ?? 1280) >= 640 ? '36px' : '30px'
+    (page.viewportSize()?.width ?? 1280) >= 640 ? '36px' : '24px'
   );
   await expect(page.getByTestId('meeting-select-trigger')).toContainText(
     '#462'

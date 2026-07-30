@@ -105,12 +105,12 @@ function MeetingSelect({
         : 'Choose a meeting or event';
 
   return (
-    <div className='grid min-w-0 gap-2'>
+    <div className='grid min-w-0 gap-2 max-[480px]:gap-1.5'>
       <span className='text-sm font-bold text-slate-700'>Meeting or event</span>
       <div className='relative min-w-0' ref={containerRef}>
         <button
           type='button'
-          className='relative flex min-h-[50px] w-full min-w-0 max-w-full cursor-pointer items-center rounded-[11px] border border-[#cad5e4] bg-white py-0 pl-[15px] pr-12 text-left text-[15px] text-[#172033] outline-none hover:border-[#9fb1c8] focus-visible:border-blue-600 focus-visible:outline-none aria-expanded:border-blue-600 disabled:cursor-default disabled:bg-[#f7f9fc] disabled:text-[#8290a4]'
+          className='relative flex min-h-[50px] w-full min-w-0 max-w-full cursor-pointer items-center rounded-[11px] border border-[#cad5e4] bg-white py-0 pl-[15px] pr-12 text-left text-[15px] text-[#172033] outline-none hover:border-[#9fb1c8] focus-visible:border-blue-600 focus-visible:outline-none aria-expanded:border-blue-600 disabled:cursor-default disabled:bg-[#f7f9fc] disabled:text-[#8290a4] max-[480px]:!h-10 max-[480px]:!min-h-10 max-[480px]:pl-3 max-[480px]:pr-10 max-[480px]:text-sm'
           aria-haspopup='listbox'
           aria-expanded={open}
           aria-controls='wxpost-meeting-options'
@@ -130,7 +130,7 @@ function MeetingSelect({
             />
           ) : (
             <ChevronDown
-              className={`pointer-events-none absolute right-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-slate-500 transition-transform duration-150 ${
+              className={`pointer-events-none absolute right-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-slate-500 transition-transform duration-150 max-[480px]:right-3 max-[480px]:h-4 max-[480px]:w-4 ${
                 open ? '-translate-y-1/2 rotate-180' : ''
               }`}
               aria-hidden='true'
@@ -145,7 +145,7 @@ function MeetingSelect({
           >
             <div
               id='wxpost-meeting-options'
-              className='max-h-[294px] overflow-y-auto p-[6px]'
+              className='max-h-[294px] overflow-y-auto p-[6px] max-[480px]:max-h-[260px] max-[480px]:p-1'
               role='listbox'
               aria-label='Meeting or event'
               onScroll={(event) => {
@@ -165,7 +165,7 @@ function MeetingSelect({
                     type='button'
                     role='option'
                     aria-selected={selected}
-                    className={`flex min-h-10 w-full cursor-pointer items-center justify-between gap-[14px] rounded-[7px] border-0 px-[11px] py-[9px] text-left text-sm leading-[1.4] ${
+                    className={`flex min-h-10 w-full cursor-pointer items-center justify-between gap-[14px] rounded-[7px] border-0 px-[11px] py-[9px] text-left text-sm leading-[1.4] max-[480px]:min-h-9 max-[480px]:gap-2.5 max-[480px]:px-2.5 max-[480px]:py-2 max-[480px]:text-[13px] ${
                       selected
                         ? 'bg-[#e8efff] font-semibold text-blue-700'
                         : 'bg-transparent text-slate-700 hover:bg-slate-100'
@@ -234,7 +234,7 @@ function SourceChoice({
   return (
     <button
       type='button'
-      className={`group grid min-h-[74px] min-w-0 cursor-pointer grid-cols-[40px_minmax(0,1fr)_20px] items-center gap-[13px] rounded-[13px] border px-4 py-[14px] text-left transition-colors disabled:cursor-default ${FOCUS_RING_CLASS} max-[480px]:min-h-[66px] ${
+      className={`flex min-h-[52px] min-w-0 cursor-pointer items-center justify-between gap-[10px] rounded-xl border px-[15px] py-3 text-left text-sm font-semibold transition-colors disabled:cursor-default ${FOCUS_RING_CLASS} max-[480px]:min-h-10 max-[480px]:px-3 max-[480px]:py-2 max-[480px]:text-[13px] ${
         selected
           ? 'border-[#4b7df0] bg-[#eef4ff] text-[#1749bb]'
           : 'border-[#d6dfeb] bg-white text-[#42516a] hover:border-[#9fb8e7] hover:bg-[#f8fbff]'
@@ -244,17 +244,13 @@ function SourceChoice({
       disabled={disabled}
       data-testid={testId}
     >
-      <span
-        className={`grid h-10 w-10 place-items-center rounded-[10px] [&_svg]:h-[18px] [&_svg]:w-[18px] ${
-          selected
-            ? 'bg-[#dce8ff] text-[#245feb]'
-            : 'bg-[#f0f4fa] text-[#5c6b82]'
-        }`}
-      >
+      <span className='inline-flex min-w-0 items-center gap-[9px] max-[480px]:gap-2 [&_svg]:h-[18px] [&_svg]:w-[18px] [&_svg]:shrink-0 max-[480px]:[&_svg]:h-4 max-[480px]:[&_svg]:w-4'>
         <Icon aria-hidden='true' />
+        {label}
       </span>
-      <strong className='min-w-0 text-[15px] font-bold'>{label}</strong>
-      {selected && <Check className='h-[18px] w-[18px]' aria-hidden='true' />}
+      {selected && (
+        <Check className='h-[17px] w-[17px] shrink-0' aria-hidden='true' />
+      )}
     </button>
   );
 }
@@ -293,7 +289,10 @@ export function WxPostSetupStage({
   sourceLocked: boolean;
 }) {
   return (
-    <div className='grid min-w-0 gap-5' data-testid='setup-stage'>
+    <div
+      className='grid min-w-0 gap-5 max-[480px]:gap-3'
+      data-testid='setup-stage'
+    >
       <section
         className={`${PANEL_CLASS} overflow-visible ${
           sourceLocked ? 'bg-slate-50' : ''
@@ -304,11 +303,11 @@ export function WxPostSetupStage({
         </div>
 
         <div
-          className={`grid min-w-0 gap-[22px] p-[22px] max-[480px]:p-4 ${
+          className={`grid min-w-0 gap-4 p-[22px] max-[480px]:gap-3 max-[480px]:p-3 ${
             sourceLocked ? 'opacity-70' : ''
           }`}
         >
-          <div className='grid min-w-0 grid-cols-2 gap-3 max-[760px]:grid-cols-1'>
+          <div className='grid min-w-0 grid-cols-2 gap-[10px] max-[760px]:grid-cols-1'>
             <SourceChoice
               selected={linked}
               icon={Link2}

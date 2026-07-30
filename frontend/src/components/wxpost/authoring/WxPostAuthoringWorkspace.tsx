@@ -115,7 +115,7 @@ function StageTabs({
 
   return (
     <nav
-      className='mb-6 grid grid-cols-4 overflow-hidden rounded-[14px] border border-[#d9e1ec] bg-white max-[480px]:rounded-xl'
+      className='mb-6 grid grid-cols-4 overflow-hidden rounded-[14px] border border-[#d9e1ec] bg-white max-[480px]:mb-4 max-[480px]:rounded-xl'
       aria-label='WxPost authoring progress'
     >
       <button
@@ -330,20 +330,20 @@ export function WxPostAuthoringWorkspace({
   return (
     <div className='min-h-screen bg-[#f3f6fa] text-base text-[#172033]'>
       <div
-        className='mx-auto w-[min(calc(100%_-_40px),1080px)] py-[34px] pb-[72px] max-[760px]:w-[min(calc(100%_-_24px),1080px)] max-[760px]:pt-6 max-[480px]:w-[min(calc(100%_-_20px),1080px)]'
+        className='mx-auto w-[min(calc(100%_-_40px),1080px)] py-[34px] pb-[72px] max-[760px]:w-[min(calc(100%_-_24px),1080px)] max-[760px]:pt-6 max-[480px]:w-[min(calc(100%_-_20px),1080px)] max-[480px]:pb-14 max-[480px]:pt-5'
         data-testid='wxpost-page-shell'
       >
         <Link
           href='/posts'
-          className='mb-6 inline-flex items-center gap-2 text-sm font-semibold text-[#46556f] no-underline hover:text-[#245feb] max-[480px]:mb-[18px] [&_svg]:h-[17px] [&_svg]:w-[17px]'
+          className='mb-6 inline-flex items-center gap-2 text-sm font-semibold text-[#46556f] no-underline hover:text-[#245feb] max-[480px]:mb-3.5 [&_svg]:h-[17px] [&_svg]:w-[17px]'
         >
           <ArrowLeft aria-hidden='true' />
           Back to Posts
         </Link>
 
-        <header className='mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
+        <header className='mb-8 flex flex-col gap-4 max-[480px]:mb-5 max-[480px]:gap-3 sm:flex-row sm:items-center sm:justify-between'>
           <div>
-            <h1 className='mb-2 text-3xl font-bold text-slate-950 sm:mb-4 sm:text-4xl'>
+            <h1 className='mb-2 text-3xl font-bold text-slate-950 max-[480px]:mb-1 max-[480px]:text-2xl sm:mb-4 sm:text-4xl'>
               {initialWorkspaceId ? 'WxPost' : 'New WxPost'}
             </h1>
             <p className='text-sm text-slate-600 sm:text-base'>
