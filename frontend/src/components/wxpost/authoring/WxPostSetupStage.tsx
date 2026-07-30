@@ -2,23 +2,16 @@
 
 import {
   ArrowRight,
-  CalendarCheck2,
   Check,
   ChevronDown,
-  ClipboardCheck,
   Link2,
-  ListChecks,
   Loader2,
-  Megaphone,
   RefreshCw,
-  Shapes,
   Unlink,
-  UserRound,
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import type { WxPostArticleType } from './types';
 import {
   FOCUS_RING_CLASS,
   PANEL_CLASS,
@@ -29,18 +22,6 @@ import {
 import type { MeetingOptionIF } from '@/interfaces';
 
 export type LinkedMeetingOption = MeetingOptionIF;
-
-const ARTICLE_TYPES = [
-  { value: 'Meeting Recap', icon: CalendarCheck2 },
-  { value: 'Member Story', icon: UserRound },
-  { value: 'Event Preview', icon: Megaphone },
-  { value: 'Meeting Review', icon: ClipboardCheck },
-  { value: 'Action Guide', icon: ListChecks },
-  { value: 'Custom', icon: Shapes },
-] satisfies Array<{
-  value: WxPostArticleType;
-  icon: LucideIcon;
-}>;
 
 function formatDate(date: string) {
   const parsed = new Date(`${date}T00:00:00`);
@@ -68,75 +49,6 @@ export function formatMeetingLabel(meeting: LinkedMeetingOption) {
   return `${meeting.type}${meeting.no ? ` #${meeting.no}` : ''}`;
 }
 
-function ArticleTypePicker({
-  value,
-  onChange,
-  customArticleType,
-  onCustomArticleTypeChange,
-}: {
-  value: WxPostArticleType;
-  onChange: (type: WxPostArticleType) => void;
-  customArticleType: string;
-  onCustomArticleTypeChange: (value: string) => void;
-}) {
-  return (
-    <section className={PANEL_CLASS} data-testid='article-type-panel'>
-      <div className={PANEL_HEADER_CLASS}>
-        <h2 className={PANEL_TITLE_CLASS}>Article type</h2>
-      </div>
-      <div className='grid gap-4 p-[22px] max-[480px]:p-4'>
-        <div className='grid grid-cols-3 gap-[10px] max-[760px]:grid-cols-2 max-[480px]:grid-cols-1'>
-          {ARTICLE_TYPES.map(({ value: type, icon: Icon }) => {
-            const selected = value === type;
-            return (
-              <button
-                type='button'
-                key={type}
-                className={`flex min-h-[52px] min-w-0 cursor-pointer items-center justify-between gap-[10px] rounded-xl border px-[15px] py-3 text-left text-sm font-semibold transition-colors ${FOCUS_RING_CLASS} ${
-                  selected
-                    ? 'border-[#4b7df0] bg-[#eef4ff] text-[#1749bb]'
-                    : 'border-[#d6dfeb] bg-white text-[#40506a] hover:border-[#9fb8e7] hover:bg-[#f8fbff]'
-                }`}
-                onClick={() => onChange(type)}
-                aria-pressed={selected}
-                data-testid={`article-type-${type.toLowerCase().replaceAll(' ', '-')}`}
-              >
-                <span className='inline-flex min-w-0 items-center gap-[9px] [&_svg]:h-[18px] [&_svg]:w-[18px] [&_svg]:shrink-0'>
-                  <Icon aria-hidden='true' />
-                  {type}
-                </span>
-                {selected && (
-                  <Check
-                    className='h-[17px] w-[17px] shrink-0'
-                    aria-hidden='true'
-                  />
-                )}
-              </button>
-            );
-          })}
-        </div>
-        {value === 'Custom' && (
-          <label className='grid gap-2 border-t border-slate-200 pt-4'>
-            <span className='text-sm font-bold text-slate-700'>
-              Custom article type (optional)
-            </span>
-            <input
-              type='text'
-              value={customArticleType}
-              onChange={(event) =>
-                onCustomArticleTypeChange(event.target.value)
-              }
-              placeholder='For example: Member interview'
-              className='min-h-[46px] rounded-[10px] border border-[#cad5e4] bg-white px-3 text-[15px] text-[#172033] outline-none placeholder:text-[#93a0b2] hover:border-[#9fb1c8] focus:border-blue-600'
-              data-testid='custom-article-type'
-            />
-          </label>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function MeetingSelect({
   meetings,
   selectedMeeting,
@@ -147,6 +59,7 @@ function MeetingSelect({
   onChange,
   onLoadMore,
   onRetry,
+  disabled,
 }: {
   meetings: LinkedMeetingOption[];
   selectedMeeting: LinkedMeetingOption | null;
@@ -157,6 +70,7 @@ function MeetingSelect({
   onChange: (meetingId: string) => void;
   onLoadMore: () => void;
   onRetry: () => void;
+  disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -200,7 +114,7 @@ function MeetingSelect({
           aria-haspopup='listbox'
           aria-expanded={open}
           aria-controls='wxpost-meeting-options'
-          disabled={isPending || hasError || meetings.length === 0}
+          disabled={disabled || isPending || hasError || meetings.length === 0}
           onClick={() => setOpen((value) => !value)}
           data-testid='meeting-select-trigger'
         >
@@ -308,23 +222,26 @@ function SourceChoice({
   label,
   testId,
   onClick,
+  disabled,
 }: {
   selected: boolean;
   icon: LucideIcon;
   label: string;
   testId: string;
   onClick: () => void;
+  disabled: boolean;
 }) {
   return (
     <button
       type='button'
-      className={`group grid min-h-[74px] min-w-0 cursor-pointer grid-cols-[40px_minmax(0,1fr)_20px] items-center gap-[13px] rounded-[13px] border px-4 py-[14px] text-left transition-colors ${FOCUS_RING_CLASS} max-[480px]:min-h-[66px] ${
+      className={`group grid min-h-[74px] min-w-0 cursor-pointer grid-cols-[40px_minmax(0,1fr)_20px] items-center gap-[13px] rounded-[13px] border px-4 py-[14px] text-left transition-colors disabled:cursor-default ${FOCUS_RING_CLASS} max-[480px]:min-h-[66px] ${
         selected
           ? 'border-[#4b7df0] bg-[#eef4ff] text-[#1749bb]'
           : 'border-[#d6dfeb] bg-white text-[#42516a] hover:border-[#9fb8e7] hover:bg-[#f8fbff]'
       }`}
       onClick={onClick}
       aria-pressed={selected}
+      disabled={disabled}
       data-testid={testId}
     >
       <span
@@ -343,10 +260,6 @@ function SourceChoice({
 }
 
 export function WxPostSetupStage({
-  articleType,
-  onArticleTypeChange,
-  customArticleType,
-  onCustomArticleTypeChange,
   linked,
   onLinkedChange,
   meetings,
@@ -358,14 +271,11 @@ export function WxPostSetupStage({
   onMeetingChange,
   onLoadMoreMeetings,
   onRetryMeetings,
-  onContinue,
-  isContinuing,
-  continueError,
+  onCreate,
+  isCreating,
+  createError,
+  sourceLocked,
 }: {
-  articleType: WxPostArticleType;
-  onArticleTypeChange: (type: WxPostArticleType) => void;
-  customArticleType: string;
-  onCustomArticleTypeChange: (value: string) => void;
   linked: boolean;
   onLinkedChange: (linked: boolean) => void;
   meetings: LinkedMeetingOption[];
@@ -377,25 +287,27 @@ export function WxPostSetupStage({
   onMeetingChange: (meetingId: string) => void;
   onLoadMoreMeetings: () => void;
   onRetryMeetings: () => void;
-  onContinue: () => void;
-  isContinuing: boolean;
-  continueError: string | null;
+  onCreate: () => void;
+  isCreating: boolean;
+  createError: string | null;
+  sourceLocked: boolean;
 }) {
   return (
     <div className='grid min-w-0 gap-5' data-testid='setup-stage'>
-      <ArticleTypePicker
-        value={articleType}
-        onChange={onArticleTypeChange}
-        customArticleType={customArticleType}
-        onCustomArticleTypeChange={onCustomArticleTypeChange}
-      />
-
-      <section className={`${PANEL_CLASS} overflow-visible`}>
+      <section
+        className={`${PANEL_CLASS} overflow-visible ${
+          sourceLocked ? 'bg-slate-50' : ''
+        }`}
+      >
         <div className={PANEL_HEADER_CLASS}>
           <h2 className={PANEL_TITLE_CLASS}>Source</h2>
         </div>
 
-        <div className='grid min-w-0 gap-[22px] p-[22px] max-[480px]:p-4'>
+        <div
+          className={`grid min-w-0 gap-[22px] p-[22px] max-[480px]:p-4 ${
+            sourceLocked ? 'opacity-70' : ''
+          }`}
+        >
           <div className='grid min-w-0 grid-cols-2 gap-3 max-[760px]:grid-cols-1'>
             <SourceChoice
               selected={linked}
@@ -403,6 +315,7 @@ export function WxPostSetupStage({
               label='Meeting or event'
               testId='association-linked'
               onClick={() => onLinkedChange(true)}
+              disabled={sourceLocked}
             />
             <SourceChoice
               selected={!linked}
@@ -410,6 +323,7 @@ export function WxPostSetupStage({
               label='Independent article'
               testId='association-independent'
               onClick={() => onLinkedChange(false)}
+              disabled={sourceLocked}
             />
           </div>
 
@@ -424,36 +338,47 @@ export function WxPostSetupStage({
               onChange={onMeetingChange}
               onLoadMore={onLoadMoreMeetings}
               onRetry={onRetryMeetings}
+              disabled={sourceLocked}
             />
+          )}
+          {sourceLocked && (
+            <p
+              className='m-0 text-sm font-medium text-slate-600'
+              data-testid='source-locked-message'
+            >
+              Source is fixed after the workspace is created.
+            </p>
           )}
         </div>
       </section>
 
-      {continueError && (
+      {createError && (
         <p
           className='m-0 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700'
           role='alert'
           data-testid='workspace-bootstrap-error'
         >
-          {continueError}
+          {createError}
         </p>
       )}
 
-      <div className='flex items-center justify-end gap-[10px] pt-0.5 max-[760px]:[&_button]:flex-1 max-[480px]:flex-col-reverse max-[480px]:[&_button]:w-full'>
-        <button
-          type='button'
-          className={PRIMARY_BUTTON_CLASS}
-          disabled={isContinuing || (linked && !selectedMeeting)}
-          onClick={onContinue}
-          data-testid='continue-to-materials'
-        >
-          {isContinuing && (
-            <Loader2 className='animate-spin' aria-hidden='true' />
-          )}
-          Continue to materials
-          {!isContinuing && <ArrowRight aria-hidden='true' />}
-        </button>
-      </div>
+      {!sourceLocked && (
+        <div className='flex items-center justify-end gap-[10px] pt-0.5 max-[760px]:[&_button]:flex-1 max-[480px]:flex-col-reverse max-[480px]:[&_button]:w-full'>
+          <button
+            type='button'
+            className={PRIMARY_BUTTON_CLASS}
+            disabled={isCreating || (linked && !selectedMeeting)}
+            onClick={onCreate}
+            data-testid='create-workspace'
+          >
+            {isCreating && (
+              <Loader2 className='animate-spin' aria-hidden='true' />
+            )}
+            Create workspace
+            {!isCreating && <ArrowRight aria-hidden='true' />}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

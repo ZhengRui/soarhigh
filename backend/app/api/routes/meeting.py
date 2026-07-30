@@ -24,6 +24,7 @@ from ...db.core import (
     get_awards_by_meeting,
     get_meeting_by_id,
     get_meeting_options,
+    get_meeting_options_by_ids,
     get_meetings,
     get_votes_by_meeting,
     get_votes_status,
@@ -33,7 +34,16 @@ from ...db.core import (
     update_meeting_status,
     update_votes_status,
 )
-from ...models.meeting import Award, Meeting, PaginatedMeetingOptions, PaginatedMeetings, Vote, VotesStatus
+from ...models.meeting import (
+    Award,
+    Meeting,
+    MeetingOptionsByIdsRequest,
+    MeetingOptionsByIdsResponse,
+    PaginatedMeetingOptions,
+    PaginatedMeetings,
+    Vote,
+    VotesStatus,
+)
 from ...models.users import User
 from ...utils.meeting import parse_meeting_agenda_image, plan_meeting_from_text
 from .auth import get_current_user, get_optional_user, verify_access_token
@@ -122,7 +132,7 @@ class MediaDeleteRequest(BaseModel):
 def get_meeting_media_user_id(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(meeting_media_scheme),
 ) -> Optional[str]:
-    """Resolve public, member, or scoped WXPost service access."""
+    """Resolve public, member, or scoped WxPost service access."""
 
     if (
         credentials is not None
@@ -231,6 +241,22 @@ async def r_list_meeting_options(
             page_size=page_size,
         )
         return PaginatedMeetingOptions(**options)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@r.post("/meetings/options/batch", response_model=MeetingOptionsByIdsResponse)
+async def r_list_meeting_options_by_ids(
+    request: MeetingOptionsByIdsRequest,
+    user: Optional[User] = Depends(get_optional_user),
+) -> MeetingOptionsByIdsResponse:
+    """Resolve compact meeting records in one request for workspace lists."""
+    try:
+        options = get_meeting_options_by_ids(
+            request.ids,
+            user_id=user.uid if user else None,
+        )
+        return MeetingOptionsByIdsResponse.model_validate({"items": options})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

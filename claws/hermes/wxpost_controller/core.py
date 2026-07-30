@@ -63,6 +63,12 @@ class WorkspaceNotFound(WorkspaceError):
     code = "workspace_not_found"
 
 
+class WorkspaceAlreadyExists(WorkspaceError):
+    """A create operation targeted an existing workspace."""
+
+    code = "workspace_already_exists"
+
+
 class InvalidWorkspace(WorkspaceError):
     """Stored workspace state does not satisfy the production contract."""
 
@@ -148,7 +154,7 @@ def error_response(error: WorkspaceError) -> dict[str, Any]:
 
 
 class WorkspaceController:
-    """Validated, versioned, atomic access to WXPost authoring workspaces."""
+    """Validated, versioned, atomic access to WxPost authoring workspaces."""
 
     def __init__(
         self,
@@ -198,6 +204,17 @@ class WorkspaceController:
             },
             label="workspace bootstrap",
         )
+        candidate = self.inbox_root / workspace_id
+        if candidate.exists() or candidate.is_symlink():
+            existing_workspace = self._resolve_workspace(workspace_id)
+            with self._workspace_lock(existing_workspace):
+                existing_manifest = existing_workspace / "source-manifest.json"
+                if existing_manifest.is_symlink():
+                    raise InvalidWorkspace("source manifest must not be a symlink")
+                if existing_manifest.exists():
+                    raise WorkspaceAlreadyExists(
+                        f"workspace already exists: {workspace_id}"
+                    )
         meeting_media = (
             self._load_meeting_media(request.meeting_id)
             if request.meeting_id is not None
@@ -206,35 +223,25 @@ class WorkspaceController:
         workspace = self._resolve_workspace(workspace_id, create=True)
         with self._workspace_lock(workspace):
             manifest_path = workspace / "source-manifest.json"
-            if manifest_path.exists() or manifest_path.is_symlink():
-                manifest = self._read_manifest(workspace, workspace_id)
-                if manifest.meeting_id != request.meeting_id:
-                    raise InvalidRequest(
-                        "workspace settings changed; use the workspace update operation"
-                    )
-                if manifest.editorial != request.editorial:
-                    raise InvalidRequest(
-                        "workspace settings changed; use the workspace update operation"
-                    )
-                manifest = self._register_meeting_media(
-                    workspace,
-                    manifest,
-                    meeting_media,
+            if manifest_path.is_symlink():
+                raise InvalidWorkspace("source manifest must not be a symlink")
+            if manifest_path.exists():
+                raise WorkspaceAlreadyExists(
+                    f"workspace already exists: {workspace_id}"
                 )
-            else:
-                unexpected = [
-                    path.name
-                    for path in workspace.iterdir()
-                    if path.name != ".source-manifest.lock"
-                ]
-                if unexpected:
-                    raise InvalidWorkspace("workspace has files but no source manifest")
-                manifest = self._new_manifest(
-                    workspace_id,
-                    request,
-                    meeting_media,
-                )
-                self._atomic_write_json(manifest_path, manifest.to_wire())
+            unexpected = [
+                path.name
+                for path in workspace.iterdir()
+                if path.name != ".source-manifest.lock"
+            ]
+            if unexpected:
+                raise InvalidWorkspace("workspace has files but no source manifest")
+            manifest = self._new_manifest(
+                workspace_id,
+                request,
+                meeting_media,
+            )
+            self._atomic_write_json(manifest_path, manifest.to_wire())
             draft = self._read_draft(workspace, manifest)
         return self._context_response(workspace_id, manifest, draft)
 
@@ -245,6 +252,7 @@ class WorkspaceController:
         expected_manifest_version: int,
         meeting_id: str | None,
         editorial: Mapping[str, Any],
+        source_updates: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         request = self._validate_request(
             UpdateWorkspaceRequest,
@@ -252,23 +260,11 @@ class WorkspaceController:
                 "expectedManifestVersion": expected_manifest_version,
                 "meetingId": meeting_id,
                 "editorial": editorial,
+                "sourceUpdates": source_updates or [],
             },
             label="workspace update",
         )
         workspace = self._resolve_workspace(workspace_id)
-
-        with self._workspace_lock(workspace):
-            current = self._read_manifest(workspace, workspace_id)
-            self._check_manifest_version(
-                current,
-                request.expected_manifest_version,
-            )
-        meeting_changed = current.meeting_id != request.meeting_id
-        meeting_media = (
-            self._load_meeting_media(request.meeting_id)
-            if meeting_changed and request.meeting_id is not None
-            else []
-        )
 
         with self._workspace_lock(workspace):
             manifest = self._read_manifest(workspace, workspace_id)
@@ -277,10 +273,17 @@ class WorkspaceController:
                 request.expected_manifest_version,
             )
             meeting_changed = manifest.meeting_id != request.meeting_id
+            if meeting_changed and request.source_updates:
+                raise InvalidRequest(
+                    "sourceUpdates cannot be combined with a meetingId change"
+                )
+            meeting_media = (
+                self._load_meeting_media(request.meeting_id)
+                if meeting_changed and request.meeting_id is not None
+                else []
+            )
             editorial_changed = manifest.editorial != request.editorial
             draft = self._read_draft(workspace, manifest)
-            if not meeting_changed and not editorial_changed:
-                return self._context_response(workspace_id, manifest, draft)
 
             manifest_data = manifest.to_wire()
             removed_sources: list[SourceRecord] = []
@@ -304,14 +307,29 @@ class WorkspaceController:
                     manifest_data["sources"].append(source.to_wire())
                     manifest_data["nextMaterialNumber"] += 1
             manifest_data["editorial"] = request.editorial.to_wire()
-            manifest_data["draft"] = None
-
-            updated_manifest = self._write_workspace_update(
-                workspace,
-                manifest_data,
-                manifest,
-                draft,
+            sources_changed = self._apply_source_updates(
+                manifest_data["sources"],
+                request.source_updates,
             )
+            if not meeting_changed and not editorial_changed and not sources_changed:
+                return self._context_response(workspace_id, manifest, draft)
+
+            if meeting_changed:
+                manifest_data["draft"] = None
+                updated_manifest = self._write_workspace_update(
+                    workspace,
+                    manifest_data,
+                    manifest,
+                    draft,
+                )
+                updated_draft = None
+            else:
+                updated_manifest = self._write_changed_manifest(
+                    workspace,
+                    manifest_data,
+                    manifest.manifest_version,
+                )
+                updated_draft = draft
             for source in removed_sources:
                 if source.workspace_ready:
                     self._remove_regular_file(
@@ -319,17 +337,36 @@ class WorkspaceController:
                         tolerate_failure=True,
                     )
 
-        return self._context_response(workspace_id, updated_manifest, None)
+        return self._context_response(
+            workspace_id,
+            updated_manifest,
+            updated_draft,
+        )
 
-    def list_workspaces(self) -> dict[str, Any]:
+    def list_workspaces(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> dict[str, Any]:
+        if (
+            isinstance(page, bool)
+            or not isinstance(page, int)
+            or page < 1
+            or isinstance(page_size, bool)
+            or not isinstance(page_size, int)
+            or page_size < 1
+            or page_size > 100
+        ):
+            raise InvalidRequest(
+                "workspace pagination requires page >= 1 and 1 <= page_size <= 100"
+            )
         items: list[dict[str, Any]] = []
         try:
             candidates = sorted(self.inbox_root.iterdir(), key=lambda path: path.name)
         except OSError as exc:
             raise InvalidWorkspace(f"cannot list workspaces: {exc}") from exc
         for candidate in candidates:
-            if not candidate.name.startswith("wxpost-"):
-                continue
             try:
                 workspace = self._resolve_workspace(candidate.name)
                 with self._workspace_lock(workspace):
@@ -337,12 +374,21 @@ class WorkspaceController:
                     items.append(self._workspace_summary(manifest))
             except (WorkspaceError, OSError) as exc:
                 logger.warning(
-                    "Skipping unreadable WXPost workspace %s: %s",
+                    "Skipping unreadable WxPost workspace %s: %s",
                     candidate.name,
                     exc,
                 )
-        items.sort(key=lambda item: item["updatedAt"], reverse=True)
-        return {"items": items}
+        items.sort(key=lambda item: item["createdAt"], reverse=True)
+        total = len(items)
+        pages = (total + page_size - 1) // page_size if total > 0 else 1
+        start = (page - 1) * page_size
+        return {
+            "items": items[start : start + page_size],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": pages,
+        }
 
     def delete_workspace(
         self,
@@ -619,11 +665,13 @@ class WorkspaceController:
         self,
         workspace_id: str,
         *,
+        expected_manifest_version: int,
         source_id: str,
     ) -> dict[str, Any]:
         request = self._validate_request(
-            SourceLookupRequest,
+            SourceActionRequest,
             {
+                "expectedManifestVersion": expected_manifest_version,
                 "sourceId": source_id,
             },
             label="source delete preflight",
@@ -631,6 +679,10 @@ class WorkspaceController:
         workspace = self._resolve_workspace(workspace_id)
         with self._workspace_lock(workspace):
             manifest = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(
+                manifest,
+                request.expected_manifest_version,
+            )
             self._find_source(manifest, request.source_id)
             draft = self._read_draft(workspace, manifest)
             references = self._draft_references(draft, request.source_id)
@@ -866,56 +918,6 @@ class WorkspaceController:
             }
         )
 
-    def _register_meeting_media(
-        self,
-        workspace: Path,
-        manifest: SourceManifest,
-        meeting_media: list[MeetingMediaReference],
-    ) -> SourceManifest:
-        if manifest.meeting_id is None or not meeting_media:
-            return manifest
-        manifest_data = manifest.to_wire()
-        existing = {
-            source.origin.file_key: source
-            for source in manifest.sources
-            if isinstance(source.origin, MeetingLibraryOrigin)
-        }
-        changed = False
-        for media in meeting_media:
-            current = existing.get(media.file_key)
-            if current is None:
-                source = self._meeting_source_record(
-                    manifest_data["nextMaterialNumber"],
-                    media,
-                )
-                manifest_data["sources"].append(source.to_wire())
-                manifest_data["nextMaterialNumber"] += 1
-                changed = True
-                continue
-            if current.workspace_ready:
-                continue
-            source_data = self._find_source_data(
-                manifest_data["sources"],
-                current.id,
-            )
-            refreshed = {
-                "kind": self._meeting_source_kind(media.mime_type),
-                "filename": media.filename,
-                "mimeType": media.mime_type,
-                "sizeBytes": media.size_bytes,
-            }
-            for field, value in refreshed.items():
-                if source_data[field] != value:
-                    source_data[field] = value
-                    changed = True
-        if not changed:
-            return manifest
-        return self._write_changed_manifest(
-            workspace,
-            manifest_data,
-            manifest.manifest_version,
-        )
-
     def _meeting_source_record(
         self,
         material_number: int,
@@ -972,7 +974,7 @@ class WorkspaceController:
             except HTTPError as exc:
                 if exc.code in {401, 403, 404}:
                     raise InvalidRequest(
-                        "meeting is unavailable to the WXPost controller"
+                        "meeting is unavailable to the WxPost controller"
                     ) from exc
                 raise UpstreamUnavailable(
                     f"meeting media API returned HTTP {exc.code}"

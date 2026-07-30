@@ -27,6 +27,10 @@ class _MeetingOptionsQuery:
         self.owner.filters.append((column, value))
         return self
 
+    def in_(self, column, values):
+        self.owner.in_filters.append((column, values))
+        return self
+
     def order(self, column, desc=False):
         self.owner.orders.append((column, desc))
         return self
@@ -46,6 +50,7 @@ class _MeetingOptionsSupabase:
         self.rows = rows
         self.selects = []
         self.filters = []
+        self.in_filters = []
         self.orders = []
         self.ranges = []
 
@@ -192,3 +197,95 @@ def test_meeting_options_query_is_lightweight_and_reuses_visibility_filters(
     ]
     assert fake_supabase.orders == [("date", True)]
     assert fake_supabase.ranges == [(10, 19)]
+
+
+def test_meeting_options_batch_returns_requested_records_in_request_order(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def get_options(ids, **kwargs):
+        captured.update({"ids": ids, **kwargs})
+        return [
+            {
+                "id": "meeting-462",
+                "no": 462,
+                "type": "Regular",
+                "theme": "Culture in Every Voice",
+                "date": "2026-07-15",
+            }
+        ]
+
+    monkeypatch.setattr(meeting_route, "get_meeting_options_by_ids", get_options)
+    app.dependency_overrides[meeting_route.get_optional_user] = lambda: User(
+        uid="member-1",
+        username="member",
+        full_name="SoarHigh Member",
+    )
+
+    response = client.post(
+        "/meetings/options/batch",
+        json={"ids": ["meeting-462", "meeting-461", "meeting-462"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {
+                "id": "meeting-462",
+                "no": 462,
+                "type": "Regular",
+                "theme": "Culture in Every Voice",
+                "date": "2026-07-15",
+            }
+        ]
+    }
+    assert captured == {
+        "ids": ["meeting-462", "meeting-461", "meeting-462"],
+        "user_id": "member-1",
+    }
+
+
+def test_meeting_options_batch_rejects_more_than_one_hundred_ids(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/meetings/options/batch",
+        json={"ids": [f"meeting-{index}" for index in range(101)]},
+    )
+
+    assert response.status_code == 422
+
+
+def test_meeting_options_batch_query_is_compact_and_deduplicated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        {
+            "id": "meeting-462",
+            "no": 462,
+            "type": "Regular",
+            "theme": "Culture in Every Voice",
+            "date": "2026-07-15",
+        },
+        {
+            "id": "meeting-461",
+            "no": 461,
+            "type": "Regular",
+            "theme": "Workshop night",
+            "date": "2026-07-08",
+        },
+    ]
+    fake_supabase = _MeetingOptionsSupabase(rows)
+    monkeypatch.setattr(meeting_db, "supabase", fake_supabase)
+
+    result = meeting_db.get_meeting_options_by_ids(
+        ["meeting-461", "meeting-462", "meeting-461"],
+        user_id="member-1",
+    )
+
+    assert result == [rows[1], rows[0]]
+    assert fake_supabase.selects == [("id,no,type,theme,date", None)]
+    assert fake_supabase.in_filters == [("id", ["meeting-461", "meeting-462"])]
+    assert fake_supabase.filters == []

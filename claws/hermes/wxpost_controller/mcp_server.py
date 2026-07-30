@@ -17,7 +17,7 @@ from .core import (
 mcp = FastMCP(
     "soarhigh-wxpost-controller",
     instructions=(
-        "Use these tools for canonical WXPost manifest and draft writes. "
+        "Use these tools for canonical WxPost manifest and draft writes. "
         "Never edit source-manifest.json or draft/article.json directly."
     ),
 )
@@ -46,7 +46,7 @@ def wxpost_bootstrap_workspace(
     editorial: dict[str, Any],
     meeting_id: str | None = None,
 ) -> dict[str, Any]:
-    """Create or resume a workspace and register its meeting media."""
+    """Create a workspace and register its initial meeting media."""
     return _run(
         lambda: _controller().bootstrap_workspace(
             workspace_id,
@@ -64,7 +64,7 @@ def wxpost_update_workspace(
     meeting_id: str | None,
     editorial: dict[str, Any],
 ) -> dict[str, Any]:
-    """Update one workspace's meeting and editorial settings in place."""
+    """Save workspace settings when the source manifest is still current."""
     return _run(
         lambda: _controller().update_workspace(
             workspace_id,
@@ -156,12 +156,14 @@ def wxpost_update_sources(
 @mcp.tool()
 def wxpost_delete_source_preflight(
     workspace_id: str,
+    expected_manifest_version: int,
     source_id: str,
 ) -> dict[str, Any]:
     """Report whether the latest saved draft references a source."""
     return _run(
         lambda: _controller().delete_source_preflight(
             workspace_id,
+            expected_manifest_version=expected_manifest_version,
             source_id=source_id,
         )
     )

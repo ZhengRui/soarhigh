@@ -29,7 +29,7 @@ class ContentAuthor(BaseModel):
 
 
 class ContentListItem(BaseModel):
-    """Shared card data for ordinary Posts and public WXPosts."""
+    """Shared card data for ordinary Posts and public WxPosts."""
 
     kind: Literal["post", "wxpost"]
     id: str

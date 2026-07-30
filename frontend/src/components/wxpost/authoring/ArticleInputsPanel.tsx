@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-
-import type { WxPostWritingApproach } from '@/components/wxpost/authoring/types';
+import {
+  WORKSPACE_WRITING_APPROACH_LABELS,
+  type WorkspaceWritingApproach,
+} from '@/utils/wxpostWorkspace';
 
 import { ResizableTextarea } from './ResizableTextarea';
 import {
@@ -11,23 +12,35 @@ import {
   PANEL_TITLE_CLASS,
 } from './authoringStyles';
 
-const WRITING_APPROACHES: WxPostWritingApproach[] = [
-  'Chronological',
-  'Theme-driven',
-  'Image-driven',
-  'Highlights first',
+const WRITING_APPROACHES: WorkspaceWritingApproach[] = [
+  'chronological',
+  'theme-driven',
+  'image-driven',
+  'highlights-first',
 ];
 
 const FIELD_CLASS =
   'grid gap-2 text-sm font-bold text-slate-700 [&_textarea]:block [&_textarea]:min-h-[132px] [&_textarea]:w-full [&_textarea]:rounded-[10px] [&_textarea]:border [&_textarea]:border-[#cad5e4] [&_textarea]:bg-white [&_textarea]:px-[13px] [&_textarea]:pb-8 [&_textarea]:pt-3 [&_textarea]:text-[15px] [&_textarea]:font-normal [&_textarea]:leading-[1.55] [&_textarea]:text-[#172033] [&_textarea]:outline-none [&_textarea]:placeholder:font-normal [&_textarea]:placeholder:text-[#93a0b2] [&_textarea]:hover:border-[#9fb1c8] [&_textarea]:focus:border-blue-600';
 
-export function ArticleInputsPanel() {
-  const [writingApproach, setWritingApproach] =
-    useState<WxPostWritingApproach>('Chronological');
-  const [transcript, setTranscript] = useState('');
-  const [notes, setNotes] = useState('');
-  const [guidance, setGuidance] = useState('');
-
+export function ArticleInputsPanel({
+  writingApproach,
+  transcript,
+  extraNotes,
+  writingGuidance,
+  onWritingApproachChange,
+  onTranscriptChange,
+  onExtraNotesChange,
+  onWritingGuidanceChange,
+}: {
+  writingApproach: WorkspaceWritingApproach;
+  transcript: string;
+  extraNotes: string;
+  writingGuidance: string;
+  onWritingApproachChange: (value: WorkspaceWritingApproach) => void;
+  onTranscriptChange: (value: string) => void;
+  onExtraNotesChange: (value: string) => void;
+  onWritingGuidanceChange: (value: string) => void;
+}) {
   return (
     <>
       <section className={PANEL_CLASS}>
@@ -39,7 +52,7 @@ export function ArticleInputsPanel() {
             <span>Meeting transcript</span>
             <ResizableTextarea
               value={transcript}
-              onChange={(event) => setTranscript(event.target.value)}
+              onChange={(event) => onTranscriptChange(event.target.value)}
               placeholder='Paste a transcript or meeting summary'
               data-testid='meeting-transcript'
               resizeHandleTestId='meeting-transcript-resize-handle'
@@ -48,8 +61,8 @@ export function ArticleInputsPanel() {
           <label className={FIELD_CLASS}>
             <span>Extra notes</span>
             <ResizableTextarea
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
+              value={extraNotes}
+              onChange={(event) => onExtraNotesChange(event.target.value)}
               placeholder='Add facts, emphasis, or details to avoid'
               data-testid='extra-notes'
               resizeHandleTestId='extra-notes-resize-handle'
@@ -80,10 +93,10 @@ export function ArticleInputsPanel() {
                         : 'border-[#d3dce8] bg-white text-[#516079] hover:border-[#9fb8e7] hover:bg-[#f8fbff]'
                     }`}
                     aria-pressed={selected}
-                    onClick={() => setWritingApproach(approach)}
+                    onClick={() => onWritingApproachChange(approach)}
                     data-testid={`writing-approach-${approach.toLowerCase().replaceAll(' ', '-')}`}
                   >
-                    {approach}
+                    {WORKSPACE_WRITING_APPROACH_LABELS[approach]}
                   </button>
                 );
               })}
@@ -93,8 +106,8 @@ export function ArticleInputsPanel() {
           <label className={FIELD_CLASS}>
             <span>Writing guidance</span>
             <ResizableTextarea
-              value={guidance}
-              onChange={(event) => setGuidance(event.target.value)}
+              value={writingGuidance}
+              onChange={(event) => onWritingGuidanceChange(event.target.value)}
               placeholder='Describe the desired angle, tone, and emphasis'
               data-testid='writing-guidance'
               resizeHandleTestId='writing-guidance-resize-handle'

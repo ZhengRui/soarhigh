@@ -1,5 +1,5 @@
 export const responseHandlerTemplate = async (response: Response) => {
-  if (response.status === 500) {
+  if (response.status >= 500) {
     throw new Error('Internal Server Error');
   }
 

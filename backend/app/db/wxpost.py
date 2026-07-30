@@ -1,4 +1,4 @@
-"""Persistence boundary for canonical WXPost source documents."""
+"""Persistence boundary for canonical WxPost source documents."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ def create_wxpost(document: ArticleDocument) -> dict:
         if response.data:
             return response.data[0]
 
-    raise RuntimeError("Could not allocate a unique WXPost slug.")
+    raise RuntimeError("Could not allocate a unique WxPost slug.")
 
 
 def get_wxpost_by_id(wxpost_id: UUID) -> dict | None:

@@ -1,6 +1,6 @@
-from typing import Generic, List, Literal, Optional, TypeVar
+from typing import Annotated, Generic, List, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 defaultSegmentTypes = Literal[
     "Members and Guests Registration, Warm up",
@@ -266,3 +266,16 @@ class MeetingOption(BaseModel):
 
 class PaginatedMeetingOptions(PaginatedResponse[MeetingOption]):
     pass
+
+
+class MeetingOptionsByIdsRequest(BaseModel):
+    ids: List[
+        Annotated[
+            str,
+            StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+        ]
+    ] = Field(max_length=100)
+
+
+class MeetingOptionsByIdsResponse(BaseModel):
+    items: List[MeetingOption]

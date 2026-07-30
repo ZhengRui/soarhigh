@@ -1,4 +1,4 @@
-"""Parse and validate the canonical Markdown body of a WXPost document."""
+"""Parse and validate the canonical Markdown body of a WxPost document."""
 
 from __future__ import annotations
 
@@ -234,7 +234,7 @@ class ParsedArticle:
 class ArticleDocumentValidationError(Exception):
     def __init__(self, errors: list[ValidationIssue]):
         self.errors = errors
-        super().__init__("WXPost ArticleDocument validation failed")
+        super().__init__("WxPost ArticleDocument validation failed")
 
 
 def capabilities() -> WxPostCapabilities:
@@ -473,7 +473,7 @@ def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
                     code="unsafe_html",
                     path=["bodyMarkdown"],
                     line=(token.map[0] + 1) if token.map else None,
-                    message="Raw HTML is not allowed in WXPost Markdown.",
+                    message="Raw HTML is not allowed in WxPost Markdown.",
                 )
             )
         if token.children:
@@ -484,7 +484,7 @@ def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
                             code="unsafe_html",
                             path=["bodyMarkdown"],
                             line=(token.map[0] + 1) if token.map else None,
-                            message="Raw HTML is not allowed in WXPost Markdown.",
+                            message="Raw HTML is not allowed in WxPost Markdown.",
                         )
                     )
 

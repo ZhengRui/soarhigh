@@ -250,6 +250,21 @@ def test_material_operation_contracts_are_strict_and_camel_case_only() -> None:
             },
         }
     )
+    with pytest.raises(ValidationError):
+        UpdateWorkspaceRequest.model_validate(
+            {
+                "meetingId": None,
+                "editorial": {"articleType": "meeting-recap"},
+            }
+        )
+    with pytest.raises(ValidationError):
+        UpdateWorkspaceRequest.model_validate(
+            {
+                "expectedManifestVersion": True,
+                "meetingId": None,
+                "editorial": {"articleType": "meeting-recap"},
+            }
+        )
     SetSourceInclusionRequest.model_validate(
         {
             "expectedManifestVersion": 1,
@@ -262,7 +277,7 @@ def test_material_operation_contracts_are_strict_and_camel_case_only() -> None:
         UpdateWorkspaceRequest.model_validate(
             {
                 "expected_manifest_version": 1,
-                "meetingId": None,
+                "meeting_id": None,
                 "editorial": {"articleType": "meeting-recap"},
             }
         )
@@ -280,6 +295,21 @@ def test_material_operation_contracts_are_strict_and_camel_case_only() -> None:
                 "expectedManifestVersion": True,
                 "sourceId": "M01",
                 "included": 1,
+            }
+        )
+    with pytest.raises(ValidationError, match="each source may be updated only once"):
+        UpdateWorkspaceRequest.model_validate(
+            {
+                "expectedManifestVersion": 1,
+                "meetingId": None,
+                "editorial": {
+                    "articleType": "meeting-recap",
+                    "customArticleType": None,
+                },
+                "sourceUpdates": [
+                    {"sourceId": "M01", "included": True},
+                    {"sourceId": "M01", "included": False},
+                ],
             }
         )
 

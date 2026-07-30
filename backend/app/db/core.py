@@ -241,6 +241,21 @@ def get_meeting_options(
     }
 
 
+def get_meeting_options_by_ids(
+    meeting_ids: list[str],
+    user_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Return compact meeting records for a caller-provided set of IDs."""
+    unique_ids = list(dict.fromkeys(meeting_ids))
+    if not unique_ids:
+        return []
+
+    query = supabase.table("meetings").select("id,no,type,theme,date").in_("id", unique_ids)
+    result = _apply_meeting_list_filters(query, user_id, None).execute()
+    by_id = {item["id"]: item for item in result.data or []}
+    return [by_id[meeting_id] for meeting_id in unique_ids if meeting_id in by_id]
+
+
 def get_meetings(
     user_id: Optional[str] = None, status: Optional[str] = None, page: int = 1, page_size: int = 10
 ) -> Dict[str, Any]:

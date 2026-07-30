@@ -55,6 +55,10 @@ export interface MeetingOptionIF {
   date: string;
 }
 
+export interface MeetingOptionsByIdsResponse {
+  items: MeetingOptionIF[];
+}
+
 export interface AwardIF {
   meeting_id: string;
   category: string;

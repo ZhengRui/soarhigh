@@ -149,7 +149,7 @@ configure_first_run() {
   prompt_secret "Existing backend WXPOST service token"
   wxpost_service_token="${PROMPT_VALUE}"
   [[ -n "${wxpost_service_token}" ]] ||
-    fail "WXPost service token must not be empty."
+    fail "WxPost service token must not be empty."
 
   printf '\nConfiguration:\n'
   printf '  Hermes home:      %s\n' "${hermes_home}"

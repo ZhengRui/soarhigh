@@ -89,9 +89,18 @@ def test_authenticated_workspace_update_is_proxied_in_place(
 
     _configure_controller(monkeypatch, handler)
     payload = {
-        "expectedManifestVersion": 3,
+        "expectedManifestVersion": 7,
         "meetingId": "meeting-461",
         "editorial": {"articleType": "member-story"},
+        "sourceUpdates": [
+            {
+                "sourceId": "M03",
+                "included": False,
+                "description": "Updated source fact.",
+                "descriptionSource": "user",
+                "descriptionStatus": "confirmed",
+            }
+        ],
     }
     response = client.patch(
         "/posts/wxposts/workspaces/wxpost-abc",
@@ -117,7 +126,16 @@ def test_authenticated_members_can_list_and_delete_all_workspaces(
     def handler(request: httpx.Request) -> httpx.Response:
         captured.append(request)
         if request.method == "GET":
-            return httpx.Response(200, json={"items": []})
+            return httpx.Response(
+                200,
+                json={
+                    "items": [],
+                    "total": 0,
+                    "page": 2,
+                    "page_size": 5,
+                    "pages": 1,
+                },
+            )
         return httpx.Response(
             200,
             json={"workspaceId": "wxpost-abc", "deleted": True},
@@ -126,6 +144,7 @@ def test_authenticated_members_can_list_and_delete_all_workspaces(
     _configure_controller(monkeypatch, handler)
     listed = client.get(
         "/posts/wxposts/workspaces",
+        params={"page": 2, "page_size": 5},
         headers={"Authorization": "Bearer member-token"},
     )
     deleted = client.delete(
@@ -137,17 +156,24 @@ def test_authenticated_members_can_list_and_delete_all_workspaces(
     )
 
     assert listed.status_code == 200
-    assert listed.json() == {"items": []}
+    assert listed.json() == {
+        "items": [],
+        "total": 0,
+        "page": 2,
+        "page_size": 5,
+        "pages": 1,
+    }
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
     assert [(request.method, request.url.path) for request in captured] == [
         ("GET", "/workspaces"),
         ("DELETE", "/workspaces/wxpost-abc"),
     ]
+    assert dict(captured[0].url.params) == {"page": "2", "page_size": "5"}
     assert captured[1].headers["X-Expected-Manifest-Version"] == "4"
 
 
-def test_upload_and_content_proxy_preserve_binary_contract(
+def test_material_proxy_preserves_version_and_binary_contracts(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -157,6 +183,15 @@ def test_upload_and_content_proxy_preserve_binary_contract(
         captured.append(request)
         if request.method == "POST":
             return httpx.Response(200, json={"manifestVersion": 2})
+        if request.url.path.endswith("/delete-preflight"):
+            return httpx.Response(
+                200,
+                json={
+                    "sourceId": "M01",
+                    "manifestVersion": 2,
+                    "referenced": False,
+                },
+            )
         return httpx.Response(
             200,
             content=b"photo",
@@ -181,6 +216,13 @@ def test_upload_and_content_proxy_preserve_binary_contract(
         "/posts/wxposts/workspaces/wxpost-abc/sources/M01/content",
         headers={"Authorization": "Bearer member-token"},
     )
+    preflight = client.get(
+        "/posts/wxposts/workspaces/wxpost-abc/sources/M01/delete-preflight",
+        headers={
+            "Authorization": "Bearer member-token",
+            "X-Expected-Manifest-Version": "2",
+        },
+    )
 
     assert uploaded.status_code == 200
     assert captured[0].url.params["filename"] == "group photo.jpg"
@@ -190,6 +232,9 @@ def test_upload_and_content_proxy_preserve_binary_contract(
     assert content.content == b"photo"
     assert content.headers["Content-Type"] == "image/jpeg"
     assert content.headers["Cache-Control"] == "private, no-store"
+    assert preflight.status_code == 200
+    assert preflight.json()["manifestVersion"] == 2
+    assert captured[2].headers["X-Expected-Manifest-Version"] == "2"
 
 
 def test_upload_rejects_oversized_bodies_before_proxying(
@@ -232,7 +277,7 @@ def test_workspace_proxy_reports_missing_or_unavailable_controller(
         headers={"Authorization": "Bearer member-token"},
     )
     assert response.status_code == 503
-    assert response.json()["detail"] == ("WXPost workspace controller is not configured.")
+    assert response.json()["detail"] == ("WxPost workspace controller is not configured.")
 
     async def fail_request(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("offline", request=request)
@@ -243,7 +288,7 @@ def test_workspace_proxy_reports_missing_or_unavailable_controller(
         headers={"Authorization": "Bearer member-token"},
     )
     assert response.status_code == 503
-    assert response.json()["detail"] == ("WXPost workspace controller is unavailable.")
+    assert response.json()["detail"] == ("WxPost workspace controller is unavailable.")
 
 
 def test_workspace_proxy_rejects_operations_outside_the_materials_slice(

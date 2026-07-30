@@ -26,11 +26,19 @@ export type WorkspaceManifest = {
   createdAt: string;
   updatedAt: string;
   meetingId: string | null;
-  draft: null;
+  draft: {
+    version: number;
+    sourceManifestVersion: number;
+    sha256: string;
+  } | null;
   editorial: {
     articleType: string;
     customArticleType: string | null;
-    writingApproach: 'chronological';
+    writingApproach:
+      | 'chronological'
+      | 'theme-driven'
+      | 'image-driven'
+      | 'highlights-first';
     transcript: string;
     extraNotes: string;
     writingGuidance: string;
@@ -55,7 +63,14 @@ export type WorkspaceManifest = {
 export type WorkspaceMock = {
   contexts: Map<
     string,
-    { workspaceId: string; manifest: WorkspaceManifest; draft: null }
+    {
+      workspaceId: string;
+      manifest: WorkspaceManifest;
+      draft: {
+        draftVersion: number;
+        document: Record<string, unknown>;
+      } | null;
+    }
   >;
   requests: string[];
   conflictNextMutation: boolean;
@@ -103,27 +118,39 @@ export async function mockWxPostWorkspaceApi(
     referencedSourceIds: new Set(),
   };
 
-  await page.route(/\/posts\/wxposts\/workspaces\//, async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    const marker = '/posts/wxposts/workspaces/';
-    const suffix = url.pathname.slice(
-      url.pathname.indexOf(marker) + marker.length
-    );
-    const [encodedWorkspaceId, ...parts] = suffix.split('/');
-    const workspaceId = decodeURIComponent(encodedWorkspaceId);
-    const method = request.method();
-    mock.requests.push(`${method} /${parts.join('/')}`);
+  await page.route(
+    /^http:\/\/localhost:5000\/posts\/wxposts\/workspaces\//,
+    async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const marker = '/posts/wxposts/workspaces/';
+      const suffix = url.pathname.slice(
+        url.pathname.indexOf(marker) + marker.length
+      );
+      const [encodedWorkspaceId, ...parts] = suffix.split('/');
+      const workspaceId = decodeURIComponent(encodedWorkspaceId);
+      const method = request.method();
+      mock.requests.push(`${method} /${parts.join('/')}`);
 
-    if (method === 'PUT' && parts.length === 0) {
-      const input = request.postDataJSON() as {
-        meetingId: string | null;
-        editorial: WorkspaceManifest['editorial'];
-      };
-      const existing = mock.contexts.get(workspaceId);
-      const context =
-        existing ??
-        ({
+      if (method === 'PUT' && parts.length === 0) {
+        const input = request.postDataJSON() as {
+          meetingId: string | null;
+          editorial: WorkspaceManifest['editorial'];
+        };
+        const existing = mock.contexts.get(workspaceId);
+        if (existing) {
+          await route.fulfill({
+            status: 409,
+            json: {
+              error: {
+                code: 'workspace_already_exists',
+                message: `workspace already exists: ${workspaceId}`,
+              },
+            },
+          });
+          return;
+        }
+        const context = {
           workspaceId,
           manifest: {
             schemaVersion: 3,
@@ -139,48 +166,97 @@ export async function mockWxPostWorkspaceApi(
             sources: meetingSources(input.meetingId),
           },
           draft: null,
-        } as const);
-      mock.contexts.set(workspaceId, context);
-      await route.fulfill({ status: 200, json: context });
-      return;
-    }
+        } as const;
+        mock.contexts.set(workspaceId, context);
+        await route.fulfill({ status: 200, json: context });
+        return;
+      }
 
-    let context = mock.contexts.get(workspaceId);
-    if (!context) {
-      context = {
-        workspaceId,
-        manifest: {
-          schemaVersion: 3,
+      let context = mock.contexts.get(workspaceId);
+      if (!context) {
+        context = {
           workspaceId,
-          manifestVersion: 4,
-          nextMaterialNumber: 4,
-          createdBy: { id: 'member-123', name: 'Test Member' },
-          createdAt: '2026-07-29T03:00:00Z',
-          updatedAt: '2026-07-29T03:15:00Z',
-          meetingId: 'meeting-462',
-          draft: null,
-          editorial: {
-            articleType: 'meeting-recap',
-            customArticleType: null,
-            writingApproach: 'chronological',
-            transcript: '',
-            extraNotes: '',
-            writingGuidance: '',
+          manifest: {
+            schemaVersion: 3,
+            workspaceId,
+            manifestVersion: 4,
+            nextMaterialNumber: 4,
+            createdBy: { id: 'member-123', name: 'Test Member' },
+            createdAt: '2026-07-29T03:00:00Z',
+            updatedAt: '2026-07-29T03:15:00Z',
+            meetingId: 'meeting-462',
+            draft: null,
+            editorial: {
+              articleType: 'meeting-recap',
+              customArticleType: null,
+              writingApproach: 'chronological',
+              transcript: '',
+              extraNotes: '',
+              writingGuidance: '',
+            },
+            sources: meetingSources('meeting-462'),
           },
-          sources: meetingSources('meeting-462'),
-        },
-        draft: null,
-      };
-      mock.contexts.set(workspaceId, context);
-    }
+          draft: null,
+        };
+        mock.contexts.set(workspaceId, context);
+      }
 
-    if (method === 'PATCH' && parts.length === 0) {
-      const input = request.postDataJSON() as {
-        expectedManifestVersion: number;
-        meetingId: string | null;
-        editorial: WorkspaceManifest['editorial'];
-      };
-      if (input.expectedManifestVersion !== context.manifest.manifestVersion) {
+      if (method === 'GET' && parts[0] === 'context') {
+        if (mock.contextDelayMs > 0) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, mock.contextDelayMs)
+          );
+        }
+        await route.fulfill({ status: 200, json: context });
+        return;
+      }
+      if (method === 'GET' && parts[2] === 'content') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'image/png',
+          body: Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+            'base64'
+          ),
+        });
+        return;
+      }
+      if (method === 'GET' && parts[2] === 'delete-preflight') {
+        const expectedVersion = Number(
+          request.headers()['x-expected-manifest-version']
+        );
+        if (expectedVersion !== context.manifest.manifestVersion) {
+          await route.fulfill({
+            status: 409,
+            json: {
+              error: {
+                code: 'version_conflict',
+                message: 'manifest changed',
+                expectedVersion,
+                actualVersion: context.manifest.manifestVersion,
+              },
+            },
+          });
+          return;
+        }
+        const referenced = mock.referencedSourceIds.has(parts[1]);
+        await route.fulfill({
+          status: 200,
+          json: {
+            sourceId: parts[1],
+            manifestVersion: context.manifest.manifestVersion,
+            draftVersion: 0,
+            referenced,
+            requiresConfirmation: referenced,
+            references: referenced ? ['media.0', 'coverMediaId'] : [],
+          },
+        });
+        return;
+      }
+
+      if (mock.conflictNextMutation) {
+        mock.conflictNextMutation = false;
+        context.manifest.manifestVersion += 1;
         await route.fulfill({
           status: 409,
           json: {
@@ -193,154 +269,127 @@ export async function mockWxPostWorkspaceApi(
         });
         return;
       }
+
       const manifest = context.manifest;
-      if (manifest.meetingId !== input.meetingId) {
-        const uploads = manifest.sources.filter(
-          (source) => source.origin.type !== 'meeting-library'
-        );
-        const replacements = meetingSources(
-          input.meetingId,
-          manifest.nextMaterialNumber
-        );
-        manifest.sources = [...uploads, ...replacements];
-        manifest.nextMaterialNumber += replacements.length;
-        manifest.meetingId = input.meetingId;
-      }
-      manifest.editorial = input.editorial;
-      manifest.manifestVersion += 1;
-      await route.fulfill({ status: 200, json: context });
-      return;
-    }
-
-    if (method === 'GET' && parts[0] === 'context') {
-      if (mock.contextDelayMs > 0) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, mock.contextDelayMs)
-        );
-      }
-      await route.fulfill({ status: 200, json: context });
-      return;
-    }
-    if (method === 'GET' && parts[2] === 'content') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'image/png',
-        body: Buffer.from(
-          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-          'base64'
-        ),
-      });
-      return;
-    }
-    if (method === 'GET' && parts[2] === 'delete-preflight') {
-      const referenced = mock.referencedSourceIds.has(parts[1]);
-      await route.fulfill({
-        status: 200,
-        json: {
-          sourceId: parts[1],
-          manifestVersion: context.manifest.manifestVersion,
-          draftVersion: 0,
-          referenced,
-          requiresConfirmation: referenced,
-          references: referenced ? ['media.0', 'coverMediaId'] : [],
-        },
-      });
-      return;
-    }
-
-    if (mock.conflictNextMutation) {
-      mock.conflictNextMutation = false;
-      context.manifest.manifestVersion += 1;
-      await route.fulfill({
-        status: 409,
-        json: {
-          error: {
-            code: 'version_conflict',
-            message: 'manifest changed',
-            actualVersion: context.manifest.manifestVersion,
-          },
-        },
-      });
-      return;
-    }
-
-    const manifest = context.manifest;
-    if (method === 'POST' && parts[2] === 'import') {
-      const source = manifest.sources.find((item) => item.id === parts[1])!;
-      source.workspaceReady = true;
-    } else if (method === 'PUT' && parts[2] === 'inclusion') {
-      const source = manifest.sources.find((item) => item.id === parts[1])!;
-      const input = request.postDataJSON() as { included: boolean };
-      source.included = input.included;
-      if (input.included) source.workspaceReady = true;
-    } else if (method === 'PATCH' && parts[0] === 'sources') {
-      const input = request.postDataJSON() as {
-        updates: Array<{
-          sourceId: string;
-          moveToIndex?: number;
-          description?: string;
-          descriptionSource?: 'user' | null;
-          descriptionStatus?: 'confirmed' | 'missing';
-        }>;
-      };
-      for (const update of input.updates) {
-        const index = manifest.sources.findIndex(
-          (source) => source.id === update.sourceId
-        );
-        const source = manifest.sources[index];
-        if (update.description !== undefined) {
-          source.description = update.description;
-          source.descriptionSource = update.descriptionSource ?? null;
-          source.descriptionStatus = update.descriptionStatus ?? 'missing';
+      if (method === 'PATCH' && parts.length === 0) {
+        const input = request.postDataJSON() as {
+          expectedManifestVersion: number;
+          meetingId: string | null;
+          editorial: WorkspaceManifest['editorial'];
+          sourceUpdates: Array<{
+            sourceId: string;
+            included?: boolean;
+            description?: string;
+            descriptionSource?: 'user' | null;
+            descriptionStatus?: 'confirmed' | 'missing';
+          }>;
+        };
+        if (input.expectedManifestVersion !== manifest.manifestVersion) {
+          await route.fulfill({
+            status: 409,
+            json: {
+              error: {
+                code: 'version_conflict',
+                message: 'manifest changed',
+                expectedVersion: input.expectedManifestVersion,
+                actualVersion: manifest.manifestVersion,
+              },
+            },
+          });
+          return;
         }
-        if (update.moveToIndex !== undefined) {
-          manifest.sources.splice(index, 1);
-          manifest.sources.splice(update.moveToIndex, 0, source);
+        expect(input.meetingId).toBe(manifest.meetingId);
+        manifest.editorial = input.editorial;
+        for (const update of input.sourceUpdates) {
+          const source = manifest.sources.find(
+            (item) => item.id === update.sourceId
+          )!;
+          if (update.included !== undefined) {
+            source.included = update.included;
+          }
+          if (update.description !== undefined) {
+            source.description = update.description;
+            source.descriptionSource = update.descriptionSource ?? null;
+            source.descriptionStatus = update.descriptionStatus ?? 'missing';
+          }
         }
+        manifest.manifestVersion += 1;
+        await route.fulfill({ status: 200, json: context });
+        return;
       }
-    } else if (method === 'POST' && parts[0] === 'uploads') {
-      const id = `M${String(manifest.nextMaterialNumber).padStart(2, '0')}`;
-      const filename = url.searchParams.get('filename')!;
-      const mimeType = request.headers()['content-type'];
-      manifest.sources.push({
-        id,
-        kind: mimeType.startsWith('video/') ? 'video' : 'image',
-        origin: { type: 'web-upload' },
-        filename,
-        mimeType,
-        sizeBytes: request.postDataBuffer()?.length ?? 1,
-        workspaceReady: true,
-        included: false,
-        description: '',
-        descriptionSource: null,
-        descriptionStatus: 'missing',
-      });
-      manifest.nextMaterialNumber += 1;
-    } else if (method === 'DELETE' && parts[0] === 'sources') {
-      const input = request.postDataJSON() as { confirmReferenced: boolean };
-      if (mock.referencedSourceIds.has(parts[1]) && !input.confirmReferenced) {
+      const versionedBody =
+        method === 'POST' && parts[2] === 'import'
+          ? (request.postDataJSON() as { expectedManifestVersion: number })
+          : method === 'DELETE' && parts[0] === 'sources'
+            ? (request.postDataJSON() as { expectedManifestVersion: number })
+            : null;
+      const expectedVersion =
+        versionedBody?.expectedManifestVersion ??
+        Number(request.headers()['x-expected-manifest-version']);
+      if (expectedVersion !== manifest.manifestVersion) {
         await route.fulfill({
           status: 409,
-          json: { error: { code: 'confirmation_required' } },
+          json: {
+            error: {
+              code: 'version_conflict',
+              message: 'manifest changed',
+              expectedVersion,
+              actualVersion: manifest.manifestVersion,
+            },
+          },
         });
         return;
       }
-      const source = manifest.sources.find((item) => item.id === parts[1])!;
-      if (source.origin.type === 'meeting-library') {
-        source.workspaceReady = false;
-        source.included = false;
+      if (method === 'POST' && parts[2] === 'import') {
+        const source = manifest.sources.find((item) => item.id === parts[1])!;
+        source.workspaceReady = true;
+      } else if (method === 'POST' && parts[0] === 'uploads') {
+        const id = `M${String(manifest.nextMaterialNumber).padStart(2, '0')}`;
+        const filename = url.searchParams.get('filename')!;
+        const mimeType = request.headers()['content-type'];
+        manifest.sources.push({
+          id,
+          kind: mimeType.startsWith('video/') ? 'video' : 'image',
+          origin: { type: 'web-upload' },
+          filename,
+          mimeType,
+          sizeBytes: request.postDataBuffer()?.length ?? 1,
+          workspaceReady: true,
+          included: false,
+          description: '',
+          descriptionSource: null,
+          descriptionStatus: 'missing',
+        });
+        manifest.nextMaterialNumber += 1;
+      } else if (method === 'DELETE' && parts[0] === 'sources') {
+        const input = request.postDataJSON() as { confirmReferenced: boolean };
+        if (
+          mock.referencedSourceIds.has(parts[1]) &&
+          !input.confirmReferenced
+        ) {
+          await route.fulfill({
+            status: 409,
+            json: { error: { code: 'confirmation_required' } },
+          });
+          return;
+        }
+        const source = manifest.sources.find((item) => item.id === parts[1])!;
+        if (source.origin.type === 'meeting-library') {
+          source.workspaceReady = false;
+          source.included = false;
+        } else {
+          manifest.sources = manifest.sources.filter(
+            (item) => item.id !== source.id
+          );
+        }
       } else {
-        manifest.sources = manifest.sources.filter(
-          (item) => item.id !== source.id
-        );
+        await route.fulfill({ status: 404, json: { detail: 'not mocked' } });
+        return;
       }
-    } else {
-      await route.fulfill({ status: 404, json: { detail: 'not mocked' } });
-      return;
+      manifest.manifestVersion += 1;
+      await route.fulfill({ status: 200, json: manifest });
     }
-    manifest.manifestVersion += 1;
-    await route.fulfill({ status: 200, json: manifest });
-  });
+  );
 
   return mock;
 }
@@ -362,13 +411,32 @@ export async function mockAuthenticatedMember(page: Page) {
       json: {
         uid: 'member-e2e',
         username: 'e2e',
-        full_name: 'WXPost E2E',
+        full_name: 'WxPost E2E',
       },
     });
   });
 }
 
 export async function mockWxPostReadApis(page: Page) {
+  await page.route(/\/meetings\/options\/batch$/, async (route) => {
+    const input = route.request().postDataJSON() as { ids: string[] };
+    const requestedIds = new Set(input.ids);
+    await route.fulfill({
+      status: 200,
+      json: {
+        items: MEETING_OPTIONS.filter((meeting) =>
+          requestedIds.has(meeting.id)
+        ).map(({ id, no, type, theme, date }) => ({
+          id,
+          no,
+          type,
+          theme,
+          date,
+        })),
+      },
+    });
+  });
+
   await page.route(
     /\/meetings\/options\?page=(1|2|3)&page_size=50$/,
     async (route) => {
@@ -468,20 +536,19 @@ export async function openAuthoringPage(page: Page) {
   await mockWxPostReadApis(page);
   const workspace = await mockWxPostWorkspaceApi(page);
   await page.goto('/posts/wxposts/new');
-  await expect(
-    page.getByRole('heading', { name: 'New WeChat Post' })
-  ).toBeVisible();
-  await expect(page.getByTestId('wxpost-drafts-link')).toHaveAttribute(
+  await expect(page.getByRole('heading', { name: 'New WxPost' })).toBeVisible();
+  await expect(page.getByTestId('wxpost-workspaces-link')).toHaveAttribute(
     'href',
-    '/posts/wxposts/drafts'
+    '/posts/wxposts/workspaces?from=new'
   );
-  await expect(page.getByTestId('wxpost-drafts-link')).toHaveCSS(
+  await expect(page.getByTestId('wxpost-workspaces-link')).toHaveText(
+    'Workspaces'
+  );
+  await expect(page.getByTestId('wxpost-workspaces-link')).toHaveCSS(
     'height',
     '36px'
   );
-  await expect(
-    page.getByRole('heading', { name: 'New WeChat Post' })
-  ).toHaveCSS(
+  await expect(page.getByRole('heading', { name: 'New WxPost' })).toHaveCSS(
     'font-size',
     (page.viewportSize()?.width ?? 1280) >= 640 ? '36px' : '30px'
   );

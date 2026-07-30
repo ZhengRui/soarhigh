@@ -1,13 +1,13 @@
 # Hermes container
 
-This directory runs the Hermes Gateway and WXPost HTTP controller as two
+This directory runs the Hermes Gateway and WxPost HTTP controller as two
 services in one Compose project. It keeps Hermes state and article working
 files in two separate host directories:
 
 | Host setting           | Container path | Purpose                                                                 |
 | ---------------------- | -------------- | ----------------------------------------------------------------------- |
 | `HERMES_HOME_DIR`      | `/opt/data`    | Configuration, credentials, memory, sessions, skills, and gateway state |
-| `HERMES_WORKSPACE_DIR` | `/workspace`   | WXPost article workspaces and their local source files                  |
+| `HERMES_WORKSPACE_DIR` | `/workspace`   | WxPost article workspaces and their local source files                  |
 
 The Compose file mounts only the small `wxpost_controller` package read-only at
 `/opt/soarhigh/wxpost_controller`. The rest of the SoarHigh repository, the
@@ -17,7 +17,7 @@ credentials are not mounted into the container.
 ## First startup
 
 The first interactive `up` asks for the Hermes home, workspace, image,
-container name, and the existing Backend WXPost service token:
+container name, and the existing Backend WxPost service token:
 
 ```bash
 ./claws/hermes/hermes.sh up
@@ -130,15 +130,16 @@ docker compose \
 Back up `HERMES_HOME_DIR` before upgrading. Hermes may migrate its persistent
 configuration when a newer image starts.
 
-## WXPost workspace controller
+## WxPost workspace controller
 
 The tracked `wxpost_controller` package is the shared boundary for one
-canonical WXPost authoring workspace. Its MCP surface implements the complete
+canonical WxPost authoring workspace. Its MCP surface implements the complete
 material-controller and draft operations:
 
 ```text
 wxpost_get_context
 wxpost_bootstrap_workspace
+wxpost_update_workspace
 wxpost_import_source
 wxpost_set_source_included
 wxpost_upload_source
@@ -169,9 +170,9 @@ operation inputs. A complete manifest example lives at
   snapshot, while editorial media wording may be refined for the article;
 - meeting-library sources may remain references with
   `workspaceReady=false, included=false`;
-- workspace bootstrap registers current meeting media without downloading it;
-  a later refresh appends newly discovered `fileKey` values but never renumbers
-  or silently removes an existing source;
+- workspace bootstrap is create-only and registers the meeting media visible at
+  creation without downloading it; opening an existing workspace reads its
+  context and never changes its sources;
 - importing copies one meeting-library source to its derived local path;
   including a non-ready meeting source performs that import and inclusion in
   one versioned operation;
@@ -183,6 +184,9 @@ operation inputs. A complete manifest example lives at
   one source and shifts the surrounding entries without persisting a duplicate
   `order` field;
 - material changes advance only `manifestVersion`;
+- every Materials mutation, including form saves, import, upload, and delete,
+  requires the current `manifestVersion`; a stale operation changes nothing and
+  returns a version conflict for the user to resolve;
 - delete preflight reports references in the latest saved draft; deleting a
   referenced source requires explicit confirmation, direct uploads lose their
   manifest record, and meeting-library sources retain their `fileKey` so they
@@ -198,11 +202,11 @@ operation inputs. A complete manifest example lives at
 
 The core accepts opaque workspace IDs below `/workspace/inbox`, rejects symlink
 and path traversal, limits collected files to 50 MiB, checks every
-workspace-ready file and declared size, uses a per-workspace file lock and
-operation-specific expected version, validates stored and incoming data, and
-writes by atomic replacement. A short-lived pending record makes the two-file
-draft/manifest update recoverable if the process stops between the two atomic
-replacements.
+workspace-ready file and declared size, uses a per-workspace file lock,
+validates stored and incoming data, and writes by atomic replacement.
+All material operations and draft saves require operation-specific expected
+versions. A short-lived pending record makes the two-file draft/manifest update
+recoverable if the process stops between the two atomic replacements.
 
 Linked workspaces read `/meetings/{meetingId}/media` from
 `SOARHIGH_API_BASE_URL`. Compose maps
@@ -244,7 +248,7 @@ configured.
 HTTP routes are:
 
 ```text
-GET    /workspaces
+GET    /workspaces?page=1&page_size=10
 PUT    /workspaces/{workspaceId}
 PATCH  /workspaces/{workspaceId}
 DELETE /workspaces/{workspaceId}
@@ -257,6 +261,9 @@ POST   /workspaces/{workspaceId}/uploads?filename=...
 GET    /workspaces/{workspaceId}/sources/{sourceId}/delete-preflight
 DELETE /workspaces/{workspaceId}/sources/{sourceId}
 ```
+
+Workspace pages are ordered by `createdAt` descending so material edits do not
+move cards, while each summary still exposes `updatedAt` for display.
 
 The upload route accepts the source bytes as its body, the MIME type in
 `Content-Type`, and the compare-and-swap version in

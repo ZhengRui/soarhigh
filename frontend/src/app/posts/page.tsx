@@ -9,6 +9,7 @@ import {
   Loader2,
   Lock,
   Newspaper,
+  PanelsTopLeft,
   Plus,
   RefreshCw,
 } from 'lucide-react';
@@ -63,7 +64,10 @@ function NewPostMenu() {
   }, [open]);
 
   return (
-    <div ref={menuRef} className='relative self-start sm:self-center'>
+    <div
+      ref={menuRef}
+      className='relative order-1 self-start sm:order-2 sm:self-center'
+    >
       <button
         type='button'
         className='inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-gradient-to-r from-blue-600 to-purple-600 px-3 py-1.5 text-sm text-white shadow-sm transition hover:from-blue-700 hover:to-purple-700 hover:shadow-md'
@@ -97,7 +101,7 @@ function NewPostMenu() {
             data-testid='new-wxpost-link'
           >
             <Newspaper className='h-4 w-4 text-slate-500' />
-            WeChat Post
+            WxPost
           </Link>
         </div>
       )}
@@ -132,7 +136,18 @@ export default function PostsPage() {
             </p>
           </div>
 
-          {user && <NewPostMenu />}
+          {user && (
+            <div className='flex w-full items-center justify-between sm:w-auto sm:justify-start sm:gap-2'>
+              <NewPostMenu />
+              <Link
+                href='/posts/wxposts/workspaces'
+                className='order-2 inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 sm:order-1'
+              >
+                <PanelsTopLeft className='h-4 w-4' aria-hidden='true' />
+                <span className='font-medium'>Wx Workspaces</span>
+              </Link>
+            </div>
+          )}
         </div>
 
         <div

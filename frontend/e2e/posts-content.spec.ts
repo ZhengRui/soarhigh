@@ -24,22 +24,22 @@ const wxpost = {
   created_at: '2026-07-25T12:00:00+00:00',
 };
 
-test('filters the shared Posts index and links WXPosts to their public route', async ({
+test('filters the shared Posts index and links WxPosts to their public route', async ({
   page,
 }) => {
-  let markWxpostRequestStarted: () => void = () => undefined;
+  let markWxPostRequestStarted: () => void = () => undefined;
   const wxpostRequestStarted = new Promise<void>((resolve) => {
-    markWxpostRequestStarted = resolve;
+    markWxPostRequestStarted = resolve;
   });
-  let releaseWxpostResponse: () => void = () => undefined;
+  let releaseWxPostResponse: () => void = () => undefined;
   const wxpostResponseReleased = new Promise<void>((resolve) => {
-    releaseWxpostResponse = resolve;
+    releaseWxPostResponse = resolve;
   });
 
   await page.route(/\/posts\?.*kind=/, async (route) => {
     const kind = new URL(route.request().url()).searchParams.get('kind');
     if (kind === 'wxpost') {
-      markWxpostRequestStarted();
+      markWxPostRequestStarted();
       await wxpostResponseReleased;
     }
     const items =
@@ -96,7 +96,7 @@ test('filters the shared Posts index and links WXPosts to their public route', a
       page.getByRole('heading', { name: 'How We Prepare a Speech' })
     ).toHaveCount(0);
   } finally {
-    releaseWxpostResponse();
+    releaseWxPostResponse();
   }
   await expect(
     page.getByRole('heading', {

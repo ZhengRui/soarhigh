@@ -1,4 +1,28 @@
 const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT ?? '';
+const WORKSPACE_ID_PREFIX = 'wxpost-';
+
+function workspaceEditorKey(workspaceId: string) {
+  return workspaceId.startsWith(WORKSPACE_ID_PREFIX)
+    ? workspaceId.slice(WORKSPACE_ID_PREFIX.length)
+    : workspaceId;
+}
+
+export function workspaceEditorPath(workspaceId: string) {
+  return `/posts/wxposts/edit/${encodeURIComponent(
+    workspaceEditorKey(workspaceId)
+  )}`;
+}
+
+export function workspaceListPath(workspaceId: string | null) {
+  if (!workspaceId) return '/posts/wxposts/workspaces?from=new';
+  return `/posts/wxposts/workspaces?from=edit&workspace=${encodeURIComponent(
+    workspaceEditorKey(workspaceId)
+  )}`;
+}
+
+export function workspaceIdFromEditorKey(workspaceKey: string) {
+  return `${WORKSPACE_ID_PREFIX}${workspaceKey}`;
+}
 
 export type WorkspaceArticleType =
   | 'meeting-recap'
@@ -8,10 +32,38 @@ export type WorkspaceArticleType =
   | 'action-guide'
   | 'custom';
 
+export type WorkspaceWritingApproach =
+  | 'chronological'
+  | 'theme-driven'
+  | 'image-driven'
+  | 'highlights-first';
+
+export const WORKSPACE_ARTICLE_TYPE_LABELS: Record<
+  WorkspaceArticleType,
+  string
+> = {
+  'meeting-recap': 'Meeting Recap',
+  'member-story': 'Member Story',
+  'event-preview': 'Event Preview',
+  'meeting-review': 'Meeting Review',
+  'action-guide': 'Action Guide',
+  custom: 'Custom',
+};
+
+export const WORKSPACE_WRITING_APPROACH_LABELS: Record<
+  WorkspaceWritingApproach,
+  string
+> = {
+  chronological: 'Chronological',
+  'theme-driven': 'Theme-driven',
+  'image-driven': 'Image-driven',
+  'highlights-first': 'Highlights first',
+};
+
 export interface WorkspaceEditorial {
   articleType: WorkspaceArticleType;
   customArticleType: string | null;
-  writingApproach: 'chronological';
+  writingApproach: WorkspaceWritingApproach;
   transcript: string;
   extraNotes: string;
   writingGuidance: string;
@@ -74,6 +126,14 @@ export interface WorkspaceDeletePreflight {
   references: string[];
 }
 
+export interface WorkspaceSourceUpdate {
+  sourceId: string;
+  included?: boolean;
+  description?: string;
+  descriptionSource?: WorkspaceSource['descriptionSource'];
+  descriptionStatus?: WorkspaceSource['descriptionStatus'];
+}
+
 export interface WorkspaceSummary {
   workspaceId: string;
   createdBy: WorkspaceCreator;
@@ -89,12 +149,12 @@ export interface WorkspaceSummary {
   hasDraft: boolean;
 }
 
-export interface WorkspaceSourceUpdate {
-  sourceId: string;
-  moveToIndex?: number;
-  description?: string;
-  descriptionSource?: 'user' | null;
-  descriptionStatus?: 'confirmed' | 'missing';
+export interface PaginatedWorkspaceSummaries {
+  items: WorkspaceSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
 }
 
 export class WorkspaceApiError extends Error {
@@ -176,12 +236,17 @@ export function bootstrapWorkspace(
   });
 }
 
-export function updateWorkspace(
+export function getWorkspaceContext(workspaceId: string) {
+  return requestJson<WorkspaceContext>(`${workspacePath(workspaceId)}/context`);
+}
+
+export function saveWorkspaceMaterials(
   workspaceId: string,
   input: {
     expectedManifestVersion: number;
     meetingId: string | null;
     editorial: WorkspaceEditorial;
+    sourceUpdates: WorkspaceSourceUpdate[];
   }
 ) {
   return requestJson<WorkspaceContext>(workspacePath(workspaceId), {
@@ -191,13 +256,19 @@ export function updateWorkspace(
   });
 }
 
-export function getWorkspaceContext(workspaceId: string) {
-  return requestJson<WorkspaceContext>(`${workspacePath(workspaceId)}/context`);
-}
-
-export function listWorkspaces() {
-  return requestJson<{ items: WorkspaceSummary[] }>(
-    '/posts/wxposts/workspaces'
+export function listWorkspaces({
+  page = 1,
+  pageSize = 10,
+}: {
+  page?: number;
+  pageSize?: number;
+} = {}) {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+  return requestJson<PaginatedWorkspaceSummaries>(
+    `/posts/wxposts/workspaces?${params.toString()}`
   );
 }
 
@@ -233,43 +304,6 @@ export function importWorkspaceSource(
   );
 }
 
-export function setWorkspaceSourceIncluded(
-  workspaceId: string,
-  sourceId: string,
-  expectedManifestVersion: number,
-  included: boolean
-) {
-  return requestJson<WorkspaceManifest>(
-    `${workspacePath(workspaceId)}/sources/${encodeURIComponent(sourceId)}/inclusion`,
-    {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expectedManifestVersion,
-        included,
-      }),
-    }
-  );
-}
-
-export function updateWorkspaceSources(
-  workspaceId: string,
-  expectedManifestVersion: number,
-  updates: WorkspaceSourceUpdate[]
-) {
-  return requestJson<WorkspaceManifest>(
-    `${workspacePath(workspaceId)}/sources`,
-    {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expectedManifestVersion,
-        updates,
-      }),
-    }
-  );
-}
-
 export function uploadWorkspaceSource(
   workspaceId: string,
   expectedManifestVersion: number,
@@ -290,10 +324,16 @@ export function uploadWorkspaceSource(
 
 export function preflightWorkspaceSourceDelete(
   workspaceId: string,
-  sourceId: string
+  sourceId: string,
+  expectedManifestVersion: number
 ) {
   return requestJson<WorkspaceDeletePreflight>(
-    `${workspacePath(workspaceId)}/sources/${encodeURIComponent(sourceId)}/delete-preflight`
+    `${workspacePath(workspaceId)}/sources/${encodeURIComponent(sourceId)}/delete-preflight`,
+    {
+      headers: {
+        'X-Expected-Manifest-Version': String(expectedManifestVersion),
+      },
+    }
   );
 }
 

@@ -78,7 +78,7 @@ test('renders the formal public page and every v1 directive', async ({
     page.getByTestId('wxpost-article').getByText('Meeting 236', { exact: true })
   ).toBeVisible();
   await expect(page.getByText('meeting-236', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('WXPost Renderer Lab')).toHaveCount(0);
+  await expect(page.getByText('WxPost Renderer Lab')).toHaveCount(0);
 
   for (const directive of [
     'info-grid',

@@ -178,13 +178,13 @@ Model for blog posts:
   - `create_checkins()`: Creates checkin records for meeting segments
   - `get_checkins_by_meeting()`: Retrieves checkins for a meeting
 - Functions for blog post management:
-  - `get_content_items()`: Merges ordinary Posts and public WXPosts for the
+  - `get_content_items()`: Merges ordinary Posts and public WxPosts for the
     paginated Posts index
   - `get_post_by_slug()`: Retrieves a specific post by slug
   - `create_post()`: Creates a new blog post
   - `update_post()`: Updates post details
   - `delete_post()`: Deletes a post
-- Functions for WXPost management:
+- Functions for WxPost management:
   - `create_wxpost()`: Stores one validated canonical article document
   - `update_wxpost()`: Updates through an expected-revision guard
   - `get_public_wxpost_by_slug()`: Derives the public render document

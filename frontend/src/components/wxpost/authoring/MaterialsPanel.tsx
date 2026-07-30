@@ -16,11 +16,25 @@ import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 
 import type { WorkspaceDeletePreflight } from '@/utils/wxpostWorkspace';
-import { getWorkspaceSourceContent } from '@/utils/wxpostWorkspace';
+import {
+  WorkspaceApiError,
+  getWorkspaceSourceContent,
+} from '@/utils/wxpostWorkspace';
 
 import { ResizableTextarea } from './ResizableTextarea';
 import { PANEL_CLASS, SECONDARY_BUTTON_CLASS } from './authoringStyles';
 import type { WxPostMaterial } from './types';
+
+function PreviewLoadingPlaceholder({ filename }: { filename: string }) {
+  return (
+    <div
+      className='pointer-events-none absolute inset-0 animate-[pulse_2s_ease-in-out_infinite] bg-[#d7dfe9] motion-reduce:animate-none'
+      role='status'
+      aria-label={`Loading preview for ${filename}`}
+      data-testid='material-preview-loading'
+    />
+  );
+}
 
 function MaterialImage({
   workspaceId,
@@ -33,6 +47,8 @@ function MaterialImage({
 }) {
   const [open, setOpen] = useState(false);
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [loadedSourceUrl, setLoadedSourceUrl] = useState<string | null>(null);
+  const [failedSourceUrl, setFailedSourceUrl] = useState<string | null>(null);
   const contentQuery = useQuery({
     queryKey: ['wxpost-source-content', workspaceId, material.sourceId],
     queryFn: () => getWorkspaceSourceContent(workspaceId, material.sourceId),
@@ -67,36 +83,59 @@ function MaterialImage({
     material.kind === 'image' &&
     material.workspaceReady &&
     !material.previewUrl;
-  const previewLoading = canLoadWorkspaceContent && contentQuery.isFetching;
+  const imageLoaded = Boolean(sourceUrl && loadedSourceUrl === sourceUrl);
+  const imageFailed = Boolean(sourceUrl && failedSourceUrl === sourceUrl);
+  const workspaceContentLoading =
+    canLoadWorkspaceContent &&
+    !contentQuery.isError &&
+    (contentQuery.isPending ||
+      contentQuery.isFetching ||
+      (contentQuery.isSuccess && !objectUrl));
+  const previewLoading =
+    material.previewLoading ||
+    workspaceContentLoading ||
+    Boolean(sourceUrl && !imageLoaded && !imageFailed);
+  const previewUnavailable = !previewLoading && (!sourceUrl || imageFailed);
 
   return (
     <>
-      {sourceUrl ? (
+      {sourceUrl && !imageFailed && (
         <button
           type='button'
           className='group absolute inset-0 block h-full w-full cursor-zoom-in overflow-hidden border-0 bg-[#e8edf4] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-600'
           onClick={() => setOpen(true)}
           aria-label={`Preview ${material.filename}`}
+          disabled={!imageLoaded}
         >
           <Image
             src={sourceUrl}
             alt={description || material.filename}
             fill
             sizes='(max-width: 640px) 100vw, (max-width: 1100px) 50vw, 33vw'
-            className='object-cover transition-transform duration-200 group-hover:scale-[1.018]'
+            className={`object-cover transition duration-200 group-hover:scale-[1.018] ${
+              imageLoaded ? 'opacity-100' : 'opacity-0'
+            }`}
             unoptimized
+            onLoad={() => {
+              setLoadedSourceUrl(sourceUrl);
+              setFailedSourceUrl(null);
+            }}
+            onError={() => {
+              setFailedSourceUrl(sourceUrl);
+              setLoadedSourceUrl(null);
+            }}
           />
         </button>
-      ) : (
+      )}
+
+      {previewLoading && (
+        <PreviewLoadingPlaceholder filename={material.filename} />
+      )}
+
+      {previewUnavailable && (
         <div className='grid h-full place-content-center justify-items-center gap-2 p-5 text-center text-[#66758b] [&_svg]:h-8 [&_svg]:w-8'>
-          {previewLoading ? (
-            <Loader2 className='animate-spin' aria-hidden='true' />
-          ) : (
-            <ImageIcon aria-hidden='true' />
-          )}
-          <small>
-            {previewLoading ? 'Loading preview…' : 'Preview unavailable'}
-          </small>
+          <ImageIcon aria-hidden='true' />
+          <small>Preview unavailable</small>
         </div>
       )}
 
@@ -148,7 +187,7 @@ function MaterialCard({
   importing,
   onImport,
   onToggleIncluded,
-  onDescriptionSave,
+  onDescriptionChange,
   onDeleteRequest,
 }: {
   workspaceId: string;
@@ -157,41 +196,9 @@ function MaterialCard({
   importing: boolean;
   onImport: () => Promise<void>;
   onToggleIncluded: () => Promise<void>;
-  onDescriptionSave: (description: string) => Promise<void>;
+  onDescriptionChange: (description: string) => void;
   onDeleteRequest: () => void;
 }) {
-  const [description, setDescription] = useState(material.description);
-  const [committedDescription, setCommittedDescription] = useState(
-    material.description
-  );
-  const [saveState, setSaveState] = useState<
-    'idle' | 'saving' | 'saved' | 'error'
-  >('idle');
-
-  useEffect(() => {
-    if (material.description === committedDescription) return;
-    setDescription((current) =>
-      current === committedDescription ? material.description : current
-    );
-    setCommittedDescription(material.description);
-  }, [committedDescription, material.description]);
-
-  useEffect(() => {
-    if (busy || saveState === 'error' || description === committedDescription)
-      return;
-    const timer = window.setTimeout(() => {
-      const pendingDescription = description;
-      setSaveState('saving');
-      void onDescriptionSave(pendingDescription)
-        .then(() => {
-          setCommittedDescription(pendingDescription);
-          setSaveState('saved');
-        })
-        .catch(() => setSaveState('error'));
-    }, 650);
-    return () => window.clearTimeout(timer);
-  }, [busy, committedDescription, description, onDescriptionSave, saveState]);
-
   return (
     <article
       className={`min-w-0 overflow-hidden rounded-[14px] border bg-white ${
@@ -204,7 +211,7 @@ function MaterialCard({
           <MaterialImage
             workspaceId={workspaceId}
             material={material}
-            description={description}
+            description={material.description}
           />
         ) : (
           <div className='grid h-full place-content-center justify-items-center gap-2 bg-gradient-to-br from-[#eef2f7] to-slate-200 p-5 text-center text-[#4d5d75] [&_small]:text-sm [&_svg]:h-[38px] [&_svg]:w-[38px]'>
@@ -266,30 +273,11 @@ function MaterialCard({
       </div>
 
       <label className='grid gap-[7px] px-4 pt-[15px] text-sm font-bold text-slate-700 max-[480px]:px-[14px]'>
-        <span className='flex items-center justify-between gap-3'>
-          Description
-          <small
-            className={`font-medium ${
-              saveState === 'error' ? 'text-red-600' : 'text-slate-500'
-            }`}
-            role={saveState === 'error' ? 'alert' : undefined}
-          >
-            {saveState === 'saving'
-              ? 'Saving…'
-              : saveState === 'saved'
-                ? 'Saved'
-                : saveState === 'error'
-                  ? 'Not saved — edit to retry'
-                  : ''}
-          </small>
-        </span>
+        <span>Description</span>
         <span className='relative block'>
           <ResizableTextarea
-            value={description}
-            onChange={(event) => {
-              setDescription(event.target.value);
-              setSaveState('idle');
-            }}
+            value={material.description}
+            onChange={(event) => onDescriptionChange(event.target.value)}
             placeholder='Add a description'
             className='block min-h-[92px] w-full rounded-[10px] border border-[#cad5e4] bg-white pb-12 pl-3 pr-[54px] pt-[11px] text-[15px] font-normal leading-[1.55] text-[#172033] outline-none placeholder:font-normal placeholder:text-[#93a0b2] hover:border-[#9fb1c8] focus:border-blue-600'
             data-testid={`description-${material.sourceId}`}
@@ -337,7 +325,7 @@ export function MaterialsPanel({
   deletingSourceId,
   onImport,
   onToggleIncluded,
-  onDescriptionSave,
+  onDescriptionChange,
   onUpload,
   onDeletePreflight,
   onDelete,
@@ -350,7 +338,7 @@ export function MaterialsPanel({
   deletingSourceId: string | null;
   onImport: (sourceId: string) => Promise<void>;
   onToggleIncluded: (sourceId: string, included: boolean) => Promise<void>;
-  onDescriptionSave: (sourceId: string, description: string) => Promise<void>;
+  onDescriptionChange: (sourceId: string, description: string) => void;
   onUpload: (file: File) => Promise<void>;
   onDeletePreflight: (sourceId: string) => Promise<WorkspaceDeletePreflight>;
   onDelete: (
@@ -373,7 +361,14 @@ export function MaterialsPanel({
     setPreflightPending(true);
     try {
       setPreflight(await onDeletePreflight(material.sourceId));
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof WorkspaceApiError &&
+        error.code === 'version_conflict'
+      ) {
+        setDeleteTarget(null);
+        return;
+      }
       setDeleteError('Could not check whether this material is in the draft.');
     } finally {
       setPreflightPending(false);
@@ -433,8 +428,8 @@ export function MaterialsPanel({
                   onToggleIncluded={() =>
                     onToggleIncluded(material.sourceId, !material.included)
                   }
-                  onDescriptionSave={(description) =>
-                    onDescriptionSave(material.sourceId, description)
+                  onDescriptionChange={(description) =>
+                    onDescriptionChange(material.sourceId, description)
                   }
                   onDeleteRequest={() => void openDeleteDialog(material)}
                 />

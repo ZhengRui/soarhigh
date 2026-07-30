@@ -1,4 +1,4 @@
-import { MeetingIF } from '../interfaces';
+import type { MeetingIF, MeetingOptionsByIdsResponse } from '../interfaces';
 import {
   requestTemplate,
   responseHandlerTemplate,
@@ -81,6 +81,29 @@ export const getMeetingOptions = requestTemplate(
   true,
   true
 );
+
+const getMeetingOptionsByIdsRequest = requestTemplate(
+  (ids: string[]) => ({
+    url: `${apiEndpoint}/meetings/options/batch`,
+    method: 'POST',
+    headers: new Headers({
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    }),
+    body: JSON.stringify({ ids }),
+  }),
+  responseHandlerTemplate,
+  null,
+  true
+);
+
+export async function getMeetingOptionsByIds(
+  ids: string[]
+): Promise<MeetingOptionsByIdsResponse> {
+  return (await getMeetingOptionsByIdsRequest(
+    ids
+  )) as MeetingOptionsByIdsResponse;
+}
 
 /**
  * Fetches a specific meeting by ID

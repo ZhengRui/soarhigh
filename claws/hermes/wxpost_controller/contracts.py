@@ -1,4 +1,4 @@
-"""Wire and storage contracts for one canonical WXPost workspace."""
+"""Wire and storage contracts for one canonical WxPost workspace."""
 
 from __future__ import annotations
 
@@ -305,6 +305,14 @@ class UpdateWorkspaceRequest(ContractModel):
     expected_manifest_version: int = Field(ge=1, strict=True)
     meeting_id: TrimmedText | None
     editorial: EditorialSettings
+    source_updates: list[SourceUpdate] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _reject_duplicate_sources(self) -> UpdateWorkspaceRequest:
+        ids = [update.source_id for update in self.source_updates]
+        if len(ids) != len(set(ids)):
+            raise ValueError("each source may be updated only once per request")
+        return self
 
 
 class SourceActionRequest(ContractModel):

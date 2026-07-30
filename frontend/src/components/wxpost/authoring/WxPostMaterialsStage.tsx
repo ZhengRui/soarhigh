@@ -1,8 +1,9 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, ChevronLeft, RefreshCw } from 'lucide-react';
+import { ArrowRight, Loader2, RefreshCw, Save } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
 
 import { listMeetingMedia, type MediaFileList } from '@/utils/alicloud';
 import { useMeeting } from '@/hooks/useMeeting';
@@ -13,18 +14,20 @@ import {
   getWorkspaceContext,
   importWorkspaceSource,
   preflightWorkspaceSourceDelete,
-  setWorkspaceSourceIncluded,
-  updateWorkspaceSources,
+  saveWorkspaceMaterials,
   uploadWorkspaceSource,
   type WorkspaceContext,
   type WorkspaceDeletePreflight,
+  type WorkspaceEditorial,
   type WorkspaceManifest,
+  type WorkspaceSourceUpdate,
 } from '@/utils/wxpostWorkspace';
 
 import { ArticleInputsPanel } from './ArticleInputsPanel';
+import { ArticleTypePanel } from './ArticleTypePanel';
 import { MeetingContextPanel } from './MeetingContextPanel';
 import { MaterialsPanel } from './MaterialsPanel';
-import type { WxPostMaterial } from './types';
+import type { WxPostMaterial, WxPostMaterialsWorkingCopy } from './types';
 import {
   PRIMARY_BUTTON_CLASS,
   SECONDARY_BUTTON_CLASS,
@@ -32,22 +35,103 @@ import {
 
 type LinkedMeeting = MeetingIF & { id: string };
 type PendingOperation = {
-  kind: 'import' | 'include' | 'description' | 'upload' | 'delete';
+  kind: 'import' | 'upload' | 'delete';
   sourceId: string | null;
 };
+
+function materialsEditorial(
+  workingCopy: WxPostMaterialsWorkingCopy
+): WorkspaceEditorial {
+  return {
+    articleType: workingCopy.articleType,
+    customArticleType:
+      workingCopy.articleType === 'custom'
+        ? workingCopy.customArticleType.trim() || null
+        : null,
+    writingApproach: workingCopy.writingApproach,
+    transcript: workingCopy.transcript,
+    extraNotes: workingCopy.extraNotes,
+    writingGuidance: workingCopy.writingGuidance,
+  };
+}
+
+function editorialsMatch(
+  current: WorkspaceEditorial,
+  next: WorkspaceEditorial
+) {
+  return (
+    current.articleType === next.articleType &&
+    current.customArticleType === next.customArticleType &&
+    current.writingApproach === next.writingApproach &&
+    current.transcript === next.transcript &&
+    current.extraNotes === next.extraNotes &&
+    current.writingGuidance === next.writingGuidance
+  );
+}
+
+function materialsSourceUpdates(
+  context: WorkspaceContext,
+  workingCopy: WxPostMaterialsWorkingCopy
+) {
+  return context.manifest.sources.flatMap<WorkspaceSourceUpdate>((source) => {
+    const workingSource = workingCopy.sources[source.id];
+    if (!workingSource) return [];
+
+    const descriptionChanged = workingSource.description !== source.description;
+    const hasDescription = workingSource.description.trim().length > 0;
+    return [
+      {
+        sourceId: source.id,
+        included: workingSource.included,
+        description: hasDescription ? workingSource.description : '',
+        descriptionSource: descriptionChanged
+          ? hasDescription
+            ? 'user'
+            : null
+          : source.descriptionSource,
+        descriptionStatus: descriptionChanged
+          ? hasDescription
+            ? 'confirmed'
+            : 'missing'
+          : source.descriptionStatus,
+      },
+    ];
+  });
+}
+
+function materialSourcesMatch(
+  context: WorkspaceContext,
+  workingCopy: WxPostMaterialsWorkingCopy
+) {
+  return context.manifest.sources.every((source) => {
+    const workingSource = workingCopy.sources[source.id];
+    return (
+      workingSource &&
+      workingSource.included === source.included &&
+      workingSource.description === source.description
+    );
+  });
+}
 
 export function WxPostMaterialsStage({
   active,
   workspaceId,
   context,
   onContextChange,
-  onBack,
+  workingCopy,
+  onWorkingCopyChange,
 }: {
   active: boolean;
   workspaceId: string;
   context: WorkspaceContext;
-  onContextChange: (context: WorkspaceContext) => void;
-  onBack: () => void;
+  onContextChange: (
+    context: WorkspaceContext,
+    options?: { resetWorkingCopy?: boolean }
+  ) => void;
+  workingCopy: WxPostMaterialsWorkingCopy;
+  onWorkingCopyChange: (
+    updater: (current: WxPostMaterialsWorkingCopy) => WxPostMaterialsWorkingCopy
+  ) => void;
 }) {
   const meetingId = context.manifest.meetingId;
   const meetingQuery = useMeeting(active && meetingId ? meetingId : undefined);
@@ -66,9 +150,21 @@ export function WxPostMaterialsStage({
   const operationQueue = useRef<Promise<unknown>>(Promise.resolve());
   const [pendingOperation, setPendingOperation] =
     useState<PendingOperation | null>(null);
-  const busy = pendingOperation !== null;
+  const [materialsSavePending, setMaterialsSavePending] = useState(false);
+  const [versionConflict, setVersionConflict] = useState(false);
+  const [conflictRefreshPending, setConflictRefreshPending] = useState(false);
+  const [conflictRefreshError, setConflictRefreshError] = useState<
+    string | null
+  >(null);
+  const busy =
+    pendingOperation !== null || materialsSavePending || versionConflict;
   const [operationError, setOperationError] = useState<string | null>(null);
-  const [operationNotice, setOperationNotice] = useState<string | null>(null);
+  const meetingPreviewsLoading =
+    active &&
+    Boolean(meetingId) &&
+    (meetingQuery.isPending ||
+      (Boolean(meeting?.id) &&
+        (mediaQuery.isPending || mediaQuery.isFetching)));
 
   useEffect(() => {
     contextRef.current = context;
@@ -93,12 +189,66 @@ export function WxPostMaterialsStage({
           source.origin.type === 'meeting-library'
             ? (mediaUrls.get(source.origin.fileKey) ?? null)
             : null,
+        previewLoading:
+          source.origin.type === 'meeting-library' &&
+          !source.workspaceReady &&
+          !mediaUrls.has(source.origin.fileKey) &&
+          meetingPreviewsLoading,
         filename: source.filename,
-        description: source.description,
+        description:
+          workingCopy.sources[source.id]?.description ?? source.description,
         workspaceReady: source.workspaceReady,
-        included: source.included,
+        included: workingCopy.sources[source.id]?.included ?? source.included,
       }));
-  }, [context.manifest.sources, mediaQuery.data?.items]);
+  }, [
+    context.manifest.sources,
+    mediaQuery.data?.items,
+    meetingPreviewsLoading,
+    workingCopy.sources,
+  ]);
+  const pendingEditorial = useMemo(
+    () => materialsEditorial(workingCopy),
+    [workingCopy]
+  );
+  const pendingSourceUpdates = useMemo(
+    () => materialsSourceUpdates(context, workingCopy),
+    [context, workingCopy]
+  );
+  const materialsDirty =
+    !editorialsMatch(context.manifest.editorial, pendingEditorial) ||
+    !materialSourcesMatch(context, workingCopy);
+
+  const updateWorkingCopy = useCallback(
+    (updates: Partial<WxPostMaterialsWorkingCopy>) => {
+      onWorkingCopyChange((current) => ({ ...current, ...updates }));
+    },
+    [onWorkingCopyChange]
+  );
+
+  const updateSourceWorkingState = useCallback(
+    (
+      sourceId: string,
+      updates: Partial<WxPostMaterialsWorkingCopy['sources'][string]>
+    ) => {
+      const source = contextRef.current.manifest.sources.find(
+        (item) => item.id === sourceId
+      );
+      onWorkingCopyChange((current) => {
+        const currentSource = current.sources[sourceId] ?? {
+          included: source?.included ?? false,
+          description: source?.description ?? '',
+        };
+        return {
+          ...current,
+          sources: {
+            ...current.sources,
+            [sourceId]: { ...currentSource, ...updates },
+          },
+        };
+      });
+    },
+    [onWorkingCopyChange]
+  );
 
   const applyManifest = useCallback(
     (manifest: WorkspaceManifest) => {
@@ -109,12 +259,20 @@ export function WxPostMaterialsStage({
     [onContextChange]
   );
 
-  const refreshContext = useCallback(async () => {
-    const refreshed = await getWorkspaceContext(workspaceId);
-    contextRef.current = refreshed;
-    onContextChange(refreshed);
-    return refreshed;
-  }, [onContextChange, workspaceId]);
+  const refreshContext = useCallback(
+    async (resetWorkingCopy = false) => {
+      const refreshed = await getWorkspaceContext(workspaceId);
+      contextRef.current = refreshed;
+      onContextChange(refreshed, { resetWorkingCopy });
+      return refreshed;
+    },
+    [onContextChange, workspaceId]
+  );
+
+  const showVersionConflict = useCallback(() => {
+    setConflictRefreshError(null);
+    setVersionConflict(true);
+  }, []);
 
   const runMutation = useCallback(
     (
@@ -124,27 +282,18 @@ export function WxPostMaterialsStage({
       const task = operationQueue.current.then(async () => {
         setPendingOperation(pending);
         setOperationError(null);
-        setOperationNotice(null);
         try {
           const manifest = await operation(
             contextRef.current.manifest.manifestVersion
           );
           applyManifest(manifest);
+          return manifest;
         } catch (error) {
           if (
             error instanceof WorkspaceApiError &&
             error.code === 'version_conflict'
           ) {
-            try {
-              await refreshContext();
-              setOperationNotice(
-                'Materials changed in another session. The latest version is now shown; retry your change.'
-              );
-            } catch {
-              setOperationError(
-                'Materials changed in another session, but the latest version could not be loaded.'
-              );
-            }
+            showVersionConflict();
           } else {
             setOperationError(
               error instanceof Error
@@ -160,11 +309,89 @@ export function WxPostMaterialsStage({
       operationQueue.current = task.catch(() => undefined);
       return task;
     },
-    [applyManifest, refreshContext]
+    [applyManifest, showVersionConflict]
   );
+
+  const keepCurrentEdits = useCallback(() => {
+    if (!versionConflict) return;
+    setVersionConflict(false);
+    setConflictRefreshError(null);
+  }, [versionConflict]);
+
+  const loadLatestMaterials = useCallback(async () => {
+    setConflictRefreshPending(true);
+    setConflictRefreshError(null);
+    try {
+      await refreshContext(true);
+      setVersionConflict(false);
+    } catch {
+      setConflictRefreshError(
+        'The latest materials could not be loaded. Your current edits are still here.'
+      );
+    } finally {
+      setConflictRefreshPending(false);
+    }
+  }, [refreshContext]);
+
+  async function handleSaveMaterials() {
+    if (!materialsDirty || materialsSavePending || pendingOperation) return;
+    onWorkingCopyChange((current) => ({
+      ...current,
+      customArticleType:
+        current.articleType === 'custom'
+          ? current.customArticleType.trim()
+          : current.customArticleType,
+      sources: Object.fromEntries(
+        Object.entries(current.sources).map(([sourceId, source]) => [
+          sourceId,
+          {
+            ...source,
+            description:
+              source.description.trim().length > 0 ? source.description : '',
+          },
+        ])
+      ),
+    }));
+    setMaterialsSavePending(true);
+    setOperationError(null);
+    try {
+      const updated = await saveWorkspaceMaterials(workspaceId, {
+        expectedManifestVersion: contextRef.current.manifest.manifestVersion,
+        meetingId: context.manifest.meetingId,
+        editorial: pendingEditorial,
+        sourceUpdates: pendingSourceUpdates,
+      });
+      contextRef.current = updated;
+      onContextChange(updated);
+      toast.success('Materials saved successfully!');
+    } catch (error) {
+      if (
+        error instanceof WorkspaceApiError &&
+        error.code === 'version_conflict'
+      ) {
+        showVersionConflict();
+      } else {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : 'The materials could not be saved.'
+        );
+      }
+    } finally {
+      setMaterialsSavePending(false);
+    }
+  }
 
   return (
     <div className='grid gap-5' data-testid='materials-stage'>
+      <ArticleTypePanel
+        value={workingCopy.articleType}
+        onChange={(articleType) => updateWorkingCopy({ articleType })}
+        customArticleType={workingCopy.customArticleType}
+        onCustomArticleTypeChange={(customArticleType) =>
+          updateWorkingCopy({ customArticleType })
+        }
+      />
       {meeting && <MeetingContextPanel meeting={meeting} />}
       {(meetingQuery.isError || mediaQuery.isError) && (
         <div className='flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900'>
@@ -195,15 +422,6 @@ export function WxPostMaterialsStage({
           {operationError}
         </p>
       )}
-      {operationNotice && (
-        <p
-          className='m-0 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800'
-          role='status'
-          data-testid='material-operation-notice'
-        >
-          {operationNotice}
-        </p>
-      )}
       <MaterialsPanel
         workspaceId={workspaceId}
         materials={materials}
@@ -215,70 +433,155 @@ export function WxPostMaterialsStage({
         deletingSourceId={
           pendingOperation?.kind === 'delete' ? pendingOperation.sourceId : null
         }
-        onImport={(sourceId) =>
-          runMutation({ kind: 'import', sourceId }, (version) =>
+        onImport={async (sourceId) => {
+          await runMutation({ kind: 'import', sourceId }, (version) =>
             importWorkspaceSource(workspaceId, sourceId, version)
-          )
+          );
+        }}
+        onToggleIncluded={async (sourceId, included) => {
+          const source = contextRef.current.manifest.sources.find(
+            (item) => item.id === sourceId
+          );
+          if (included && !source?.workspaceReady) {
+            await runMutation({ kind: 'import', sourceId }, (version) =>
+              importWorkspaceSource(workspaceId, sourceId, version)
+            );
+          }
+          updateSourceWorkingState(sourceId, { included });
+        }}
+        onDescriptionChange={(sourceId, description) =>
+          updateSourceWorkingState(sourceId, { description })
         }
-        onToggleIncluded={(sourceId, included) =>
-          runMutation({ kind: 'include', sourceId }, (version) =>
-            setWorkspaceSourceIncluded(workspaceId, sourceId, version, included)
-          )
-        }
-        onDescriptionSave={(sourceId, description) =>
-          runMutation({ kind: 'description', sourceId }, (version) =>
-            updateWorkspaceSources(workspaceId, version, [
-              description.trim()
-                ? {
-                    sourceId,
-                    description,
-                    descriptionSource: 'user',
-                    descriptionStatus: 'confirmed',
-                  }
-                : {
-                    sourceId,
-                    description: '',
-                    descriptionSource: null,
-                    descriptionStatus: 'missing',
-                  },
-            ])
-          )
-        }
-        onUpload={(file) =>
-          runMutation({ kind: 'upload', sourceId: null }, (version) =>
+        onUpload={async (file) => {
+          await runMutation({ kind: 'upload', sourceId: null }, (version) =>
             uploadWorkspaceSource(workspaceId, version, file)
-          )
-        }
-        onDeletePreflight={(sourceId) =>
-          preflightWorkspaceSourceDelete(workspaceId, sourceId)
-        }
-        onDelete={(sourceId: string, preflight: WorkspaceDeletePreflight) =>
-          runMutation({ kind: 'delete', sourceId }, () =>
+          );
+        }}
+        onDeletePreflight={async (sourceId) => {
+          try {
+            return await preflightWorkspaceSourceDelete(
+              workspaceId,
+              sourceId,
+              contextRef.current.manifest.manifestVersion
+            );
+          } catch (error) {
+            if (
+              error instanceof WorkspaceApiError &&
+              error.code === 'version_conflict'
+            ) {
+              showVersionConflict();
+            }
+            throw error;
+          }
+        }}
+        onDelete={async (
+          sourceId: string,
+          preflight: WorkspaceDeletePreflight
+        ) => {
+          const manifest = await runMutation({ kind: 'delete', sourceId }, () =>
             deleteWorkspaceSource(
               workspaceId,
               sourceId,
               preflight.manifestVersion,
               preflight.requiresConfirmation
             )
-          )
+          );
+          if (manifest.sources.some((source) => source.id === sourceId)) {
+            updateSourceWorkingState(sourceId, { included: false });
+          }
+        }}
+      />
+      <ArticleInputsPanel
+        writingApproach={workingCopy.writingApproach}
+        transcript={workingCopy.transcript}
+        extraNotes={workingCopy.extraNotes}
+        writingGuidance={workingCopy.writingGuidance}
+        onWritingApproachChange={(writingApproach) =>
+          updateWorkingCopy({ writingApproach })
+        }
+        onTranscriptChange={(transcript) => updateWorkingCopy({ transcript })}
+        onExtraNotesChange={(extraNotes) => updateWorkingCopy({ extraNotes })}
+        onWritingGuidanceChange={(writingGuidance) =>
+          updateWorkingCopy({ writingGuidance })
         }
       />
-      <ArticleInputsPanel key={meetingId ?? 'independent'} />
 
-      <div className='flex items-center justify-end gap-[10px] pt-0.5 max-[760px]:[&_button]:flex-1 max-[480px]:flex-col-reverse max-[480px]:[&_button]:w-full'>
+      <div className='flex items-center justify-end gap-[10px] pt-0.5 max-[760px]:[&_button]:flex-1 max-[480px]:flex-col max-[480px]:[&_button]:w-full'>
         <button
           type='button'
           className={SECONDARY_BUTTON_CLASS}
-          onClick={onBack}
+          disabled={!materialsDirty || busy}
+          onClick={() => void handleSaveMaterials()}
+          data-testid='save-materials'
         >
-          <ChevronLeft aria-hidden='true' />
-          Change setup
+          {materialsSavePending ? (
+            <Loader2 className='animate-spin' aria-hidden='true' />
+          ) : (
+            <Save aria-hidden='true' />
+          )}
+          {materialsSavePending ? 'Saving…' : 'Save Materials'}
         </button>
-        <button type='button' className={PRIMARY_BUTTON_CLASS} disabled>
-          Generate English draft
+        <button
+          type='button'
+          className={PRIMARY_BUTTON_CLASS}
+          disabled
+          title='Draft generation will be added in the next implementation slice.'
+          data-testid='generate-draft'
+        >
+          Generate Draft
           <ArrowRight aria-hidden='true' />
         </button>
       </div>
+
+      {versionConflict && (
+        <div
+          className='fixed inset-0 z-[90] grid place-items-center bg-slate-950/55 p-4'
+          role='dialog'
+          aria-modal='true'
+          aria-labelledby='materials-conflict-title'
+          data-testid='materials-conflict-dialog'
+        >
+          <div className='w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl'>
+            <h2
+              id='materials-conflict-title'
+              className='m-0 text-lg font-bold text-slate-900'
+            >
+              Load latest materials?
+            </h2>
+            <p className='mb-0 mt-3 text-sm leading-6 text-slate-600'>
+              This workspace changed since this page loaded. Loading the latest
+              version will discard your unsaved changes on this page. The
+              material change you just attempted was not applied.
+            </p>
+            {conflictRefreshError && (
+              <p className='mb-0 mt-3 text-sm text-red-700' role='alert'>
+                {conflictRefreshError}
+              </p>
+            )}
+            <div className='mt-5 flex justify-end gap-2 max-[480px]:flex-col-reverse max-[480px]:[&_button]:w-full'>
+              <button
+                type='button'
+                className={SECONDARY_BUTTON_CLASS}
+                disabled={conflictRefreshPending}
+                onClick={keepCurrentEdits}
+              >
+                Keep current edits
+              </button>
+              <button
+                type='button'
+                className={PRIMARY_BUTTON_CLASS}
+                disabled={conflictRefreshPending}
+                onClick={() => void loadLatestMaterials()}
+              >
+                {conflictRefreshPending && (
+                  <Loader2 className='animate-spin' aria-hidden='true' />
+                )}
+                {conflictRefreshPending ? 'Loading…' : 'Load latest'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

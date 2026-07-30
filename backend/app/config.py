@@ -62,7 +62,7 @@ WECHAT_APP_ID = config("WECHAT_APP_ID", cast=str)
 WECHAT_APP_SECRET = config("WECHAT_APP_SECRET", cast=str)
 WECHAT_JWT_SECRET = config("WECHAT_JWT_SECRET", cast=str)
 
-# WXPost ingestion is intentionally separate from member authentication and
+# WxPost ingestion is intentionally separate from member authentication and
 # WeChat draft credentials. Local development links point at the existing
 # Next.js server; deployed environments default to the public site.
 WXPOST_SERVICE_TOKEN = config("WXPOST_SERVICE_TOKEN", cast=str, default="")

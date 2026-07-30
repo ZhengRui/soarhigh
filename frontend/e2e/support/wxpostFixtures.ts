@@ -141,7 +141,7 @@ export const MEETING_449 = {
   ...MEETING_461,
   id: 'meeting-449',
   type: 'Special Event',
-  no: undefined,
+  no: 100001,
   date: '2026-04-08',
   theme: 'Beyond the Mask: Authenticity in Connection',
 };

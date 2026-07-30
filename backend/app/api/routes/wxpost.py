@@ -1,4 +1,4 @@
-"""Authoring and public-read routes for Hermes-authored WXPosts."""
+"""Authoring and public-read routes for Hermes-authored WxPosts."""
 
 import json
 import re
@@ -8,7 +8,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import ValidationError
@@ -59,13 +59,13 @@ async def require_wxpost_service(
     """Authorize only the narrowly scoped Hermes ingestion credential."""
 
     if not WXPOST_SERVICE_TOKEN:
-        raise HTTPException(status_code=503, detail="WXPost service ingestion is not configured.")
+        raise HTTPException(status_code=503, detail="WxPost service ingestion is not configured.")
     if (
         credentials is None
         or credentials.scheme.lower() != "bearer"
         or not secrets.compare_digest(credentials.credentials, WXPOST_SERVICE_TOKEN)
     ):
-        raise HTTPException(status_code=401, detail="Invalid WXPost service credential.")
+        raise HTTPException(status_code=401, detail="Invalid WxPost service credential.")
 
 
 def _validate_persistable_document(document: ArticleDocument) -> None:
@@ -75,7 +75,7 @@ def _validate_persistable_document(document: ArticleDocument) -> None:
         except ValueError as error:
             raise HTTPException(
                 status_code=422,
-                detail="sourceMeetingId must be a meeting UUID when a WXPost is stored.",
+                detail="sourceMeetingId must be a meeting UUID when a WxPost is stored.",
             ) from error
     try:
         validate_and_parse(document)
@@ -106,7 +106,7 @@ async def _proxy_workspace_controller(
     if not WXPOST_CONTROLLER_URL or not WXPOST_SERVICE_TOKEN:
         raise HTTPException(
             status_code=503,
-            detail="WXPost workspace controller is not configured.",
+            detail="WxPost workspace controller is not configured.",
         )
     headers = {"Authorization": f"Bearer {WXPOST_SERVICE_TOKEN}"}
     if content_type:
@@ -124,7 +124,7 @@ async def _proxy_workspace_controller(
     except httpx.HTTPError as error:
         raise HTTPException(
             status_code=503,
-            detail="WXPost workspace controller is unavailable.",
+            detail="WxPost workspace controller is unavailable.",
         ) from error
     response_headers = {}
     if upstream_content_type := upstream.headers.get("Content-Type"):
@@ -252,13 +252,13 @@ async def r_create_wxpost(request: WxPostCreateRequest) -> WxPostMutationResult:
 )
 async def r_update_wxpost(
     request: WxPostUpdateRequest,
-    wxpost_id: UUID = Path(..., description="The WXPost UUID to revise"),
+    wxpost_id: UUID = Path(..., description="The WxPost UUID to revise"),
 ) -> WxPostMutationResult:
     """Replace article content with compare-and-swap revision protection."""
 
     current = get_wxpost_by_id(wxpost_id)
     if current is None:
-        raise HTTPException(status_code=404, detail="WXPost not found.")
+        raise HTTPException(status_code=404, detail="WxPost not found.")
 
     document_payload = request.document.model_dump(by_alias=True, mode="json")
     if request.document.presentation is None:
@@ -273,11 +273,11 @@ async def r_update_wxpost(
             document=document,
         )
     except WxPostNotFoundError as error:
-        raise HTTPException(status_code=404, detail="WXPost not found.") from error
+        raise HTTPException(status_code=404, detail="WxPost not found.") from error
     except WxPostRevisionConflictError as error:
         raise HTTPException(
             status_code=409,
-            detail="WXPost changed since the requested revision.",
+            detail="WxPost changed since the requested revision.",
         ) from error
     return _mutation_result(row)
 
@@ -334,8 +334,14 @@ async def r_update_wxpost_workspace(
     "/posts/wxposts/workspaces",
     dependencies=[Depends(get_current_user)],
 )
-async def r_list_wxpost_workspaces() -> Response:
-    return await _proxy_workspace_controller("GET", "/workspaces")
+async def r_list_wxpost_workspaces(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+) -> Response:
+    return await _proxy_workspace_controller(
+        "GET",
+        f"/workspaces?page={page}&page_size={page_size}",
+    )
 
 
 @r.delete(
@@ -368,11 +374,11 @@ async def r_proxy_wxpost_workspace_operation(
 
 @r.get("/posts/wxposts/{slug}", response_model=WxPostPublicDetail)
 async def r_get_public_wxpost(
-    slug: str = Path(..., min_length=1, description="The stable public WXPost slug"),
+    slug: str = Path(..., min_length=1, description="The stable public WxPost slug"),
 ) -> WxPostPublicDetail:
-    """Return a backend-derived render document for a public WXPost."""
+    """Return a backend-derived render document for a public WxPost."""
 
     detail = get_public_wxpost_by_slug(slug)
     if detail is None:
-        raise HTTPException(status_code=404, detail="WXPost not found.")
+        raise HTTPException(status_code=404, detail="WxPost not found.")
     return detail

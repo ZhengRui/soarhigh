@@ -1,47 +1,93 @@
 'use client';
 
-import { ArrowLeft, Check, FileText } from 'lucide-react';
+import { ArrowLeft, Check, Loader2, PanelsTopLeft } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useMeetingOptions } from '@/hooks/useMeetingOptions';
 import {
   bootstrapWorkspace,
   getWorkspaceContext,
-  updateWorkspace,
-  type WorkspaceArticleType,
+  WORKSPACE_ARTICLE_TYPE_LABELS,
+  workspaceEditorPath,
+  workspaceListPath,
   type WorkspaceContext,
   type WorkspaceEditorial,
 } from '@/utils/wxpostWorkspace';
 
-import type { WxPostArticleType, WxPostAuthoringStage } from './types';
+import type { WxPostAuthoringStage, WxPostMaterialsWorkingCopy } from './types';
 import {
   formatMeetingLabel,
   type LinkedMeetingOption,
   WxPostSetupStage,
 } from './WxPostSetupStage';
 import { WxPostMaterialsStage } from './WxPostMaterialsStage';
-import {
-  PRIMARY_BUTTON_CLASS,
-  SECONDARY_BUTTON_CLASS,
-  STAGE_BUTTON_CLASS,
-} from './authoringStyles';
+import { STAGE_BUTTON_CLASS } from './authoringStyles';
 
-const ARTICLE_TYPE_TO_WIRE: Record<WxPostArticleType, WorkspaceArticleType> = {
-  'Meeting Recap': 'meeting-recap',
-  'Member Story': 'member-story',
-  'Event Preview': 'event-preview',
-  'Meeting Review': 'meeting-review',
-  'Action Guide': 'action-guide',
-  Custom: 'custom',
-};
-const ARTICLE_TYPE_FROM_WIRE = Object.fromEntries(
-  Object.entries(ARTICLE_TYPE_TO_WIRE).map(([label, value]) => [value, label])
-) as Record<WorkspaceArticleType, WxPostArticleType>;
+function createInitialEditorial(
+  linked: boolean,
+  meeting: LinkedMeetingOption | null
+): WorkspaceEditorial {
+  const isEvent =
+    linked &&
+    meeting?.no !== undefined &&
+    String(meeting.no).startsWith('10000');
 
-type PendingSourceChange =
-  | { kind: 'meeting'; meeting: LinkedMeetingOption }
-  | { kind: 'independent' };
+  return {
+    articleType: !linked || isEvent ? 'custom' : 'meeting-recap',
+    customArticleType: isEvent ? 'Event Recap' : null,
+    writingApproach: 'chronological',
+    transcript: '',
+    extraNotes: '',
+    writingGuidance: '',
+  };
+}
+
+function createMaterialsWorkingCopy(
+  context: WorkspaceContext
+): WxPostMaterialsWorkingCopy {
+  return {
+    workspaceId: context.workspaceId,
+    articleType: context.manifest.editorial.articleType,
+    customArticleType: context.manifest.editorial.customArticleType ?? '',
+    writingApproach: context.manifest.editorial.writingApproach,
+    transcript: context.manifest.editorial.transcript,
+    extraNotes: context.manifest.editorial.extraNotes,
+    writingGuidance: context.manifest.editorial.writingGuidance,
+    sources: Object.fromEntries(
+      context.manifest.sources.map((source) => [
+        source.id,
+        {
+          included: source.included,
+          description: source.description,
+        },
+      ])
+    ),
+  };
+}
+
+function reconcileMaterialsWorkingCopy(
+  current: WxPostMaterialsWorkingCopy | null,
+  context: WorkspaceContext
+) {
+  if (!current || current.workspaceId !== context.workspaceId) {
+    return createMaterialsWorkingCopy(context);
+  }
+  return {
+    ...current,
+    sources: Object.fromEntries(
+      context.manifest.sources.map((source) => [
+        source.id,
+        current.sources[source.id] ?? {
+          included: source.included,
+          description: source.description,
+        },
+      ])
+    ),
+  };
+}
 
 function createWorkspaceId() {
   const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 12);
@@ -63,10 +109,11 @@ function StageTabs({
   return (
     <nav
       className='mb-6 grid grid-cols-4 overflow-hidden rounded-[14px] border border-[#d9e1ec] bg-white max-[480px]:rounded-xl'
-      aria-label='WXPost creation progress'
+      aria-label='WxPost authoring progress'
     >
       <button
         type='button'
+        aria-current={stage === 'setup' ? 'step' : undefined}
         className={`${STAGE_BUTTON_CLASS} ${
           stage === 'setup'
             ? activeClass
@@ -79,6 +126,7 @@ function StageTabs({
       </button>
       <button
         type='button'
+        aria-current={stage === 'materials' ? 'step' : undefined}
         className={`${STAGE_BUTTON_CLASS} ${
           stage === 'materials' ? activeClass : ''
         }`}
@@ -108,20 +156,27 @@ function StageTabs({
   );
 }
 
-export function WxPostAuthoringWorkspace() {
-  const [stage, setStage] = useState<WxPostAuthoringStage>('setup');
-  const [articleType, setArticleType] =
-    useState<WxPostArticleType>('Meeting Recap');
-  const [customArticleType, setCustomArticleType] = useState('');
+export function WxPostAuthoringWorkspace({
+  initialWorkspaceId,
+}: {
+  initialWorkspaceId: string | null;
+}) {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [stage, setStage] = useState<WxPostAuthoringStage>(
+    initialWorkspaceId ? 'materials' : 'setup'
+  );
   const [linked, setLinked] = useState(true);
   const [selectedMeeting, setSelectedMeeting] =
     useState<LinkedMeetingOption | null>(null);
-  const [pendingSourceChange, setPendingSourceChange] =
-    useState<PendingSourceChange | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceContext, setWorkspaceContext] =
     useState<WorkspaceContext | null>(null);
-  const [workspacePending, setWorkspacePending] = useState(false);
+  const [materialsWorkingCopy, setMaterialsWorkingCopy] =
+    useState<WxPostMaterialsWorkingCopy | null>(null);
+  const [workspacePending, setWorkspacePending] = useState(
+    Boolean(initialWorkspaceId)
+  );
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [syncWorkspaceMeeting, setSyncWorkspaceMeeting] = useState(false);
   const meetingsQuery = useMeetingOptions();
@@ -134,33 +189,50 @@ export function WxPostAuthoringWorkspace() {
     [meetingsQuery.data?.pages]
   );
 
-  const applyWorkspaceContext = useCallback((context: WorkspaceContext) => {
-    setWorkspaceId(context.workspaceId);
-    setWorkspaceContext(context);
-    setArticleType(
-      ARTICLE_TYPE_FROM_WIRE[context.manifest.editorial.articleType]
-    );
-    setCustomArticleType(context.manifest.editorial.customArticleType ?? '');
-    setLinked(Boolean(context.manifest.meetingId));
-    setSelectedMeeting((current) =>
-      current?.id === context.manifest.meetingId ? current : null
-    );
-    setSyncWorkspaceMeeting(Boolean(context.manifest.meetingId));
-  }, []);
+  const applyWorkspaceContext = useCallback(
+    (
+      context: WorkspaceContext,
+      options: { resetWorkingCopy?: boolean } = {}
+    ) => {
+      setWorkspaceId(context.workspaceId);
+      setWorkspaceContext(context);
+      setMaterialsWorkingCopy((current) =>
+        options.resetWorkingCopy
+          ? createMaterialsWorkingCopy(context)
+          : reconcileMaterialsWorkingCopy(current, context)
+      );
+      setLinked(Boolean(context.manifest.meetingId));
+      setSelectedMeeting((current) =>
+        current?.id === context.manifest.meetingId ? current : null
+      );
+      setSyncWorkspaceMeeting(Boolean(context.manifest.meetingId));
+    },
+    []
+  );
+
+  const applyChangedWorkspaceContext = useCallback(
+    (
+      context: WorkspaceContext,
+      options: { resetWorkingCopy?: boolean } = {}
+    ) => {
+      applyWorkspaceContext(context, options);
+      void queryClient.invalidateQueries({
+        queryKey: ['wxpost-workspaces'],
+        refetchType: 'none',
+      });
+    },
+    [applyWorkspaceContext, queryClient]
+  );
 
   useEffect(() => {
-    const resumedWorkspaceId = new URLSearchParams(window.location.search).get(
-      'workspace'
-    );
-    if (!resumedWorkspaceId) return;
+    if (!initialWorkspaceId) return;
 
     let active = true;
     setWorkspacePending(true);
-    void getWorkspaceContext(resumedWorkspaceId)
+    void getWorkspaceContext(initialWorkspaceId)
       .then((context) => {
         if (!active) return;
         applyWorkspaceContext(context);
-        setStage('materials');
         setWorkspaceError(null);
       })
       .catch((error) => {
@@ -177,7 +249,7 @@ export function WxPostAuthoringWorkspace() {
     return () => {
       active = false;
     };
-  }, [applyWorkspaceContext]);
+  }, [applyWorkspaceContext, initialWorkspaceId]);
 
   useEffect(() => {
     const meetingId = workspaceContext?.manifest.meetingId;
@@ -205,47 +277,23 @@ export function WxPostAuthoringWorkspace() {
     workspaceContext?.manifest.meetingId,
   ]);
 
-  const handleContinue = useCallback(async () => {
+  const handleCreateWorkspace = useCallback(async () => {
     const meetingId = linked ? (selectedMeeting?.id ?? null) : null;
     if (linked && !meetingId) return;
-    const editorial: WorkspaceEditorial = {
-      ...(workspaceContext?.manifest.editorial ?? {
-        writingApproach: 'chronological',
-        transcript: '',
-        extraNotes: '',
-        writingGuidance: '',
-      }),
-      articleType: ARTICLE_TYPE_TO_WIRE[articleType],
-      customArticleType:
-        articleType === 'Custom' ? customArticleType.trim() || null : null,
-    };
-
-    const current = workspaceContext?.manifest;
-    const settingsChanged =
-      current?.meetingId !== meetingId ||
-      current.editorial.articleType !== editorial.articleType ||
-      current.editorial.customArticleType !== editorial.customArticleType;
-    const nextWorkspaceId = workspaceId ?? createWorkspaceId();
+    const editorial = createInitialEditorial(linked, selectedMeeting);
+    const nextWorkspaceId = createWorkspaceId();
 
     setWorkspacePending(true);
     setWorkspaceError(null);
     try {
-      const context =
-        current && workspaceId && settingsChanged
-          ? await updateWorkspace(workspaceId, {
-              expectedManifestVersion: current.manifestVersion,
-              meetingId,
-              editorial,
-            })
-          : await bootstrapWorkspace(nextWorkspaceId, {
-              meetingId,
-              editorial,
-            });
-      applyWorkspaceContext(context);
-      const url = new URL(window.location.href);
-      url.searchParams.set('workspace', context.workspaceId);
-      window.history.replaceState(null, '', url);
-      setStage('materials');
+      const context = await bootstrapWorkspace(nextWorkspaceId, {
+        meetingId,
+        editorial,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['wxpost-workspaces'],
+      });
+      router.replace(workspaceEditorPath(context.workspaceId));
     } catch (error) {
       setWorkspaceError(
         error instanceof Error
@@ -255,18 +303,10 @@ export function WxPostAuthoringWorkspace() {
     } finally {
       setWorkspacePending(false);
     }
-  }, [
-    applyWorkspaceContext,
-    articleType,
-    customArticleType,
-    linked,
-    selectedMeeting,
-    workspaceContext?.manifest,
-    workspaceId,
-  ]);
+  }, [linked, queryClient, router, selectedMeeting]);
 
   const effectiveMeeting = linked ? selectedMeeting : null;
-  const canOpenMaterials = Boolean(workspaceContext);
+  const canOpenMaterials = Boolean(initialWorkspaceId || workspaceContext);
   const workspaceMeeting =
     workspaceContext?.manifest.meetingId &&
     selectedMeeting?.id === workspaceContext.manifest.meetingId
@@ -275,15 +315,10 @@ export function WxPostAuthoringWorkspace() {
   const displayedMeeting =
     stage === 'materials' ? workspaceMeeting : effectiveMeeting;
   const displayedArticleType =
-    stage === 'materials' && workspaceContext
-      ? ARTICLE_TYPE_FROM_WIRE[workspaceContext.manifest.editorial.articleType]
-      : articleType;
-
-  function openExistingMaterials() {
-    if (!workspaceContext) return;
-    applyWorkspaceContext(workspaceContext);
-    setStage('materials');
-  }
+    stage === 'materials' ? materialsWorkingCopy?.articleType : null;
+  const displayedArticleTypeLabel = displayedArticleType
+    ? WORKSPACE_ARTICLE_TYPE_LABELS[displayedArticleType]
+    : null;
 
   return (
     <div className='min-h-screen bg-[#f3f6fa] text-base text-[#172033]'>
@@ -302,23 +337,35 @@ export function WxPostAuthoringWorkspace() {
         <header className='mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
           <div>
             <h1 className='mb-2 text-3xl font-bold text-slate-950 sm:mb-4 sm:text-4xl'>
-              New WeChat Post
+              {initialWorkspaceId ? 'WxPost' : 'New WxPost'}
             </h1>
             <p className='text-sm text-slate-600 sm:text-base'>
               {displayedMeeting
-                ? `${formatMeetingLabel(displayedMeeting)} · ${displayedArticleType}`
+                ? `${formatMeetingLabel(displayedMeeting)}${
+                    displayedArticleTypeLabel
+                      ? ` · ${displayedArticleTypeLabel}`
+                      : ''
+                  }`
                 : workspaceContext?.manifest.meetingId && linked
-                  ? `Linked meeting · ${displayedArticleType}`
-                  : `Independent article · ${displayedArticleType}`}
+                  ? `Linked meeting${
+                      displayedArticleTypeLabel
+                        ? ` · ${displayedArticleTypeLabel}`
+                        : ''
+                    }`
+                  : `Independent article${
+                      displayedArticleTypeLabel
+                        ? ` · ${displayedArticleTypeLabel}`
+                        : ''
+                    }`}
             </p>
           </div>
           <Link
-            href='/posts/wxposts/drafts'
+            href={workspaceListPath(initialWorkspaceId)}
             className='inline-flex h-9 self-start items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-300 bg-white px-4 text-sm text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 sm:self-center [&_svg]:h-4 [&_svg]:w-4'
-            data-testid='wxpost-drafts-link'
+            data-testid='wxpost-workspaces-link'
           >
-            <FileText aria-hidden='true' />
-            WXPost Drafts
+            <PanelsTopLeft aria-hidden='true' />
+            Workspaces
           </Link>
         </header>
 
@@ -326,25 +373,14 @@ export function WxPostAuthoringWorkspace() {
           stage={stage}
           canOpenMaterials={canOpenMaterials}
           onStageChange={(nextStage) => {
-            if (nextStage === 'materials') openExistingMaterials();
-            else setStage(nextStage);
+            setStage(nextStage);
           }}
         />
 
         <div hidden={stage !== 'setup'}>
           <WxPostSetupStage
-            articleType={articleType}
-            onArticleTypeChange={setArticleType}
-            customArticleType={customArticleType}
-            onCustomArticleTypeChange={setCustomArticleType}
             linked={linked}
-            onLinkedChange={(nextLinked) => {
-              if (!nextLinked && workspaceContext?.manifest.meetingId) {
-                setPendingSourceChange({ kind: 'independent' });
-                return;
-              }
-              setLinked(nextLinked);
-            }}
+            onLinkedChange={setLinked}
             meetings={meetings}
             meetingsPending={meetingsQuery.isPending}
             meetingsError={meetingsQuery.isError}
@@ -355,12 +391,6 @@ export function WxPostAuthoringWorkspace() {
               const meeting =
                 meetings.find((item) => item.id === meetingId) ?? null;
               if (meeting) {
-                const currentMeetingId =
-                  workspaceContext?.manifest.meetingId ?? null;
-                if (currentMeetingId && currentMeetingId !== meeting.id) {
-                  setPendingSourceChange({ kind: 'meeting', meeting });
-                  return;
-                }
                 setSelectedMeeting(meeting);
                 setSyncWorkspaceMeeting(false);
               }
@@ -371,91 +401,53 @@ export function WxPostAuthoringWorkspace() {
             onRetryMeetings={() => {
               void meetingsQuery.refetch();
             }}
-            onContinue={() => void handleContinue()}
-            isContinuing={workspacePending}
-            continueError={workspaceError}
+            onCreate={() => void handleCreateWorkspace()}
+            isCreating={workspacePending}
+            createError={workspaceError}
+            sourceLocked={Boolean(workspaceContext)}
           />
         </div>
 
         <div hidden={stage !== 'materials'}>
-          {workspaceId && workspaceContext && (
-            <WxPostMaterialsStage
-              key={workspaceId}
-              active={stage === 'materials'}
-              workspaceId={workspaceId}
-              context={workspaceContext}
-              onContextChange={setWorkspaceContext}
-              onBack={() => setStage('setup')}
-            />
+          {workspacePending && !workspaceContext ? (
+            <div
+              className='grid min-h-[50vh] place-content-center'
+              role='status'
+              data-testid='workspace-resume-status'
+            >
+              <Loader2
+                className='h-8 w-8 animate-spin text-blue-500'
+                aria-hidden='true'
+              />
+              <span className='sr-only'>Loading workspace…</span>
+            </div>
+          ) : workspaceError && !workspaceContext ? (
+            <div
+              className='grid min-h-40 place-content-center text-sm text-red-700'
+              role='alert'
+            >
+              {workspaceError}
+            </div>
+          ) : (
+            workspaceId &&
+            workspaceContext &&
+            materialsWorkingCopy && (
+              <WxPostMaterialsStage
+                key={workspaceId}
+                active={stage === 'materials'}
+                workspaceId={workspaceId}
+                context={workspaceContext}
+                onContextChange={applyChangedWorkspaceContext}
+                workingCopy={materialsWorkingCopy}
+                onWorkingCopyChange={(updater) =>
+                  setMaterialsWorkingCopy((current) =>
+                    current ? updater(current) : current
+                  )
+                }
+              />
+            )
           )}
         </div>
-
-        {pendingSourceChange && (
-          <div
-            className='fixed inset-0 z-[90] grid place-items-center bg-slate-950/55 p-4'
-            role='dialog'
-            aria-modal='true'
-            aria-labelledby='change-meeting-title'
-            data-testid='change-meeting-dialog'
-          >
-            <div className='w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl'>
-              <h2
-                id='change-meeting-title'
-                className='m-0 text-lg font-bold text-slate-900'
-              >
-                {pendingSourceChange.kind === 'meeting'
-                  ? 'Change meeting?'
-                  : 'Make this article independent?'}
-              </h2>
-              <p className='mb-0 mt-3 text-sm leading-6 text-slate-600'>
-                Materials imported from{' '}
-                <strong className='font-semibold text-slate-800'>
-                  {selectedMeeting
-                    ? formatMeetingLabel(selectedMeeting)
-                    : 'the current meeting'}
-                </strong>{' '}
-                will be removed
-                {pendingSourceChange.kind === 'meeting' && (
-                  <>
-                    {' '}
-                    and replaced with materials from{' '}
-                    <strong className='font-semibold text-slate-800'>
-                      {formatMeetingLabel(pendingSourceChange.meeting)}
-                    </strong>
-                  </>
-                )}
-                . Files you uploaded yourself will be kept.
-              </p>
-              <div className='mt-5 flex justify-end gap-2'>
-                <button
-                  type='button'
-                  className={SECONDARY_BUTTON_CLASS}
-                  onClick={() => setPendingSourceChange(null)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type='button'
-                  className={PRIMARY_BUTTON_CLASS}
-                  onClick={() => {
-                    if (pendingSourceChange.kind === 'meeting') {
-                      setSelectedMeeting(pendingSourceChange.meeting);
-                      setLinked(true);
-                    } else {
-                      setLinked(false);
-                    }
-                    setSyncWorkspaceMeeting(false);
-                    setPendingSourceChange(null);
-                  }}
-                >
-                  {pendingSourceChange.kind === 'meeting'
-                    ? 'Change meeting'
-                    : 'Make independent'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

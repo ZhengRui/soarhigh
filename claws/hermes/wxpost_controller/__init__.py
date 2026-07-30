@@ -1,4 +1,4 @@
-"""Deterministic WXPost workspace operations shared by HTTP and MCP."""
+"""Deterministic WxPost workspace operations shared by HTTP and MCP."""
 
 from .core import (
     ConfirmationRequired,
@@ -7,6 +7,7 @@ from .core import (
     UpstreamUnavailable,
     ValidationUnavailable,
     VersionConflict,
+    WorkspaceAlreadyExists,
     WorkspaceController,
     WorkspaceError,
     WorkspaceNotFound,
@@ -19,6 +20,7 @@ __all__ = [
     "UpstreamUnavailable",
     "ValidationUnavailable",
     "VersionConflict",
+    "WorkspaceAlreadyExists",
     "WorkspaceController",
     "WorkspaceError",
     "WorkspaceNotFound",

@@ -20,6 +20,7 @@ from .core import (
     VersionConflict,
     WorkspaceController,
     WorkspaceError,
+    WorkspaceAlreadyExists,
     WorkspaceNotFound,
     error_response,
 )
@@ -48,14 +49,40 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
     server: ControllerHTTPServer
 
     def do_GET(self) -> None:
-        path = urlsplit(self.path).path
+        parsed = urlsplit(self.path)
+        path = parsed.path
         if path == "/healthz":
             self._send_json(HTTPStatus.OK, {"status": "ok"})
             return
         if not self._authorized():
             return
         if path == WORKSPACES_PATH:
-            self._run_controller(self.server.controller.list_workspaces)
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            if set(query) - {"page", "page_size"} or any(
+                len(values) != 1 for values in query.values()
+            ):
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_request",
+                    "workspace list accepts one page and page_size value",
+                )
+                return
+            try:
+                page = int(query.get("page", ["1"])[0])
+                page_size = int(query.get("page_size", ["10"])[0])
+            except ValueError:
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_request",
+                    "workspace page and page_size must be integers",
+                )
+                return
+            self._run_controller(
+                lambda: self.server.controller.list_workspaces(
+                    page=page,
+                    page_size=page_size,
+                )
+            )
             return
         context_match = CONTEXT_PATH.fullmatch(path)
         if context_match is not None:
@@ -74,9 +101,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             return
         preflight_match = SOURCE_DELETE_PREFLIGHT_PATH.fullmatch(path)
         if preflight_match is not None:
+            expected_version = self._read_expected_manifest_version()
+            if expected_version is None:
+                return
             self._run_controller(
                 lambda: self.server.controller.delete_source_preflight(
                     preflight_match.group(1),
+                    expected_manifest_version=expected_version,
                     source_id=preflight_match.group(2),
                 )
             )
@@ -95,9 +126,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 "meetingId",
                 "editorial",
             }
+            accepted_fields = required_fields | {"sourceUpdates"}
             if payload is None or not self._accept_fields(
                 payload,
-                required_fields,
+                accepted_fields,
                 "workspace update",
             ):
                 return
@@ -124,6 +156,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     editorial=cast(
                         dict[str, Any],
                         payload.get("editorial"),
+                    ),
+                    source_updates=cast(
+                        list[dict[str, Any]],
+                        payload.get("sourceUpdates", []),
                     ),
                 )
             )
@@ -411,7 +447,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         try:
             result = operation()
         except WorkspaceError as exc:
-            if isinstance(exc, (VersionConflict, ConfirmationRequired)):
+            if isinstance(
+                exc,
+                (
+                    VersionConflict,
+                    ConfirmationRequired,
+                    WorkspaceAlreadyExists,
+                ),
+            ):
                 status = HTTPStatus.CONFLICT
             elif isinstance(exc, WorkspaceNotFound):
                 status = HTTPStatus.NOT_FOUND
@@ -490,7 +533,7 @@ def build_server(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Serve the WXPost workspace API")
+    parser = argparse.ArgumentParser(description="Serve the WxPost workspace API")
     parser.add_argument(
         "--workspace-root",
         default=os.environ.get("WXPOST_WORKSPACE_ROOT", "/workspace"),

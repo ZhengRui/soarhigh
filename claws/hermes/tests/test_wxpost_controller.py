@@ -118,7 +118,7 @@ def _controller(root: Path) -> WorkspaceController:
 
 @pytest.fixture
 def seeded_workspace(tmp_path: Path) -> tuple[Path, str]:
-    workspace_id = "contract-workspace"
+    workspace_id = "wxpost-contract-workspace"
     _seed_workspace(tmp_path, workspace_id)
     return tmp_path, workspace_id
 
@@ -782,7 +782,7 @@ def test_workspace_identifier_and_symlink_escape_are_rejected(
         controller.get_context("linked-workspace")
 
 
-def test_workspace_update_invalidates_a_saved_draft_without_replacing_workspace(
+def test_materials_update_preserves_a_saved_draft(
     seeded_workspace: tuple[Path, str],
 ) -> None:
     root, workspace_id = seeded_workspace
@@ -802,18 +802,67 @@ def test_workspace_update_invalidates_a_saved_draft_without_replacing_workspace(
     }
     updated = controller.update_workspace(
         workspace_id,
-        expected_manifest_version=1,
+        expected_manifest_version=current["manifest"]["manifestVersion"],
         meeting_id=current["manifest"]["meetingId"],
         editorial=editorial,
+        source_updates=[
+            {
+                "sourceId": WEB_IMAGE_ID,
+                "included": False,
+                "description": "Updated source fact.",
+                "descriptionSource": "user",
+                "descriptionStatus": "confirmed",
+            }
+        ],
     )
 
     assert updated["workspaceId"] == workspace_id
     assert updated["manifest"]["manifestVersion"] == 2
     assert updated["manifest"]["editorial"]["articleType"] == "member-story"
+    updated_source = next(
+        source
+        for source in updated["manifest"]["sources"]
+        if source["id"] == WEB_IMAGE_ID
+    )
+    assert updated_source["included"] is False
+    assert updated_source["description"] == "Updated source fact."
+    assert updated["manifest"]["draft"] == current["manifest"]["draft"]
+    assert updated["draft"] == saved
+    raw = json.loads(
+        (root / "inbox" / workspace_id / "draft" / "article.json").read_text()
+    )
+    assert raw == _canonical_document(_article_document())
+
+
+def test_meeting_source_change_invalidates_a_saved_draft(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    current = controller.get_context(workspace_id)
+
+    updated = controller.update_workspace(
+        workspace_id,
+        expected_manifest_version=current["manifest"]["manifestVersion"],
+        meeting_id=None,
+        editorial=current["manifest"]["editorial"],
+    )
+
+    assert updated["manifest"]["manifestVersion"] == 2
+    assert updated["manifest"]["meetingId"] is None
     assert updated["manifest"]["draft"] is None
     assert updated["draft"] is None
     assert not (root / "inbox" / workspace_id / "draft" / "article.json").exists()
-    assert updated["manifest"]["sources"] == current["manifest"]["sources"]
+    assert all(
+        source["origin"]["type"] != "meeting-library"
+        for source in updated["manifest"]["sources"]
+    )
 
 
 @pytest.mark.asyncio
@@ -837,6 +886,22 @@ async def test_http_and_mcp_share_auth_contract_state_and_raw_draft(
             token="wrong",
         )
         assert unauthorized == 401
+
+        status, listing = _json_request(
+            f"{base_url}/workspaces?page=1&page_size=1",
+        )
+        assert status == 200
+        assert listing["page"] == 1
+        assert listing["page_size"] == 1
+        assert listing["total"] == 1
+        assert listing["pages"] == 1
+        assert [item["workspaceId"] for item in listing["items"]] == [workspace_id]
+
+        status, invalid_pagination = _json_request(
+            f"{base_url}/workspaces?page=one",
+        )
+        assert status == 422
+        assert invalid_pagination["error"]["code"] == "invalid_request"
 
         status, invalid = _json_request(
             f"{base_url}/workspaces/{workspace_id}/sources",
@@ -960,6 +1025,45 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
             assert response.headers["Cache-Control"] == "private, no-store"
             assert response.read() == b"web-photo"
 
+        status, saved = _json_request(
+            f"{base_url}/workspaces/{workspace_id}",
+            method="PATCH",
+            payload={
+                "expectedManifestVersion": uploaded["manifestVersion"],
+                "meetingId": None,
+                "editorial": created["manifest"]["editorial"],
+                "sourceUpdates": [
+                    {
+                        "sourceId": "M01",
+                        "included": False,
+                        "description": "Saved through the real HTTP route.",
+                        "descriptionSource": "user",
+                        "descriptionStatus": "confirmed",
+                    }
+                ],
+            },
+        )
+        assert status == 200
+        assert saved["manifest"]["manifestVersion"] == 3
+        assert saved["manifest"]["sources"][0] == {
+            **uploaded["sources"][0],
+            "description": "Saved through the real HTTP route.",
+            "descriptionSource": "user",
+            "descriptionStatus": "confirmed",
+        }
+        status, conflict = _json_request(
+            f"{base_url}/workspaces/{workspace_id}",
+            method="PATCH",
+            payload={
+                "expectedManifestVersion": uploaded["manifestVersion"],
+                "meetingId": None,
+                "editorial": created["manifest"]["editorial"],
+                "sourceUpdates": [],
+            },
+        )
+        assert status == 409
+        assert conflict["error"]["code"] == "version_conflict"
+
         incoming = tmp_path / "incoming"
         incoming.mkdir()
         clip_path = incoming / "clip.mp4"
@@ -987,12 +1091,12 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
                         "wxpost_upload_source",
                         {
                             "workspace_id": workspace_id,
-                            "expected_manifest_version": 2,
+                            "expected_manifest_version": 3,
                             "source_path": str(clip_path),
                         },
                     )
                 )
-                assert mcp_uploaded["manifestVersion"] == 3
+                assert mcp_uploaded["manifestVersion"] == 4
                 assert mcp_uploaded["sources"][1]["id"] == "M02"
                 assert mcp_uploaded["sources"][1]["origin"] == {"type": "feishu-upload"}
 
@@ -1023,44 +1127,44 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
                 assert http_conflict["error"] == {
                     "code": "version_conflict",
                     "message": (
-                        "expected manifest version 1, " "current manifest version is 3"
+                        "expected manifest version 1, current manifest version is 4"
                     ),
                     "versionKind": "manifest",
                     "expectedVersion": 1,
-                    "actualVersion": 3,
+                    "actualVersion": 4,
                 }
 
                 status, included = _json_request(
                     f"{base_url}/workspaces/{workspace_id}/sources/M01/inclusion",
                     method="PUT",
                     payload={
-                        "expectedManifestVersion": 3,
+                        "expectedManifestVersion": 4,
                         "included": True,
                     },
                 )
                 assert status == 200
-                assert included["manifestVersion"] == 4
+                assert included["manifestVersion"] == 5
                 assert included["sources"][0]["included"] is True
 
                 status, preflight = _json_request(
-                    f"{base_url}/workspaces/{workspace_id}/sources/"
-                    "M02/delete-preflight"
+                    f"{base_url}/workspaces/{workspace_id}/sources/M02/delete-preflight",
+                    headers={"X-Expected-Manifest-Version": "5"},
                 )
                 assert status == 200
                 assert preflight["referenced"] is False
-                assert preflight["manifestVersion"] == 4
+                assert preflight["manifestVersion"] == 5
 
                 deleted = _mcp_value(
                     await session.call_tool(
                         "wxpost_delete_source",
                         {
                             "workspace_id": workspace_id,
-                            "expected_manifest_version": 4,
+                            "expected_manifest_version": 5,
                             "source_id": "M02",
                         },
                     )
                 )
-                assert deleted["manifestVersion"] == 5
+                assert deleted["manifestVersion"] == 6
                 assert [source["id"] for source in deleted["sources"]] == ["M01"]
 
         status, final_context = _json_request(

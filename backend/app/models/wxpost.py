@@ -1,4 +1,4 @@
-"""Versioned wire contracts for Hermes-authored WXPost articles."""
+"""Versioned wire contracts for Hermes-authored WxPost articles."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ def _to_camel(value: str) -> str:
 
 
 class WireModel(BaseModel):
-    """Strict camelCase JSON model used by the WXPost authoring protocol."""
+    """Strict camelCase JSON model used by the WxPost authoring protocol."""
 
     model_config = ConfigDict(
         alias_generator=_to_camel,
