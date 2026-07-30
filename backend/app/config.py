@@ -71,6 +71,11 @@ WXPOST_CONTROLLER_URL = config(
     cast=str,
     default="http://127.0.0.1:8787" if _local_env_file else "",
 ).rstrip("/")
+WXPOST_HERMES_URL = config(
+    "WXPOST_HERMES_URL",
+    cast=str,
+    default="http://127.0.0.1:8642" if _local_env_file else "",
+).rstrip("/")
 WXPOST_PUBLIC_BASE_URL = config(
     "WXPOST_PUBLIC_BASE_URL",
     cast=str,

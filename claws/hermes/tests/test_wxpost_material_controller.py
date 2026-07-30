@@ -29,6 +29,7 @@ EDITORIAL = {
     "transcript": "",
     "extraNotes": "",
     "writingGuidance": "",
+    "voiceTone": {"presets": [], "customProfiles": []},
 }
 CREATOR = {"id": "member-123", "name": "Test Member"}
 
@@ -216,7 +217,7 @@ def test_workspace_list_and_delete_expose_collaboration_metadata(
     workspace_id = "shared-workspace"
 
     created = _bootstrap(controller, workspace_id)["manifest"]
-    assert created["schemaVersion"] == 3
+    assert created["schemaVersion"] == 4
     assert created["createdBy"] == CREATOR
     assert created["createdAt"] == created["updatedAt"]
 

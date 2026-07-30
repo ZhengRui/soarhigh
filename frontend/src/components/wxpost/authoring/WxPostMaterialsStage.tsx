@@ -52,6 +52,10 @@ function materialsEditorial(
     transcript: workingCopy.transcript,
     extraNotes: workingCopy.extraNotes,
     writingGuidance: workingCopy.writingGuidance,
+    voiceTone: {
+      presets: workingCopy.voiceTonePresets,
+      customProfiles: workingCopy.customVoiceToneProfiles,
+    },
   };
 }
 
@@ -65,7 +69,8 @@ function editorialsMatch(
     current.writingApproach === next.writingApproach &&
     current.transcript === next.transcript &&
     current.extraNotes === next.extraNotes &&
-    current.writingGuidance === next.writingGuidance
+    current.writingGuidance === next.writingGuidance &&
+    JSON.stringify(current.voiceTone) === JSON.stringify(next.voiceTone)
   );
 }
 
@@ -492,12 +497,21 @@ export function WxPostMaterialsStage({
         }}
       />
       <ArticleInputsPanel
+        workspaceId={workspaceId}
         writingApproach={workingCopy.writingApproach}
+        voiceTonePresets={workingCopy.voiceTonePresets}
+        customVoiceToneProfiles={workingCopy.customVoiceToneProfiles}
         transcript={workingCopy.transcript}
         extraNotes={workingCopy.extraNotes}
         writingGuidance={workingCopy.writingGuidance}
         onWritingApproachChange={(writingApproach) =>
           updateWorkingCopy({ writingApproach })
+        }
+        onVoiceTonePresetsChange={(voiceTonePresets) =>
+          updateWorkingCopy({ voiceTonePresets })
+        }
+        onCustomVoiceToneProfilesChange={(customVoiceToneProfiles) =>
+          updateWorkingCopy({ customVoiceToneProfiles })
         }
         onTranscriptChange={(transcript) => updateWorkingCopy({ transcript })}
         onExtraNotesChange={(extraNotes) => updateWorkingCopy({ extraNotes })}

@@ -49,7 +49,7 @@ from app.services.wxpost_document import (  # noqa: E402
 
 
 def _manifest_fixture() -> dict[str, Any]:
-    return json.loads((FIXTURES / "source-manifest-v3.json").read_text())
+    return json.loads((FIXTURES / "source-manifest-v4.json").read_text())
 
 
 def _seed_workspace(root: Path, workspace_id: str) -> None:
@@ -262,6 +262,7 @@ def test_http_workspace_delete_requires_the_current_manifest_version(
                 "editorial": {
                     "articleType": "meeting-recap",
                     "customArticleType": None,
+                    "voiceTone": {"presets": [], "customProfiles": []},
                 },
                 "createdBy": {"id": "member-123", "name": "Test Member"},
             },
@@ -318,7 +319,7 @@ def test_manifest_and_draft_versions_advance_independently(
     controller = _controller(root)
 
     context = controller.get_context(workspace_id)
-    assert context["manifest"]["schemaVersion"] == 3
+    assert context["manifest"]["schemaVersion"] == 4
     assert context["manifest"]["manifestVersion"] == 1
     assert context["manifest"]["draft"] is None
     assert context["draft"] is None
@@ -761,7 +762,7 @@ def test_v1_manifest_is_rejected_without_runtime_compatibility(
     manifest["schemaVersion"] = 1
     path.write_text(json.dumps(manifest))
 
-    with pytest.raises(InvalidWorkspace, match="source-manifest v3"):
+    with pytest.raises(InvalidWorkspace, match="source-manifest v4"):
         _controller(root).get_context(workspace_id)
 
 
@@ -993,6 +994,7 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
                 "editorial": {
                     "articleType": "meeting-recap",
                     "customArticleType": None,
+                    "voiceTone": {"presets": [], "customProfiles": []},
                 },
                 "createdBy": {
                     "id": "member-123",

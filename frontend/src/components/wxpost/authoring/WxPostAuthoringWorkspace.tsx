@@ -42,6 +42,10 @@ function createInitialEditorial(
     transcript: '',
     extraNotes: '',
     writingGuidance: '',
+    voiceTone: {
+      presets: [],
+      customProfiles: [],
+    },
   };
 }
 
@@ -56,6 +60,9 @@ function createMaterialsWorkingCopy(
     transcript: context.manifest.editorial.transcript,
     extraNotes: context.manifest.editorial.extraNotes,
     writingGuidance: context.manifest.editorial.writingGuidance,
+    voiceTonePresets: context.manifest.editorial.voiceTone.presets,
+    customVoiceToneProfiles:
+      context.manifest.editorial.voiceTone.customProfiles,
     sources: Object.fromEntries(
       context.manifest.sources.map((source) => [
         source.id,

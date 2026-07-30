@@ -1,8 +1,9 @@
 # Hermes container
 
 This directory runs the Hermes Gateway and WxPost HTTP controller as two
-services in one Compose project. It keeps Hermes state and article working
-files in two separate host directories:
+services in one Compose project. The Gateway also exposes Hermes's authenticated
+Agent API for focused editorial suggestions. Hermes state and article working
+files remain in two separate host directories:
 
 | Host setting           | Container path | Purpose                                                                 |
 | ---------------------- | -------------- | ----------------------------------------------------------------------- |
@@ -154,9 +155,9 @@ return the same error and version-conflict details. HTTP exposes the material
 operations needed by the authoring page; MCP exposes those same operations plus
 draft saves for Hermes.
 
-`contracts.py` defines the single supported `source-manifest v3` shape plus the
+`contracts.py` defines the single supported `source-manifest v4` shape plus the
 operation inputs. A complete manifest example lives at
-`tests/fixtures/source-manifest-v3.json`. Important invariants include:
+`tests/fixtures/source-manifest-v4.json`. Important invariants include:
 
 - each collected source receives the next workspace-local material ID
   (`M01`, `M02`, and so on) when it enters the manifest; the ID is persisted,
@@ -212,8 +213,9 @@ Linked workspaces read `/meetings/{meetingId}/media` from
 `SOARHIGH_API_BASE_URL`. Compose maps
 `SOARHIGH_WXPOST_SERVICE_TOKEN` to `WXPOST_SERVICE_TOKEN` inside both
 containers; its value must equal Backend's existing `WXPOST_SERVICE_TOKEN`.
-The token is sent only between Backend and the controller, never to the browser
-or an asset URL.
+The same value is also mapped to the Gateway's `API_SERVER_KEY`; it is sent
+only from Backend to the controller or Hermes, never to the browser or an asset
+URL.
 
 Configure the stdio MCP server once in the dedicated SoarHigh Hermes home:
 
@@ -244,6 +246,18 @@ the same workspace at `/workspace`, and publishes it only on
 `127.0.0.1:8787`. Local Backend uses that address by default and authenticates
 with its existing `WXPOST_SERVICE_TOKEN`; no separate controller credential is
 configured.
+
+The Gateway's OpenAI-compatible Agent API is enabled on
+`127.0.0.1:8642`. Backend uses it for the editable custom Voice & tone
+instruction proposal and authenticates with that same existing token. The
+controller remains deterministic and never invokes a model. No Hermes
+credential is returned to the frontend.
+
+Workspace manifests use schema version 4. Editorial settings include up to
+three selected Voice & tone profiles. Custom profile names, instructions, and
+selection state are workspace-local and persist only through Save Materials;
+there is intentionally no parser or migration for cleared development
+workspaces from older schema versions.
 
 HTTP routes are:
 

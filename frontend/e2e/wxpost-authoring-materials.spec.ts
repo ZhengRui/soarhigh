@@ -11,6 +11,91 @@ import {
   openAuthoringPage,
 } from './support/wxpostAuthoring';
 
+test('saves up to three preset and custom Voice & tone profiles', async ({
+  page,
+}) => {
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  const context = Array.from(workspace.contexts.values())[0];
+  const saveMaterials = page.getByTestId('save-materials');
+
+  await page.getByTestId('voice-tone-encouraging').click();
+  await page.getByTestId('voice-tone-reflective').click();
+  await page.getByTestId('voice-tone-celebratory').click();
+  await expect(page.getByText('3/3 selected')).toBeVisible();
+  await expect(page.getByTestId('voice-tone-heartfelt')).toBeDisabled();
+  await expect(page.getByTestId('add-custom-voice-tone')).toBeDisabled();
+
+  await page.getByTestId('voice-tone-celebratory').click();
+  await page.getByTestId('add-custom-voice-tone').click();
+  const dialog = page.getByTestId('voice-tone-dialog');
+  await expect(dialog).toContainText('current workspace');
+  await dialog.getByTestId('custom-voice-tone-name').fill('Warm and candid');
+  await dialog.getByTestId('suggest-voice-tone-instruction').click();
+  await expect(dialog.getByTestId('custom-voice-tone-instruction')).toHaveValue(
+    /Use a warm, specific voice/
+  );
+  await dialog
+    .getByTestId('custom-voice-tone-instruction')
+    .fill(
+      'Sound warm and candid, using precise human details without becoming sentimental.'
+    );
+  await dialog.getByTestId('save-custom-voice-tone').click();
+
+  await expect(page.getByText('3/3 selected')).toBeVisible();
+  await expect(page.getByTestId('voice-tone-details')).toContainText(
+    'Warm and candid:'
+  );
+  await expect(saveMaterials).toBeEnabled();
+  expect(context.manifest.editorial.voiceTone).toEqual({
+    presets: [],
+    customProfiles: [],
+  });
+  expect(workspace.requests).toContain('POST /voice-tone/suggestion');
+  expect(workspace.requests).not.toContain('PATCH /');
+
+  await page.getByRole('button', { name: 'Edit Warm and candid' }).click();
+  await page
+    .getByTestId('custom-voice-tone-instruction')
+    .fill(
+      'Sound warm and candid, and use precise human details without becoming sentimental.'
+    );
+  await page.getByTestId('save-custom-voice-tone').click();
+  await saveMaterials.click();
+  await expect(
+    page.getByText('Materials saved successfully!', { exact: true })
+  ).toBeVisible();
+  expect(context.manifest.editorial.voiceTone).toEqual({
+    presets: ['encouraging', 'reflective'],
+    customProfiles: [
+      {
+        name: 'Warm and candid',
+        instruction:
+          'Sound warm and candid, and use precise human details without becoming sentimental.',
+        selected: true,
+      },
+    ],
+  });
+
+  await page.reload();
+  await expect(page.getByTestId('voice-tone-encouraging')).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  await expect(page.getByTestId('voice-tone-reflective')).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  await expect(page.getByTestId('custom-voice-tone-0')).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  await expect(page.getByTestId('voice-tone-details')).toContainText(
+    'Sound warm and candid'
+  );
+  await expect(page.getByTestId('save-materials')).toBeDisabled();
+});
+
 test('keeps Materials edits local and isolated from the saved Draft', async ({
   page,
 }) => {
@@ -127,6 +212,7 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
     transcript: '',
     extraNotes: '',
     writingGuidance: '',
+    voiceTone: { presets: [], customProfiles: [] },
   });
   expect(context.manifest.sources[0]).toMatchObject({
     included: false,
@@ -154,6 +240,7 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
     transcript: 'Local transcript',
     extraNotes: 'Local notes',
     writingGuidance: 'Keep it concise.',
+    voiceTone: { presets: [], customProfiles: [] },
   });
   expect(context.manifest.sources[0]).toMatchObject({
     included: true,

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "workspaceId": "meeting-462-contract",
   "manifestVersion": 1,
   "nextMaterialNumber": 6,
@@ -17,7 +17,20 @@
     "writingApproach": "chronological",
     "transcript": "",
     "extraNotes": "Mention the first-time guests.",
-    "writingGuidance": "Lead with the strongest human moment."
+    "writingGuidance": "Lead with the strongest human moment.",
+    "voiceTone": {
+      "presets": [
+        "encouraging",
+        "reflective"
+      ],
+      "customProfiles": [
+        {
+          "name": "Room energy",
+          "instruction": "Keep the voice conversational and alert to the energy shared across the room.",
+          "selected": false
+        }
+      ]
+    }
   },
   "sources": [
     {

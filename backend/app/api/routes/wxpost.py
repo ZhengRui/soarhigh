@@ -3,7 +3,7 @@
 import json
 import re
 import secrets
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import quote
 from uuid import UUID
 
@@ -11,10 +11,11 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import ValidationError
+from pydantic import BaseModel, StringConstraints, ValidationError
 
 from ...config import (
     WXPOST_CONTROLLER_URL,
+    WXPOST_HERMES_URL,
     WXPOST_PUBLIC_BASE_URL,
     WXPOST_SERVICE_TOKEN,
 )
@@ -43,6 +44,11 @@ from ...services.wxpost_document import (
     pydantic_validation_issues,
     validate_and_parse,
 )
+from ...services.wxpost_hermes import (
+    HermesResponseError,
+    HermesUnavailableError,
+    suggest_voice_tone_instruction,
+)
 from .auth import get_current_user
 
 wxpost_router = r = APIRouter()
@@ -51,6 +57,17 @@ WXPOST_MAX_SOURCE_BYTES = 50 * 1024 * 1024
 workspace_source_route = re.compile(
     r"^sources/M(?:0[1-9]|[1-9][0-9]+)" r"(?:/(?:import|inclusion|content|delete-preflight))?$"
 )
+
+
+class VoiceToneSuggestionRequest(BaseModel):
+    name: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+    ]
+
+
+class VoiceToneSuggestionResponse(BaseModel):
+    instruction: str
 
 
 async def require_wxpost_service(
@@ -357,6 +374,49 @@ async def r_delete_wxpost_workspace(
         f"/workspaces/{quote(workspace_id, safe='')}",
         expected_manifest_version=request.headers.get("X-Expected-Manifest-Version"),
     )
+
+
+@r.post(
+    "/posts/wxposts/workspaces/{workspace_id}/voice-tone/suggestion",
+    response_model=VoiceToneSuggestionResponse,
+    dependencies=[Depends(get_current_user)],
+)
+async def r_suggest_wxpost_voice_tone(
+    payload: VoiceToneSuggestionRequest,
+    workspace_id: str = Path(..., min_length=1),
+) -> VoiceToneSuggestionResponse | Response:
+    context_response = await _proxy_workspace_controller(
+        "GET",
+        f"/workspaces/{quote(workspace_id, safe='')}/context",
+    )
+    if context_response.status_code != 200:
+        return context_response
+    try:
+        workspace_context = json.loads(context_response.body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="WxPost workspace controller returned invalid context.",
+        ) from error
+
+    try:
+        instruction = await suggest_voice_tone_instruction(
+            hermes_url=WXPOST_HERMES_URL,
+            service_token=WXPOST_SERVICE_TOKEN,
+            profile_name=payload.name,
+            workspace_context=workspace_context,
+        )
+    except HermesUnavailableError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Hermes editorial assistant is unavailable.",
+        ) from error
+    except HermesResponseError as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Hermes returned an unusable voice and tone instruction.",
+        ) from error
+    return VoiceToneSuggestionResponse(instruction=instruction)
 
 
 @r.api_route(

@@ -1,11 +1,14 @@
 'use client';
 
 import {
+  type WorkspaceCustomVoiceToneProfile,
+  type WorkspaceVoiceTonePreset,
   WORKSPACE_WRITING_APPROACH_LABELS,
   type WorkspaceWritingApproach,
 } from '@/utils/wxpostWorkspace';
 
 import { ResizableTextarea } from './ResizableTextarea';
+import { VoiceToneField } from './VoiceToneField';
 import {
   PANEL_CLASS,
   PANEL_HEADER_CLASS,
@@ -23,20 +26,32 @@ const FIELD_CLASS =
   'grid gap-2 text-sm font-bold text-slate-700 [&_textarea]:block [&_textarea]:min-h-[132px] [&_textarea]:w-full [&_textarea]:rounded-[10px] [&_textarea]:border [&_textarea]:border-[#cad5e4] [&_textarea]:bg-white [&_textarea]:px-[13px] [&_textarea]:pb-8 [&_textarea]:pt-3 [&_textarea]:text-[15px] [&_textarea]:font-normal [&_textarea]:leading-[1.55] [&_textarea]:text-[#172033] [&_textarea]:outline-none [&_textarea]:placeholder:font-normal [&_textarea]:placeholder:text-[#93a0b2] [&_textarea]:hover:border-[#9fb1c8] [&_textarea]:focus:border-blue-600';
 
 export function ArticleInputsPanel({
+  workspaceId,
   writingApproach,
+  voiceTonePresets,
+  customVoiceToneProfiles,
   transcript,
   extraNotes,
   writingGuidance,
   onWritingApproachChange,
+  onVoiceTonePresetsChange,
+  onCustomVoiceToneProfilesChange,
   onTranscriptChange,
   onExtraNotesChange,
   onWritingGuidanceChange,
 }: {
+  workspaceId: string;
   writingApproach: WorkspaceWritingApproach;
+  voiceTonePresets: WorkspaceVoiceTonePreset[];
+  customVoiceToneProfiles: WorkspaceCustomVoiceToneProfile[];
   transcript: string;
   extraNotes: string;
   writingGuidance: string;
   onWritingApproachChange: (value: WorkspaceWritingApproach) => void;
+  onVoiceTonePresetsChange: (value: WorkspaceVoiceTonePreset[]) => void;
+  onCustomVoiceToneProfilesChange: (
+    value: WorkspaceCustomVoiceToneProfile[]
+  ) => void;
   onTranscriptChange: (value: string) => void;
   onExtraNotesChange: (value: string) => void;
   onWritingGuidanceChange: (value: string) => void;
@@ -103,12 +118,20 @@ export function ArticleInputsPanel({
             </div>
           </fieldset>
 
+          <VoiceToneField
+            workspaceId={workspaceId}
+            presets={voiceTonePresets}
+            customProfiles={customVoiceToneProfiles}
+            onPresetsChange={onVoiceTonePresetsChange}
+            onCustomProfilesChange={onCustomVoiceToneProfilesChange}
+          />
+
           <label className={FIELD_CLASS}>
             <span>Writing guidance</span>
             <ResizableTextarea
               value={writingGuidance}
               onChange={(event) => onWritingGuidanceChange(event.target.value)}
-              placeholder='Describe the desired angle, tone, and emphasis'
+              placeholder='Describe the desired angle, emphasis, and details to avoid'
               data-testid='writing-guidance'
               resizeHandleTestId='writing-guidance-resize-handle'
             />

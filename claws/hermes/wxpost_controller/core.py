@@ -24,6 +24,7 @@ from .contracts import (
     BootstrapWorkspaceRequest,
     DeleteSourceRequest,
     DraftEnvelope,
+    MANIFEST_SCHEMA_VERSION,
     MeetingLibraryOrigin,
     MeetingMediaReference,
     SaveDraftRequest,
@@ -904,7 +905,7 @@ class WorkspaceController:
         ]
         return SourceManifest.model_validate(
             {
-                "schemaVersion": 3,
+                "schemaVersion": MANIFEST_SCHEMA_VERSION,
                 "workspaceId": workspace_id,
                 "manifestVersion": 1,
                 "nextMaterialNumber": len(sources) + 1,
@@ -1482,7 +1483,7 @@ class WorkspaceController:
         except ValidationError as exc:
             error_type = InvalidRequest if request_error else InvalidWorkspace
             raise error_type(
-                f"{label} does not satisfy source-manifest v3: "
+                f"{label} does not satisfy source-manifest v4: "
                 f"{cls._validation_message(exc)}"
             ) from exc
 

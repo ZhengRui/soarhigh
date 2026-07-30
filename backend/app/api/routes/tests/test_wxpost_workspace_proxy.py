@@ -173,6 +173,94 @@ def test_authenticated_members_can_list_and_delete_all_workspaces(
     assert captured[1].headers["X-Expected-Manifest-Version"] == "4"
 
 
+def test_voice_tone_suggestion_uses_workspace_context_and_existing_token(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[httpx.Request] = []
+    hermes_calls: list[dict] = []
+    workspace_context = {
+        "workspaceId": "wxpost-abc",
+        "manifest": {
+            "editorial": {
+                "articleType": "meeting-recap",
+                "customArticleType": None,
+                "writingGuidance": "Keep it vivid.",
+                "voiceTone": {
+                    "presets": ["reflective"],
+                    "customProfiles": [],
+                },
+            }
+        },
+        "draft": None,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=workspace_context)
+
+    async def suggest(**kwargs) -> str:
+        hermes_calls.append(kwargs)
+        return "Use lively details and restrained wit."
+
+    _configure_controller(monkeypatch, handler)
+    monkeypatch.setattr(wxpost_route, "WXPOST_HERMES_URL", "http://hermes")
+    monkeypatch.setattr(wxpost_route, "suggest_voice_tone_instruction", suggest)
+
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/voice-tone/suggestion",
+        headers={"Authorization": "Bearer member-token"},
+        json={"name": "  Dry humour  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"instruction": "Use lively details and restrained wit."}
+    assert [(request.method, request.url.path) for request in captured] == [("GET", "/workspaces/wxpost-abc/context")]
+    assert hermes_calls == [
+        {
+            "hermes_url": "http://hermes",
+            "service_token": "controller-secret",
+            "profile_name": "Dry humour",
+            "workspace_context": workspace_context,
+        }
+    ]
+
+
+def test_voice_tone_suggestion_does_not_run_when_workspace_is_missing(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "error": {
+                    "code": "workspace_not_found",
+                    "message": "workspace not found",
+                }
+            },
+        )
+
+    async def should_not_run(**kwargs) -> str:
+        raise AssertionError("Hermes should not run for an unknown workspace")
+
+    _configure_controller(monkeypatch, handler)
+    monkeypatch.setattr(
+        wxpost_route,
+        "suggest_voice_tone_instruction",
+        should_not_run,
+    )
+
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-missing/voice-tone/suggestion",
+        headers={"Authorization": "Bearer member-token"},
+        json={"name": "Warm"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "workspace_not_found"
+
+
 def test_material_proxy_preserves_version_and_binary_contracts(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

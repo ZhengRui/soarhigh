@@ -24,10 +24,10 @@ WEB_IMAGE_ID = "M03"
 
 @pytest.fixture
 def manifest_data() -> dict[str, Any]:
-    return json.loads((FIXTURES / "source-manifest-v3.json").read_text())
+    return json.loads((FIXTURES / "source-manifest-v4.json").read_text())
 
 
-def test_source_manifest_v3_fixture_is_complete(
+def test_source_manifest_v4_fixture_is_complete(
     manifest_data: dict[str, Any],
 ) -> None:
     manifest = SourceManifest.model_validate(manifest_data)
@@ -49,8 +49,8 @@ def test_source_manifest_v3_fixture_is_complete(
     }
 
 
-@pytest.mark.parametrize("invalid_version", [None, 2, True, 3.0, "3"])
-def test_manifest_requires_strict_schema_version_3(
+@pytest.mark.parametrize("invalid_version", [None, 3, True, 4.0, "4"])
+def test_manifest_requires_strict_schema_version_4(
     manifest_data: dict[str, Any],
     invalid_version: object,
 ) -> None:
@@ -215,6 +215,7 @@ def test_workspace_custom_article_type_label_is_optional() -> None:
             "editorial": {
                 "articleType": "custom",
                 "customArticleType": None,
+                "voiceTone": {"presets": [], "customProfiles": []},
             },
             "createdBy": {
                 "id": "member-123",
@@ -233,6 +234,7 @@ def test_material_operation_contracts_are_strict_and_camel_case_only() -> None:
             "editorial": {
                 "articleType": "meeting-recap",
                 "customArticleType": None,
+                "voiceTone": {"presets": [], "customProfiles": []},
             },
             "createdBy": {
                 "id": "member-123",
@@ -247,6 +249,7 @@ def test_material_operation_contracts_are_strict_and_camel_case_only() -> None:
             "editorial": {
                 "articleType": "meeting-recap",
                 "customArticleType": None,
+                "voiceTone": {"presets": [], "customProfiles": []},
             },
         }
     )
@@ -305,11 +308,94 @@ def test_material_operation_contracts_are_strict_and_camel_case_only() -> None:
                 "editorial": {
                     "articleType": "meeting-recap",
                     "customArticleType": None,
+                    "voiceTone": {"presets": [], "customProfiles": []},
                 },
                 "sourceUpdates": [
                     {"sourceId": "M01", "included": True},
                     {"sourceId": "M01", "included": False},
                 ],
+            }
+        )
+
+
+def test_voice_tone_contract_limits_selection_and_requires_unique_profiles() -> None:
+    valid_editorial = {
+        "articleType": "meeting-recap",
+        "customArticleType": None,
+        "voiceTone": {
+            "presets": ["encouraging", "reflective"],
+            "customProfiles": [
+                {
+                    "name": "Room energy",
+                    "instruction": "Keep the prose lively and grounded.",
+                    "selected": True,
+                }
+            ],
+        },
+    }
+    request = BootstrapWorkspaceRequest.model_validate(
+        {
+            "meetingId": None,
+            "editorial": valid_editorial,
+            "createdBy": {"id": "member-123", "name": "Test Member"},
+        }
+    )
+    assert request.editorial.voice_tone.to_wire() == valid_editorial["voiceTone"]
+
+    too_many = {
+        **valid_editorial,
+        "voiceTone": {
+            **valid_editorial["voiceTone"],
+            "presets": ["encouraging", "reflective", "celebratory"],
+        },
+    }
+    with pytest.raises(ValidationError, match="at most three"):
+        BootstrapWorkspaceRequest.model_validate(
+            {
+                "meetingId": None,
+                "editorial": too_many,
+                "createdBy": {"id": "member-123", "name": "Test Member"},
+            }
+        )
+
+    duplicate_profiles = {
+        **valid_editorial,
+        "voiceTone": {
+            "presets": [],
+            "customProfiles": [
+                {
+                    "name": "Warm",
+                    "instruction": "Use warm details.",
+                    "selected": False,
+                },
+                {
+                    "name": " warm ",
+                    "instruction": "Use a second instruction.",
+                    "selected": False,
+                },
+            ],
+        },
+    }
+    with pytest.raises(ValidationError, match="names must be unique"):
+        BootstrapWorkspaceRequest.model_validate(
+            {
+                "meetingId": None,
+                "editorial": duplicate_profiles,
+                "createdBy": {"id": "member-123", "name": "Test Member"},
+            }
+        )
+
+
+def test_voice_tone_is_required_without_a_legacy_default() -> None:
+    with pytest.raises(ValidationError, match="voiceTone"):
+        BootstrapWorkspaceRequest.model_validate(
+            {
+                "meetingId": None,
+                "editorial": {
+                    "articleType": "meeting-recap",
+                    "customArticleType": None,
+                },
+                "createdBy": {"id": "member-123", "name": "Test Member"},
             }
         )
 

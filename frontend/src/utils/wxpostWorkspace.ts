@@ -38,6 +38,25 @@ export type WorkspaceWritingApproach =
   | 'image-driven'
   | 'highlights-first';
 
+export type WorkspaceVoiceTonePreset =
+  | 'encouraging'
+  | 'lightly-humorous'
+  | 'heartfelt'
+  | 'documentary'
+  | 'reflective'
+  | 'celebratory';
+
+export interface WorkspaceCustomVoiceToneProfile {
+  name: string;
+  instruction: string;
+  selected: boolean;
+}
+
+export interface WorkspaceVoiceTone {
+  presets: WorkspaceVoiceTonePreset[];
+  customProfiles: WorkspaceCustomVoiceToneProfile[];
+}
+
 export const WORKSPACE_ARTICLE_TYPE_LABELS: Record<
   WorkspaceArticleType,
   string
@@ -60,6 +79,49 @@ export const WORKSPACE_WRITING_APPROACH_LABELS: Record<
   'highlights-first': 'Highlights first',
 };
 
+export const WORKSPACE_VOICE_TONE_PRESETS: ReadonlyArray<{
+  id: WorkspaceVoiceTonePreset;
+  label: string;
+  instruction: string;
+}> = [
+  {
+    id: 'encouraging',
+    label: 'Encouraging',
+    instruction:
+      'Use an uplifting, supportive voice that gives readers confidence and forward momentum.',
+  },
+  {
+    id: 'lightly-humorous',
+    label: 'Lightly humorous',
+    instruction:
+      'Add gentle, natural wit without turning people or meaningful moments into punchlines.',
+  },
+  {
+    id: 'heartfelt',
+    label: 'Heartfelt',
+    instruction:
+      'Write with warmth and emotional honesty while keeping the language specific and sincere.',
+  },
+  {
+    id: 'documentary',
+    label: 'Documentary',
+    instruction:
+      'Use a clear, observant voice grounded in concrete events, details, and verifiable facts.',
+  },
+  {
+    id: 'reflective',
+    label: 'Reflective',
+    instruction:
+      'Connect specific moments to thoughtful meaning without becoming abstract or overly solemn.',
+  },
+  {
+    id: 'celebratory',
+    label: 'Celebratory',
+    instruction:
+      'Highlight achievement and shared energy with lively language that remains credible and inclusive.',
+  },
+];
+
 export interface WorkspaceEditorial {
   articleType: WorkspaceArticleType;
   customArticleType: string | null;
@@ -67,6 +129,7 @@ export interface WorkspaceEditorial {
   transcript: string;
   extraNotes: string;
   writingGuidance: string;
+  voiceTone: WorkspaceVoiceTone;
 }
 
 export interface WorkspaceSource {
@@ -91,7 +154,7 @@ export interface WorkspaceCreator {
 }
 
 export interface WorkspaceManifest {
-  schemaVersion: 3;
+  schemaVersion: 4;
   workspaceId: string;
   manifestVersion: number;
   nextMaterialNumber: number;
@@ -254,6 +317,20 @@ export function saveWorkspaceMaterials(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
+}
+
+export function suggestWorkspaceVoiceToneInstruction(
+  workspaceId: string,
+  name: string
+) {
+  return requestJson<{ instruction: string }>(
+    `${workspacePath(workspaceId)}/voice-tone/suggestion`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }
+  );
 }
 
 export function listWorkspaces({

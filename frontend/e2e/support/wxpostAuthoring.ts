@@ -18,7 +18,7 @@ export {
 } from './wxpostFixtures';
 
 export type WorkspaceManifest = {
-  schemaVersion: 3;
+  schemaVersion: 4;
   workspaceId: string;
   manifestVersion: number;
   nextMaterialNumber: number;
@@ -42,6 +42,21 @@ export type WorkspaceManifest = {
     transcript: string;
     extraNotes: string;
     writingGuidance: string;
+    voiceTone: {
+      presets: Array<
+        | 'encouraging'
+        | 'lightly-humorous'
+        | 'heartfelt'
+        | 'documentary'
+        | 'reflective'
+        | 'celebratory'
+      >;
+      customProfiles: Array<{
+        name: string;
+        instruction: string;
+        selected: boolean;
+      }>;
+    };
   };
   sources: Array<{
     id: string;
@@ -153,7 +168,7 @@ export async function mockWxPostWorkspaceApi(
         const context = {
           workspaceId,
           manifest: {
-            schemaVersion: 3,
+            schemaVersion: 4,
             workspaceId,
             manifestVersion: 1,
             nextMaterialNumber: meetingSources(input.meetingId).length + 1,
@@ -177,7 +192,7 @@ export async function mockWxPostWorkspaceApi(
         context = {
           workspaceId,
           manifest: {
-            schemaVersion: 3,
+            schemaVersion: 4,
             workspaceId,
             manifestVersion: 4,
             nextMaterialNumber: 4,
@@ -193,6 +208,7 @@ export async function mockWxPostWorkspaceApi(
               transcript: '',
               extraNotes: '',
               writingGuidance: '',
+              voiceTone: { presets: [], customProfiles: [] },
             },
             sources: meetingSources('meeting-462'),
           },
@@ -208,6 +224,20 @@ export async function mockWxPostWorkspaceApi(
           );
         }
         await route.fulfill({ status: 200, json: context });
+        return;
+      }
+      if (
+        method === 'POST' &&
+        parts[0] === 'voice-tone' &&
+        parts[1] === 'suggestion'
+      ) {
+        const input = request.postDataJSON() as { name: string };
+        await route.fulfill({
+          status: 200,
+          json: {
+            instruction: `Use a warm, specific voice that makes ${input.name} feel natural without becoming sentimental.`,
+          },
+        });
         return;
       }
       if (method === 'GET' && parts[2] === 'content') {

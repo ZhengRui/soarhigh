@@ -1,5 +1,7 @@
 import type {
   WorkspaceArticleType,
+  WorkspaceCustomVoiceToneProfile,
+  WorkspaceVoiceTonePreset,
   WorkspaceWritingApproach,
 } from '@/utils/wxpostWorkspace';
 
@@ -30,5 +32,7 @@ export interface WxPostMaterialsWorkingCopy {
   transcript: string;
   extraNotes: string;
   writingGuidance: string;
+  voiceTonePresets: WorkspaceVoiceTonePreset[];
+  customVoiceToneProfiles: WorkspaceCustomVoiceToneProfile[];
   sources: Record<string, WxPostMaterialWorkingState>;
 }

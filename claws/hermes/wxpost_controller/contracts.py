@@ -15,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-MANIFEST_SCHEMA_VERSION: Literal[3] = 3
+MANIFEST_SCHEMA_VERSION: Literal[4] = 4
 
 TrimmedText = Annotated[
     str,
@@ -59,6 +59,15 @@ class WritingApproach(str, Enum):
     THEME_DRIVEN = "theme-driven"
     IMAGE_DRIVEN = "image-driven"
     HIGHLIGHTS_FIRST = "highlights-first"
+
+
+class VoiceTonePreset(str, Enum):
+    ENCOURAGING = "encouraging"
+    LIGHTLY_HUMOROUS = "lightly-humorous"
+    HEARTFELT = "heartfelt"
+    DOCUMENTARY = "documentary"
+    REFLECTIVE = "reflective"
+    CELEBRATORY = "celebratory"
 
 
 class SourceKind(str, Enum):
@@ -112,6 +121,43 @@ SourceOrigin = Annotated[
 ]
 
 
+VoiceToneName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+]
+VoiceToneInstruction = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=1000),
+]
+
+
+class CustomVoiceToneProfile(ContractModel):
+    name: VoiceToneName
+    instruction: VoiceToneInstruction
+    selected: bool = Field(strict=True)
+
+
+class VoiceToneSettings(ContractModel):
+    presets: list[VoiceTonePreset]
+    custom_profiles: list[CustomVoiceToneProfile]
+
+    @model_validator(mode="after")
+    def _validate_profiles(self) -> VoiceToneSettings:
+        if len(self.presets) != len(set(self.presets)):
+            raise ValueError("voice tone presets must be unique")
+
+        profile_names = [profile.name.casefold() for profile in self.custom_profiles]
+        if len(profile_names) != len(set(profile_names)):
+            raise ValueError("custom voice tone names must be unique")
+
+        selected_count = len(self.presets) + sum(
+            profile.selected for profile in self.custom_profiles
+        )
+        if selected_count > 3:
+            raise ValueError("at most three voice tones may be selected")
+        return self
+
+
 class EditorialSettings(ContractModel):
     article_type: ArticleType
     custom_article_type: TrimmedText | None = None
@@ -119,6 +165,7 @@ class EditorialSettings(ContractModel):
     transcript: str = ""
     extra_notes: str = ""
     writing_guidance: str = ""
+    voice_tone: VoiceToneSettings
 
     @model_validator(mode="after")
     def _validate_custom_article_type(self) -> EditorialSettings:
@@ -182,7 +229,7 @@ class WorkspaceCreator(ContractModel):
 
 
 class SourceManifest(ContractModel):
-    schema_version: Literal[3]
+    schema_version: Literal[4]
     workspace_id: TrimmedText
     manifest_version: int = Field(ge=1, strict=True)
     next_material_number: int = Field(ge=1, strict=True)
@@ -202,7 +249,7 @@ class SourceManifest(ContractModel):
             or isinstance(value, bool)
             or value != MANIFEST_SCHEMA_VERSION
         ):
-            raise ValueError("schemaVersion must be the integer 3")
+            raise ValueError("schemaVersion must be the integer 4")
         return value
 
     @model_validator(mode="after")
