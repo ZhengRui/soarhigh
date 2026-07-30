@@ -3,7 +3,10 @@
 **Last updated:** 2026-07-30
 
 **WxPost checkpoint:** `0aa76f0` — Setup, Materials, and Workspaces complete;
-Draft and Preview pending.
+Draft and Preview pending. The next slice owns the rendered Draft workbench,
+the formal WxPost Hermes Skill, and the focused web Hermes session through
+`hermes serve`. Feishu attachment integration, selected-image description
+generation, and public-preview synchronization remain in the following slice.
 
 ## Application Overview
 
@@ -136,6 +139,8 @@ All routes in the (auth) group are protected by authentication middleware which 
 - "Save Materials" persists that working copy atomically and does not change
   the last saved Draft
 - Import, upload, and delete remain immediate file operations
+- Import, upload, and delete persist only their structural workspace changes;
+  they do not save unrelated local Materials form edits
 - Every material mutation carries the current manifest version; stale writes
   open a confirmation dialog before server state replaces local edits
 - The Workspaces list is shared by all members, paginated, ordered by creation
@@ -144,6 +149,22 @@ All routes in the (auth) group are protected by authentication middleware which 
   remain usable if meeting metadata is temporarily unavailable
 - Draft and Preview are intentionally disabled until the rendered Draft
   workbench is implemented
+- The next slice connects one persisted web Hermes session to the same
+  workspace, submits the complete Materials snapshot through Generate Draft,
+  and saves the validated ArticleDocument through the existing MCP controller
+- Generate Draft is available only after Materials form changes have been
+  saved; immediate import, upload, and delete operations do not conflict with
+  that rule
+- Direct rendered-block edits stay local until Save Draft; a successful
+  Generate, Regenerate, Save Draft, or explicit Hermes revision increments
+  `draftVersion`
+- The first Draft workbench supports block editing and selected-text context
+  for Hermes, not a general rich-text formatting toolbar
+- Regenerate replaces the current canonical Draft and advances its version;
+  retained version history and rollback are not part of the next slice
+- Feishu active-workspace selection, Feishu attachment ingestion, selected-image
+  description generation, and explicit public-preview synchronization are not
+  part of that Draft-workbench slice
 
 ### Meeting Form
 
@@ -306,8 +327,16 @@ The meeting management workflow is now fully implemented:
      protection
    - Lists shared workspaces with pagination, stable creation-time ordering,
      compact linked-meeting metadata, and resilient loading/error states
-   - Leaves Draft generation, rendered Draft editing, Preview, and Hermes web
-     conversation for the next implementation slice
+   - Keeps workspace cards visible during deletion and background refreshes;
+     only the first load replaces the list with the centered spinner
+   - Leaves Draft generation, rendered Draft editing, read-only Preview, the
+     formal WxPost Hermes Skill, and the focused `hermes serve` conversation
+     for the next implementation slice
+   - Plans a workspace-local, multi-select `Voice & tone` brief for that slice:
+     six presets, up to three selections, and optional custom profiles with a
+     user-editable AI instruction proposal
+   - Leaves Feishu workspace/attachment integration, selected-image
+     descriptions, and public-preview synchronization for the following slice
 
 9. **Voting System**
 

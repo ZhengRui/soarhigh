@@ -126,6 +126,7 @@ export default function WxPostWorkspacesPage() {
     queryKey: ['meeting-options-by-ids', meetingIds],
     queryFn: () => getMeetingOptionsByIds(meetingIds),
     enabled: meetingIds.length > 0,
+    placeholderData: keepPreviousData,
     retry: false,
     staleTime: 60 * 1000,
   });
@@ -137,6 +138,10 @@ export default function WxPostWorkspacesPage() {
   );
   const meetingMetadataPending =
     meetingIds.length > 0 && meetingOptionsQuery.isPending;
+  const workspacesRefreshing =
+    !workspacesQuery.isPending &&
+    !meetingMetadataPending &&
+    (workspacesQuery.isFetching || meetingOptionsQuery.isFetching);
   const totalPages = workspacesQuery.data?.pages ?? 1;
 
   useEffect(() => {
@@ -245,8 +250,11 @@ export default function WxPostWorkspacesPage() {
           </div>
         ) : (
           <>
-            {workspacesQuery.isFetching && !workspacesQuery.isPending && (
-              <div className='mb-4 flex items-center justify-center gap-2 rounded-md bg-blue-50 px-4 py-2 text-sm text-blue-600'>
+            {workspacesRefreshing && (
+              <div
+                className='mb-4 flex items-center justify-center gap-2 rounded-md bg-blue-50 px-4 py-2 text-sm text-blue-600'
+                data-testid='workspaces-refreshing'
+              >
                 <RefreshCw
                   className='h-4 w-4 animate-spin'
                   aria-hidden='true'

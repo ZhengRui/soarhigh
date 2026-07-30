@@ -3,7 +3,9 @@
 **Last updated:** 2026-07-30
 
 **WxPost checkpoint:** `0aa76f0` — workspace proxy, compact meeting metadata,
-and versioned Materials saves complete.
+and versioned Materials saves complete. The controller can validate and save an
+ArticleDocument supplied through MCP, but the WxPost Hermes Skill, web Hermes
+session, and Generate Draft product flow are not connected yet.
 
 ## Architecture Overview
 
@@ -303,6 +305,11 @@ Model for blog posts:
   - Authenticated workspace creation, listing, saving, deletion, and material
     operations through the containerized controller
   - Bounded compact meeting metadata for selectors and workspace cards
+  - Controller-side ArticleDocument validation and draft persistence; article
+    generation still belongs to the pending Hermes integration
+  - The pending Draft slice may change the workspace editorial manifest
+    directly for `Voice & tone`; the development workspaces were cleared, so
+    no legacy-manifest migration or compatibility branch is required
 
 ### Current Implementation Details
 

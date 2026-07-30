@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  MEETING_OPTIONS,
   mockAuthenticatedMember,
   mockWxPostReadApis,
   mockWxPostWorkspaceApi,
@@ -102,7 +103,6 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
   page,
 }) => {
   await mockAuthenticatedMember(page);
-  await mockWxPostReadApis(page);
   const meetingBatchRequests: string[][] = [];
   const fullMeetingRequests: string[] = [];
   page.on('request', (request) => {
@@ -116,6 +116,39 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
       fullMeetingRequests.push(url.pathname);
     }
   });
+  let meetingMetadataRequestCount = 0;
+  let markRefreshStarted: () => void = () => undefined;
+  const refreshStarted = new Promise<void>((resolve) => {
+    markRefreshStarted = resolve;
+  });
+  let releaseRefresh: () => void = () => undefined;
+  const refreshReleased = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  await page.route(/\/meetings\/options\/batch$/, async (route) => {
+    meetingMetadataRequestCount += 1;
+    const requestedIds = new Set(
+      (route.request().postDataJSON() as { ids: string[] }).ids
+    );
+    if (meetingMetadataRequestCount === 2) {
+      markRefreshStarted();
+      await refreshReleased;
+    }
+    await route.fulfill({
+      status: 200,
+      json: {
+        items: MEETING_OPTIONS.filter((meeting) =>
+          requestedIds.has(meeting.id)
+        ).map(({ id, no, type, theme, date }) => ({
+          id,
+          no,
+          type,
+          theme,
+          date,
+        })),
+      },
+    });
+  });
   let deleted = false;
   let listRequests = 0;
   await page.route(WORKSPACES_API_URL, async (route) => {
@@ -124,7 +157,12 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
       status: 200,
       json: workspacePage(
         deleted
-          ? []
+          ? [
+              workspaceSummary('wxpost-second', {
+                meetingId: 'meeting-461',
+                articleType: 'meeting-recap',
+              }),
+            ]
           : [
               workspaceSummary('wxpost-4f2c9a7bd861', {
                 meetingId: 'meeting-462',
@@ -133,6 +171,10 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
                 sourceCount: 3,
                 readySourceCount: 1,
                 includedSourceCount: 1,
+              }),
+              workspaceSummary('wxpost-second', {
+                meetingId: 'meeting-461',
+                articleType: 'meeting-recap',
               }),
             ]
       ),
@@ -180,7 +222,7 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
   ).toHaveCount(0);
   await expect(workspace.getByText(/Created by Test Member/)).toBeVisible();
   await expect(workspace.getByText('No draft yet')).toBeVisible();
-  expect(meetingBatchRequests).toEqual([['meeting-462']]);
+  expect(meetingBatchRequests).toEqual([['meeting-462', 'meeting-461']]);
   expect(fullMeetingRequests).toEqual([]);
   const continueWorkspace = workspace.getByRole('link', {
     name: 'Continue workspace',
@@ -215,7 +257,21 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
   const dialog = page.getByTestId('delete-workspace-dialog');
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: 'Delete workspace' }).click();
-  await expect(page.getByText('No WxPost workspaces yet.')).toBeVisible();
+  await refreshStarted;
+
+  const remainingWorkspace = page.getByTestId('workspace-wxpost-second');
+  await expect(workspace).toHaveCount(0);
+  await expect(remainingWorkspace).toContainText(
+    'Build a speech people remember'
+  );
+  await expect(page.getByTestId('workspaces-loading')).toHaveCount(0);
+  await expect(page.getByTestId('workspaces-refreshing')).toBeVisible();
+
+  releaseRefresh();
+  await expect(page.getByTestId('workspaces-refreshing')).toHaveCount(0);
+  await expect(remainingWorkspace).toContainText(
+    'Build a speech people remember'
+  );
   expect(listRequests).toBe(2);
 });
 
