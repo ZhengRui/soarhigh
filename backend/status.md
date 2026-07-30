@@ -1,5 +1,10 @@
 # SoarHigh Toastmasters Club - Backend Status
 
+**Last updated:** 2026-07-30
+
+**WxPost checkpoint:** `0aa76f0` — workspace proxy, compact meeting metadata,
+and versioned Materials saves complete.
+
 ## Architecture Overview
 
 This backend application serves as the API for the SoarHigh Toastmasters Club platform. It's built with FastAPI and uses Supabase as the database backend, with JWT-based authentication.
@@ -16,28 +21,36 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 ## API Endpoints
 
 ### Authentication
+
 - **/whoami** - Endpoint to retrieve current authenticated user information
 - **/members** - Endpoint to retrieve all club members (requires authentication)
 
 ### Meeting Management
+
 - **/meeting/parse_agenda_image** - Endpoint to parse a meeting agenda from an uploaded image using OpenAI's GPT-4o model
 - **/meeting/plan_from_text** - Endpoint to plan a meeting from textual description using OpenAI's API
 - **/meetings** - GET: List meetings (with filter by status), POST: Create a new meeting
+- **/meetings/options** - GET: Paginated compact meeting records for selectors
+- **/meetings/options/batch** - POST: Resolve up to 100 compact meeting records
+  for workspace cards
 - **/meetings/{id}** - GET: Retrieve meeting details
 - **/meetings/{id}** - PUT: Update an existing meeting
 - **/meetings/{id}/status** - PUT: Update meeting status (draft/published)
 - **/meetings/{id}** - DELETE: Delete a meeting
 
 ### Awards Management
+
 - **/meetings/{id}/awards** - GET: Retrieve awards for a specific meeting
 - **/meetings/{id}/awards** - POST: Save awards for a specific meeting
 
 ### Media Management
+
 - **/meetings/{id}/media** - GET: List all media files for a meeting
 - **/meetings/{id}/media/get-upload-url** - POST: Get pre-signed URLs for uploading media files
 - **/meetings/{id}/media** - DELETE: Delete media files from a meeting
 
 ### Voting Management
+
 - **/meetings/{id}/votes** - GET: Retrieve votes for a specific meeting
 - **/meetings/{id}/votes** - POST: Cast votes for a specific meeting
 - **/meetings/{id}/votes/increment** - POST: Increment vote counts
@@ -45,27 +58,52 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 - **/meetings/{id}/votes/status** - PUT: Update voting status (open/close voting)
 
 ### Feedback Management
+
 - **/meetings/{id}/feedbacks** - GET: Retrieve feedbacks with access control, POST: Create feedback
 - **/meetings/{id}/feedbacks/{feedback_id}** - PUT: Update feedback, DELETE: Delete feedback
 - **/meetings/{id}/feedbacks/experiences** - POST: Create experience curve feedbacks (batch operation)
 
 ### Checkin Management
+
 - **/meetings/{id}/checkins** - GET: Retrieve checkins, POST: Create checkins for segments
 
 ### Blog Post Management
+
 - **/posts** - GET: List posts with pagination, POST: Create a new post
 - **/posts/{slug}** - GET: Retrieve a post by slug, PATCH: Update an existing post, DELETE: Delete a post
+
+### WxPost Management
+
+- **/posts/wxposts/capabilities** - GET: Return the canonical authoring
+  vocabulary
+- **/posts/wxposts/validate** - POST: Validate an ArticleDocument without
+  storing it
+- **/posts/wxposts** - POST: Store a validated WxPost through the scoped
+  service credential
+- **/posts/wxposts/{id}** - PATCH: Update a stored WxPost with revision
+  protection
+- **/posts/wxposts/{slug}** - GET: Return a public render document
+- **/posts/wxposts/workspaces** - GET: List paginated shared workspaces
+- **/posts/wxposts/workspaces/{id}** - PUT/PATCH/DELETE: Create, save, or
+  delete a versioned workspace
+- **/posts/wxposts/workspaces/{id}/...** - Authenticated proxy for the
+  controller's context, material, import, upload, content, and delete
+  operations
 
 ## Data Models
 
 ### User Model
+
 A simple model with:
+
 - `uid`: User identifier
 - `username`: Username
 - `full_name`: User's full name
 
 ### Attendee Model
+
 A model for meeting participants with:
+
 - `id`: Attendee identifier
 - `name`: Attendee's full name
 - `type`: Type of attendee ("Member" or "Guest")
@@ -74,7 +112,9 @@ A model for meeting participants with:
 - `member_id`: Optional link to a member record (for member-type attendees)
 
 ### Meeting Model
+
 A comprehensive model for Toastmasters meetings with:
+
 - Basic meeting information: type, theme, manager, date, times, location
 - Introduction text
 - A list of meeting segments
@@ -82,7 +122,9 @@ A comprehensive model for Toastmasters meetings with:
 - Associated media files stored in AliCloud OSS
 
 ### Meeting Segment Model
+
 Detailed model for meeting agenda items with:
+
 - Segment ID and type
 - Start time, duration and end time
 - Role taker (references an Attendee)
@@ -90,13 +132,17 @@ Detailed model for meeting agenda items with:
 - Related segment IDs (as comma-separated string)
 
 ### Award Model
+
 Model for meeting awards and recognitions:
+
 - `meeting_id`: Reference to the associated meeting
 - `category`: Award category name
 - `winner`: Name of the award recipient
 
 ### Vote Model
+
 Model for tracking votes at meetings:
+
 - `meeting_id`: Reference to the associated meeting
 - `category`: Vote category (e.g., "Best Speaker", "Best Table Topics")
 - `name`: Name of the person being voted for
@@ -104,19 +150,25 @@ Model for tracking votes at meetings:
 - `count`: Number of votes received
 
 ### Media File Model
+
 Model for tracking meeting media files:
+
 - `filename`: Original filename of the media file
 - `url`: Public URL for accessing the file
 - `fileKey`: OSS object key for the file
 - `uploadedAt`: Timestamp when the file was uploaded
 
 ### Vote Status Model
+
 Model for tracking voting status:
+
 - `meeting_id`: Reference to the associated meeting
 - `open`: Boolean indicating if voting is open or closed
 
 ### Feedback Model
+
 Model for meeting feedback and checkins:
+
 - `id`: Feedback identifier
 - `meeting_id`: Reference to the associated meeting
 - `from_wxid`: WeChat openid of the feedback provider
@@ -128,7 +180,9 @@ Model for meeting feedback and checkins:
 - `updated_at`: Timestamp of last update
 
 ### Checkin Model
+
 Model for meeting participation tracking:
+
 - `id`: Checkin identifier
 - `meeting_id`: Reference to the associated meeting
 - `wxid`: WeChat openid of the participant
@@ -137,7 +191,9 @@ Model for meeting participation tracking:
 - `created_at`: Timestamp of checkin
 
 ### Post Model
+
 Model for blog posts:
+
 - `id`: Post identifier
 - `title`: Post title
 - `slug`: URL-friendly identifier
@@ -153,6 +209,8 @@ Model for blog posts:
 - Comprehensive functions for meeting CRUD operations:
   - `create_meeting()`: Creates a new meeting (as draft by default)
   - `get_meetings()`: Retrieves meetings with filtering options
+  - `get_meeting_options()`: Retrieves lightweight paginated selector records
+  - `get_meeting_options_by_ids()`: Resolves a bounded batch for workspace cards
   - `get_meeting_by_id()`: Retrieves a specific meeting by ID
   - `update_meeting()`: Updates meeting details
   - `update_meeting_status()`: Updates meeting status (draft/published)
@@ -188,6 +246,8 @@ Model for blog posts:
   - `create_wxpost()`: Stores one validated canonical article document
   - `update_wxpost()`: Updates through an expected-revision guard
   - `get_public_wxpost_by_slug()`: Derives the public render document
+  - Workspace proxy routes authenticate members, hide the controller token,
+    enforce a 50 MiB upload limit, and forward manifest-version guards
 
 ## Authentication System
 
@@ -199,6 +259,7 @@ Model for blog posts:
 ## Development Status
 
 ### Completed Features
+
 - Basic FastAPI application setup with CORS support
 - Supabase integration for database operations
 - JWT-based authentication
@@ -236,36 +297,48 @@ Model for blog posts:
   - Updating existing posts (members only)
   - Deleting posts (members only)
   - Access control for posts (public/private visibility)
+- WxPost management:
+  - Canonical ArticleDocument validation and public rendering
+  - Revision-protected create and update operations
+  - Authenticated workspace creation, listing, saving, deletion, and material
+    operations through the containerized controller
+  - Bounded compact meeting metadata for selectors and workspace cards
 
 ### Current Implementation Details
 
 The backend now fully supports the meeting management workflow:
 
 1. **Meeting Creation**:
+
    - Members can create new meetings which are saved as drafts by default
    - Meetings can be created from scratch, from parsed agenda images, or from text descriptions
 
 2. **Meeting Listing**:
+
    - Members can see all meetings (both draft and published)
    - Non-members can only see published meetings
    - Optional filtering by status
 
 3. **Meeting Details**:
+
    - Detailed meeting information retrieval with segments
    - Access control based on meeting status and user authentication
 
 4. **Meeting Updates**:
+
    - Full meeting information updates
    - Dedicated endpoint for status changes (draft/published)
    - Access control to ensure only members can update
 
 5. **Meeting Deletion**:
+
    - Members can delete meetings they manage
    - Administrators have broader deletion rights
    - Row-level security enforced at the database level
    - Associated media files automatically deleted from AliCloud OSS
 
 6. **Blog Post Management**:
+
    - Members can create, edit, and delete blog posts
    - Posts can be set as public or private
    - Public posts are visible to all users, private posts only to members
@@ -273,6 +346,7 @@ The backend now fully supports the meeting management workflow:
    - Full CRUD operations with appropriate validation
 
 7. **Voting System**:
+
    - Members and non-members can cast votes in open voting sessions
    - Only members can manage voting status (open/close)
    - Atomic vote counting to ensure data integrity
@@ -281,6 +355,7 @@ The backend now fully supports the meeting management workflow:
    - Real-time vote tallying
 
 8. **Feedback and Checkin System**:
+
    - Complete feedback CRUD operations with sophisticated access control
    - Experience curve feedback methodology (opening/peak/valley/ending)
    - Batch experience feedback creation for efficient user input

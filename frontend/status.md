@@ -1,5 +1,10 @@
 # SoarHigh Toastmasters Club - Frontend Status
 
+**Last updated:** 2026-07-30
+
+**WxPost checkpoint:** `0aa76f0` — Setup, Materials, and Workspaces complete;
+Draft and Preview pending.
+
 ## Application Overview
 
 This Next.js application serves as the web platform for the "SoarHigh Toastmasters Club," providing functionality for meeting management, growth tracking, awards recognition, posts, and voting. The application has both public-facing components and authenticated sections.
@@ -11,8 +16,10 @@ This Next.js application serves as the web platform for the "SoarHigh Toastmaste
 - **/** - Landing page with club introduction and information
 - **/signin** - Authentication page with sign-in form
 - **/meetings** - Public meeting listing page showing published meetings
-- **/posts** - Public posts listing page showing published content
+- **/posts** - Public listing for ordinary Posts and WxPosts
 - **/posts/[slug]** - Public post detail page for viewing specific content
+- **/posts/wxposts/[slug]** - Public, read-only WxPost rendering and
+  presentation controls
 - **/meetings/workbook/[id]** - Public meeting agenda workbook preview page
 
 ### Protected Routes (under the (auth) group)
@@ -31,6 +38,12 @@ All routes in the (auth) group are protected by authentication middleware which 
 
 - **/posts/new** - Page for creating new posts
 - **/posts/edit/[slug]** - Page for editing existing posts
+- **/posts/wxposts/new** - Select a meeting/event or independent source and
+  create a WxPost workspace
+- **/posts/wxposts/edit/[workspaceKey]** - Resume an existing workspace
+  directly in Materials
+- **/posts/wxposts/workspaces** - List, paginate, resume, and delete shared
+  workspaces
 
 #### Operations
 
@@ -100,9 +113,10 @@ All routes in the (auth) group are protected by authentication middleware which 
 
 ### Posts Listing Page (/posts)
 
-- Displays posts with visibility based on user authentication
-- "Create Post" button for authenticated users
-- Post cards with title, author, date, and excerpt
+- Displays ordinary Posts and public WxPosts with All, Posts, and WxPost filters
+- "New Post" and "Wx Workspaces" actions for authenticated users
+- "New Post" opens a compact choice between Regular Post and WxPost
+- Content cards show title, author, date, excerpt, and content type
 - Visibility indicators for authenticated users
 - Edit links for authenticated users
 
@@ -111,6 +125,25 @@ All routes in the (auth) group are protected by authentication middleware which 
 - Displays full post content with title and author information
 - Edit button for authenticated users
 - Access control based on post visibility
+
+### WxPost Authoring
+
+- Setup contains only the source choice and creates one workspace
+- The source is immutable after creation; resumed workspaces open Materials
+  directly instead of flashing Setup first
+- Article type, descriptions, inclusion, transcript, notes, and writing brief
+  are one browser-local Materials working copy
+- "Save Materials" persists that working copy atomically and does not change
+  the last saved Draft
+- Import, upload, and delete remain immediate file operations
+- Every material mutation carries the current manifest version; stale writes
+  open a confirmation dialog before server state replaces local edits
+- The Workspaces list is shared by all members, paginated, ordered by creation
+  time, and displays each workspace's latest update time
+- Linked workspace cards resolve compact meeting metadata in one batch and
+  remain usable if meeting metadata is temporarily unavailable
+- Draft and Preview are intentionally disabled until the rendered Draft
+  workbench is implemented
 
 ### Meeting Form
 
@@ -166,6 +199,9 @@ The application uses several key interfaces:
 - **MediaFile** - Media file structure with filename, url, fileKey, and uploadedAt fields
 - **AwardIF** - Award structure with meeting_id, category, and winner fields
 - **PostIF** - Post structure with title, slug, content, visibility, and author information
+- **WxPost** interfaces - Public article documents, workspace manifests,
+  versioned material sources, editorial state, and paginated workspace
+  summaries
 - **VoteIF** - Vote structure with meeting_id, category, name, segment (optional), and count fields
 - **VoteStatusIF** - Vote status structure with meeting_id and open (boolean) fields
 
@@ -199,6 +235,11 @@ The application uses several key interfaces:
 - Attendee handling for role assignments
 - Meeting awards management
 - Post management with create, read, update, and delete capabilities
+- Public WxPost rendering and filtering inside Posts
+- Source-only WxPost Setup and immutable workspace creation
+- Browser-local Materials editing with explicit Save Materials
+- Version-conflict confirmation for every Materials mutation
+- Responsive, paginated shared Workspaces list with semantic edit routes
 - Meeting voting system with category-based voting
 - Meeting media display with image gallery and lightbox
 - Vote status management (open/close voting)
@@ -255,7 +296,20 @@ The meeting management workflow is now fully implemented:
    - Visibility controls (public/private)
    - Access control based on visibility and user authentication
 
-8. **Voting System**
+8. **WxPost Workspace Authoring**
+
+   - Creates linked or independent workspaces from a source-only Setup page
+   - Opens existing workspaces directly in Materials
+   - Keeps ordinary form edits local until "Save Materials"
+   - Keeps the saved Draft isolated from Materials edits
+   - Executes import, upload, and delete immediately with manifest-version
+     protection
+   - Lists shared workspaces with pagination, stable creation-time ordering,
+     compact linked-meeting metadata, and resilient loading/error states
+   - Leaves Draft generation, rendered Draft editing, Preview, and Hermes web
+     conversation for the next implementation slice
+
+9. **Voting System**
 
    - Category-based voting for meetings (Best Speaker, Best Table Topics, etc.)
    - Voting status management (open/close)
@@ -264,17 +318,17 @@ The meeting management workflow is now fully implemented:
    - Admin controls for managing voting
    - Real-time vote count updates
 
-9. **Meeting Agenda Workbook**
+10. **Meeting Agenda Workbook**
 
-   - Excel-compatible workbook generation with proper formatting
-   - Browser-based preview with responsive design
-   - Support for complex Excel features (merged cells, styling)
-   - Embedded images (club logos and QR codes)
-   - Preview mode for draft meetings
-   - Authentication-gated download functionality
-   - Proper section formatting for all meeting components
+- Excel-compatible workbook generation with proper formatting
+- Browser-based preview with responsive design
+- Support for complex Excel features (merged cells, styling)
+- Embedded images (club logos and QR codes)
+- Preview mode for draft meetings
+- Authentication-gated download functionality
+- Proper section formatting for all meeting components
 
-10. **Meeting Media Management**
+11. **Meeting Media Management**
 
 - Image upload functionality for meetings
 - Media display in expandable meeting cards with tabbed interface
