@@ -458,7 +458,8 @@ test('edits every Draft text source precisely and persists it without changing M
     'field-notes',
     'editorial-feature',
   ] as const) {
-    await page.getByTestId('draft-layout-select').selectOption(layout);
+    await page.getByTestId('draft-layout-select').click();
+    await page.getByTestId(`draft-layout-option-${layout}`).click();
     for (const canvas of ['desktop', 'mobile'] as const) {
       await page.getByTestId(`draft-canvas-${canvas}`).click();
       await expect(article).toHaveAttribute('data-layout', layout);
@@ -767,7 +768,8 @@ test('generates only saved Materials and previews the same local Draft working c
   await page
     .getByRole('textbox', { name: 'Edit draft title' })
     .fill('Unsaved Draft title');
-  await page.getByTestId('draft-palette-select').selectOption('paper-neutral');
+  await page.getByTestId('draft-palette-select').click();
+  await page.getByTestId('draft-palette-option-paper-neutral').click();
   await page.getByTestId('draft-mode-preview').click();
   await expect(page.getByTestId('wxpost-article')).toContainText(
     'Unsaved Draft title'
@@ -853,6 +855,126 @@ test('keeps the balanced workbench usable without horizontal overflow on mobile'
     .getByRole('button', { name: 'Close Hermes editor' })
     .click();
   await expect(page.getByTestId('mobile-hermes-dialog')).toBeHidden();
+});
+
+test('keeps Draft controls compact at intermediate viewport widths', async ({
+  page,
+}) => {
+  await createAndGenerateDraft(page);
+
+  for (const testId of [
+    'draft-layout-select',
+    'draft-palette-select',
+    'draft-appearance-select',
+    'draft-typeface-select',
+  ]) {
+    const select = page.getByTestId(testId);
+    await expect(select).toHaveCSS('height', '36px');
+    await expect(select).toHaveCSS('border-radius', '6px');
+    await expect(select).toHaveCSS('border-color', 'rgb(209, 213, 219)');
+    await expect(select).toHaveCSS('font-size', '14px');
+    await expect(select).toHaveCSS('font-weight', '400');
+  }
+
+  await page.getByTestId('draft-layout-select').click();
+  const layoutOptions = page.getByRole('listbox', { name: 'Layout' });
+  await expect(layoutOptions).toBeVisible();
+  await expect(layoutOptions.locator('..')).toHaveCSS(
+    'background-color',
+    'rgb(255, 255, 255)'
+  );
+  await expect(page.getByTestId('draft-layout-option-brand-default')).toHaveCSS(
+    'background-color',
+    'rgb(232, 239, 255)'
+  );
+  await page.keyboard.press('Escape');
+  await expect(layoutOptions).toBeHidden();
+
+  for (const width of [308, 520, 700]) {
+    await page.setViewportSize({ width, height: 844 });
+
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth
+      )
+    ).toBe(true);
+
+    const modeBox = await page
+      .locator('[aria-label="Draft mode"]')
+      .boundingBox();
+    const editBox = await page.getByTestId('draft-mode-edit').boundingBox();
+    const previewBox = await page
+      .getByTestId('draft-mode-preview')
+      .boundingBox();
+    const hermesBox = await page
+      .getByTestId('open-mobile-hermes')
+      .boundingBox();
+    const regenerateBox = await page
+      .getByTestId('regenerate-draft')
+      .boundingBox();
+    const saveBox = await page.getByTestId('save-draft').boundingBox();
+    expect(modeBox).not.toBeNull();
+    expect(editBox).not.toBeNull();
+    expect(previewBox).not.toBeNull();
+    expect(hermesBox).not.toBeNull();
+    expect(regenerateBox).not.toBeNull();
+    expect(saveBox).not.toBeNull();
+    expect(Math.abs(modeBox!.y - hermesBox!.y)).toBeLessThan(2);
+    expect(Math.abs(modeBox!.y - regenerateBox!.y)).toBeLessThan(2);
+    expect(Math.abs(modeBox!.y - saveBox!.y)).toBeLessThan(2);
+    expect(regenerateBox!.width).toBeLessThanOrEqual(48);
+    expect(saveBox!.width).toBeLessThanOrEqual(48);
+    if (width <= 360) {
+      expect(editBox!.width).toBeLessThanOrEqual(48);
+      expect(previewBox!.width).toBeLessThanOrEqual(48);
+    }
+
+    const presentationControls = page.getByTestId(
+      'draft-presentation-controls'
+    );
+    await expect(presentationControls).toHaveCSS('display', 'grid');
+    const layoutBox = await page
+      .getByTestId('draft-layout-select')
+      .boundingBox();
+    const paletteBox = await page
+      .getByTestId('draft-palette-select')
+      .boundingBox();
+    const appearanceBox = await page
+      .getByTestId('draft-appearance-select')
+      .boundingBox();
+    const typefaceBox = await page
+      .getByTestId('draft-typeface-select')
+      .boundingBox();
+    expect(layoutBox).not.toBeNull();
+    expect(paletteBox).not.toBeNull();
+    expect(appearanceBox).not.toBeNull();
+    expect(typefaceBox).not.toBeNull();
+    expect(Math.abs(layoutBox!.y - paletteBox!.y)).toBeLessThan(2);
+    expect(Math.abs(appearanceBox!.y - typefaceBox!.y)).toBeLessThan(2);
+
+    if (width === 308) {
+      for (const control of [
+        { name: 'layout', option: 'editorial-feature' },
+        { name: 'palette', option: 'warm-terracotta' },
+        { name: 'typeface', option: 'editorial-serif' },
+      ]) {
+        await page.getByTestId(`draft-${control.name}-select`).click();
+        const option = page.getByTestId(
+          `draft-${control.name}-option-${control.option}`
+        );
+        const menuBox = await option.locator('../..').boundingBox();
+        expect(menuBox).not.toBeNull();
+        expect(menuBox!.width).toBeGreaterThanOrEqual(180);
+        expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+        expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(width);
+        expect(await option.evaluate((element) => element.scrollWidth)).toBe(
+          await option.evaluate((element) => element.clientWidth)
+        );
+        expect((await option.boundingBox())!.height).toBeLessThanOrEqual(40);
+        await page.keyboard.press('Escape');
+      }
+    }
+  }
 });
 
 test('never exposes an older Draft as a newer version after validation fails', async ({

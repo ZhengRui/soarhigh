@@ -1,6 +1,10 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
+
 import {
+  Check,
+  ChevronDown,
   Eye,
   Loader2,
   Monitor,
@@ -51,29 +55,103 @@ function PresentationSelect<
   label,
   value,
   options,
+  menuAlign = 'start',
   onChange,
 }: {
   label: string;
   value: Value;
   options: readonly Value[];
+  menuAlign?: 'start' | 'end';
   onChange: (value: Value) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
   return (
-    <label className='grid min-w-0 gap-1 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-500 sm:shrink-0'>
-      {label}
-      <select
-        className='h-9 min-w-0 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold normal-case tracking-normal text-slate-700 outline-none transition hover:border-slate-300 focus:border-blue-500 sm:min-w-32'
-        value={value}
-        onChange={(event) => onChange(event.target.value as Value)}
+    <div
+      className='relative grid min-w-0 gap-1 text-[10px] font-bold uppercase tracking-[0.1em] text-slate-500 min-[761px]:min-w-32 min-[761px]:shrink-0'
+      ref={containerRef}
+    >
+      <span>{label}</span>
+      <button
+        type='button'
+        className='relative flex h-9 min-w-0 w-full items-center rounded-md border border-gray-300 bg-white py-1.5 pl-3 pr-9 text-left text-sm font-normal normal-case tracking-normal text-gray-900 outline-none transition-colors duration-200 hover:border-gray-400 focus-visible:border-blue-500 focus-visible:outline-none aria-expanded:border-blue-500'
+        aria-label={label}
+        aria-haspopup='listbox'
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
         data-testid={`draft-${label.toLowerCase()}-select`}
       >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {PRESENTATION_LABELS[option]}
-          </option>
-        ))}
-      </select>
-    </label>
+        <span className='min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap'>
+          {PRESENTATION_LABELS[value]}
+        </span>
+        <ChevronDown
+          className={`pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 transition-transform duration-150 ${
+            open ? '-translate-y-1/2 rotate-180' : ''
+          }`}
+          aria-hidden='true'
+        />
+      </button>
+
+      {open && (
+        <div
+          className={`absolute top-[calc(100%+6px)] z-40 w-[180px] min-w-full max-w-[calc(100vw-2rem)] overflow-hidden rounded-md border border-gray-300 bg-white p-1 shadow-xl ${
+            menuAlign === 'end' ? 'right-0' : 'left-0'
+          }`}
+        >
+          <div role='listbox' aria-label={label}>
+            {options.map((option) => {
+              const selected = option === value;
+              return (
+                <button
+                  key={option}
+                  type='button'
+                  role='option'
+                  aria-selected={selected}
+                  className={`flex min-h-9 w-full items-center justify-between gap-2 rounded px-2.5 py-2 text-left text-sm font-normal normal-case tracking-normal transition-colors ${
+                    selected
+                      ? 'bg-[#e8efff] font-semibold text-blue-700'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                  onClick={() => {
+                    onChange(option);
+                    setOpen(false);
+                  }}
+                  data-testid={`draft-${label.toLowerCase()}-option-${option}`}
+                >
+                  <span className='whitespace-nowrap'>
+                    {PRESENTATION_LABELS[option]}
+                  </span>
+                  {selected && (
+                    <Check className='h-4 w-4 shrink-0' aria-hidden='true' />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -134,7 +212,7 @@ export function WxPostDraftControls({
               : 'Clean preview of the current Draft working copy'}
           </p>
         </div>
-        <div className='flex items-center gap-2 max-[560px]:w-full'>
+        <div className='flex items-center gap-2 max-[760px]:w-full'>
           <div
             className='flex h-10 rounded-lg bg-slate-100 p-1'
             aria-label='Draft mode'
@@ -151,7 +229,7 @@ export function WxPostDraftControls({
               data-testid='draft-mode-edit'
             >
               <Pencil className='h-3.5 w-3.5' />
-              Edit
+              <span className='max-[360px]:sr-only'>Edit</span>
             </button>
             <button
               type='button'
@@ -165,25 +243,25 @@ export function WxPostDraftControls({
               data-testid='draft-mode-preview'
             >
               <Eye className='h-3.5 w-3.5' />
-              Preview
+              <span className='max-[360px]:sr-only'>Preview</span>
             </button>
           </div>
           <div className='ml-auto flex gap-2'>
             {mode === 'edit' && !mobileHermesOpen && (
               <button
                 type='button'
-                className={`${SECONDARY_BUTTON_CLASS} max-[480px]:min-h-10 max-[480px]:px-3 lg:hidden`}
+                className={`${SECONDARY_BUTTON_CLASS} max-[760px]:min-h-10 max-[760px]:px-3 lg:hidden`}
                 aria-label='Ask Hermes'
                 onClick={onOpenHermes}
                 data-testid='open-mobile-hermes'
               >
                 <Sparkles />
-                <span className='max-[560px]:sr-only'>Ask Hermes</span>
+                <span className='max-[760px]:sr-only'>Ask Hermes</span>
               </button>
             )}
             <button
               type='button'
-              className={`${SECONDARY_BUTTON_CLASS} max-[480px]:min-h-10 max-[480px]:px-3`}
+              className={`${SECONDARY_BUTTON_CLASS} max-[760px]:min-h-10 max-[760px]:px-3`}
               disabled={
                 dirty || regeneratePending || chatPending || savePending
               }
@@ -200,24 +278,24 @@ export function WxPostDraftControls({
               ) : (
                 <RefreshCw />
               )}
-              <span className='max-[430px]:sr-only'>Regenerate</span>
+              <span className='max-[760px]:sr-only'>Regenerate</span>
             </button>
             <button
               type='button'
-              className={`${PRIMARY_BUTTON_CLASS} max-[480px]:min-h-10 max-[480px]:px-3`}
+              className={`${PRIMARY_BUTTON_CLASS} max-[760px]:min-h-10 max-[760px]:px-3`}
               disabled={!dirty || savePending || chatPending}
               onClick={onSave}
               data-testid='save-draft'
             >
               {savePending ? <Loader2 className='animate-spin' /> : <Save />}
-              <span className='max-[430px]:sr-only'>Save Draft</span>
+              <span className='max-[760px]:sr-only'>Save Draft</span>
             </button>
           </div>
         </div>
       </div>
 
       <div
-        className='grid grid-cols-2 items-end gap-3 border-t border-slate-100 pt-3 sm:flex'
+        className='grid grid-cols-2 items-end gap-3 border-t border-slate-100 pt-3 min-[761px]:flex'
         data-testid='draft-presentation-controls'
       >
         <PresentationSelect
@@ -234,6 +312,7 @@ export function WxPostDraftControls({
           label='Palette'
           value={presentation.palette}
           options={['brand-blue', 'paper-neutral', 'warm-terracotta'] as const}
+          menuAlign='end'
           onChange={(palette) =>
             onPresentationChange({ ...presentation, palette })
           }
@@ -250,11 +329,12 @@ export function WxPostDraftControls({
           label='Typeface'
           value={presentation.typeface}
           options={['modern-sans', 'editorial-serif', 'humanist-mix'] as const}
+          menuAlign='end'
           onChange={(typeface) =>
             onPresentationChange({ ...presentation, typeface })
           }
         />
-        <div className='col-span-2 grid gap-1 sm:col-span-1 sm:shrink-0'>
+        <div className='col-span-2 grid gap-1 min-[761px]:col-span-1 min-[761px]:shrink-0'>
           <span className='text-[10px] font-bold uppercase tracking-[0.1em] text-slate-500'>
             Canvas
           </span>
