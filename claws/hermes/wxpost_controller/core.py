@@ -1455,7 +1455,9 @@ class WorkspaceController:
                 source.workspace_ready for source in manifest.sources
             ),
             "includedSourceCount": sum(source.included for source in manifest.sources),
-            "hasDraft": manifest.draft is not None,
+            "draftVersion": (
+                manifest.draft.version if manifest.draft is not None else None
+            ),
         }
 
     @staticmethod

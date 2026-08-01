@@ -548,7 +548,9 @@ export function WxPostDraftStage({
 
       <div
         className={`grid items-start gap-4 ${
-          mode === 'edit' ? 'lg:grid-cols-[minmax(0,1fr)_320px]' : 'grid-cols-1'
+          mode === 'edit'
+            ? 'lg:grid-cols-[minmax(0,1fr)_minmax(360px,32%)]'
+            : 'grid-cols-1'
         }`}
       >
         <div
@@ -589,7 +591,10 @@ export function WxPostDraftStage({
         </div>
 
         {mode === 'edit' && (
-          <aside className='sticky top-4 hidden max-h-[calc(100vh-2rem)] min-h-[34rem] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:block'>
+          <aside
+            className='sticky top-24 hidden h-[calc(100dvh-7rem)] min-h-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:block'
+            data-testid='desktop-hermes-panel'
+          >
             <WxPostHermesPanel
               mobile={false}
               session={session}
@@ -612,13 +617,13 @@ export function WxPostDraftStage({
           className='fixed inset-0 z-50 lg:hidden'
           role='dialog'
           aria-modal='true'
-          aria-label='Hermes editor'
+          aria-label='Draft Assistant'
           data-testid='mobile-hermes-dialog'
         >
           <button
             type='button'
             className='absolute inset-0 bg-slate-950/35'
-            aria-label='Dismiss Hermes editor'
+            aria-label='Dismiss Draft Assistant'
             onClick={() => setMobileHermesOpen(false)}
           />
           <div className='absolute inset-x-0 bottom-0 flex max-h-[78dvh] min-h-[32rem] flex-col overflow-hidden rounded-t-2xl border border-slate-200 bg-white shadow-[0_-16px_40px_rgba(15,23,42,0.18)]'>

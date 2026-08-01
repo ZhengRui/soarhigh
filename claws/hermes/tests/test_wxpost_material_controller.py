@@ -236,7 +236,7 @@ def test_workspace_list_and_delete_expose_collaboration_metadata(
                 "sourceCount": 0,
                 "readySourceCount": 0,
                 "includedSourceCount": 0,
-                "hasDraft": False,
+                "draftVersion": None,
             }
         ],
         "total": 1,

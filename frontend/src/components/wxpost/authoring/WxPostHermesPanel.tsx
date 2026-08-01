@@ -1,5 +1,6 @@
 'use client';
 
+import { useLayoutEffect, useRef } from 'react';
 import { ArrowUp, Loader2, Sparkles, X } from 'lucide-react';
 
 import type { WorkspaceDraftSession } from '@/utils/wxpostWorkspace';
@@ -29,14 +30,31 @@ export function WxPostHermesPanel({
   onMessageChange: (message: string) => void;
   onSend: () => void;
 }) {
+  const historyRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messages = session?.messages ?? [];
+
+  useLayoutEffect(() => {
+    const history = historyRef.current;
+    if (!history) return;
+    history.scrollTop = history.scrollHeight;
+  }, [chatPending, messages.length]);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  }, [message]);
+
   return (
-    <div className='flex h-full min-h-0 flex-col bg-white'>
-      <div className='flex items-start justify-between border-b border-slate-200 px-4 py-3'>
+    <div className='flex h-full min-h-0 flex-col overflow-hidden bg-white'>
+      <div className='flex shrink-0 items-start justify-between border-b border-slate-200 px-4 py-3'>
         <div>
           <div className='flex items-center gap-2'>
             <Sparkles className='h-4 w-4 text-blue-600' aria-hidden='true' />
             <h2 className='m-0 text-sm font-bold text-slate-900'>
-              Hermes editor
+              Draft Assistant
             </h2>
           </div>
           <p className='mb-0 mt-1 text-[11px] text-slate-500'>
@@ -61,7 +79,7 @@ export function WxPostHermesPanel({
             <button
               type='button'
               className='grid h-8 w-8 place-items-center rounded-full border border-slate-200 text-slate-500'
-              aria-label='Close Hermes editor'
+              aria-label='Close Draft Assistant'
               onClick={onClose}
             >
               <X className='h-4 w-4' />
@@ -70,19 +88,20 @@ export function WxPostHermesPanel({
         </div>
       </div>
       <div
-        className='grid min-h-52 flex-1 content-start gap-3 overflow-y-auto bg-slate-50/60 p-4'
+        ref={historyRef}
+        className='grid min-h-0 flex-1 content-start gap-3 overflow-y-auto bg-slate-50/60 p-4'
         aria-live='polite'
         data-testid={
           mobile ? 'mobile-draft-chat-history' : 'draft-chat-history'
         }
       >
-        {(session?.messages ?? []).length === 0 ? (
+        {messages.length === 0 ? (
           <div className='grid min-h-44 place-content-center text-center text-sm text-slate-500'>
             <Sparkles className='mx-auto mb-2 h-5 w-5 text-blue-500' />
-            Ask Hermes to revise the saved Draft.
+            Ask the assistant to revise the saved Draft.
           </div>
         ) : (
-          session?.messages.map((item, index) => (
+          messages.map((item, index) => (
             <p
               key={`${item.role}-${index}`}
               className={`m-0 max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm leading-6 ${
@@ -98,11 +117,16 @@ export function WxPostHermesPanel({
         {chatPending && (
           <p className='m-0 flex items-center gap-2 text-sm text-slate-500'>
             <Loader2 className='h-4 w-4 animate-spin' />
-            Hermes is revising…
+            Draft Assistant is revising…
           </p>
         )}
       </div>
-      <div className='border-t border-slate-200 p-3'>
+      <div
+        className='shrink-0 border-t border-slate-200 bg-white p-3'
+        data-testid={
+          mobile ? 'mobile-draft-chat-composer' : 'draft-chat-composer'
+        }
+      >
         {selectedText && (
           <div className='mb-2 flex items-start gap-2 rounded-lg bg-blue-50 p-2 text-xs text-blue-900'>
             <span className='line-clamp-2 flex-1'>“{selectedText}”</span>
@@ -118,8 +142,9 @@ export function WxPostHermesPanel({
         )}
         <div className='rounded-xl border border-slate-300 bg-white p-2 focus-within:border-blue-500'>
           <textarea
-            className='block min-h-20 w-full resize-y border-0 bg-transparent p-1 text-sm outline-none'
-            placeholder='Ask Hermes to revise the draft…'
+            ref={textareaRef}
+            className='block min-h-20 max-h-40 w-full resize-none overflow-y-auto border-0 bg-transparent p-1 text-sm outline-none'
+            placeholder='Ask the assistant to revise the Draft…'
             value={message}
             disabled={chatPending}
             onChange={(event) => onMessageChange(event.target.value)}

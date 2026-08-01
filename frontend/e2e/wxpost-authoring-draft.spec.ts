@@ -150,7 +150,7 @@ test('keeps local Draft edits isolated until an explicit Save Draft', async ({
   const workspace = await createAndGenerateDraft(page);
   const context = Array.from(workspace.contexts.values())[0];
 
-  await expect(page.getByText('English Draft · v1')).toBeVisible();
+  await expect(page.getByText('Draft · v1')).toBeVisible();
   await expect(
     page.getByTestId('draft-workbench').locator(':scope > header')
   ).toContainText('Saved');
@@ -203,7 +203,7 @@ test('keeps local Draft edits isolated until an explicit Save Draft', async ({
     'A local title that is not saved yet'
   );
   await expect(
-    page.getByRole('heading', { name: 'Hermes editor' })
+    page.getByRole('heading', { name: 'Draft Assistant' })
   ).toBeHidden();
   await expect(page.getByTestId('draft-presentation-controls')).toBeVisible();
   expect(context.draft!.document.title).toBe(savedTitle);
@@ -220,7 +220,7 @@ test('keeps local Draft edits isolated until an explicit Save Draft', async ({
   await expect(
     page.getByText('Draft saved successfully!', { exact: true })
   ).toBeVisible();
-  await expect(page.getByText('English Draft · v2')).toBeVisible();
+  await expect(page.getByText('Draft · v2')).toBeVisible();
   await expect(
     page.getByTestId('draft-workbench').locator(':scope > header')
   ).toContainText('Saved');
@@ -281,7 +281,7 @@ test('keeps local Draft edits isolated until an explicit Save Draft', async ({
     'Generated from saved Materials as version 1. revised'
   );
   await page.getByTestId('save-draft').click();
-  await expect(page.getByText('English Draft · v3')).toBeVisible();
+  await expect(page.getByText('Draft · v3')).toBeVisible();
   expect(context.draft!.draftVersion).toBe(3);
   expect(context.draft!.document.bodyMarkdown).toBe(
     '## Generated section\n\nGenerated from saved Materials as version 1. revised'
@@ -420,7 +420,7 @@ test('edits every Draft text source precisely and persists it without changing M
   await article.click({ position: { x: 5, y: 5 } });
   await expect(page.getByTestId('save-draft')).toBeEnabled();
   await page.getByTestId('save-draft').click();
-  await expect(page.getByText('English Draft · v2')).toBeVisible();
+  await expect(page.getByText('Draft · v2')).toBeVisible();
 
   const savedDocument = context.draft!.document as unknown as DraftDocument;
   expect(savedDocument.title).toBe('Edited article title');
@@ -477,7 +477,7 @@ test('edits every Draft text source precisely and persists it without changing M
   }
 
   await page.getByTestId('save-draft').click();
-  await expect(page.getByText('English Draft · v3')).toBeVisible();
+  await expect(page.getByText('Draft · v3')).toBeVisible();
   await page.reload();
   await page.getByRole('button', { name: /^3 Draft$/ }).click();
   await expect(page.getByTestId('draft-workbench')).toBeVisible();
@@ -550,7 +550,7 @@ Text before ![Reference image](https://assets.example/reference.jpg "Reference")
 
   await article.click({ position: { x: 5, y: 5 } });
   await page.getByTestId('save-draft').click();
-  await expect(page.getByText('English Draft · v2')).toBeVisible();
+  await expect(page.getByText('Draft · v2')).toBeVisible();
 
   const body = context.draft!.document.bodyMarkdown as string;
   expect(body).toContain('#### A revised small heading');
@@ -585,7 +585,7 @@ test('preserves the saved Draft across generation, chat, and conflict failures',
 
   workspace.draftSessionUnavailable = true;
   await page.getByTestId('generate-draft').click();
-  await expect(page.getByText('English Draft · v1')).toBeVisible();
+  await expect(page.getByText('Draft · v1')).toBeVisible();
   await expect(page.getByText('Unavailable', { exact: true })).toBeVisible();
   workspace.draftSessionUnavailable = false;
   const generatedTitle = context.draft!.document.title;
@@ -600,11 +600,13 @@ test('preserves the saved Draft across generation, chat, and conflict failures',
         .count()
     )
     .toBeGreaterThan(0);
-  await expect(page.getByText('English Draft · v1')).toBeVisible();
+  await expect(page.getByText('Draft · v1')).toBeVisible();
   expect(context.draft!.draftVersion).toBe(1);
   expect(context.draft!.document.title).toBe(generatedTitle);
 
-  const chatInput = page.getByPlaceholder('Ask Hermes to revise the draft…');
+  const chatInput = page.getByPlaceholder(
+    'Ask the assistant to revise the Draft…'
+  );
   await chatInput.fill('Make the opening warmer.');
   workspace.failNextDraftChat = true;
   await page.getByTestId('send-draft-chat').click();
@@ -624,7 +626,7 @@ test('preserves the saved Draft across generation, chat, and conflict failures',
   ).toHaveCount(0);
 
   await page.getByTestId('send-draft-chat').click();
-  await expect(page.getByText('English Draft · v2')).toBeVisible();
+  await expect(page.getByText('Draft · v2')).toBeVisible();
   await expect(page.getByText('Online', { exact: true })).toBeVisible();
   await expect(page.getByTestId('draft-chat-history')).toContainText(
     'Make the opening warmer.'
@@ -674,7 +676,7 @@ test('preserves the saved Draft across generation, chat, and conflict failures',
   await expect(
     page.getByTestId('wxpost-article').getByRole('heading', { level: 1 })
   ).toHaveText('Keep this local title after the conflict');
-  await expect(page.getByText('English Draft · v2')).toBeVisible();
+  await expect(page.getByText('Draft · v2')).toBeVisible();
 
   await conflictDialog
     .getByRole('button', { name: 'Keep current edits' })
@@ -688,7 +690,7 @@ test('preserves the saved Draft across generation, chat, and conflict failures',
   await expect(conflictDialog).toBeVisible();
   await conflictDialog.getByRole('button', { name: 'Load latest' }).click();
   await expect(conflictDialog).toHaveCount(0);
-  await expect(page.getByText('English Draft · v3')).toBeVisible();
+  await expect(page.getByText('Draft · v3')).toBeVisible();
   await expect(
     page.getByTestId('wxpost-article').getByRole('heading', { level: 1 })
   ).toHaveText('Saved in another tab');
@@ -705,7 +707,7 @@ test('shows a regenerated Draft immediately and reloads the latest Draft after a
     '## Updated section\n\nThis version should appear immediately.'
   );
   await page.getByTestId('regenerate-draft').click();
-  await expect(page.getByText('English Draft · v2')).toBeVisible();
+  await expect(page.getByText('Draft · v2')).toBeVisible();
   await expect(page.getByTestId('wxpost-article')).toContainText(
     'Regenerated without a reload'
   );
@@ -726,13 +728,13 @@ test('shows a regenerated Draft immediately and reloads the latest Draft after a
   await page.getByTestId('regenerate-draft').click();
   const conflictDialog = page.getByTestId('draft-conflict-dialog');
   await expect(conflictDialog).toBeVisible();
-  await expect(page.getByText('English Draft · v2')).toBeVisible();
+  await expect(page.getByText('Draft · v2')).toBeVisible();
   await expect(page.getByTestId('wxpost-article')).toContainText(
     'Regenerated without a reload'
   );
   await conflictDialog.getByRole('button', { name: 'Load latest' }).click();
   await expect(conflictDialog).toHaveCount(0);
-  await expect(page.getByText('English Draft · v3')).toBeVisible();
+  await expect(page.getByText('Draft · v3')).toBeVisible();
   await expect(page.getByTestId('wxpost-article')).toContainText(
     'Saved in another tab'
   );
@@ -760,7 +762,7 @@ test('generates only saved Materials and previews the same local Draft working c
   );
 
   await page.getByTestId('generate-draft').click();
-  await expect(page.getByText('English Draft · v1')).toBeVisible();
+  await expect(page.getByText('Draft · v1')).toBeVisible();
   await page
     .getByTestId('wxpost-article')
     .getByRole('heading', { level: 1 })
@@ -788,7 +790,7 @@ test('generates only saved Materials and previews the same local Draft working c
   });
 
   await page.getByTestId('save-draft').click();
-  await expect(page.getByText('English Draft · v2')).toBeVisible();
+  await expect(page.getByText('Draft · v2')).toBeVisible();
   expect(context.draft!.document.presentation).toEqual({
     layout: 'brand-default',
     palette: 'paper-neutral',
@@ -815,7 +817,7 @@ test('keeps the balanced workbench usable without horizontal overflow on mobile'
   const articleBox = await article.boundingBox();
   expect(articleBox).not.toBeNull();
   await expect(
-    workbench.getByRole('heading', { name: 'Hermes editor' })
+    workbench.getByRole('heading', { name: 'Draft Assistant' })
   ).toBeHidden();
   const mobileHermesButton = page.getByTestId('open-mobile-hermes');
   await expect(mobileHermesButton).toBeVisible();
@@ -848,11 +850,11 @@ test('keeps the balanced workbench usable without horizontal overflow on mobile'
   await expect(
     page
       .getByTestId('mobile-hermes-dialog')
-      .getByRole('heading', { name: 'Hermes editor' })
+      .getByRole('heading', { name: 'Draft Assistant' })
   ).toBeVisible();
   await page
     .getByTestId('mobile-hermes-dialog')
-    .getByRole('button', { name: 'Close Hermes editor' })
+    .getByRole('button', { name: 'Close Draft Assistant' })
     .click();
   await expect(page.getByTestId('mobile-hermes-dialog')).toBeHidden();
 });
@@ -977,6 +979,82 @@ test('keeps Draft controls compact at intermediate viewport widths', async ({
   }
 });
 
+test('keeps the desktop Hermes composer visible while long history scrolls', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 844 });
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  const workspaceId = Array.from(workspace.contexts.keys())[0];
+  workspace.draftMessages.set(
+    workspaceId,
+    Array.from({ length: 24 }, (_, index) => ({
+      role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      text: `Hermes conversation turn ${index + 1} with enough text to exercise the scrolling history.`,
+    }))
+  );
+
+  await page.getByTestId('generate-draft').click();
+  const panel = page.getByTestId('desktop-hermes-panel');
+  await expect(panel).toBeVisible();
+  await panel.evaluate((element) =>
+    element.scrollIntoView({ block: 'start', behavior: 'auto' })
+  );
+
+  const panelBox = await panel.boundingBox();
+  const history = page.getByTestId('draft-chat-history');
+  const historyBox = await history.boundingBox();
+  const composer = page.getByTestId('draft-chat-composer');
+  const composerBox = await composer.boundingBox();
+  expect(panelBox).not.toBeNull();
+  expect(historyBox).not.toBeNull();
+  expect(composerBox).not.toBeNull();
+  expect(panelBox!.width).toBeGreaterThanOrEqual(360);
+  expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(844);
+  expect(composerBox!.y).toBeGreaterThanOrEqual(
+    historyBox!.y + historyBox!.height - 1
+  );
+  expect(
+    Math.abs(
+      composerBox!.y + composerBox!.height - (panelBox!.y + panelBox!.height)
+    )
+  ).toBeLessThanOrEqual(1);
+  const textarea = page.getByPlaceholder(
+    'Ask the assistant to revise the Draft…'
+  );
+  await expect(textarea).toBeInViewport();
+  await expect(textarea).toHaveCSS('resize', 'none');
+  const initialTextareaHeight = (await textarea.boundingBox())!.height;
+  await textarea.fill('Line one\nLine two\nLine three\nLine four\nLine five');
+  expect((await textarea.boundingBox())!.height).toBeGreaterThan(
+    initialTextareaHeight
+  );
+  await textarea.fill(
+    Array.from({ length: 20 }, (_, index) => `Line ${index + 1}`).join('\n')
+  );
+  expect((await textarea.boundingBox())!.height).toBeLessThanOrEqual(160);
+  expect(
+    await textarea.evaluate(
+      (element) => element.scrollHeight > element.clientHeight
+    )
+  ).toBe(true);
+  await textarea.fill('Short again');
+  expect((await textarea.boundingBox())!.height).toBe(initialTextareaHeight);
+  expect(
+    await history.evaluate(
+      (element) => element.scrollHeight > element.clientHeight
+    )
+  ).toBe(true);
+  expect(
+    await history.evaluate(
+      (element) =>
+        Math.abs(
+          element.scrollHeight - element.scrollTop - element.clientHeight
+        ) <= 1
+    )
+  ).toBe(true);
+});
+
 test('never exposes an older Draft as a newer version after validation fails', async ({
   page,
 }) => {
@@ -994,12 +1072,12 @@ test('never exposes an older Draft as a newer version after validation fails', a
   ).toBeVisible();
   await expect(page.getByTestId('draft-workbench')).toBeHidden();
   await expect(page.getByTestId('save-draft')).toBeHidden();
-  await expect(page.getByText('English Draft · v2')).toBeHidden();
+  await expect(page.getByText('Draft · v2')).toBeHidden();
 
   workspace.failDraftValidation = false;
   await page.reload();
   await page.getByRole('button', { name: /^3 Draft$/ }).click();
-  await expect(page.getByText('English Draft · v2')).toBeVisible();
+  await expect(page.getByText('Draft · v2')).toBeVisible();
   await expect(page.getByTestId('wxpost-article')).toContainText(
     context.draft!.document.title
   );

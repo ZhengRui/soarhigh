@@ -229,7 +229,7 @@ export interface WorkspaceSummary {
   sourceCount: number;
   readySourceCount: number;
   includedSourceCount: number;
-  hasDraft: boolean;
+  draftVersion: number | null;
 }
 
 export interface PaginatedWorkspaceSummaries {

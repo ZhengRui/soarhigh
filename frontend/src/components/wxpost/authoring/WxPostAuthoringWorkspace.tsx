@@ -4,7 +4,13 @@ import { ArrowLeft, Check, Loader2, PanelsTopLeft } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from 'react';
 import toast from 'react-hot-toast';
 
 import { useMeetingOptions } from '@/hooks/useMeetingOptions';
@@ -188,6 +194,10 @@ export function WxPostAuthoringWorkspace({
   const [syncWorkspaceMeeting, setSyncWorkspaceMeeting] = useState(false);
   const [draftGenerationPending, setDraftGenerationPending] = useState(false);
   const meetingsQuery = useMeetingOptions();
+
+  useLayoutEffect(() => {
+    if (initialWorkspaceId) window.scrollTo({ top: 0, left: 0 });
+  }, [initialWorkspaceId]);
 
   const meetings = useMemo(
     () =>

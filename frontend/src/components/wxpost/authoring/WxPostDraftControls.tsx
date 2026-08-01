@@ -194,7 +194,7 @@ export function WxPostDraftControls({
         <div className='min-w-0'>
           <div className='flex flex-wrap items-center gap-2'>
             <strong className='text-sm text-slate-900'>
-              English Draft · v{draftVersion}
+              Draft · v{draftVersion}
             </strong>
             <span
               className={`rounded-full px-2 py-1 text-[10px] font-bold ${
@@ -208,7 +208,7 @@ export function WxPostDraftControls({
           </div>
           <p className='mb-0 mt-1 hidden text-xs text-slate-500 sm:block'>
             {mode === 'edit'
-              ? 'Click a title or section to edit · Select text to ask Hermes'
+              ? 'Click a title or section to edit · Select text to ask the assistant'
               : 'Clean preview of the current Draft working copy'}
           </p>
         </div>
@@ -251,12 +251,12 @@ export function WxPostDraftControls({
               <button
                 type='button'
                 className={`${SECONDARY_BUTTON_CLASS} max-[760px]:min-h-10 max-[760px]:px-3 lg:hidden`}
-                aria-label='Ask Hermes'
+                aria-label='Ask the assistant'
                 onClick={onOpenHermes}
                 data-testid='open-mobile-hermes'
               >
                 <Sparkles />
-                <span className='max-[760px]:sr-only'>Ask Hermes</span>
+                <span className='max-[760px]:sr-only'>Ask the assistant</span>
               </button>
             )}
             <button

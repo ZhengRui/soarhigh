@@ -364,12 +364,12 @@ export default function WxPostWorkspacesPage() {
                     <div className='mt-5 border-t border-dashed border-slate-300 pt-4'>
                       <span
                         className={`inline-flex items-center gap-2 text-sm font-medium ${
-                          workspace.hasDraft
+                          workspace.draftVersion !== null
                             ? 'text-slate-700'
                             : 'text-slate-500'
                         }`}
                       >
-                        {workspace.hasDraft ? (
+                        {workspace.draftVersion !== null ? (
                           <CircleCheck
                             className='h-4 w-4 text-blue-600'
                             aria-hidden='true'
@@ -380,7 +380,9 @@ export default function WxPostWorkspacesPage() {
                             aria-hidden='true'
                           />
                         )}
-                        {workspace.hasDraft ? 'Draft ready' : 'No draft yet'}
+                        {workspace.draftVersion !== null
+                          ? `Draft · v${workspace.draftVersion}`
+                          : 'No draft yet'}
                       </span>
                     </div>
                   </article>

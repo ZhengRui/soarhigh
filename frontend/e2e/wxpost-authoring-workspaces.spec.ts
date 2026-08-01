@@ -27,7 +27,7 @@ function workspaceSummary(
     sourceCount: 0,
     readySourceCount: 0,
     includedSourceCount: 0,
-    hasDraft: false,
+    draftVersion: null,
     ...overrides,
   };
 }
@@ -171,6 +171,7 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
                 sourceCount: 3,
                 readySourceCount: 1,
                 includedSourceCount: 1,
+                draftVersion: 14,
               }),
               workspaceSummary('wxpost-second', {
                 meetingId: 'meeting-461',
@@ -221,7 +222,7 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
     workspace.locator('span.rounded-full', { hasText: 'Meeting Recap' })
   ).toHaveCount(0);
   await expect(workspace.getByText(/Created by Test Member/)).toBeVisible();
-  await expect(workspace.getByText('No draft yet')).toBeVisible();
+  await expect(workspace.getByText('Draft · v14')).toBeVisible();
   expect(meetingBatchRequests).toEqual([['meeting-462', 'meeting-461']]);
   expect(fullMeetingRequests).toEqual([]);
   const continueWorkspace = workspace.getByRole('link', {
@@ -624,7 +625,7 @@ test('refreshes a cached empty list after creating an independent workspace', as
           includedSourceCount: context.manifest.sources.filter(
             (source) => source.included
           ).length,
-          hasDraft: context.manifest.draft !== null,
+          draftVersion: context.manifest.draft?.version ?? null,
         }))
       ),
     });
@@ -652,8 +653,14 @@ test('refreshes a cached empty list after creating an independent workspace', as
   ).toBeVisible();
   expect(listRequests).toBe(2);
 
+  await page.evaluate(() => {
+    document.body.style.minHeight = '2400px';
+    window.scrollTo(0, 900);
+  });
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
   await page.getByRole('link', { name: 'Continue workspace' }).click();
   await expect(page.getByTestId('materials-stage')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await page.getByTestId('wxpost-workspaces-link').click();
   await expect(page.getByTestId('wxpost-workspaces-list')).toBeVisible();
   expect(listRequests).toBe(2);
