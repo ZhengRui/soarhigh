@@ -32,6 +32,7 @@ import {
   PRIMARY_BUTTON_CLASS,
   SECONDARY_BUTTON_CLASS,
 } from './authoringStyles';
+import { WorkspaceConflictDialog } from './WorkspaceConflictDialog';
 
 type LinkedMeeting = MeetingIF & { id: string };
 type PendingOperation = {
@@ -125,6 +126,8 @@ export function WxPostMaterialsStage({
   onContextChange,
   workingCopy,
   onWorkingCopyChange,
+  onGenerateDraft,
+  draftGenerationPending,
 }: {
   active: boolean;
   workspaceId: string;
@@ -137,6 +140,8 @@ export function WxPostMaterialsStage({
   onWorkingCopyChange: (
     updater: (current: WxPostMaterialsWorkingCopy) => WxPostMaterialsWorkingCopy
   ) => void;
+  onGenerateDraft: () => Promise<void>;
+  draftGenerationPending: boolean;
 }) {
   const meetingId = context.manifest.meetingId;
   const meetingQuery = useMeeting(active && meetingId ? meetingId : undefined);
@@ -387,6 +392,19 @@ export function WxPostMaterialsStage({
     }
   }
 
+  const generateDraft = useCallback(async () => {
+    try {
+      await onGenerateDraft();
+    } catch (error) {
+      if (
+        error instanceof WorkspaceApiError &&
+        error.code === 'version_conflict'
+      ) {
+        showVersionConflict();
+      }
+    }
+  }, [onGenerateDraft, showVersionConflict]);
+
   return (
     <div className='grid gap-5 max-[480px]:gap-3' data-testid='materials-stage'>
       <ArticleTypePanel
@@ -538,63 +556,42 @@ export function WxPostMaterialsStage({
         <button
           type='button'
           className={PRIMARY_BUTTON_CLASS}
-          disabled
-          title='Draft generation will be added in the next implementation slice.'
+          disabled={materialsDirty || busy || draftGenerationPending}
+          title={
+            materialsDirty
+              ? 'Save Materials before generating the draft.'
+              : undefined
+          }
+          onClick={() => void generateDraft()}
           data-testid='generate-draft'
         >
-          Generate Draft
+          {draftGenerationPending && (
+            <Loader2 className='animate-spin' aria-hidden='true' />
+          )}
+          {draftGenerationPending
+            ? context.draft
+              ? 'Regenerating…'
+              : 'Generating…'
+            : context.draft
+              ? 'Regenerate Draft'
+              : 'Generate Draft'}
           <ArrowRight aria-hidden='true' />
         </button>
       </div>
 
       {versionConflict && (
-        <div
-          className='fixed inset-0 z-[90] grid place-items-center bg-slate-950/55 p-4'
-          role='dialog'
-          aria-modal='true'
-          aria-labelledby='materials-conflict-title'
-          data-testid='materials-conflict-dialog'
+        <WorkspaceConflictDialog
+          title='Load latest materials?'
+          error={conflictRefreshError}
+          pending={conflictRefreshPending}
+          testId='materials-conflict-dialog'
+          onKeepCurrent={keepCurrentEdits}
+          onLoadLatest={() => void loadLatestMaterials()}
         >
-          <div className='w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl'>
-            <h2
-              id='materials-conflict-title'
-              className='m-0 text-lg font-bold text-slate-900'
-            >
-              Load latest materials?
-            </h2>
-            <p className='mb-0 mt-3 text-sm leading-6 text-slate-600'>
-              This workspace changed since this page loaded. Loading the latest
-              version will discard your unsaved changes on this page. The
-              material change you just attempted was not applied.
-            </p>
-            {conflictRefreshError && (
-              <p className='mb-0 mt-3 text-sm text-red-700' role='alert'>
-                {conflictRefreshError}
-              </p>
-            )}
-            <div className='mt-5 flex justify-end gap-2 max-[480px]:flex-col-reverse max-[480px]:[&_button]:w-full'>
-              <button
-                type='button'
-                className={SECONDARY_BUTTON_CLASS}
-                disabled={conflictRefreshPending}
-                onClick={keepCurrentEdits}
-              >
-                Keep current edits
-              </button>
-              <button
-                type='button'
-                className={PRIMARY_BUTTON_CLASS}
-                disabled={conflictRefreshPending}
-                onClick={() => void loadLatestMaterials()}
-              >
-                {conflictRefreshPending && (
-                  <Loader2 className='animate-spin' aria-hidden='true' />
-                )}
-                {conflictRefreshPending ? 'Loading…' : 'Load latest'}
-              </button>
-            </div>
-          </div>
-        </div>
+          This workspace changed since this page loaded. Loading the latest
+          version will discard your unsaved changes on this page. The material
+          change you just attempted was not applied.
+        </WorkspaceConflictDialog>
       )}
     </div>
   );

@@ -1,3 +1,9 @@
+import type {
+  WxPostArticleDocument,
+  WxPostArticleType,
+  WxPostRenderDocument,
+} from '@/components/wxpost/types';
+
 const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT ?? '';
 const WORKSPACE_ID_PREFIX = 'wxpost-';
 
@@ -24,13 +30,7 @@ export function workspaceIdFromEditorKey(workspaceKey: string) {
   return `${WORKSPACE_ID_PREFIX}${workspaceKey}`;
 }
 
-export type WorkspaceArticleType =
-  | 'meeting-recap'
-  | 'member-story'
-  | 'event-preview'
-  | 'meeting-review'
-  | 'action-guide'
-  | 'custom';
+export type WorkspaceArticleType = WxPostArticleType;
 
 export type WorkspaceWritingApproach =
   | 'chronological'
@@ -166,6 +166,7 @@ export interface WorkspaceManifest {
     version: number;
     sourceManifestVersion: number;
     sha256: string;
+    operationId?: string;
   } | null;
   editorial: WorkspaceEditorial;
   sources: WorkspaceSource[];
@@ -176,8 +177,27 @@ export interface WorkspaceContext {
   manifest: WorkspaceManifest;
   draft: {
     draftVersion: number;
-    document: Record<string, unknown>;
+    document: WxPostArticleDocument;
   } | null;
+}
+
+export interface WorkspaceDraftSession {
+  workspaceId: string;
+  sessionId: string | null;
+  messages: Array<{ role: 'user' | 'assistant'; text: string }>;
+}
+
+interface WorkspaceDraftTurn {
+  workspaceId: string;
+  sessionId: string;
+  reply: string;
+  context: WorkspaceContext;
+}
+
+interface WxPostValidationResult {
+  valid: true;
+  document: WxPostArticleDocument;
+  renderDocument: WxPostRenderDocument;
 }
 
 export interface WorkspaceDeletePreflight {
@@ -265,6 +285,27 @@ async function errorFromResponse(response: Response) {
     if (typeof value.detail === 'string') {
       return new WorkspaceApiError(response.status, value.detail);
     }
+    if (Array.isArray(value.detail)) {
+      const first = value.detail.find((item): item is { message: string } =>
+        Boolean(
+          item &&
+            typeof item === 'object' &&
+            'message' in item &&
+            typeof item.message === 'string'
+        )
+      );
+      if (first) return new WorkspaceApiError(response.status, first.message);
+    }
+    if (
+      'errors' in value &&
+      Array.isArray(value.errors) &&
+      value.errors[0] &&
+      typeof value.errors[0] === 'object' &&
+      'message' in value.errors[0] &&
+      typeof value.errors[0].message === 'string'
+    ) {
+      return new WorkspaceApiError(response.status, value.errors[0].message);
+    }
   }
   return new WorkspaceApiError(
     response.status,
@@ -301,6 +342,74 @@ export function bootstrapWorkspace(
 
 export function getWorkspaceContext(workspaceId: string) {
   return requestJson<WorkspaceContext>(`${workspacePath(workspaceId)}/context`);
+}
+
+export function getWorkspaceDraftSession(workspaceId: string) {
+  return requestJson<WorkspaceDraftSession>(
+    `${workspacePath(workspaceId)}/draft/session`
+  );
+}
+
+export function validateWorkspaceDraft(document: WxPostArticleDocument) {
+  return requestJson<WxPostValidationResult>('/posts/wxposts/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(document),
+  });
+}
+
+export function saveWorkspaceDraft(
+  workspaceId: string,
+  input: {
+    expectedManifestVersion: number;
+    expectedDraftVersion: number;
+    document: WxPostArticleDocument;
+  }
+) {
+  return requestJson<WorkspaceContext>(
+    `${workspacePath(workspaceId)}/draft/save`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export function generateWorkspaceDraft(
+  workspaceId: string,
+  input: {
+    expectedManifestVersion: number;
+    expectedDraftVersion: number;
+  }
+) {
+  return requestJson<WorkspaceDraftTurn>(
+    `${workspacePath(workspaceId)}/draft/generate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export function reviseWorkspaceDraft(
+  workspaceId: string,
+  input: {
+    expectedManifestVersion: number;
+    expectedDraftVersion: number;
+    message: string;
+    selectedText: string | null;
+  }
+) {
+  return requestJson<WorkspaceDraftTurn>(
+    `${workspacePath(workspaceId)}/draft/chat`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }
+  );
 }
 
 export function saveWorkspaceMaterials(

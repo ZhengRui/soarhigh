@@ -24,6 +24,12 @@ from .core import (
     WorkspaceNotFound,
     error_response,
 )
+from .hermes_session import (
+    HermesDraftService,
+    HermesSessionClient,
+    HermesTurnFailed,
+    HermesUnavailable,
+)
 
 WORKSPACE_PATH = re.compile(r"^/workspaces/([^/]+)$")
 WORKSPACES_PATH = "/workspaces"
@@ -37,11 +43,16 @@ SOURCE_DELETE_PREFLIGHT_PATH = re.compile(
 SOURCE_CONTENT_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)/content$")
 SOURCE_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)$")
 UPLOADS_PATH = re.compile(r"^/workspaces/([^/]+)/uploads$")
+DRAFT_SESSION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/session$")
+DRAFT_SAVE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/save$")
+DRAFT_GENERATE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/generate$")
+DRAFT_CHAT_PATH = re.compile(r"^/workspaces/([^/]+)/draft/chat$")
 MAX_REQUEST_BYTES = 1_000_000
 
 
 class ControllerHTTPServer(ThreadingHTTPServer):
     controller: WorkspaceController
+    draft_service: HermesDraftService
     bearer_token: str
 
 
@@ -88,6 +99,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if context_match is not None:
             self._run_controller(
                 lambda: self.server.controller.get_context(context_match.group(1))
+            )
+            return
+        draft_session_match = DRAFT_SESSION_PATH.fullmatch(path)
+        if draft_session_match is not None:
+            self._run_controller(
+                lambda: self.server.draft_service.history(draft_session_match.group(1))
             )
             return
         content_match = SOURCE_CONTENT_PATH.fullmatch(path)
@@ -257,6 +274,99 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         parsed = urlsplit(self.path)
+        draft_save_match = DRAFT_SAVE_PATH.fullmatch(parsed.path)
+        if draft_save_match is not None:
+            payload = self._read_json_body()
+            if payload is None or not self._accept_fields(
+                payload,
+                {
+                    "expectedManifestVersion",
+                    "expectedDraftVersion",
+                    "document",
+                },
+                "draft save",
+            ):
+                return
+            self._run_controller(
+                lambda: self._save_draft(
+                    draft_save_match.group(1),
+                    expected_manifest_version=cast(
+                        int,
+                        payload.get("expectedManifestVersion"),
+                    ),
+                    expected_draft_version=cast(
+                        int,
+                        payload.get("expectedDraftVersion"),
+                    ),
+                    document=cast(
+                        dict[str, Any],
+                        payload.get("document"),
+                    ),
+                )
+            )
+            return
+
+        draft_generate_match = DRAFT_GENERATE_PATH.fullmatch(parsed.path)
+        if draft_generate_match is not None:
+            payload = self._read_json_body()
+            if payload is None or not self._accept_fields(
+                payload,
+                {
+                    "expectedManifestVersion",
+                    "expectedDraftVersion",
+                },
+                "draft generation",
+            ):
+                return
+            self._run_controller(
+                lambda: self.server.draft_service.generate(
+                    draft_generate_match.group(1),
+                    expected_manifest_version=cast(
+                        int,
+                        payload.get("expectedManifestVersion"),
+                    ),
+                    expected_draft_version=cast(
+                        int,
+                        payload.get("expectedDraftVersion"),
+                    ),
+                )
+            )
+            return
+
+        draft_chat_match = DRAFT_CHAT_PATH.fullmatch(parsed.path)
+        if draft_chat_match is not None:
+            payload = self._read_json_body()
+            if payload is None or not self._accept_fields(
+                payload,
+                {
+                    "expectedManifestVersion",
+                    "expectedDraftVersion",
+                    "message",
+                    "selectedText",
+                },
+                "draft revision",
+            ):
+                return
+            self._run_controller(
+                lambda: self.server.draft_service.revise(
+                    draft_chat_match.group(1),
+                    expected_manifest_version=cast(
+                        int,
+                        payload.get("expectedManifestVersion"),
+                    ),
+                    expected_draft_version=cast(
+                        int,
+                        payload.get("expectedDraftVersion"),
+                    ),
+                    message=cast(str, payload.get("message")),
+                    selected_text=cast(
+                        str | None,
+                        payload.get("selectedText"),
+                    ),
+                )
+            )
+            return
+
         import_match = SOURCE_IMPORT_PATH.fullmatch(parsed.path)
         if import_match is not None:
             payload = self._read_json_body()
@@ -309,6 +419,22 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             )
             return
         self._send_error(HTTPStatus.NOT_FOUND, "not_found", "route not found")
+
+    def _save_draft(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        expected_draft_version: int,
+        document: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.server.controller.save_draft(
+            workspace_id,
+            expected_manifest_version=expected_manifest_version,
+            expected_draft_version=expected_draft_version,
+            document=document,
+        )
+        return self.server.controller.get_context(workspace_id)
 
     def do_DELETE(self) -> None:
         if not self._authorized():
@@ -460,9 +586,15 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 status = HTTPStatus.NOT_FOUND
             elif isinstance(
                 exc,
-                (ValidationUnavailable, UpstreamUnavailable),
+                (
+                    ValidationUnavailable,
+                    UpstreamUnavailable,
+                    HermesUnavailable,
+                ),
             ):
                 status = HTTPStatus.SERVICE_UNAVAILABLE
+            elif isinstance(exc, HermesTurnFailed):
+                status = HTTPStatus.BAD_GATEWAY
             elif isinstance(exc, (InvalidRequest, InvalidWorkspace)):
                 status = HTTPStatus.UNPROCESSABLE_ENTITY
             else:
@@ -523,11 +655,19 @@ def build_server(
     bearer_token: str,
     host: str = "127.0.0.1",
     port: int = 8787,
+    hermes_serve_url: str = "ws://127.0.0.1:9119/api/ws",
 ) -> ControllerHTTPServer:
     if not bearer_token:
         raise ValueError("controller bearer token must not be empty")
     server = ControllerHTTPServer((host, port), ControllerRequestHandler)
     server.controller = WorkspaceController(workspace_root)
+    server.draft_service = HermesDraftService(
+        controller=server.controller,
+        session_client=HermesSessionClient(
+            serve_url=hermes_serve_url,
+            token=bearer_token,
+        ),
+    )
     server.bearer_token = bearer_token
     return server
 
@@ -539,6 +679,13 @@ def main() -> None:
         default=os.environ.get("WXPOST_WORKSPACE_ROOT", "/workspace"),
     )
     parser.add_argument("--token", default=os.environ.get("WXPOST_SERVICE_TOKEN", ""))
+    parser.add_argument(
+        "--hermes-serve-url",
+        default=os.environ.get(
+            "HERMES_SERVE_URL",
+            "ws://127.0.0.1:9119/api/ws",
+        ),
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
     args = parser.parse_args()
@@ -547,6 +694,7 @@ def main() -> None:
         bearer_token=args.token,
         host=args.host,
         port=args.port,
+        hermes_serve_url=args.hermes_serve_url,
     )
     try:
         server.serve_forever()

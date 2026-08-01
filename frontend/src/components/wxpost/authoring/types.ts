@@ -5,7 +5,7 @@ import type {
   WorkspaceWritingApproach,
 } from '@/utils/wxpostWorkspace';
 
-export type WxPostAuthoringStage = 'setup' | 'materials';
+export type WxPostAuthoringStage = 'setup' | 'materials' | 'draft';
 
 export interface WxPostMaterial {
   sourceId: string;

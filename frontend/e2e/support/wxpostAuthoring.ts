@@ -1,5 +1,10 @@
 import { expect, type Page } from '@playwright/test';
+import { parse as parseYaml } from 'yaml';
 
+import type {
+  WxPostArticleDocument,
+  WxPostBodyNode,
+} from '../../src/components/wxpost/types';
 import {
   MEETING_462,
   MEETING_461,
@@ -75,6 +80,12 @@ export type WorkspaceManifest = {
   }>;
 };
 
+type StoredDraftDocument = Pick<
+  WxPostArticleDocument,
+  'title' | 'bodyMarkdown'
+> &
+  Partial<WxPostArticleDocument>;
+
 export type WorkspaceMock = {
   contexts: Map<
     string,
@@ -83,15 +94,85 @@ export type WorkspaceMock = {
       manifest: WorkspaceManifest;
       draft: {
         draftVersion: number;
-        document: Record<string, unknown>;
+        document: StoredDraftDocument;
       } | null;
     }
   >;
   requests: string[];
+  draftValidationRequests: number;
   conflictNextMutation: boolean;
+  conflictNextDraftMutation: boolean;
+  failNextDraftGeneration: boolean;
+  failDraftValidation: boolean;
+  failSourceContent: boolean;
+  failNextDraftChat: boolean;
+  draftSessionUnavailable: boolean;
   contextDelayMs: number;
+  nextGeneratedDocument: DraftDocument | null;
   referencedSourceIds: Set<string>;
+  draftMessages: Map<
+    string,
+    Array<{ role: 'user' | 'assistant'; text: string }>
+  >;
 };
+
+export type DraftDocument = WxPostArticleDocument;
+
+function renderBody(bodyMarkdown: string): WxPostBodyNode[] {
+  const lines = bodyMarkdown.split('\n');
+  const body: WxPostBodyNode[] = [];
+  let markdownStart = 0;
+  const flushMarkdown = (end: number) => {
+    const source = lines.slice(markdownStart, end).join('\n');
+    if (source.trim()) {
+      body.push({ kind: 'markdown', source, line: markdownStart + 1 });
+    }
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const opening = /^:::([a-z][a-z0-9-]*)$/.exec(lines[index]);
+    if (!opening) continue;
+    flushMarkdown(index);
+    const closingIndex = lines.findIndex(
+      (line, candidate) => candidate > index && line === ':::'
+    );
+    if (closingIndex < 0) throw new Error(`Unclosed ${opening[1]} directive`);
+    body.push({
+      kind: 'directive',
+      name: opening[1],
+      payload: parseYaml(lines.slice(index + 1, closingIndex).join('\n')),
+      line: index + 1,
+    } as WxPostBodyNode);
+    index = closingIndex;
+    markdownStart = closingIndex + 1;
+  }
+  flushMarkdown(lines.length);
+  return body;
+}
+
+export function draftDocument(
+  title = 'Culture in Every Voice',
+  bodyMarkdown = '## Opening the room\n\nA meeting begins with a warm welcome.'
+): DraftDocument {
+  return {
+    schemaVersion: 1,
+    title,
+    excerpt: 'An evening of stories and careful listening.',
+    byline: 'SoarHigh editorial team',
+    articleType: 'meeting-recap',
+    customArticleType: null,
+    sourceMeetingId: 'meeting-462',
+    media: [],
+    coverMediaId: null,
+    presentation: {
+      layout: 'brand-default',
+      palette: 'paper-neutral',
+      appearance: 'light',
+      typeface: 'editorial-serif',
+    },
+    bodyMarkdown,
+  };
+}
 
 export function meetingSources(
   meetingId: string | null,
@@ -128,10 +209,43 @@ export async function mockWxPostWorkspaceApi(
   const mock: WorkspaceMock = {
     contexts: new Map(),
     requests: [],
+    draftValidationRequests: 0,
     conflictNextMutation: false,
+    conflictNextDraftMutation: false,
+    failNextDraftGeneration: false,
+    failDraftValidation: false,
+    failSourceContent: false,
+    failNextDraftChat: false,
+    draftSessionUnavailable: false,
     contextDelayMs: 0,
+    nextGeneratedDocument: null,
     referencedSourceIds: new Set(),
+    draftMessages: new Map(),
   };
+
+  await page.route(/\/posts\/wxposts\/validate$/, async (route) => {
+    mock.draftValidationRequests += 1;
+    if (mock.failDraftValidation) {
+      await route.fulfill({
+        status: 503,
+        json: { detail: 'Canonical renderer is unavailable' },
+      });
+      return;
+    }
+    const document = route.request().postDataJSON() as DraftDocument;
+    await route.fulfill({
+      status: 200,
+      json: {
+        valid: true,
+        document,
+        renderDocument: {
+          ...document,
+          renderVersion: 1,
+          body: renderBody(document.bodyMarkdown),
+        },
+      },
+    });
+  });
 
   await page.route(
     /^http:\/\/localhost:5000\/posts\/wxposts\/workspaces\//,
@@ -226,6 +340,202 @@ export async function mockWxPostWorkspaceApi(
         await route.fulfill({ status: 200, json: context });
         return;
       }
+      if (method === 'GET' && parts[0] === 'draft' && parts[1] === 'session') {
+        if (mock.draftSessionUnavailable) {
+          await route.fulfill({
+            status: 503,
+            json: {
+              error: {
+                code: 'hermes_unavailable',
+                message: 'Hermes history is temporarily unavailable',
+              },
+            },
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          json: {
+            workspaceId,
+            sessionId: context.draft ? `session-${workspaceId}` : null,
+            messages: mock.draftMessages.get(workspaceId) ?? [],
+          },
+        });
+        return;
+      }
+      if (method === 'POST' && parts[0] === 'draft' && parts[1] === 'save') {
+        const input = request.postDataJSON() as {
+          expectedManifestVersion: number;
+          expectedDraftVersion: number;
+          document: DraftDocument;
+        };
+        const actualDraftVersion = context.draft?.draftVersion ?? 0;
+        if (
+          mock.conflictNextDraftMutation ||
+          input.expectedManifestVersion !== context.manifest.manifestVersion ||
+          input.expectedDraftVersion !== actualDraftVersion
+        ) {
+          mock.conflictNextDraftMutation = false;
+          await route.fulfill({
+            status: 409,
+            json: {
+              error: {
+                code: 'version_conflict',
+                message: 'draft changed',
+                expectedVersion: input.expectedDraftVersion,
+                actualVersion: actualDraftVersion,
+              },
+            },
+          });
+          return;
+        }
+        const nextVersion = actualDraftVersion + 1;
+        context.draft = {
+          draftVersion: nextVersion,
+          document: input.document,
+        };
+        context.manifest.draft = {
+          version: nextVersion,
+          sourceManifestVersion: context.manifest.manifestVersion,
+          sha256: `draft-${nextVersion}`,
+        };
+        await route.fulfill({ status: 200, json: context });
+        return;
+      }
+      if (
+        method === 'POST' &&
+        parts[0] === 'draft' &&
+        parts[1] === 'generate'
+      ) {
+        if (mock.failNextDraftGeneration) {
+          mock.failNextDraftGeneration = false;
+          await route.fulfill({
+            status: 503,
+            json: {
+              error: {
+                code: 'hermes_unavailable',
+                message: 'Hermes is temporarily unavailable',
+              },
+            },
+          });
+          return;
+        }
+        const input = request.postDataJSON() as {
+          expectedManifestVersion: number;
+          expectedDraftVersion: number;
+        };
+        const actualDraftVersion = context.draft?.draftVersion ?? 0;
+        if (
+          input.expectedManifestVersion !== context.manifest.manifestVersion ||
+          input.expectedDraftVersion !== actualDraftVersion
+        ) {
+          await route.fulfill({
+            status: 409,
+            json: {
+              error: {
+                code: 'version_conflict',
+                message: 'draft changed',
+              },
+            },
+          });
+          return;
+        }
+        const nextVersion = actualDraftVersion + 1;
+        const generatedDocument =
+          mock.nextGeneratedDocument ??
+          draftDocument(
+            `Generated draft v${nextVersion}`,
+            `## Generated section\n\nGenerated from saved Materials as version ${nextVersion}.`
+          );
+        mock.nextGeneratedDocument = null;
+        context.draft = {
+          draftVersion: nextVersion,
+          document: generatedDocument,
+        };
+        context.manifest.draft = {
+          version: nextVersion,
+          sourceManifestVersion: context.manifest.manifestVersion,
+          sha256: `draft-${nextVersion}`,
+        };
+        await route.fulfill({
+          status: 200,
+          json: {
+            workspaceId,
+            sessionId: `session-${workspaceId}`,
+            reply: `Generated draft version ${nextVersion}.`,
+            context,
+          },
+        });
+        return;
+      }
+      if (method === 'POST' && parts[0] === 'draft' && parts[1] === 'chat') {
+        if (mock.failNextDraftChat) {
+          mock.failNextDraftChat = false;
+          await route.fulfill({
+            status: 502,
+            json: {
+              error: {
+                code: 'hermes_turn_failed',
+                message: 'Hermes could not revise the draft',
+              },
+            },
+          });
+          return;
+        }
+        const input = request.postDataJSON() as {
+          expectedManifestVersion: number;
+          expectedDraftVersion: number;
+          message: string;
+          selectedText: string | null;
+        };
+        const actualDraftVersion = context.draft?.draftVersion ?? 0;
+        if (
+          input.expectedManifestVersion !== context.manifest.manifestVersion ||
+          input.expectedDraftVersion !== actualDraftVersion
+        ) {
+          await route.fulfill({
+            status: 409,
+            json: {
+              error: {
+                code: 'version_conflict',
+                message: 'draft changed',
+              },
+            },
+          });
+          return;
+        }
+        const nextVersion = actualDraftVersion + 1;
+        const nextDocument = {
+          ...(context.draft?.document as unknown as DraftDocument),
+          title: `Hermes revision v${nextVersion}`,
+        };
+        context.draft = {
+          draftVersion: nextVersion,
+          document: nextDocument,
+        };
+        context.manifest.draft = {
+          version: nextVersion,
+          sourceManifestVersion: context.manifest.manifestVersion,
+          sha256: `draft-${nextVersion}`,
+        };
+        const reply = 'I revised the saved draft and kept the request focused.';
+        const messages = mock.draftMessages.get(workspaceId) ?? [];
+        mock.draftMessages.set(workspaceId, [
+          ...messages,
+          { role: 'user', text: input.message },
+          { role: 'assistant', text: reply },
+        ]);
+        await route.fulfill({
+          status: 200,
+          json: {
+            workspaceId,
+            sessionId: `session-${workspaceId}`,
+            reply,
+            context,
+          },
+        });
+        return;
+      }
       if (
         method === 'POST' &&
         parts[0] === 'voice-tone' &&
@@ -241,6 +551,18 @@ export async function mockWxPostWorkspaceApi(
         return;
       }
       if (method === 'GET' && parts[2] === 'content') {
+        if (mock.failSourceContent) {
+          await route.fulfill({
+            status: 503,
+            json: {
+              error: {
+                code: 'source_unavailable',
+                message: 'Draft media is temporarily unavailable',
+              },
+            },
+          });
+          return;
+        }
         await route.fulfill({
           status: 200,
           contentType: 'image/png',

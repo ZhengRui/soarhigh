@@ -17,6 +17,7 @@ from ...config import (
     WXPOST_CONTROLLER_URL,
     WXPOST_HERMES_URL,
     WXPOST_PUBLIC_BASE_URL,
+    WXPOST_PUBLISHER_NAME,
     WXPOST_SERVICE_TOKEN,
 )
 from ...db.wxpost import (
@@ -57,6 +58,12 @@ WXPOST_MAX_SOURCE_BYTES = 50 * 1024 * 1024
 workspace_source_route = re.compile(
     r"^sources/M(?:0[1-9]|[1-9][0-9]+)" r"(?:/(?:import|inclusion|content|delete-preflight))?$"
 )
+workspace_draft_routes = {
+    ("GET", "draft/session"),
+    ("POST", "draft/save"),
+    ("POST", "draft/generate"),
+    ("POST", "draft/chat"),
+}
 
 
 class VoiceToneSuggestionRequest(BaseModel):
@@ -83,6 +90,67 @@ async def require_wxpost_service(
         or not secrets.compare_digest(credentials.credentials, WXPOST_SERVICE_TOKEN)
     ):
         raise HTTPException(status_code=401, detail="Invalid WxPost service credential.")
+
+
+async def _compile_trusted_render(render_document: dict[str, Any]) -> str:
+    if not WXPOST_PUBLIC_BASE_URL or not WXPOST_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="WxPost canonical renderer is not configured.",
+        )
+    presentation = render_document.get("presentation")
+    media = render_document.get("media")
+    asset_urls = (
+        {
+            item["id"]: item["sourceUrl"]
+            for item in media
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("sourceUrl"), str)
+        }
+        if isinstance(media, list)
+        else {}
+    )
+    try:
+        async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
+            response = await client.post(
+                f"{WXPOST_PUBLIC_BASE_URL}/api/internal/wxpost/render",
+                headers={
+                    "Authorization": f"Bearer {WXPOST_SERVICE_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "renderDocument": render_document,
+                    "presentation": presentation,
+                    "context": {
+                        "assetUrls": asset_urls,
+                        "publisherName": WXPOST_PUBLISHER_NAME,
+                    },
+                },
+            )
+    except httpx.HTTPError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="WxPost canonical renderer is unavailable.",
+        ) from error
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=503,
+            detail="WxPost canonical renderer rejected the document.",
+        )
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="WxPost canonical renderer returned invalid JSON.",
+        ) from error
+    html = payload.get("html") if isinstance(payload, dict) else None
+    render_version = payload.get("renderVersion") if isinstance(payload, dict) else None
+    if render_version != 1 or not isinstance(html, str) or not html:
+        raise HTTPException(
+            status_code=503,
+            detail="WxPost canonical renderer returned an invalid result.",
+        )
+    return html
 
 
 def _validate_persistable_document(document: ArticleDocument) -> None:
@@ -119,6 +187,7 @@ async def _proxy_workspace_controller(
     body: bytes | None = None,
     content_type: str | None = None,
     expected_manifest_version: str | None = None,
+    timeout: int = 30,
 ) -> Response:
     if not WXPOST_CONTROLLER_URL or not WXPOST_SERVICE_TOKEN:
         raise HTTPException(
@@ -131,7 +200,7 @@ async def _proxy_workspace_controller(
     if expected_manifest_version:
         headers["X-Expected-Manifest-Version"] = expected_manifest_version
     try:
-        async with httpx.AsyncClient(timeout=30, trust_env=False) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             upstream = await client.request(
                 method,
                 f"{WXPOST_CONTROLLER_URL}{path}",
@@ -160,7 +229,7 @@ def _workspace_route_allowed(method: str, path: str) -> bool:
         ("GET", "context"),
         ("PATCH", "sources"),
         ("POST", "uploads"),
-    }:
+    } | workspace_draft_routes:
         return True
     if not workspace_source_route.fullmatch(path):
         return False
@@ -188,6 +257,7 @@ async def _proxy_workspace_request(
         body=body,
         content_type=request.headers.get("Content-Type"),
         expected_manifest_version=request.headers.get("X-Expected-Manifest-Version"),
+        timeout=330 if controller_path in {"draft/generate", "draft/chat"} else 30,
     )
 
 
@@ -239,13 +309,15 @@ async def r_validate_wxpost(payload: Any = Body(...)) -> WxPostValidationSuccess
         failure = WxPostValidationFailure(errors=error.errors)
         return JSONResponse(status_code=422, content=failure.model_dump(by_alias=True, mode="json"))
 
+    render_document = parsed.render_document(document)
+    await _compile_trusted_render(render_document.model_dump(by_alias=True, mode="json"))
     return WxPostValidationSuccess(
         document=document,
         article_type=document.article_type,
         custom_article_type=document.custom_article_type,
         directives=parsed.directive_summaries(),
         inline_extensions=parsed.inline_summaries(),
-        render_document=parsed.render_document(document),
+        render_document=render_document,
     )
 
 

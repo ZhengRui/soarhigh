@@ -31,7 +31,7 @@ def _configure_controller(
     transport = httpx.MockTransport(handler)
 
     def client_factory(*, timeout: int, trust_env: bool) -> httpx.AsyncClient:
-        assert timeout == 30
+        assert timeout in {30, 330}
         assert trust_env is False
         return real_client(transport=transport)
 
@@ -398,3 +398,66 @@ def test_workspace_proxy_rejects_operations_outside_the_materials_slice(
 
     assert response.status_code == 404
     assert captured == []
+
+
+def test_workspace_proxy_allows_only_the_scoped_draft_routes(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    _configure_controller(monkeypatch, handler)
+
+    requests = [
+        ("GET", "/draft/session", None),
+        (
+            "POST",
+            "/draft/save",
+            {
+                "expectedManifestVersion": 3,
+                "expectedDraftVersion": 1,
+                "document": {"schemaVersion": 1},
+            },
+        ),
+        (
+            "POST",
+            "/draft/generate",
+            {"expectedManifestVersion": 3, "expectedDraftVersion": 1},
+        ),
+        (
+            "POST",
+            "/draft/chat",
+            {
+                "expectedManifestVersion": 3,
+                "expectedDraftVersion": 1,
+                "message": "Tighten the opening.",
+                "selectedText": "The meeting began.",
+            },
+        ),
+    ]
+    for method, suffix, payload in requests:
+        response = client.request(
+            method,
+            f"/posts/wxposts/workspaces/wxpost-abc{suffix}",
+            headers={"Authorization": "Bearer member-token"},
+            json=payload,
+        )
+        assert response.status_code == 200
+
+    rejected = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/draft/arbitrary",
+        headers={"Authorization": "Bearer member-token"},
+        json={},
+    )
+
+    assert rejected.status_code == 404
+    assert [(request.method, request.url.path) for request in captured] == [
+        ("GET", "/workspaces/wxpost-abc/draft/session"),
+        ("POST", "/workspaces/wxpost-abc/draft/save"),
+        ("POST", "/workspaces/wxpost-abc/draft/generate"),
+        ("POST", "/workspaces/wxpost-abc/draft/chat"),
+    ]

@@ -247,6 +247,12 @@ test('defaults event-number workspaces to a custom Event Recap', async ({
   await expect(page.getByTestId('custom-article-type')).toHaveValue(
     'Event Recap'
   );
+  await expect(page.getByTestId('wxpost-header-subtitle')).toContainText(
+    'Event #100001 · Event Recap'
+  );
+  await expect(page.getByTestId('meeting-context')).toContainText(
+    'Event · #100001'
+  );
   await expect(page.getByTestId('article-type-event-preview')).toHaveAttribute(
     'aria-pressed',
     'false'
@@ -293,6 +299,11 @@ test('resumes an existing workspace without creating or unlocking it', async ({
   await expect(
     page.getByRole('heading', { name: 'WxPost', exact: true })
   ).toBeVisible();
+  const headerSubtitle = page.locator('header p');
+  await expect(
+    page.getByTestId('wxpost-header-subtitle-loading')
+  ).toBeVisible();
+  await expect(headerSubtitle).not.toContainText('Independent article');
   await expect(page.getByTestId('wxpost-workspaces-link')).toHaveAttribute(
     'href',
     '/posts/wxposts/workspaces?from=edit&workspace=resume'
@@ -306,6 +317,10 @@ test('resumes an existing workspace without creating or unlocking it', async ({
   await expect(page.getByTestId('setup-stage')).toBeHidden();
   await expect(page.getByTestId('materials-stage')).toBeVisible();
   await expect(page.getByTestId(`material-${FIRST_SOURCE_KEY}`)).toBeVisible();
+  await expect(page.getByTestId('wxpost-header-subtitle-loading')).toHaveCount(
+    0
+  );
+  await expect(headerSubtitle).toHaveText('Regular #462 · Meeting Recap');
   await page.getByRole('button', { name: /Setup/ }).click();
   await expect(page.getByTestId('source-locked-message')).toBeVisible();
   await expect(page.getByTestId('association-linked')).toBeDisabled();

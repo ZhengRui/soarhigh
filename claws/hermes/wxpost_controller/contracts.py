@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
@@ -16,6 +17,7 @@ from pydantic import (
 )
 
 MANIFEST_SCHEMA_VERSION: Literal[4] = 4
+DRAFT_PROPOSAL_SCHEMA_VERSION: Literal[2] = 2
 
 TrimmedText = Annotated[
     str,
@@ -221,6 +223,10 @@ class DraftState(ContractModel):
     version: int = Field(ge=1, strict=True)
     source_manifest_version: int = Field(ge=1, strict=True)
     sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    operation_id: TrimmedText | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class WorkspaceCreator(ContractModel):
@@ -293,6 +299,221 @@ class DraftEnvelope(ContractModel):
 
     draft_version: int = Field(ge=1, strict=True)
     document: dict[str, Any]
+
+
+class DraftMediaProposal(ContractModel):
+    """Editorial fields Hermes owns for one workspace material."""
+
+    id: SourceId
+    description: TrimmedText
+    credit: TrimmedText | None = None
+    people: list[TrimmedText] = Field(default_factory=list)
+
+
+MarkdownText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1),
+]
+
+
+def _reject_directive_fences(value: str) -> str:
+    if any(line.strip().startswith(":::") for line in value.splitlines()):
+        raise ValueError(
+            "markdown blocks cannot contain directive fences; use a typed block"
+        )
+    return value
+
+
+_ATX_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}(?:[ \t]+|$)")
+_SETEXT_HEADING = re.compile(r"^[ \t]{0,3}(?:=+|-+)[ \t]*$")
+
+
+def _reject_section_heading(value: str) -> str:
+    _reject_directive_fences(value)
+    lines = value.splitlines()
+    for index, line in enumerate(lines):
+        if _ATX_HEADING.match(line):
+            raise ValueError(
+                "section bodies cannot contain Markdown headings; use a section block"
+            )
+        if index > 0 and lines[index - 1].strip() and _SETEXT_HEADING.match(line):
+            raise ValueError(
+                "section bodies cannot contain Markdown headings; use a section block"
+            )
+    return value
+
+
+class DraftMarkdownBlock(ContractModel):
+    """Free-form prose, lists, or other ordinary Markdown."""
+
+    type: Literal["markdown"]
+    markdown: MarkdownText = Field(
+        description=(
+            "Ordinary prose, block quotes, or lists only. Do not include "
+            "directive fences or semantic blocks."
+        )
+    )
+
+    _validate_markdown = field_validator("markdown")(_reject_directive_fences)
+
+
+class DraftSectionBlock(ContractModel):
+    """One marked narrative section with an editable heading and body."""
+
+    type: Literal["section"]
+    kicker: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+    ]
+    heading: TrimmedText
+    body: MarkdownText = Field(
+        description=(
+            "The section prose and lists only. Do not include a heading, "
+            "directive fence, or semantic block. Put media and other semantic "
+            "content in separate sibling blocks after this section."
+        )
+    )
+
+    _validate_body = field_validator("body")(_reject_section_heading)
+
+
+class DraftImageBlock(ContractModel):
+    type: Literal["image"]
+    media: SourceId
+    caption: TrimmedText | None = None
+
+
+class DraftGalleryBlock(ContractModel):
+    type: Literal["gallery"]
+    items: list[SourceId] = Field(min_length=2)
+    caption: TrimmedText | None = None
+
+    @field_validator("items")
+    @classmethod
+    def _require_unique_items(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("gallery items must be unique")
+        return value
+
+
+class DraftVideoBlock(ContractModel):
+    type: Literal["video"]
+    media: SourceId
+    caption: TrimmedText | None = None
+
+
+class DraftPersonBlock(ContractModel):
+    type: Literal["person"]
+    name: TrimmedText
+    role: TrimmedText | None = None
+    media: SourceId | None = None
+    summary: TrimmedText | None = None
+    quote: TrimmedText | None = None
+
+
+class DraftTakeawayBlock(ContractModel):
+    type: Literal["takeaway"]
+    text: MarkdownText
+    title: TrimmedText | None = None
+
+
+class DraftInfoGridItem(ContractModel):
+    label: TrimmedText
+    value: TrimmedText
+
+
+class DraftInfoGridBlock(ContractModel):
+    type: Literal["info-grid"]
+    title: TrimmedText | None = None
+    items: list[DraftInfoGridItem] = Field(min_length=1)
+
+
+class DraftTimelineItem(ContractModel):
+    label: TrimmedText
+    title: TrimmedText
+    description: TrimmedText | None = None
+
+
+class DraftTimelineBlock(ContractModel):
+    type: Literal["timeline"]
+    title: TrimmedText | None = None
+    items: list[DraftTimelineItem] = Field(min_length=1)
+
+
+class DraftPullQuoteBlock(ContractModel):
+    type: Literal["pull-quote"]
+    text: TrimmedText
+    attribution: TrimmedText | None = None
+
+
+DraftBlock = Annotated[
+    DraftMarkdownBlock
+    | DraftSectionBlock
+    | DraftImageBlock
+    | DraftGalleryBlock
+    | DraftVideoBlock
+    | DraftPersonBlock
+    | DraftTakeawayBlock
+    | DraftInfoGridBlock
+    | DraftTimelineBlock
+    | DraftPullQuoteBlock,
+    Field(discriminator="type"),
+]
+
+
+class DraftProposal(ContractModel):
+    """Strict structured output authored by Hermes before canonical assembly."""
+
+    schema_version: Literal[2]
+    title: TrimmedText
+    excerpt: TrimmedText | None = None
+    byline: TrimmedText | None = None
+    blocks: list[DraftBlock] = Field(
+        min_length=1,
+        description=(
+            "Ordered article content. Use markdown blocks for unconstrained prose "
+            "and typed semantic blocks for sections, media, quotes, timelines, "
+            "information grids, people, and takeaways."
+        ),
+    )
+    media: list[DraftMediaProposal] = Field(
+        description=(
+            "Editorial descriptions for every included image or video exactly "
+            "once. Canonical media order is derived from first block reference."
+        )
+    )
+    cover_media_id: SourceId | None = None
+
+    @model_validator(mode="after")
+    def _validate_media(self) -> DraftProposal:
+        media_ids = [item.id for item in self.media]
+        if len(media_ids) != len(set(media_ids)):
+            raise ValueError("draft proposal media ids must be unique")
+        if self.cover_media_id is not None and self.cover_media_id not in media_ids:
+            raise ValueError("coverMediaId must reference proposal media")
+
+        referenced_ids: list[str] = []
+        for block in self.blocks:
+            if isinstance(block, (DraftImageBlock, DraftVideoBlock)):
+                referenced_ids.append(block.media)
+            elif isinstance(block, DraftGalleryBlock):
+                referenced_ids.extend(block.items)
+            elif isinstance(block, DraftPersonBlock) and block.media is not None:
+                referenced_ids.append(block.media)
+
+        unexpected = sorted(set(referenced_ids) - set(media_ids))
+        if unexpected:
+            raise ValueError(
+                "draft blocks reference media missing from proposal: "
+                + ", ".join(unexpected)
+            )
+        missing = sorted(set(media_ids) - set(referenced_ids))
+        if missing:
+            raise ValueError(
+                "draft proposal media is not referenced by a block: "
+                + ", ".join(missing)
+            )
+        return self
 
 
 class SourceUpdate(ContractModel):
@@ -425,3 +646,4 @@ class SaveDraftRequest(ContractModel):
     expected_manifest_version: int = Field(ge=1, strict=True)
     expected_draft_version: int = Field(ge=0, strict=True)
     document: dict[str, Any]
+    operation_id: TrimmedText | None = None

@@ -102,7 +102,12 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   const workspace = await openAuthoringPage(page);
-  await page.getByTestId('create-workspace').click();
+  const materialsStage = page.getByTestId('materials-stage');
+  await expect(async () => {
+    if (await materialsStage.isVisible()) return;
+    await page.getByTestId('create-workspace').click();
+    await expect(materialsStage).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
 
   const context = Array.from(workspace.contexts.values())[0];
   const savedDraft = {
@@ -119,7 +124,7 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
   };
   context.draft = savedDraft;
 
-  await expect(page.getByTestId('generate-draft')).toBeDisabled();
+  await expect(page.getByTestId('generate-draft')).toBeEnabled();
   const saveMaterials = page.getByTestId('save-materials');
   await expect(saveMaterials).toBeDisabled();
   const saveBox = await saveMaterials.boundingBox();
@@ -331,6 +336,32 @@ test('confirms before a stale Materials save replaces local edits', async ({
   expect(
     workspace.requests.filter((request) => request === 'PATCH /')
   ).toHaveLength(2);
+});
+
+test('uses the Materials conflict dialog when Draft generation is stale', async ({
+  page,
+}) => {
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  const context = Array.from(workspace.contexts.values())[0];
+  const generateDraft = page.getByTestId('generate-draft');
+  await expect(page.getByTestId('materials-stage')).toBeVisible();
+  await expect(generateDraft).toBeEnabled();
+  context.manifest.manifestVersion += 1;
+
+  await generateDraft.click();
+  const conflictDialog = page.getByTestId('materials-conflict-dialog');
+  await expect(conflictDialog).toBeVisible();
+  await expect(
+    page.getByText(
+      'Regenerate stopped because this workspace changed in another tab. The latest saved version has been loaded.'
+    )
+  ).toHaveCount(0);
+  await expect(page.getByTestId('materials-stage')).toBeVisible();
+
+  await conflictDialog.getByRole('button', { name: 'Load latest' }).click();
+  await expect(conflictDialog).toHaveCount(0);
+  await expect(page.getByTestId('materials-stage')).toBeVisible();
 });
 
 test('checks the Materials version before opening a delete confirmation', async ({

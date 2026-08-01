@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "reviewMode": "manual",
+  "scenarios": [
+    {
+      "id": "meeting-recap-linked-chronological",
+      "articleType": "meeting-recap",
+      "writingApproach": "chronological",
+      "meetingContext": {
+        "theme": "Culture in Every Voice",
+        "agenda": ["Opening", "Prepared speeches", "Evaluations"],
+        "awards": []
+      },
+      "materials": [
+        {
+          "id": "M02",
+          "kind": "image",
+          "description": "A prepared speaker addresses the room."
+        }
+      ],
+      "reviewCriteria": [
+        "uses the confirmed meeting theme and sequence without copying every agenda row",
+        "places M02 where the prepared speech is discussed",
+        "does not invent an award or quotation"
+      ]
+    },
+    {
+      "id": "meeting-recap-image-led",
+      "articleType": "meeting-recap",
+      "writingApproach": "image-driven",
+      "meetingContext": {
+        "theme": "Culture in Every Voice",
+        "agenda": ["Opening", "Prepared speeches", "Evaluations"],
+        "awards": []
+      },
+      "materials": [
+        {
+          "id": "M04",
+          "kind": "image",
+          "description": "Members exchange ideas after the formal meeting."
+        },
+        {
+          "id": "M01",
+          "kind": "image",
+          "description": "A guest answers a Table Topics prompt."
+        }
+      ],
+      "reviewCriteria": [
+        "uses a different narrative shape from the chronological case",
+        "orders media by meaning rather than material ID",
+        "does not append a generic gallery merely to consume both images"
+      ]
+    },
+    {
+      "id": "member-story-grounded",
+      "articleType": "member-story",
+      "writingApproach": "theme-driven",
+      "meetingContext": null,
+      "materials": [
+        {
+          "id": "M01",
+          "kind": "image",
+          "description": "Lin practices beside a marked-up notebook."
+        }
+      ],
+      "writingGuidance": "Focus on Lin's practice habit; no direct quotation is available.",
+      "reviewCriteria": [
+        "centers Lin rather than general club promotion",
+        "does not fabricate a quotation or finished transformation",
+        "uses the image only when it advances the profile"
+      ]
+    },
+    {
+      "id": "event-preview-practical",
+      "articleType": "event-preview",
+      "writingApproach": "highlights-first",
+      "meetingContext": null,
+      "materials": [],
+      "extraNotes": "Open Night, September 3, 19:00, Nanshan Community Room. Registration method is not confirmed.",
+      "reviewCriteria": [
+        "states confirmed time and place",
+        "omits registration instructions because they are unconfirmed",
+        "describes an upcoming event rather than scenes that already happened"
+      ]
+    },
+    {
+      "id": "meeting-review-evidence-first",
+      "articleType": "meeting-review",
+      "writingApproach": "theme-driven",
+      "meetingContext": {
+        "theme": "Make complexity clear",
+        "agenda": ["Prepared speeches", "Table Topics", "Evaluations"],
+        "awards": []
+      },
+      "materials": [],
+      "extraNotes": "Role explanations ran long; Table Topics recovered participation.",
+      "reviewCriteria": [
+        "separates observations from editorial judgment",
+        "offers a practical next action without shaming a participant",
+        "does not claim audience reactions absent from the notes"
+      ]
+    },
+    {
+      "id": "action-guide-compact",
+      "articleType": "action-guide",
+      "writingApproach": "chronological",
+      "meetingContext": null,
+      "materials": [],
+      "transcript": "Choose one idea. Give one example. Ask the listener to repeat the takeaway.",
+      "reviewCriteria": [
+        "produces a usable sequence rather than a narrative recap",
+        "does not pad the three supported actions with invented results",
+        "uses structural directives only when they improve action clarity"
+      ]
+    },
+    {
+      "id": "custom-event-recap-completed",
+      "articleType": "custom",
+      "customArticleType": "Event Recap",
+      "writingApproach": "highlights-first",
+      "meetingContext": null,
+      "materials": [
+        {
+          "id": "M03",
+          "kind": "image",
+          "description": "Members and guests pose together after Member Day."
+        }
+      ],
+      "extraNotes": "Member Day has ended. Twelve prepared projects were presented.",
+      "reviewCriteria": [
+        "treats the event as completed rather than previewing attendance",
+        "uses only the confirmed count and described closing image",
+        "does not invent participant names, awards, or quotations"
+      ]
+    },
+    {
+      "id": "regenerate-preserves-member-state",
+      "operation": "regenerate",
+      "articleType": "meeting-recap",
+      "meetingContext": null,
+      "materials": [],
+      "savedDraft": {
+        "presentation": {
+          "layout": "editorial-feature",
+          "palette": "warm-terracotta",
+          "appearance": "dark",
+          "typeface": "humanist-mix"
+        }
+      },
+      "reviewCriteria": [
+        "proposal omits presentation",
+        "controller preserves the saved presentation",
+        "new structure remains grounded in the same evidence"
+      ]
+    },
+    {
+      "id": "focused-revision-preserves-unrelated-copy",
+      "operation": "revise",
+      "articleType": "member-story",
+      "meetingContext": null,
+      "materials": [],
+      "memberRequest": "Make the opening warmer.",
+      "reviewCriteria": [
+        "changes only the requested opening",
+        "preserves unrelated body sections and media",
+        "proposal omits presentation"
+      ]
+    }
+  ]
+}

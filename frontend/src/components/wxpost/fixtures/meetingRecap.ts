@@ -31,6 +31,14 @@ export const meetingRecapFixture: WxPostRenderDocument = {
       },
     },
     {
+      kind: 'directive',
+      name: 'section',
+      line: 14,
+      payload: {
+        kicker: 'Opening',
+      },
+    },
+    {
       kind: 'markdown',
       source:
         '\n## First, make the attempt visible\n\nThe evening opened with three speakers sharing how they protect time for deeper work. Their methods differed, but each one turned an abstract intention into something observable.\n',
@@ -64,12 +72,28 @@ export const meetingRecapFixture: WxPostRenderDocument = {
     },
     {
       kind: 'directive',
+      name: 'image',
+      line: 30,
+      payload: {
+        media: 'M01',
+        caption: 'Members gather around the room and listen to a speaker',
+      },
+    },
+    {
+      kind: 'directive',
       name: 'gallery',
       line: 34,
       payload: {
-        items: ['M01', 'M02', 'M03'],
-        caption:
-          'Three moments of members listening, responding, and trying again',
+        items: ['M02', 'M03'],
+        caption: 'Two moments of members responding and trying again',
+      },
+    },
+    {
+      kind: 'directive',
+      name: 'section',
+      line: 40,
+      payload: {
+        kicker: 'Feedback',
       },
     },
     {
@@ -113,6 +137,14 @@ export const meetingRecapFixture: WxPostRenderDocument = {
       payload: {
         media: 'V01',
         caption: 'Maya returns to the stage and completes her example',
+      },
+    },
+    {
+      kind: 'directive',
+      name: 'section',
+      line: 64,
+      payload: {
+        kicker: 'After',
       },
     },
     {

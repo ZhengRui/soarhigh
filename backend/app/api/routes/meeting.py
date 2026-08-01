@@ -129,10 +129,10 @@ class MediaDeleteRequest(BaseModel):
     fileKeys: List[str]
 
 
-def get_meeting_media_user_id(
+def get_meeting_reader_user_id(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(meeting_media_scheme),
 ) -> Optional[str]:
-    """Resolve public, member, or scoped WxPost service access."""
+    """Resolve public, member, or scoped WxPost service read access."""
 
     if (
         credentials is not None
@@ -264,7 +264,7 @@ async def r_list_meeting_options_by_ids(
 @r.get("/meetings/{meeting_id}", response_model=Meeting)
 async def r_get_meeting(
     meeting_id: str = Path(..., description="The ID of the meeting to retrieve"),
-    user: Optional[User] = Depends(get_optional_user),
+    user_id: Optional[str] = Depends(get_meeting_reader_user_id),
 ) -> Meeting:
     """
     Get a specific meeting by ID.
@@ -273,9 +273,6 @@ async def r_get_meeting(
     For unauthenticated users, returns only published meetings.
     """
     try:
-        # Get user ID (None for unauthenticated users)
-        user_id = user.uid if user else None
-
         # Get meeting from database
         meeting_db = get_meeting_by_id(meeting_id, user_id)
 
@@ -621,7 +618,7 @@ async def r_cast_vote(
 @r.get("/meetings/{meeting_id}/media", response_model=MediaFileList)
 async def r_get_meeting_media(
     meeting_id: str = Path(..., description="The ID of the meeting"),
-    user_id: Optional[str] = Depends(get_meeting_media_user_id),
+    user_id: Optional[str] = Depends(get_meeting_reader_user_id),
 ) -> MediaFileList:
     """
     List all media files for a meeting directly from the storage bucket.

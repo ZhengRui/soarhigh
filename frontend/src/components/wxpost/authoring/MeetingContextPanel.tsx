@@ -5,6 +5,8 @@ import { useState } from 'react';
 
 import type { MeetingIF } from '@/interfaces';
 
+import { formatMeetingType } from './meetingLabels';
+
 function truncateText(text: string, limit: number) {
   const normalized = text.replace(/\s+/g, ' ').trim();
   return normalized.length > limit
@@ -93,7 +95,7 @@ export function MeetingContextPanel({ meeting }: { meeting: MeetingIF }) {
             Meeting context
           </strong>
           <small className='overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-[1.45] text-slate-500 max-[480px]:text-[13px]'>
-            {meeting.type}
+            {formatMeetingType(meeting)}
             {meeting.no ? ` · #${meeting.no}` : ''} · {meeting.date} ·{' '}
             {meeting.theme}
           </small>

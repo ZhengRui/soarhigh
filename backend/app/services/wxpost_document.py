@@ -42,9 +42,18 @@ class _DirectiveModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
-class _GalleryPayload(_DirectiveModel):
-    items: list[str] = Field(min_length=1)
+class _ImagePayload(_DirectiveModel):
+    media: str = Field(min_length=1)
     caption: str | None = Field(default=None, min_length=1)
+
+
+class _GalleryPayload(_DirectiveModel):
+    items: list[str] = Field(min_length=2)
+    caption: str | None = Field(default=None, min_length=1)
+
+
+class _SectionPayload(_DirectiveModel):
+    kicker: str = Field(min_length=1, max_length=64)
 
 
 class _VideoPayload(_DirectiveModel):
@@ -110,6 +119,20 @@ class _DirectiveDefinition:
 
 
 _DIRECTIVE_DEFINITIONS = (
+    _DirectiveDefinition(
+        name="section",
+        payload_model=_SectionPayload,
+        required_fields=("kicker",),
+        optional_fields=(),
+        example={"kicker": "Opening"},
+    ),
+    _DirectiveDefinition(
+        name="image",
+        payload_model=_ImagePayload,
+        required_fields=("media",),
+        optional_fields=("caption",),
+        example={"media": "M01", "caption": "Members listen during the prepared speeches"},
+    ),
     _DirectiveDefinition(
         name="gallery",
         payload_model=_GalleryPayload,
@@ -192,6 +215,8 @@ class ParsedDirective:
 
     @property
     def media_ids(self) -> list[str]:
+        if isinstance(self.payload, _ImagePayload):
+            return [self.payload.media]
         if isinstance(self.payload, _GalleryPayload):
             return self.payload.items
         if isinstance(self.payload, _VideoPayload):
@@ -279,6 +304,7 @@ def validate_and_parse(document: ArticleDocument) -> ParsedArticle:
     errors: list[ValidationIssue] = []
     _validate_document_shape(document, errors)
     parsed = _parse_markdown(document.body_markdown, errors)
+    _validate_section_structure(parsed.body, errors)
     _validate_directive_media(parsed.directives, document.media, errors)
 
     if errors:
@@ -287,15 +313,6 @@ def validate_and_parse(document: ArticleDocument) -> ParsedArticle:
 
 
 def _validate_document_shape(document: ArticleDocument, errors: list[ValidationIssue]) -> None:
-    custom_label = (document.custom_article_type or "").strip()
-    if document.article_type == ArticleType.CUSTOM and not custom_label:
-        errors.append(
-            ValidationIssue(
-                code="custom_article_type_required",
-                path=["customArticleType"],
-                message="customArticleType is required when articleType is custom.",
-            )
-        )
     if document.article_type != ArticleType.CUSTOM and document.custom_article_type is not None:
         errors.append(
             ValidationIssue(
@@ -502,6 +519,29 @@ def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
     )
 
 
+def _validate_section_structure(
+    body: list[RenderBodyNode],
+    errors: list[ValidationIssue],
+) -> None:
+    for index, node in enumerate(body):
+        if not isinstance(node, DirectiveBodyNode) or node.name != "section":
+            continue
+        following = body[index + 1] if index + 1 < len(body) else None
+        if isinstance(following, MarkdownBodyNode):
+            tokens = _MARKDOWN.parse(following.source)
+            if tokens and tokens[0].type == "heading_open" and tokens[0].tag == "h2":
+                continue
+        errors.append(
+            ValidationIssue(
+                code="section_heading_required",
+                path=["bodyMarkdown", "directive:section"],
+                line=node.line,
+                directive="section",
+                message=("A section directive must be followed by a Markdown H2 " "heading."),
+            )
+        )
+
+
 def _load_directive_payload(
     name: str,
     payload_text: str,
@@ -594,10 +634,19 @@ def _validate_directive_media(
     errors: list[ValidationIssue],
 ) -> None:
     by_id = {asset.id: asset for asset in media}
+    referenced_ids: set[str] = set()
     for directive in directives:
         expected_kind: MediaKind | None = None
         references: list[tuple[str, list[str | int]]] = []
-        if isinstance(directive.payload, _GalleryPayload):
+        if isinstance(directive.payload, _ImagePayload):
+            expected_kind = MediaKind.IMAGE
+            references = [
+                (
+                    directive.payload.media,
+                    ["bodyMarkdown", f"directive:{directive.name}", "media"],
+                )
+            ]
+        elif isinstance(directive.payload, _GalleryPayload):
             expected_kind = MediaKind.IMAGE
             references = [
                 (media_id, ["bodyMarkdown", f"directive:{directive.name}", "items", index])
@@ -611,6 +660,18 @@ def _validate_directive_media(
             references = [(directive.payload.media, ["bodyMarkdown", f"directive:{directive.name}", "media"])]
 
         for media_id, path in references:
+            if media_id in referenced_ids:
+                errors.append(
+                    ValidationIssue(
+                        code="duplicate_media_reference",
+                        path=path,
+                        line=directive.line,
+                        directive=directive.name,
+                        message=f"Media {media_id!r} is already used in the article body.",
+                    )
+                )
+            else:
+                referenced_ids.add(media_id)
             asset = by_id.get(media_id)
             if asset is None:
                 errors.append(
@@ -645,3 +706,16 @@ def _validate_directive_media(
                         ),
                     )
                 )
+
+    for asset in media:
+        if asset.include and asset.id not in referenced_ids:
+            errors.append(
+                ValidationIssue(
+                    code="included_media_not_referenced",
+                    path=["bodyMarkdown"],
+                    message=(
+                        f"Included media {asset.id!r} must appear in a supported "
+                        "image, gallery, video, or person directive."
+                    ),
+                )
+            )

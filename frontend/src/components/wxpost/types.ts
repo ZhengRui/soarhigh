@@ -69,9 +69,31 @@ export interface WxPostArticleMetadata {
   presentation: WxPostPresentation;
 }
 
+export interface WxPostArticleDocument extends WxPostArticleMetadata {
+  bodyMarkdown: string;
+}
+
 export interface WxPostRenderDocument extends WxPostArticleMetadata {
   renderVersion: 1;
   body: WxPostBodyNode[];
+}
+
+export interface WxPostRenderContext {
+  assetUrls?: Record<string, string>;
+  contextLabel?: string | null;
+  displayDate?: string | null;
+  publisherName?: string | null;
+}
+
+export interface WxPostCompileRequest {
+  renderDocument: WxPostRenderDocument;
+  presentation: WxPostPresentation;
+  context: WxPostRenderContext;
+}
+
+export interface WxPostCompileResult {
+  renderVersion: 1;
+  html: string;
 }
 
 export interface WxPostPublicDetail {
@@ -88,6 +110,15 @@ export interface WxPostPublicDetail {
 export interface GalleryDirectivePayload {
   items: string[];
   caption?: string;
+}
+
+export interface ImageDirectivePayload {
+  media: string;
+  caption?: string;
+}
+
+export interface SectionDirectivePayload {
+  kicker: string;
 }
 
 export interface VideoDirectivePayload {
@@ -131,6 +162,8 @@ export interface PullQuoteDirectivePayload {
 }
 
 export interface WxPostDirectivePayloadMap {
+  section: SectionDirectivePayload;
+  image: ImageDirectivePayload;
   gallery: GalleryDirectivePayload;
   video: VideoDirectivePayload;
   takeaway: TakeawayDirectivePayload;

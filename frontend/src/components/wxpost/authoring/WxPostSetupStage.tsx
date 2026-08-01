@@ -19,6 +19,7 @@ import {
   PANEL_TITLE_CLASS,
   PRIMARY_BUTTON_CLASS,
 } from './authoringStyles';
+import { formatMeetingType } from './meetingLabels';
 import type { MeetingOptionIF } from '@/interfaces';
 
 export type LinkedMeetingOption = MeetingOptionIF;
@@ -37,16 +38,12 @@ function formatDate(date: string) {
 function formatMeetingOption(meeting: LinkedMeetingOption) {
   return [
     meeting.no ? `#${meeting.no}` : null,
-    meeting.type,
+    formatMeetingType(meeting),
     formatDate(meeting.date),
     meeting.theme,
   ]
     .filter(Boolean)
     .join(' · ');
-}
-
-export function formatMeetingLabel(meeting: LinkedMeetingOption) {
-  return `${meeting.type}${meeting.no ? ` #${meeting.no}` : ''}`;
 }
 
 function MeetingSelect({

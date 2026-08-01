@@ -6,18 +6,20 @@ services:
     container_name: ${HERMES_CONTAINER_NAME:-soarhigh-hermes}
     restart: unless-stopped
     working_dir: /workspace
-    command: ["gateway", "run"]
+    command: ["/opt/soarhigh/run_gateway.sh"]
     environment:
       HERMES_UID: "${HERMES_UID:-10000}"
       HERMES_GID: "${HERMES_GID:-10000}"
       SOARHIGH_API_BASE_URL: "${SOARHIGH_API_BASE_URL:-http://host.docker.internal:5000}"
       WXPOST_SERVICE_TOKEN: "${SOARHIGH_WXPOST_SERVICE_TOKEN:?Set SOARHIGH_WXPOST_SERVICE_TOKEN in .env.local}"
+      HERMES_DASHBOARD_SESSION_TOKEN: "${SOARHIGH_WXPOST_SERVICE_TOKEN:?Set SOARHIGH_WXPOST_SERVICE_TOKEN in .env.local}"
       API_SERVER_ENABLED: "true"
       API_SERVER_KEY: "${SOARHIGH_WXPOST_SERVICE_TOKEN:?Set SOARHIGH_WXPOST_SERVICE_TOKEN in .env.local}"
       API_SERVER_HOST: "0.0.0.0"
       API_SERVER_PORT: "8642"
     ports:
       - "127.0.0.1:8642:8642"
+      - "127.0.0.1:8787:8787"
     volumes:
       - type: bind
         source: ${HERMES_HOME_DIR:?Set HERMES_HOME_DIR in .env.local}
@@ -32,6 +34,18 @@ services:
       - type: bind
         source: ./wxpost_controller
         target: /opt/soarhigh/wxpost_controller
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./skills/soarhigh-wxpost-authoring
+        target: /opt/data/skills/domain/soarhigh-wxpost-authoring
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./run_gateway.sh
+        target: /opt/soarhigh/run_gateway.sh
         read_only: true
         bind:
           create_host_path: false
@@ -55,8 +69,10 @@ services:
       SOARHIGH_API_BASE_URL: "${SOARHIGH_API_BASE_URL:-http://host.docker.internal:5000}"
       WXPOST_SERVICE_TOKEN: "${SOARHIGH_WXPOST_SERVICE_TOKEN:?Set SOARHIGH_WXPOST_SERVICE_TOKEN in .env.local}"
       WXPOST_WORKSPACE_ROOT: /workspace
-    ports:
-      - "127.0.0.1:8787:8787"
+      HERMES_SERVE_URL: ws://127.0.0.1:9119/api/ws
+    network_mode: service:gateway
+    depends_on:
+      - gateway
     volumes:
       - type: bind
         source: ${HERMES_WORKSPACE_DIR:?Set HERMES_WORKSPACE_DIR in .env.local}

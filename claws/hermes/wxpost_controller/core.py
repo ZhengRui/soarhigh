@@ -23,7 +23,14 @@ from pydantic import BaseModel, ValidationError
 from .contracts import (
     BootstrapWorkspaceRequest,
     DeleteSourceRequest,
+    DraftGalleryBlock,
     DraftEnvelope,
+    DraftImageBlock,
+    DraftMarkdownBlock,
+    DraftPersonBlock,
+    DraftProposal,
+    DraftSectionBlock,
+    DraftVideoBlock,
     MANIFEST_SCHEMA_VERSION,
     MeetingLibraryOrigin,
     MeetingMediaReference,
@@ -44,9 +51,16 @@ WORKSPACE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 MAX_SOURCE_BYTES = 50 * 1024 * 1024
 ArticleValidator = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 MeetingMediaLoader = Callable[[str], list[Mapping[str, Any]]]
+MeetingContextLoader = Callable[[str], Mapping[str, Any]]
 SourceLoader = Callable[[str], bytes]
 RequestModel = TypeVar("RequestModel", bound=BaseModel)
 logger = logging.getLogger(__name__)
+DEFAULT_DRAFT_PRESENTATION = {
+    "layout": "brand-default",
+    "palette": "paper-neutral",
+    "appearance": "light",
+    "typeface": "editorial-serif",
+}
 
 
 class WorkspaceError(Exception):
@@ -165,6 +179,7 @@ class WorkspaceController:
         soarhigh_api_base_url: str | None = None,
         soarhigh_service_token: str | None = None,
         meeting_media_loader: MeetingMediaLoader | None = None,
+        meeting_context_loader: MeetingContextLoader | None = None,
         source_loader: SourceLoader | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -185,6 +200,7 @@ class WorkspaceController:
             else os.environ.get("WXPOST_SERVICE_TOKEN", "")
         )
         self._meeting_media_loader = meeting_media_loader
+        self._meeting_context_loader = meeting_context_loader
         self._source_loader = source_loader
 
     def bootstrap_workspace(
@@ -414,6 +430,21 @@ class WorkspaceController:
             manifest = self._read_manifest(workspace, workspace_id)
             draft = self._read_draft(workspace, manifest)
         return self._context_response(workspace_id, manifest, draft)
+
+    def get_agent_context(self, workspace_id: str) -> dict[str, Any]:
+        """Return saved workspace state plus live facts needed for authoring."""
+
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            draft = self._read_draft(workspace, manifest)
+        context = self._context_response(workspace_id, manifest, draft)
+        context["meetingContext"] = (
+            self._load_meeting_context(manifest.meeting_id)
+            if manifest.meeting_id is not None
+            else None
+        )
+        return context
 
     def read_source(
         self,
@@ -801,6 +832,8 @@ class WorkspaceController:
         expected_manifest_version: int,
         expected_draft_version: int,
         document: Mapping[str, Any],
+        operation_id: str | None = None,
+        refresh_source_snapshot: bool = False,
     ) -> dict[str, Any]:
         workspace = self._resolve_workspace(workspace_id)
         request = self._validate_request(
@@ -809,6 +842,7 @@ class WorkspaceController:
                 "expectedManifestVersion": expected_manifest_version,
                 "expectedDraftVersion": expected_draft_version,
                 "document": document,
+                "operationId": operation_id,
             },
             label="draft save",
         )
@@ -833,14 +867,27 @@ class WorkspaceController:
                     actual=actual_version,
                 )
 
-            self._validate_draft_against_manifest(validated_document, manifest)
+            self._validate_draft_source_snapshot(
+                validated_document,
+                manifest=manifest,
+                current=current,
+                refresh_from_materials=refresh_source_snapshot,
+            )
             next_version = actual_version + 1
             manifest_data = manifest.to_wire()
-            manifest_data["draft"] = {
+            source_manifest_version = (
+                actual_manifest_version
+                if refresh_source_snapshot or manifest.draft is None
+                else manifest.draft.source_manifest_version
+            )
+            draft_state = {
                 "version": next_version,
-                "sourceManifestVersion": actual_manifest_version,
+                "sourceManifestVersion": source_manifest_version,
                 "sha256": document_hash,
             }
+            if request.operation_id is not None:
+                draft_state["operationId"] = request.operation_id
+            manifest_data["draft"] = draft_state
             manifest_data["updatedAt"] = datetime.now(UTC)
             updated_manifest = self._validate_manifest_data(
                 manifest_data,
@@ -879,6 +926,60 @@ class WorkspaceController:
             self._remove_regular_file(pending_path, tolerate_failure=True)
 
         return saved.to_wire()
+
+    def save_draft_proposal(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        expected_draft_version: int,
+        proposal: DraftProposal | Mapping[str, Any],
+        operation_id: str | None = None,
+        refresh_from_materials: bool = True,
+    ) -> dict[str, Any]:
+        """Assemble and save a canonical document from Hermes-owned fields."""
+        validated_proposal = (
+            proposal
+            if isinstance(proposal, DraftProposal)
+            else self._validate_request(
+                DraftProposal,
+                proposal,
+                label="draft proposal",
+            )
+        )
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(manifest, expected_manifest_version)
+            current = self._read_draft(workspace, manifest)
+            if not refresh_from_materials and current is None:
+                raise InvalidRequest(
+                    "a Draft revision requires an existing saved Draft"
+                )
+            presentation = (
+                current.document["presentation"]
+                if current is not None
+                else DEFAULT_DRAFT_PRESENTATION
+            )
+            document = self._article_document_from_proposal(
+                workspace_id,
+                validated_proposal,
+                manifest,
+                presentation,
+                current.document if current is not None else None,
+                refresh_from_materials=refresh_from_materials,
+            )
+
+        # save_draft rechecks both versions under the write lock. A Materials
+        # change between assembly and save therefore rejects the stale proposal.
+        return self.save_draft(
+            workspace_id,
+            expected_manifest_version=expected_manifest_version,
+            expected_draft_version=expected_draft_version,
+            document=document,
+            operation_id=operation_id,
+            refresh_source_snapshot=refresh_from_materials,
+        )
 
     @staticmethod
     def _context_response(
@@ -1016,6 +1117,112 @@ class WorkspaceController:
                     "meeting media API returned an invalid source URL"
                 )
         return sorted(parsed, key=lambda item: (item.uploaded_at, item.file_key))
+
+    def _load_meeting_context(self, meeting_id: str) -> dict[str, Any]:
+        raw: Any
+        if self._meeting_context_loader is not None:
+            try:
+                raw = self._meeting_context_loader(meeting_id)
+            except WorkspaceError:
+                raise
+            except Exception as exc:
+                raise UpstreamUnavailable(
+                    f"cannot read linked meeting context: {exc}"
+                ) from exc
+        else:
+            if not self._soarhigh_api_base_url:
+                raise UpstreamUnavailable(
+                    "SOARHIGH_API_BASE_URL is required to read linked meeting context"
+                )
+            headers = {}
+            if self._soarhigh_service_token:
+                headers["Authorization"] = f"Bearer {self._soarhigh_service_token}"
+            request = Request(
+                f"{self._soarhigh_api_base_url}/meetings/"
+                f"{quote(meeting_id, safe='')}",
+                headers=headers,
+                method="GET",
+            )
+            try:
+                with urlopen(request, timeout=15) as response:
+                    raw = json.loads(response.read())
+            except HTTPError as exc:
+                if exc.code in {401, 403, 404}:
+                    raise InvalidRequest(
+                        "linked meeting is unavailable to the WxPost controller"
+                    ) from exc
+                raise UpstreamUnavailable(
+                    f"meeting API returned HTTP {exc.code}"
+                ) from exc
+            except (
+                OSError,
+                URLError,
+                TimeoutError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ) as exc:
+                raise UpstreamUnavailable(
+                    f"cannot reach linked meeting API: {exc}"
+                ) from exc
+
+        if not isinstance(raw, Mapping):
+            raise UpstreamUnavailable("meeting API returned an invalid response")
+
+        def clean_text(value: Any) -> str:
+            return value.strip() if isinstance(value, str) else ""
+
+        manager = raw.get("manager")
+        manager_name = (
+            clean_text(manager.get("name")) if isinstance(manager, Mapping) else ""
+        )
+        agenda: list[dict[str, Any]] = []
+        segments = raw.get("segments")
+        if isinstance(segments, list):
+            for segment in segments:
+                if not isinstance(segment, Mapping):
+                    continue
+                role_taker = segment.get("role_taker")
+                role_name = (
+                    clean_text(role_taker.get("name"))
+                    if isinstance(role_taker, Mapping)
+                    else ""
+                )
+                agenda.append(
+                    {
+                        "type": clean_text(segment.get("type")),
+                        "startTime": clean_text(segment.get("start_time")),
+                        "endTime": clean_text(segment.get("end_time")),
+                        "roleTaker": role_name or None,
+                        "title": clean_text(segment.get("title")),
+                        "content": clean_text(segment.get("content")),
+                    }
+                )
+        awards: list[dict[str, str]] = []
+        raw_awards = raw.get("awards")
+        if isinstance(raw_awards, list):
+            for award in raw_awards:
+                if isinstance(award, Mapping):
+                    awards.append(
+                        {
+                            "category": clean_text(award.get("category")),
+                            "winner": clean_text(award.get("winner")),
+                        }
+                    )
+
+        return {
+            "id": clean_text(raw.get("id")) or meeting_id,
+            "no": raw.get("no") if isinstance(raw.get("no"), int) else None,
+            "type": clean_text(raw.get("type")),
+            "theme": clean_text(raw.get("theme")),
+            "manager": manager_name or None,
+            "date": clean_text(raw.get("date")),
+            "startTime": clean_text(raw.get("start_time")),
+            "endTime": clean_text(raw.get("end_time")),
+            "location": clean_text(raw.get("location")),
+            "introduction": clean_text(raw.get("introduction")),
+            "agenda": agenda,
+            "awards": awards,
+        }
 
     def _materialize_meeting_source(
         self,
@@ -1614,85 +1821,239 @@ class WorkspaceController:
         return "ArticleDocument is invalid"
 
     @staticmethod
-    def _validate_draft_against_manifest(
-        document: Mapping[str, Any],
+    def _article_document_from_proposal(
+        workspace_id: str,
+        proposal: DraftProposal,
         manifest: SourceManifest,
-    ) -> None:
-        expected_article_type = manifest.editorial.article_type.value
-        if document.get("articleType") != expected_article_type:
+        presentation: Mapping[str, Any],
+        current_document: Mapping[str, Any] | None,
+        *,
+        refresh_from_materials: bool,
+    ) -> dict[str, Any]:
+        if not refresh_from_materials and current_document is None:
+            raise InvalidRequest("a Draft revision requires an existing saved Draft")
+        snapshot_document = current_document or {}
+        current_media = (
+            {
+                item["id"]: item
+                for item in current_document.get("media", [])
+                if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+            }
+            if current_document is not None
+            else {}
+        )
+        if refresh_from_materials:
+            source_media = {
+                source.id: {
+                    "id": source.id,
+                    "kind": source.kind.value,
+                    "sourceUrl": (
+                        "https://workspace.invalid/"
+                        f"{quote(workspace_id, safe='')}/materials/{source.id}"
+                    ),
+                }
+                for source in manifest.sources
+                if source.included
+                and source.kind in {SourceKind.IMAGE, SourceKind.VIDEO}
+            }
+        else:
+            source_media = current_media
+        proposal_ids = [item.id for item in proposal.media]
+        unexpected = [
+            source_id for source_id in proposal_ids if source_id not in source_media
+        ]
+        if unexpected:
             raise InvalidRequest(
-                "ArticleDocument articleType does not match the source manifest"
+                "draft proposal media contains sources outside its source snapshot: "
+                + ", ".join(unexpected)
+            )
+        missing = [
+            source_id for source_id in source_media if source_id not in proposal_ids
+        ]
+        if missing:
+            raise InvalidRequest(
+                "draft proposal media is missing sources from its source snapshot: "
+                + ", ".join(missing)
+            )
+
+        media_proposals = {item.id: item for item in proposal.media}
+        media: list[dict[str, Any]] = []
+        for order, source_id in enumerate(
+            WorkspaceController._proposal_media_order(proposal)
+        ):
+            item = media_proposals[source_id]
+            source = source_media[source_id]
+            previous = current_media.get(source_id)
+            description_unchanged = (
+                previous is not None and previous.get("description") == item.description
+            )
+            media.append(
+                {
+                    "id": source_id,
+                    "kind": source["kind"],
+                    "sourceUrl": source["sourceUrl"],
+                    "description": item.description,
+                    "credit": item.credit,
+                    "people": item.people,
+                    "include": True,
+                    "order": order,
+                    "descriptionSource": (
+                        previous.get("descriptionSource")
+                        if description_unchanged and previous is not None
+                        else "ai"
+                    ),
+                    "descriptionStatus": (
+                        previous.get("descriptionStatus")
+                        if description_unchanged and previous is not None
+                        else "needs_confirmation"
+                    ),
+                }
+            )
+
+        proposal_wire = proposal.to_wire()
+        return {
+            "schemaVersion": 1,
+            "title": proposal_wire["title"],
+            "slug": None,
+            "excerpt": proposal_wire.get("excerpt"),
+            "byline": proposal_wire.get("byline"),
+            "articleType": (
+                manifest.editorial.article_type.value
+                if refresh_from_materials
+                else snapshot_document["articleType"]
+            ),
+            "customArticleType": (
+                manifest.editorial.custom_article_type
+                if refresh_from_materials
+                else snapshot_document.get("customArticleType")
+            ),
+            "sourceMeetingId": (
+                manifest.meeting_id
+                if refresh_from_materials
+                else snapshot_document.get("sourceMeetingId")
+            ),
+            "bodyMarkdown": WorkspaceController._proposal_body_markdown(proposal),
+            "media": media,
+            "coverMediaId": proposal_wire.get("coverMediaId"),
+            "presentation": dict(presentation),
+        }
+
+    @staticmethod
+    def _proposal_body_markdown(proposal: DraftProposal) -> str:
+        parts: list[str] = []
+        for block in proposal.blocks:
+            if isinstance(block, DraftMarkdownBlock):
+                parts.append(block.markdown)
+                continue
+            if isinstance(block, DraftSectionBlock):
+                parts.append(
+                    "\n".join(
+                        [
+                            WorkspaceController._serialize_directive(
+                                "section",
+                                {"kicker": block.kicker},
+                            ),
+                            f"## {block.heading}",
+                            "",
+                            block.body,
+                        ]
+                    )
+                )
+                continue
+
+            payload = block.to_wire()
+            directive = str(payload.pop("type"))
+            parts.append(WorkspaceController._serialize_directive(directive, payload))
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _serialize_directive(name: str, payload: Mapping[str, Any]) -> str:
+        return "\n".join(
+            [
+                f":::{name}",
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                ":::",
+            ]
+        )
+
+    @staticmethod
+    def _proposal_media_order(proposal: DraftProposal) -> list[str]:
+        ordered: list[str] = []
+        for block in proposal.blocks:
+            references: list[str]
+            if isinstance(block, (DraftImageBlock, DraftVideoBlock)):
+                references = [block.media]
+            elif isinstance(block, DraftGalleryBlock):
+                references = block.items
+            elif isinstance(block, DraftPersonBlock) and block.media is not None:
+                references = [block.media]
+            else:
+                references = []
+            for source_id in references:
+                if source_id not in ordered:
+                    ordered.append(source_id)
+        return ordered
+
+    @staticmethod
+    def _validate_draft_source_snapshot(
+        document: Mapping[str, Any],
+        *,
+        manifest: SourceManifest,
+        current: DraftEnvelope | None,
+        refresh_from_materials: bool,
+    ) -> None:
+        if current is not None and not refresh_from_materials:
+            snapshot = current.document
+            for field in ("articleType", "customArticleType", "sourceMeetingId"):
+                if document.get(field) != snapshot.get(field):
+                    raise InvalidRequest(
+                        f"ArticleDocument {field} does not match the saved Draft snapshot"
+                    )
+            expected_media = {
+                item["id"]: (item.get("kind"), item.get("include"))
+                for item in snapshot.get("media", [])
+                if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+            }
+            WorkspaceController._validate_media_snapshot(document, expected_media)
+            return
+
+        expected_media = {
+            source.id: (source.kind.value, True)
+            for source in manifest.sources
+            if source.included and source.kind in {SourceKind.IMAGE, SourceKind.VIDEO}
+        }
+        if document.get("articleType") != manifest.editorial.article_type.value:
+            raise InvalidRequest(
+                "ArticleDocument articleType does not match saved Materials"
             )
         if document.get("customArticleType") != manifest.editorial.custom_article_type:
             raise InvalidRequest(
-                "ArticleDocument customArticleType does not match the source manifest"
+                "ArticleDocument customArticleType does not match saved Materials"
             )
-
         if document.get("sourceMeetingId") != manifest.meeting_id:
             raise InvalidRequest(
-                "ArticleDocument sourceMeetingId does not match the source manifest"
+                "ArticleDocument sourceMeetingId does not match saved Materials"
             )
+        WorkspaceController._validate_media_snapshot(document, expected_media)
 
-        sources_by_id = {
-            source.id: (index, source) for index, source in enumerate(manifest.sources)
-        }
+    @staticmethod
+    def _validate_media_snapshot(
+        document: Mapping[str, Any],
+        expected_media: Mapping[str, tuple[Any, Any]],
+    ) -> None:
         media = document.get("media")
         if not isinstance(media, list):
             raise InvalidRequest("ArticleDocument media must be a list")
-        media_ids: set[str] = set()
+        actual_media: dict[str, tuple[Any, Any]] = {}
         for index, item in enumerate(media):
-            if not isinstance(item, Mapping):
-                raise InvalidRequest(f"ArticleDocument media.{index} must be an object")
-            source_id = item.get("id")
-            if not isinstance(source_id, str):
+            if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
                 raise InvalidRequest(
-                    f"ArticleDocument media.{index}.id must be a string"
+                    f"ArticleDocument media.{index} must have a string id"
                 )
-            source_entry = sources_by_id.get(source_id)
-            if source_entry is None:
-                raise InvalidRequest(
-                    f"ArticleDocument media.{index}.id is not in the source manifest: "
-                    f"{source_id}"
-                )
-            source_index, source = source_entry
-            media_ids.add(source_id)
-            if item.get("kind") != source.kind.value:
-                raise InvalidRequest(
-                    f"ArticleDocument media.{index}.kind does not match source "
-                    f"{source_id}"
-                )
-            snapshot_fields = {
-                "include": source.included,
-                "order": source_index,
-                "descriptionSource": (
-                    source.description_source.value
-                    if source.description_source is not None
-                    else None
-                ),
-                "descriptionStatus": source.description_status.value,
-            }
-            mismatches = [
-                field
-                for field, expected in snapshot_fields.items()
-                if item.get(field) != expected
-            ]
-            if mismatches:
-                raise InvalidRequest(
-                    f"ArticleDocument media.{index} does not match source "
-                    f"{source_id}: {', '.join(mismatches)}"
-                )
-
-        missing_included_media = [
-            source.id
-            for source in manifest.sources
-            if source.included
-            and source.kind.value in {"image", "video"}
-            and source.id not in media_ids
-        ]
-        if missing_included_media:
+            actual_media[item["id"]] = (item.get("kind"), item.get("include"))
+        if actual_media != expected_media:
             raise InvalidRequest(
-                "ArticleDocument media is missing included manifest sources: "
-                + ", ".join(missing_included_media)
+                "ArticleDocument media does not match its saved source snapshot"
             )
 
     def _recover_pending_draft(

@@ -8,6 +8,7 @@ from typing import Any, Literal
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
+from .contracts import DraftProposal
 from .core import (
     WorkspaceController,
     WorkspaceError,
@@ -36,8 +37,8 @@ def _run(operation: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 
 @mcp.tool()
 def wxpost_get_context(workspace_id: str) -> dict[str, Any]:
-    """Read the latest source manifest and working draft for one workspace."""
-    return _run(lambda: _controller().get_context(workspace_id))
+    """Read saved Materials, Draft, and live linked-meeting authoring facts."""
+    return _run(lambda: _controller().get_agent_context(workspace_id))
 
 
 @mcp.tool()
@@ -192,15 +193,19 @@ def wxpost_save_draft(
     workspace_id: str,
     expected_manifest_version: int,
     expected_draft_version: int,
-    document: dict[str, Any],
+    operation_id: str,
+    refresh_from_materials: bool,
+    proposal: DraftProposal,
 ) -> dict[str, Any]:
-    """Validate and save one complete working ArticleDocument atomically."""
+    """Assemble and save a canonical draft from strict editorial output."""
     return _run(
-        lambda: _controller().save_draft(
+        lambda: _controller().save_draft_proposal(
             workspace_id,
             expected_manifest_version=expected_manifest_version,
             expected_draft_version=expected_draft_version,
-            document=document,
+            proposal=proposal,
+            operation_id=operation_id,
+            refresh_from_materials=refresh_from_materials,
         )
     )
 

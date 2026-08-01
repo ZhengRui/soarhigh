@@ -5,12 +5,15 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import toast from 'react-hot-toast';
 
 import { useMeetingOptions } from '@/hooks/useMeetingOptions';
 import {
   bootstrapWorkspace,
+  generateWorkspaceDraft,
   getWorkspaceContext,
   WORKSPACE_ARTICLE_TYPE_LABELS,
+  WorkspaceApiError,
   workspaceEditorPath,
   workspaceListPath,
   type WorkspaceContext,
@@ -18,22 +21,17 @@ import {
 } from '@/utils/wxpostWorkspace';
 
 import type { WxPostAuthoringStage, WxPostMaterialsWorkingCopy } from './types';
-import {
-  formatMeetingLabel,
-  type LinkedMeetingOption,
-  WxPostSetupStage,
-} from './WxPostSetupStage';
+import { formatMeetingLabel, isEventMeeting } from './meetingLabels';
+import { type LinkedMeetingOption, WxPostSetupStage } from './WxPostSetupStage';
 import { WxPostMaterialsStage } from './WxPostMaterialsStage';
+import { WxPostDraftStage } from './WxPostDraftStage';
 import { STAGE_BUTTON_CLASS } from './authoringStyles';
 
 function createInitialEditorial(
   linked: boolean,
   meeting: LinkedMeetingOption | null
 ): WorkspaceEditorial {
-  const isEvent =
-    linked &&
-    meeting?.no !== undefined &&
-    String(meeting.no).startsWith('10000');
+  const isEvent = linked && isEventMeeting(meeting);
 
   return {
     articleType: !linked || isEvent ? 'custom' : 'meeting-recap',
@@ -104,10 +102,12 @@ function createWorkspaceId() {
 function StageTabs({
   stage,
   canOpenMaterials,
+  canOpenDraft,
   onStageChange,
 }: {
   stage: WxPostAuthoringStage;
   canOpenMaterials: boolean;
+  canOpenDraft: boolean;
   onStageChange: (stage: WxPostAuthoringStage) => void;
 }) {
   const activeClass =
@@ -115,7 +115,7 @@ function StageTabs({
 
   return (
     <nav
-      className='mb-6 grid grid-cols-4 overflow-hidden rounded-[14px] border border-[#d9e1ec] bg-white max-[480px]:mb-4 max-[480px]:rounded-xl'
+      className='mb-6 grid grid-cols-3 overflow-hidden rounded-[14px] border border-[#d9e1ec] bg-white max-[480px]:mb-4 max-[480px]:rounded-xl'
       aria-label='WxPost authoring progress'
     >
       <button
@@ -128,7 +128,7 @@ function StageTabs({
         }`}
         onClick={() => onStageChange('setup')}
       >
-        <span>{stage === 'materials' ? <Check /> : '1'}</span>
+        <span>{stage !== 'setup' ? <Check /> : '1'}</span>
         Setup
       </button>
       <button
@@ -140,24 +140,24 @@ function StageTabs({
         onClick={() => onStageChange('materials')}
         disabled={!canOpenMaterials}
       >
-        <span>2</span>
+        <span>{stage === 'draft' ? <Check /> : '2'}</span>
         Materials
       </button>
       <button
         type='button'
-        className={`${STAGE_BUTTON_CLASS} cursor-default text-[#a2adbd]`}
-        disabled
+        aria-current={stage === 'draft' ? 'step' : undefined}
+        className={`${STAGE_BUTTON_CLASS} ${
+          stage === 'draft'
+            ? activeClass
+            : !canOpenDraft
+              ? 'text-[#a2adbd]'
+              : ''
+        }`}
+        disabled={!canOpenDraft}
+        onClick={() => onStageChange('draft')}
       >
         <span>3</span>
         Draft
-      </button>
-      <button
-        type='button'
-        className={`${STAGE_BUTTON_CLASS} cursor-default text-[#a2adbd]`}
-        disabled
-      >
-        <span>4</span>
-        Preview
       </button>
     </nav>
   );
@@ -186,6 +186,7 @@ export function WxPostAuthoringWorkspace({
   );
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [syncWorkspaceMeeting, setSyncWorkspaceMeeting] = useState(false);
+  const [draftGenerationPending, setDraftGenerationPending] = useState(false);
   const meetingsQuery = useMeetingOptions();
 
   const meetings = useMemo(
@@ -202,7 +203,19 @@ export function WxPostAuthoringWorkspace({
       options: { resetWorkingCopy?: boolean } = {}
     ) => {
       setWorkspaceId(context.workspaceId);
-      setWorkspaceContext(context);
+      setWorkspaceContext((current) => {
+        const currentDraftState = current?.manifest.draft;
+        const nextDraftState = context.manifest.draft;
+        const sameSavedDraft =
+          current?.workspaceId === context.workspaceId &&
+          current.draft !== null &&
+          context.draft !== null &&
+          currentDraftState != null &&
+          nextDraftState != null &&
+          currentDraftState.version === nextDraftState.version &&
+          currentDraftState.sha256 === nextDraftState.sha256;
+        return sameSavedDraft ? { ...context, draft: current.draft } : context;
+      });
       setMaterialsWorkingCopy((current) =>
         options.resetWorkingCopy
           ? createMaterialsWorkingCopy(context)
@@ -312,6 +325,40 @@ export function WxPostAuthoringWorkspace({
     }
   }, [linked, queryClient, router, selectedMeeting]);
 
+  const handleGenerateDraft = useCallback(async () => {
+    if (!workspaceContext || !workspaceId) return;
+    setDraftGenerationPending(true);
+    setWorkspaceError(null);
+    try {
+      const result = await generateWorkspaceDraft(workspaceId, {
+        expectedManifestVersion: workspaceContext.manifest.manifestVersion,
+        expectedDraftVersion: workspaceContext.draft?.draftVersion ?? 0,
+      });
+      applyChangedWorkspaceContext(result.context);
+      setStage('draft');
+      toast.success(
+        workspaceContext.draft
+          ? 'Draft regenerated successfully!'
+          : 'Draft generated successfully!'
+      );
+    } catch (error) {
+      if (
+        error instanceof WorkspaceApiError &&
+        error.code === 'version_conflict'
+      ) {
+        throw error;
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unable to generate the draft.';
+      setWorkspaceError(message);
+      toast.error(message);
+    } finally {
+      setDraftGenerationPending(false);
+    }
+  }, [applyChangedWorkspaceContext, workspaceContext, workspaceId]);
+
   const effectiveMeeting = linked ? selectedMeeting : null;
   const canOpenMaterials = Boolean(initialWorkspaceId || workspaceContext);
   const workspaceMeeting =
@@ -320,12 +367,34 @@ export function WxPostAuthoringWorkspace({
       ? selectedMeeting
       : null;
   const displayedMeeting =
-    stage === 'materials' ? workspaceMeeting : effectiveMeeting;
+    stage !== 'setup' ? workspaceMeeting : effectiveMeeting;
   const displayedArticleType =
-    stage === 'materials' ? materialsWorkingCopy?.articleType : null;
+    stage !== 'setup' ? materialsWorkingCopy?.articleType : null;
   const displayedArticleTypeLabel = displayedArticleType
-    ? WORKSPACE_ARTICLE_TYPE_LABELS[displayedArticleType]
+    ? displayedArticleType === 'custom' &&
+      materialsWorkingCopy?.customArticleType.trim()
+      ? materialsWorkingCopy.customArticleType.trim()
+      : WORKSPACE_ARTICLE_TYPE_LABELS[displayedArticleType]
     : null;
+  const headerSubtitlePending = Boolean(
+    initialWorkspaceId && !workspaceContext && workspacePending
+  );
+  const headerSubtitle =
+    initialWorkspaceId && !workspaceContext
+      ? workspaceError
+        ? 'Workspace unavailable'
+        : null
+      : displayedMeeting
+        ? `${formatMeetingLabel(displayedMeeting)}${
+            displayedArticleTypeLabel ? ` · ${displayedArticleTypeLabel}` : ''
+          }`
+        : workspaceContext?.manifest.meetingId && linked
+          ? `Linked meeting${
+              displayedArticleTypeLabel ? ` · ${displayedArticleTypeLabel}` : ''
+            }`
+          : `Independent article${
+              displayedArticleTypeLabel ? ` · ${displayedArticleTypeLabel}` : ''
+            }`;
 
   return (
     <div className='min-h-screen bg-[#f3f6fa] text-base text-[#172033]'>
@@ -346,24 +415,19 @@ export function WxPostAuthoringWorkspace({
             <h1 className='mb-2 text-3xl font-bold text-slate-950 max-[480px]:mb-1 max-[480px]:text-2xl sm:mb-4 sm:text-4xl'>
               {initialWorkspaceId ? 'WxPost' : 'New WxPost'}
             </h1>
-            <p className='text-sm text-slate-600 sm:text-base'>
-              {displayedMeeting
-                ? `${formatMeetingLabel(displayedMeeting)}${
-                    displayedArticleTypeLabel
-                      ? ` · ${displayedArticleTypeLabel}`
-                      : ''
-                  }`
-                : workspaceContext?.manifest.meetingId && linked
-                  ? `Linked meeting${
-                      displayedArticleTypeLabel
-                        ? ` · ${displayedArticleTypeLabel}`
-                        : ''
-                    }`
-                  : `Independent article${
-                      displayedArticleTypeLabel
-                        ? ` · ${displayedArticleTypeLabel}`
-                        : ''
-                    }`}
+            <p
+              className='flex min-h-6 items-center text-sm text-slate-600 sm:text-base'
+              data-testid='wxpost-header-subtitle'
+            >
+              {headerSubtitlePending ? (
+                <span
+                  aria-label='Loading WxPost details'
+                  className='inline-block h-4 w-40 animate-pulse rounded bg-slate-200'
+                  data-testid='wxpost-header-subtitle-loading'
+                />
+              ) : (
+                headerSubtitle
+              )}
             </p>
           </div>
           <Link
@@ -379,6 +443,7 @@ export function WxPostAuthoringWorkspace({
         <StageTabs
           stage={stage}
           canOpenMaterials={canOpenMaterials}
+          canOpenDraft={Boolean(workspaceContext?.draft)}
           onStageChange={(nextStage) => {
             setStage(nextStage);
           }}
@@ -451,10 +516,33 @@ export function WxPostAuthoringWorkspace({
                     current ? updater(current) : current
                   )
                 }
+                onGenerateDraft={handleGenerateDraft}
+                draftGenerationPending={draftGenerationPending}
               />
             )
           )}
         </div>
+
+        {workspaceId && workspaceContext?.draft && (
+          <div
+            className='w-full min-[761px]:relative min-[761px]:left-1/2 min-[761px]:w-[min(calc(100vw_-_40px),1380px)] min-[761px]:-translate-x-1/2'
+            hidden={stage !== 'draft'}
+          >
+            <WxPostDraftStage
+              active={stage === 'draft'}
+              workspaceId={workspaceId}
+              context={workspaceContext}
+              contextLabel={
+                displayedMeeting?.no
+                  ? `SoarHigh · ${displayedMeeting.no}`
+                  : undefined
+              }
+              onContextChange={applyChangedWorkspaceContext}
+              onRegenerate={handleGenerateDraft}
+              regeneratePending={draftGenerationPending}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

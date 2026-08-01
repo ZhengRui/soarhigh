@@ -1,12 +1,26 @@
 # SoarHigh Toastmasters Club - Frontend Status
 
-**Last updated:** 2026-07-30
+**Last updated:** 2026-07-31
 
-**WxPost checkpoint:** `0aa76f0` — Setup, Materials, and Workspaces complete;
-Draft and Preview pending. The next slice owns the rendered Draft workbench,
-the formal WxPost Hermes Skill, and the focused web Hermes session through
-`hermes serve`. Feishu attachment integration, selected-image description
-generation, and public-preview synchronization remain in the following slice.
+**WxPost checkpoint:** `d1c85a4` is the committed pre-Slice-6 base. The current
+working tree completes Slice 6: one workspace-scoped Hermes session and formal
+Skill generate and revise canonical Drafts through typed proposal schema v2,
+while one pure TypeScript compiler renders the same backend-normalized input in
+the browser and in an authenticated, stateless Next server route. Draft owns
+Edit and Preview, in-place visual editing, explicit Save Draft, member-owned
+presentation, and desktop/mobile canvas review. The controller applies the
+agreed first-Draft presentation, preserves later member choices, derives
+manifest-owned source fields, records generated captions as AI proposals, and
+alone serializes canonical directives.
+Representative Skill scenarios are retained as a manual review checklist;
+they are not automated quality evaluations. Cross-runtime compiler tests, the
+complete WxPost browser suite, and full Backend/controller suites cover the
+deterministic behavior. Real Hermes generation succeeded for six linked
+meeting/event workspaces plus one independent workspace, and signed-in Chrome
+verified the complete rich-block and presentation matrix at desktop and 390 px.
+Public sync, WeChat delivery,
+Feishu ingestion, and selected-image description generation remain in their
+already planned later boundaries.
 
 ## Application Overview
 
@@ -147,24 +161,363 @@ All routes in the (auth) group are protected by authentication middleware which 
   time, and displays each workspace's latest update time
 - Linked workspace cards resolve compact meeting metadata in one batch and
   remain usable if meeting metadata is temporarily unavailable
-- Draft and Preview are intentionally disabled until the rendered Draft
-  workbench is implemented
-- The next slice connects one persisted web Hermes session to the same
-  workspace, submits the complete Materials snapshot through Generate Draft,
-  and saves the validated ArticleDocument through the existing MCP controller
+- Generate Draft and Regenerate submit only the saved Materials state to one
+  persisted, workspace-scoped Hermes web session
+- The formal `soarhigh-wxpost-authoring` Skill reads and saves through the
+  existing MCP controller; generated documents are normalized by Backend
+  validation before they become canonical
+- Independent Custom workspaces may omit `customArticleType`; Hermes infers the
+  clearest form from the saved brief instead of requiring a synthetic label
 - Generate Draft is available only after Materials form changes have been
   saved; immediate import, upload, and delete operations do not conflict with
   that rule
 - Direct rendered-block edits stay local until Save Draft; a successful
   Generate, Regenerate, Save Draft, or explicit Hermes revision increments
   `draftVersion`
-- The first Draft workbench supports block editing and selected-text context
-  for Hermes, not a general rich-text formatting toolbar
+- Draft and Materials retain separate browser-local working copies while their
+  tabs remain mounted; a structural Materials update does not discard an
+  unsaved Draft edit
+- A saved Draft keeps its own article type and material references. Excluding a
+  material does not hide it from an older Draft, deleted files render as missing
+  placeholders, and only Generate or Regenerate adopts current Materials
+- The Draft workbench maps each visible member-authored field back to its
+  canonical source: article title/excerpt/byline, individual Markdown blocks,
+  section kickers and headings, every directive text field, and media
+  descriptions used as captions. Generated labels and section numbers remain
+  read-only
+- Direct editing uses explicit source keys rather than rendered-text matching;
+  only the selected text block receives editor focus and its single outline
+- Draft media-description edits change only the Draft document snapshot and do
+  not write back to the Materials working copy
+- Markdown remains the canonical storage format but is not exposed in the
+  member-facing editor; this is not a general rich-text formatting toolbar
+- Draft is the third and final authoring stage. Its `Edit` and `Preview` modes
+  render the same current working copy; there is no standalone Preview stage
+- Edit keeps direct title/block editing, selected-text Hermes context, and the
+  focused Hermes panel. Preview removes editor chrome and Hermes so the member
+  can review the current working copy cleanly before saving it
+- Layout, palette, appearance, typeface, and Desktop/Mobile controls remain
+  available in both Draft modes
+- Draft save, generation, and Hermes revisions use manifest and draft versions;
+  each Hermes turn also carries a unique save operation ID so another tab's
+  direct save cannot be mistaken for that turn's success. Stale saves keep
+  local edits, and failed operations leave the saved Draft unchanged
+- Missing workspace media renders a controlled in-article placeholder instead
+  of a broken private URL
 - Regenerate replaces the current canonical Draft and advances its version;
-  retained version history and rollback are not part of the next slice
+  retained version history and rollback are not part of Slice 6
 - Feishu active-workspace selection, Feishu attachment ingestion, selected-image
   description generation, and explicit public-preview synchronization are not
   part of that Draft-workbench slice
+
+#### Draft and presentation contract
+
+- Draft is the single authoring and review workbench with `Edit` and `Preview`
+  modes instead of a separate Preview workflow stage
+- Layout, palette, appearance, typeface, and Desktop/Mobile controls are
+  available in both modes through one shared presentation working copy
+- Layout, palette, appearance, and typeface are part of the Draft document;
+  changing one makes the Draft dirty and explicit `Save Draft` persists it
+- Desktop/Mobile is browser view state only. It is never written to the Draft
+  and does not make the Draft dirty
+- A future public-delivery stage should be named for its distinct responsibility
+  (`Publish` or `Sync`) and own public revisions, OSS synchronization, and the
+  public URL; a generic Preview stage should not be retained for that work
+
+#### Content-template contract
+
+- Article type is more than metadata or a one-line writing hint. Each supported
+  type resolves to a flexible content recipe that defines likely starting
+  modules, editorial goals, useful metadata, and conditional sections
+- Recipes are not fixed outlines. Hermes may omit irrelevant modules, reorder
+  them, or add a better section when the saved Materials support it
+- `Meeting Recap` should normally establish a scene, use the meeting context and
+  selected highlights, place media beside the events they support, and close
+  with meaning or a next step; it must not degrade into a generic article based
+  only on the string `meeting-recap`
+- `Custom · Event Recap` remains the default for linked meeting numbers beginning
+  with `10000`; the older visual study's `Event Preview` example does not
+  override that product decision
+- Content recipes belong in the formal WxPost Skill. The per-turn Generate
+  prompt remains a small orchestration protocol, while `wxpost_get_context`
+  supplies the saved Materials and the Skill interprets them
+- For linked workspaces, the agent context loads theme, introduction, agenda,
+  awards, date, time, and location live from Backend. This `meetingContext` is
+  read-only generation input and is not duplicated in workspace JSON
+- The formal Skill resolves all six preset Voice & tone IDs to their complete
+  instructions. Selected custom profiles contribute their saved instructions
+- Article content remains free-form Markdown. Recipes guide purpose and likely
+  modules without limiting Hermes to a fixed set of headings or a rigid order
+
+#### Canonical rendering and delivery contract
+
+- `ArticleDocument` remains the canonical editable document: free-form
+  `bodyMarkdown`, media metadata, and saved `presentation` settings
+- Ordinary prose stays ordinary Markdown. Fenced YAML directives represent
+  semantic structures that Markdown cannot express. `section` marks a major
+  narrative section, `image` places one image without gallery chrome, and
+  `gallery`, `video`, and `person` cover richer media structures. Directives
+  identify content intent and media; they do not contain layout, color, font,
+  or other theme styling. `==important phrase==` is the confirmed semantic
+  key-point inline extension; its visual treatment is selected by the renderer
+  theme
+- the version 1 registry contains nine block directives: `section`, `image`,
+  `gallery`, `video`, `person`, `takeaway`, `info-grid`, `timeline`, and
+  `pull-quote`. It is an extensible, versioned registry rather than a permanent
+  closed list; future directives may be added when they have a defined
+  semantic purpose, payload schema, renderer behavior, Skill guidance, and
+  tests
+- Content recipes and Voice & tone belong to the Hermes Skill. They influence
+  what the article says. The renderer owns how the saved document looks and
+  must not infer article structure from particular headings or phrases
+- The target is one canonical rendering pipeline:
+
+  ```text
+  ArticleDocument -- Backend validation --> WxPostRenderDocument
+                                             + presentation
+                                             + RenderContext
+                                                   |
+                                                   v
+          shared pure TypeScript compiler
+                 /                 \
+        browser runtime       trusted Next runtime
+        instant Draft UI      authoritative HTML
+                                  |
+                                  v
+                         Backend publish / sync
+  ```
+
+- the compiler is one framework-independent TypeScript implementation built
+  for two runtimes. Browser and trusted server execute the same source; this is
+  not a React renderer plus a separate export renderer
+- the browser imports it directly so title/block edits, directive changes, and
+  presentation switches render immediately from local state without a render
+  API request
+- a stateless trusted Next server route imports the same compiler and returns
+  authoritative HTML for a backend-normalized `WxPostRenderDocument`. Backend
+  continues to own authentication, versions, material validation, persistence,
+  public sync, and WeChat delivery
+- browser-generated HTML is preview-only and is never accepted as publication
+  authority. Backend passes validated render input to the trusted route and
+  consumes its output; renderer failure changes no saved or public state
+- the trusted route accepts backend service calls through the existing
+  server-side WxPost service credential. It introduces no renderer-specific
+  token, and no service credential is exposed to browser JavaScript. Backend
+  resolves the route from the existing `WXPOST_PUBLIC_BASE_URL` and authenticates
+  with the existing `WXPOST_SERVICE_TOKEN`; no renderer-specific environment
+  variable or credential value is introduced. The Next server receives that
+  existing token as server-only configuration
+- local development therefore needs the existing `WXPOST_SERVICE_TOKEN` in
+  `frontend/.env.local` as well as Backend; restart `bun dev` after adding it.
+  This is the same credential value, not a new renderer token, and it remains
+  unavailable to browser JavaScript
+- Preview may retain editor-only node identifiers and private preview URLs.
+  Delivery may replace media URLs, remove editor-only attributes, sanitize the
+  result, and validate platform limits. These are output post-processors, not
+  separate renderers
+- The compiler directly emits the constrained inline HTML that
+  WeChat accepts. Tailwind remains appropriate for the surrounding authoring
+  UI, but Tailwind classes, CSS variables, pseudo-elements, JavaScript, and
+  browser-only responsive behavior cannot be publication dependencies
+- Layout, palette, appearance, and typeface select deterministic layout
+  templates and presentation tokens inside the one renderer. They must not
+  change article meaning or require Hermes to rewrite the Draft
+- Local Preview can be visually identical to the outgoing HTML, but only
+  WeChat upload/readback and a WeChat mobile preview can verify platform
+  filtering. The product must not claim exact WeChat fidelity before that
+  boundary is tested
+- the renderer also needs a small host-owned `RenderContext` for visual
+  metadata that is not article prose: resolved asset URLs, context/folio label,
+  display date, and publisher identity. The article body must not encode or
+  infer these values from headings or prose. Missing context is omitted rather
+  than invented. The paper display date is the first public-sync timestamp
+  stored as the public WxPost record's `created_at`; it remains stable across
+  later revisions. An unsynchronized Draft has no public date and omits it
+
+## WxPost Future Phases and Slices
+
+The original plan remains Phase 2 with seven implementation slices, followed by
+the WeChat integration in Phase 3. Clarifying the canonical renderer does not
+create two extra slices: it closes the presentation responsibility already
+owned by Slice 6.
+
+The implementation boundary is settled: one pure TypeScript compiler runs
+locally in the browser and authoritatively in a trusted, stateless Next server
+route. Backend owns Markdown/directive validation and produces the normalized
+`WxPostRenderDocument` consumed by both runtimes. The trusted route reuses the
+existing server-side WxPost service credential and introduces no new token.
+`RenderContext` remains request-scoped. Asset URLs come from the validated
+media mapping for the current target, context/folio copy comes from already
+resolved workspace/public metadata, publisher identity comes from the
+configured publisher fallback unless the document has a byline, and the paper
+date follows the public-sync rule above.
+
+### Phase 2 - Complete the shared authoring workflow
+
+#### Slice 6 complete - Skill quality and canonical Draft presentation
+
+Slice 6 now combines two completed tracks:
+
+1. strengthen the Skill from concise baseline recipes into a detailed,
+   testable editorial playbook while keeping the resulting article free-form;
+2. replace the browser-only React/Tailwind article renderer with the shared
+   pure TypeScript Markdown/directive-to-inline-HTML compiler and its trusted
+   Next server execution path.
+
+The Skill decides what makes a strong article and where evidence-backed media
+supports it. The renderer decides how that document looks. Draft Preview reuses
+the renderer's exact output, while visual editing uses stable editor-only node
+IDs or an overlay instead of a second styled renderer.
+
+Implemented order for this cut:
+
+1. freeze the normalized render input/output and request-scoped
+   `RenderContext` contracts;
+2. implement the pure TypeScript compiler and cross-runtime fixtures;
+3. add the stateless trusted Next route and backend client using the existing
+   URL and service credential;
+4. move Draft Edit/Preview to the shared compiler, reach the agreed visual and
+   editing fidelity, then delete the superseded React/Tailwind article-renderer
+   styling and obsolete tests;
+5. make presentation controller-owned, expand the Skill recipes, and add
+   manual Skill review scenarios without a compatibility layer or content
+   heuristics;
+6. run contract, compiler, UI, and real signed-in desktop/mobile browser smoke.
+
+Acceptance:
+
+- every article-type recipe defines its editorial purpose, source priorities,
+  useful narrative shapes, optional modules, omission rules, and common failure
+  modes without prescribing literal headings or a fixed section count
+- Meeting Recap, Member Story, Meeting Review, Action Guide, Event Preview, and
+  Custom/Event Recap have representative manual-review scenarios grounded in
+  saved Materials and, when linked, live meeting context
+- the Skill follows explicit precedence: factual sources and meeting context,
+  user writing guidance, article-type purpose and writing approach, then
+  selected Voice & tone; it never invents scenes, quotations, attendees,
+  awards, or outcomes
+- media placement follows meaning and descriptions rather than material ID
+  order; included media uses only supported semantic directives and is not
+  dumped into a generic end gallery
+- Generate and Regenerate may choose a fresh evidence-supported narrative
+  shape; focused revisions preserve unrelated content, and every operation
+  preserves the member's saved presentation unless the member explicitly
+  changes it
+- presentation is controller/member-owned rather than a creative Skill choice:
+  first generation receives the agreed default, later generations preserve the
+  saved Draft presentation, and normal editorial revisions do not choose a new
+  layout, palette, appearance, or typeface
+- Hermes proposal schema v2 omits `presentation` and exposes typed ordered
+  blocks instead of asking the model to hand-author fenced YAML; the controller
+  applies the first default or preserves the saved/current presentation,
+  serializes canonical ArticleDocument v1 directives, and the proposal
+  contract, controller assembly, Skill, and tests agree
+- the only bounded correction is one replacement save after a first attempt is
+  rejected before persistence solely by formal proposal or ArticleDocument
+  validation; version conflicts and runtime failures are not retried
+- manual Skill review verifies that different evidence can produce different
+  structures for the same article type; no hard-coded heading sequence or
+  content-specific repair heuristic is introduced
+- the version 1 syntax supports all nine registered block directives plus the
+  key-point inline extension; capabilities, frontend types, fixtures, Skill
+  guidance, renderer behavior, and tests agree
+- a future directive is added only as a versioned registry extension with a
+  semantic purpose and the same end-to-end contract coverage; unknown or
+  arbitrary directives remain invalid
+- the agreed default presentation is `brand-default`, `paper-neutral`, `light`,
+  and `editorial-serif`
+- local title/block/directive edits and presentation changes invoke the shared
+  compiler in the browser without a render API request
+- the trusted Next runtime produces byte-identical HTML for the same normalized
+  input, and Backend never accepts browser-generated HTML as authoritative
+- the trusted renderer route is stateless, does not read workspaces or hold
+  publication credentials, and fails closed without changing saved state
+- every successful Generate, Regenerate, direct Save Draft, or Hermes revision
+  passes backend normalization and trusted-server compilation; failure
+  preserves the previous saved Draft and the browser's local working copy
+- the old React/Tailwind article renderer is not retained as a second
+  implementation after parity; the surrounding application UI may continue to
+  use Tailwind
+- every supported Markdown node and every retained directive has deterministic
+  WeChat-compatible inline HTML and preserves its semantic Markdown when edited
+- Layout, Palette, Appearance, and Typeface visibly change the same article
+  without changing its Markdown
+- Desktop and Mobile preview display the same canonical HTML at different
+  canvas widths; canvas size is not saved into the document
+- Draft Edit and Preview no longer disagree on typography, spacing, media
+  placement, or presentation
+- event-number sources beginning with `10000` display as `Event` throughout the
+  WxPost header, selector, and meeting context while retaining flexible Custom
+  `Event Recap` editorial behavior
+- at 390 px all presentation controls wrap without horizontal overflow, Ask
+  Hermes opens from the normal toolbar instead of covering the article, and
+  Draft loading explicitly identifies preview and media preparation
+- the Paper Neutral + Editorial Serif default is visually checked against the
+  agreed Style Lab direction for paper surface, headline/deck hierarchy,
+  byline/date treatment, section rhythm, captions, and whitespace; this is a
+  design-fidelity acceptance, not a request for pixel-identical colors
+- clicking a rendered title or block edits in place without exposing raw
+  Markdown or expanding into a differently sized form; clicking outside any
+  editable title or block exits editing consistently
+- gallery media uses the full available article width, preserves intrinsic
+  aspect ratio, remains centered, and has no arbitrary maximum height or crop
+- multi-image galleries use horizontal touch/trackpad scrolling and snapping
+  without previous/next arrow controls
+- renderer fixture tests cover all supported nodes, themes, missing media, and
+  sanitization, followed by real signed-in desktop and mobile browser smoke
+
+#### Slice 7 - Feishu ingestion, image descriptions, and public sync
+
+Complete the cross-surface workflow without rebuilding the Materials editor
+inside Feishu cards. Feishu selects or creates the active workspace, collects
+attachments and concise instructions, reports status, and links to the web
+workspace for full editing. Selected-image description generation uses Hermes
+and writes through the same versioned controller. Public sync materializes OSS
+assets and a public SoarHigh revision from the saved Draft and canonical
+renderer output.
+
+Acceptance:
+
+- a Feishu member can create/select a workspace and attach material without
+  seeing controller credentials or private storage paths
+- retries and duplicate Feishu events do not duplicate materials
+- attachments receive stable workspace material IDs and appear in the web
+  Materials page with correct provenance
+- image-description generation is explicit, scoped to selected images, and
+  produces editable suggestions rather than silently overwriting descriptions
+- public sync validates cover, title, author, excerpt/summary, visibility, asset
+  readiness, and revision conflicts before writing Supabase or public assets
+- retrying a failed public sync is idempotent and cannot expose a partially
+  synchronized revision
+- generation and public-sync status can be queried from Feishu, while complex
+  editing remains in the web UI
+- one real Feishu-to-web-to-Hermes-to-public-WxPost smoke proves the complete
+  Phase 2 workflow
+
+### Phase 3 - WeChat Official Account Draft integration
+
+This remains a separate publishing integration, not another Phase 2 authoring
+slice. Backend-owned credentials and token caching, WeChat media upload, cover
+and metadata validation, and create/update Draft operations all consume the
+same saved Draft and canonical inline HTML. No agent regenerates or restyles
+the article during delivery.
+
+Acceptance:
+
+- the exact canonical HTML reviewed in the product is submitted after only
+  deterministic media-URL replacement and platform sanitization
+- create/update operations are confirmed, retryable, and idempotent so repeated
+  clicks do not create duplicate WeChat drafts
+- WeChat draft readback and a WeChat mobile preview are compared with the
+  outgoing HTML; filtering differences are surfaced rather than repaired with
+  article-specific heuristics
+
+### Phase 4 - Optional hardening
+
+Retained Draft history/rollback, true simultaneous collaborative editing,
+analytics, bulk operational tooling, shareable style presets, and Bitable are
+optional follow-ups. They are not required to complete the current
+WxPost + Hermes + Feishu goal.
 
 ### Meeting Form
 
@@ -329,12 +682,26 @@ The meeting management workflow is now fully implemented:
      compact linked-meeting metadata, and resilient loading/error states
    - Keeps workspace cards visible during deletion and background refreshes;
      only the first load replaces the list with the centered spinner
-   - Leaves Draft generation, rendered Draft editing, read-only Preview, the
-     formal WxPost Hermes Skill, and the focused `hermes serve` conversation
-     for the next implementation slice
-   - Plans a workspace-local, multi-select `Voice & tone` brief for that slice:
-     six presets, up to three selections, and optional custom profiles with a
-     user-editable AI instruction proposal
+   - Implements a workspace-local, multi-select `Voice & tone` brief with six
+     presets, up to three selections, and optional custom profiles with a
+     user-editable Hermes-proposed instruction
+   - Generates or regenerates a strict editorial Draft proposal through one
+     workspace-scoped `hermes serve` session and the formal WxPost Skill;
+     Controller derives manifest-owned source fields and AI caption provenance
+     before backend validation
+   - Keeps material IDs independent from article position, assigns canonical
+     media order from the proposal, and requires included media to use the
+     supported image, gallery, video, or person body directives
+   - Renders the Draft beside its focused Hermes conversation on desktop and
+     opens Hermes in a bottom sheet on mobile
+   - Supports local title/block edits, selected-text context, and explicit Save
+     Draft
+   - Keeps authoring and review in Draft-local Edit/Preview modes with shared
+     layout, palette, appearance, typeface, and Desktop/Mobile controls
+   - Persists presentation choices with Save Draft while keeping Desktop/Mobile
+     canvas selection browser-local
+   - Preserves the saved Draft on generation/chat failure or version conflict;
+     stale direct edits remain local for the member to recover
    - Leaves Feishu workspace/attachment integration, selected-image
      descriptions, and public-preview synchronization for the following slice
 

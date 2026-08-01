@@ -1,11 +1,21 @@
 # SoarHigh Toastmasters Club - Backend Status
 
-**Last updated:** 2026-07-30
+**Last updated:** 2026-07-31
 
-**WxPost checkpoint:** `0aa76f0` — workspace proxy, compact meeting metadata,
-and versioned Materials saves complete. The controller can validate and save an
-ArticleDocument supplied through MCP, but the WxPost Hermes Skill, web Hermes
-session, and Generate Draft product flow are not connected yet.
+**WxPost checkpoint:** `d1c85a4` is the committed pre-Slice-6 base. The current
+working tree completes Slice 6 Draft session, save, generation, revision, and
+canonical rendering. Backend normalizes every Draft mutation into
+`WxPostRenderDocument`, then requires the authenticated stateless Next route to
+compile it with the same pure TypeScript source used by the browser. A compiler
+failure returns 503 before controller persistence, so the previous saved Draft
+remains authoritative. Backend remains the validation, versioning, asset, and
+publication authority and never trusts browser-generated HTML. Hermes now
+submits typed proposal schema v2; the controller derives manifest-owned source
+identity and inclusion, records Hermes-authored captions as AI proposals, and
+deterministically serializes canonical ArticleDocument v1 directives before
+Backend validation. This removes model-authored YAML without adding repair
+heuristics or a second validator. Public/OSS synchronization and
+Feishu ingestion remain Slice 7, and WeChat Draft delivery remains Phase 3.
 
 ## Architecture Overview
 
@@ -89,8 +99,8 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 - **/posts/wxposts/workspaces/{id}** - PUT/PATCH/DELETE: Create, save, or
   delete a versioned workspace
 - **/posts/wxposts/workspaces/{id}/...** - Authenticated proxy for the
-  controller's context, material, import, upload, content, and delete
-  operations
+  controller's context, material, import, upload, content, delete, Draft
+  session, Draft save, Draft generation, and Draft chat operations
 
 ## Data Models
 
@@ -305,11 +315,22 @@ Model for blog posts:
   - Authenticated workspace creation, listing, saving, deletion, and material
     operations through the containerized controller
   - Bounded compact meeting metadata for selectors and workspace cards
-  - Controller-side ArticleDocument validation and draft persistence; article
-    generation still belongs to the pending Hermes integration
-  - The pending Draft slice may change the workspace editorial manifest
-    directly for `Voice & tone`; the development workspaces were cleared, so
-    no legacy-manifest migration or compatibility branch is required
+  - Controller-side ArticleDocument validation and Draft persistence with
+    workspace-scoped Hermes Generate, Regenerate, and focused revision
+  - Strict typed Draft proposal schema v2 with controller-owned directive
+    serialization, one bounded formal pre-save correction, and no YAML repair
+    or runtime/version retry heuristic
+  - Optional Custom article labels, allowing Independent workspaces to infer
+    their form from the saved brief without inventing a placeholder label
+  - Deterministic public persistence for an unlabeled Custom article using the
+    database-safe `Custom` label while workspace and Draft state remain null
+  - Trusted canonical inline-HTML compilation for every Draft mutation through
+    the existing WxPost service credential and public-base URL
+  - Versioned semantic validation for explicit narrative sections, single
+    images, galleries, videos, people, takeaways, info grids, timelines, pull
+    quotes, and inline key points without content-repair heuristics
+  - Workspace-local `Voice & tone` editorial state without a legacy-manifest
+    migration or compatibility branch
 
 ### Current Implementation Details
 

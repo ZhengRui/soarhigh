@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from postgrest.exceptions import APIError
 
-from ..models.wxpost import ArticleDocument, WxPostPublicDetail
+from ..models.wxpost import ArticleDocument, ArticleType, WxPostPublicDetail
 from ..services.wxpost_document import validate_and_parse
 from .supabase import supabase
 
@@ -31,13 +31,16 @@ def slugify_wxpost_title(title: str) -> str:
 
 
 def _document_values(document: ArticleDocument) -> dict:
+    custom_article_type = document.custom_article_type
+    if document.article_type == ArticleType.CUSTOM and custom_article_type is None:
+        custom_article_type = "Custom"
     return {
         "title": document.title,
         "content": document.body_markdown,
         "is_public": True,
         "schema_version": document.schema_version,
         "article_type": document.article_type.value,
-        "custom_article_type": document.custom_article_type,
+        "custom_article_type": custom_article_type,
         "source_meeting_id": document.source_meeting_id,
         "excerpt": document.excerpt,
         "byline": document.byline,

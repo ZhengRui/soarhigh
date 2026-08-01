@@ -81,6 +81,8 @@ test('renders the formal public page and every v1 directive', async ({
   await expect(page.getByText('WxPost Renderer Lab')).toHaveCount(0);
 
   for (const directive of [
+    'section',
+    'image',
     'info-grid',
     'timeline',
     'gallery',
@@ -89,7 +91,9 @@ test('renders the formal public page and every v1 directive', async ({
     'video',
     'takeaway',
   ]) {
-    await expect(page.getByTestId(`directive-${directive}`)).toBeVisible();
+    await expect(
+      page.getByTestId(`directive-${directive}`).first()
+    ).toBeVisible();
   }
 
   const keyPoints = page.locator('.wxpost-key-point');
@@ -98,7 +102,8 @@ test('renders the formal public page and every v1 directive', async ({
     'text-decoration-line',
     'underline'
   );
-  await expect(page.getByTestId('markdown-segment')).toHaveCount(6);
+  await expect(page.locator('[data-wxpost-kind="markdown"]')).toHaveCount(6);
+  await expect(page.getByTestId('markdown-segment')).toHaveCount(3);
 
   const video = page.getByTestId('wxpost-video');
   await expect(video).toBeVisible();
@@ -108,6 +113,35 @@ test('renders the formal public page and every v1 directive', async ({
     'src',
     /interactive-examples\.mdn\.mozilla\.net/
   );
+});
+
+test('renders a controlled placeholder for missing media', async ({ page }) => {
+  const article = structuredClone(WXPOST_FIXTURES['meeting-recap']);
+  article.media[0].sourceUrl = '';
+  await page.route(/\/posts\/wxposts\/meeting-recap$/, async (route) => {
+    if (route.request().resourceType() === 'document') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      json: {
+        id: '00000000-0000-4000-8000-000000000001',
+        slug: 'meeting-recap',
+        is_public: true,
+        article_revision: 3,
+        context_label: 'Meeting 236',
+        created_at: '2026-07-18T12:00:00+00:00',
+        updated_at: '2026-07-19T12:00:00+00:00',
+        render_document: article,
+      },
+    });
+  });
+
+  await openFixture(page);
+
+  await expect(page.getByText('Missing image M01')).toBeVisible();
+  await expect(page.locator('img[src=""]')).toHaveCount(0);
 });
 
 test('starts with stored defaults and changes presentation only locally', async ({
@@ -147,6 +181,36 @@ test('starts with stored defaults and changes presentation only locally', async 
     (element) => element.getBoundingClientRect().width
   );
   expect(mobileWidth).toBeLessThanOrEqual(390);
+  const defaultTypography = await article.evaluate((element) => {
+    const style = (selector: string) =>
+      getComputedStyle(element.querySelector(selector)!);
+    const articleStyle = getComputedStyle(element);
+    const metaStyle = style('header > div');
+    return {
+      background: articleStyle.backgroundColor,
+      bodyFontSize: articleStyle.fontSize,
+      bodyLineHeight: articleStyle.lineHeight,
+      paddingTop: articleStyle.paddingTop,
+      titleFontSize: style('h1').fontSize,
+      titleLineHeight: style('h1').lineHeight,
+      headingFontSize: style('h2').fontSize,
+      headingLineHeight: style('h2').lineHeight,
+      metaFontSize: metaStyle.fontSize,
+      captionFontSize: style('figure p').fontSize,
+    };
+  });
+  expect(defaultTypography).toEqual({
+    background: 'rgb(248, 246, 240)',
+    bodyFontSize: '16px',
+    bodyLineHeight: '29.6px',
+    paddingTop: '29.44px',
+    titleFontSize: '24px',
+    titleLineHeight: '32.4px',
+    headingFontSize: '20px',
+    headingLineHeight: '27px',
+    metaFontSize: '16px',
+    captionFontSize: '16px',
+  });
 
   await presentationOption(page, 'layout', 'editorial-feature').click();
   await presentationOption(page, 'palette', 'brand-blue').click();
@@ -212,18 +276,32 @@ test('renders every layout, palette, appearance, and typeface combination', asyn
   for (const layout of WXPOST_LAYOUTS) {
     await presentationOption(page, 'layout', layout).click();
     await expect(article).toHaveAttribute('data-layout', layout);
-    const heroColumnCount = await article
-      .locator('header')
-      .evaluate(
-        (header) =>
-          getComputedStyle(header).gridTemplateColumns.trim().split(/\s+/)
-            .length
-      );
-    expect(heroColumnCount).toBe(layout === 'brand-default' ? 1 : 2);
+    const layoutStyles = await article.evaluate((element) => ({
+      articleMaxWidth: getComputedStyle(element).maxWidth,
+      headerDisplay: getComputedStyle(element.querySelector('header')!).display,
+    }));
+    expect(layoutStyles.articleMaxWidth).toBe(
+      {
+        'brand-default': '736px',
+        'field-notes': '768px',
+        'editorial-feature': '816px',
+      }[layout]
+    );
+    expect(layoutStyles.headerDisplay).toBe(
+      layout === 'brand-default' ? 'block' : 'flex'
+    );
 
     for (const palette of WXPOST_PALETTES) {
       await presentationOption(page, 'palette', palette).click();
       await expect(article).toHaveAttribute('data-palette', palette);
+      const borderImageSource = await article
+        .locator('header')
+        .evaluate((header) => getComputedStyle(header).borderImageSource);
+      if (palette === 'brand-blue') {
+        expect(borderImageSource).toContain('linear-gradient');
+      } else {
+        expect(borderImageSource).toBe('none');
+      }
 
       for (const appearance of WXPOST_APPEARANCES) {
         await presentationOption(page, 'appearance', appearance).click();
@@ -271,7 +349,7 @@ test('keeps three article shapes readable in every layout and preview size', asy
           const articleRect = element.getBoundingClientRect();
           const title = element.querySelector('h1');
           const titleRect = title?.getBoundingClientRect();
-          const body = element.querySelector('[data-testid="wxpost-body"]');
+          const body = element.querySelector('[data-wxpost-body="true"]');
           const bodyRect = body?.getBoundingClientRect();
           const bodyChildren = body
             ? Array.from(body.children)
@@ -286,40 +364,41 @@ test('keeps three article shapes readable in every layout and preview size', asy
               '[data-testid="markdown-segment"]'
             )
           ).map((segment) => {
-            const markdown = segment.firstElementChild;
-            const sectionCopy = segment.querySelector<HTMLElement>(
-              '[data-wxpost-section-copy]'
-            );
-            const paragraphs = sectionCopy
-              ? Array.from(sectionCopy.querySelectorAll('p')).map((paragraph) =>
-                  paragraph.getBoundingClientRect()
-                )
-              : [];
-            const paragraphGaps = paragraphs
-              .slice(1)
-              .map((paragraph, index) => {
-                const previousParagraph = paragraphs[index];
-                return paragraph.top - previousParagraph.bottom;
-              });
-
             return {
-              leadingHeading: segment.dataset.leadingHeading === 'true',
               paddingLeft: Number.parseFloat(
                 getComputedStyle(segment).paddingLeft
+              ),
+              borderLeftWidth: Number.parseFloat(
+                getComputedStyle(segment).borderLeftWidth
               ),
               borderTopWidth: Number.parseFloat(
                 getComputedStyle(segment).borderTopWidth
               ),
-              markdownDisplay: markdown
-                ? getComputedStyle(markdown).display
-                : '',
-              maxParagraphGap:
-                paragraphGaps.length > 0 ? Math.max(...paragraphGaps) : 0,
             };
           });
+          const sectionHeading = element.querySelector<HTMLElement>(
+            '[data-wxpost-section-heading="true"]'
+          );
+          const sectionRoot = element.querySelector<HTMLElement>(
+            '[data-testid="directive-section"] > [data-wxpost-kind="markdown"]'
+          );
+          const sectionHeadingStyle = sectionHeading
+            ? getComputedStyle(sectionHeading)
+            : null;
+          const sectionRootStyle = sectionRoot
+            ? getComputedStyle(sectionRoot)
+            : null;
+          const mediaWidths = Array.from(
+            element.querySelectorAll<HTMLElement>(
+              '[data-wxpost-directive="image"], [data-wxpost-directive="gallery"], [data-wxpost-directive="video"]'
+            )
+          ).map((media) => media.getBoundingClientRect().width);
 
           return {
             horizontalOverflow: element.scrollWidth - element.clientWidth,
+            paddingInline: Number.parseFloat(
+              getComputedStyle(element).paddingLeft
+            ),
             titleInside:
               Boolean(titleRect) &&
               titleRect!.left >= articleRect.left - 1 &&
@@ -331,63 +410,92 @@ test('keeps three article shapes readable in every layout and preview size', asy
                   )
                 : 1,
             segments,
+            sectionHeading: sectionHeadingStyle
+              ? {
+                  borderTopWidth: Number.parseFloat(
+                    sectionHeadingStyle.borderTopWidth
+                  ),
+                  borderBottomWidth: Number.parseFloat(
+                    sectionHeadingStyle.borderBottomWidth
+                  ),
+                }
+              : null,
+            sectionRoot: sectionRootStyle
+              ? {
+                  borderTopWidth: Number.parseFloat(
+                    sectionRootStyle.borderTopWidth
+                  ),
+                }
+              : null,
+            bodyWidth: bodyRect?.width ?? 0,
+            mediaWidths,
           };
         });
 
         expect(geometry.horizontalOverflow).toBeLessThanOrEqual(1);
         expect(geometry.titleInside).toBe(true);
-        expect(geometry.narrowestBodyChildRatio).toBeGreaterThan(0.95);
+        expect(geometry.narrowestBodyChildRatio).toBeGreaterThan(0.94);
+        expect(
+          geometry.mediaWidths.every(
+            (width) => Math.abs(width - geometry.bodyWidth) <= 1
+          )
+        ).toBe(true);
 
         const stageWidth = await stage.evaluate(
           (element) => element.getBoundingClientRect().width
         );
         if (previewSize === 'mobile-390') {
           expect(stageWidth).toBeLessThanOrEqual(390);
+          expect(geometry.paddingInline).toBeCloseTo(12, 1);
         } else {
           expect(stageWidth).toBeGreaterThan(700);
           expect(stageWidth).toBeLessThanOrEqual(760);
+          expect(geometry.paddingInline).toBeCloseTo(29.44, 1);
         }
+
+        expect(
+          geometry.segments.every(
+            (segment) =>
+              segment.paddingLeft <= 1 &&
+              segment.borderLeftWidth <= 0.1 &&
+              segment.borderTopWidth <= 0.1
+          )
+        ).toBe(true);
+        await expect(
+          article.getByText('Field notes', { exact: true })
+        ).toHaveCount(0);
 
         if (layout === 'field-notes') {
-          expect(
-            geometry.segments.every((segment) => segment.paddingLeft <= 1)
-          ).toBe(true);
-          expect(
-            geometry.segments.every((segment) => segment.borderTopWidth <= 0.1)
-          ).toBe(true);
-
-          const marker = page.getByTestId('field-notes-mark');
-          if (previewSize === 'desktop-760') {
-            await expect(marker).toBeVisible();
-            await expect(marker).toContainText('Field');
-            await expect(marker).toContainText('Notes');
-          } else {
-            await expect(marker).toBeHidden();
+          await expect(
+            article.locator('[data-wxpost-hero-mark="true"]')
+          ).toBeVisible();
+          if (geometry.sectionRoot) {
+            expect(geometry.sectionRoot.borderTopWidth).toBeGreaterThanOrEqual(
+              1
+            );
           }
+        } else {
+          await expect(
+            article.locator('[data-wxpost-hero-mark="true"]')
+          ).toHaveCount(0);
         }
 
-        if (layout === 'editorial-feature' && previewSize === 'desktop-760') {
+        if (layout === 'editorial-feature' && geometry.sectionHeading) {
+          expect(geometry.sectionHeading.borderTopWidth).toBeGreaterThanOrEqual(
+            3
+          );
+        }
+        if (layout === 'brand-default' && geometry.sectionHeading) {
           expect(
-            geometry.segments
-              .filter((segment) => segment.leadingHeading)
-              .every(
-                (segment) =>
-                  segment.markdownDisplay === 'grid' &&
-                  segment.maxParagraphGap <= 48
-              )
-          ).toBe(true);
-          expect(
-            geometry.segments
-              .filter((segment) => !segment.leadingHeading)
-              .every((segment) => segment.markdownDisplay !== 'grid')
-          ).toBe(true);
+            geometry.sectionHeading.borderBottomWidth
+          ).toBeGreaterThanOrEqual(1);
         }
       }
     }
   }
 });
 
-test('uses a horizontally scrollable gallery in the mobile preview', async ({
+test('uses full-width images in a native horizontally scrolling gallery', async ({
   page,
 }) => {
   await openFixture(page);
@@ -397,12 +505,59 @@ test('uses a horizontally scrollable gallery in the mobile preview', async ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
     scrollLeft: element.scrollLeft,
+    overflowX: getComputedStyle(element).overflowX,
+    scrollSnapType: getComputedStyle(element).scrollSnapType,
+    figureWidths: Array.from(element.querySelectorAll('figure')).map(
+      (figure) => figure.getBoundingClientRect().width
+    ),
+    imageWidths: Array.from(element.querySelectorAll('img')).map(
+      (image) => image.getBoundingClientRect().width
+    ),
   }));
 
   expect(initial.scrollWidth).toBeGreaterThan(initial.clientWidth);
   expect(initial.scrollLeft).toBe(0);
+  expect(initial.overflowX).toBe('auto');
+  expect(initial.scrollSnapType).toContain('x');
+  expect(initial.figureWidths.length).toBeGreaterThan(1);
+  expect(
+    initial.figureWidths.every(
+      (width) => Math.abs(width - initial.clientWidth) <= 1
+    )
+  ).toBe(true);
+  expect(
+    initial.imageWidths.every(
+      (width) => Math.abs(width - initial.clientWidth) <= 2
+    )
+  ).toBe(true);
+  await expect(
+    page.getByRole('button', { name: /gallery image/i })
+  ).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Next gallery image' }).click();
+  await presentationOption(page, 'preview-size', 'desktop-760').click();
+  const desktop = await track.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    figureWidths: Array.from(element.querySelectorAll('figure')).map(
+      (figure) => figure.getBoundingClientRect().width
+    ),
+    imageWidths: Array.from(element.querySelectorAll('img')).map(
+      (image) => image.getBoundingClientRect().width
+    ),
+  }));
+  expect(
+    desktop.figureWidths.every(
+      (width) => Math.abs(width - desktop.clientWidth) <= 1
+    )
+  ).toBe(true);
+  expect(
+    desktop.imageWidths.every(
+      (width) => Math.abs(width - desktop.clientWidth) <= 2
+    )
+  ).toBe(true);
+
+  await track.evaluate((element) => {
+    element.scrollTo({ left: element.clientWidth });
+  });
   await expect
     .poll(() => track.evaluate((element) => element.scrollLeft))
     .toBeGreaterThan(0);

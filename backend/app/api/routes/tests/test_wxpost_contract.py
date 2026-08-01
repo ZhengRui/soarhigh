@@ -2,10 +2,13 @@ import copy
 import json
 from pathlib import Path
 
+import httpx
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.api.routes.post as post_route
+import app.api.routes.wxpost as wxpost_route
 from app.api.serv import app
 from app.models.wxpost import ArticleDocument
 
@@ -13,7 +16,11 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "wxpost-meeting-recap-v1.jso
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    async def compile_render(_: dict) -> str:
+        return "<article>compiled</article>"
+
+    monkeypatch.setattr(wxpost_route, "_compile_trusted_render", compile_render)
     return TestClient(app)
 
 
@@ -45,6 +52,99 @@ def _plain_article(*, article_type: str = "custom", custom_type: str | None = "F
     return article
 
 
+@pytest.mark.asyncio
+async def test_trusted_renderer_receives_the_normalized_document_and_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"renderVersion": 1, "html": "<article>canonical</article>"},
+        )
+
+    async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handle)
+    monkeypatch.setattr(
+        wxpost_route.httpx,
+        "AsyncClient",
+        lambda **_: async_client(transport=transport),
+    )
+    monkeypatch.setattr(wxpost_route, "WXPOST_PUBLIC_BASE_URL", "https://public.example")
+    monkeypatch.setattr(wxpost_route, "WXPOST_SERVICE_TOKEN", "shared-token")
+    monkeypatch.setattr(wxpost_route, "WXPOST_PUBLISHER_NAME", "SoarHigh")
+    render_document = {
+        "presentation": {
+            "layout": "brand-default",
+            "palette": "paper-neutral",
+            "appearance": "light",
+            "typeface": "editorial-serif",
+        },
+        "media": [
+            {"id": "M01", "sourceUrl": "https://assets.example/m01.jpg"},
+            {"id": "M02", "sourceUrl": None},
+        ],
+    }
+
+    html = await wxpost_route._compile_trusted_render(render_document)
+
+    assert html == "<article>canonical</article>"
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.url == "https://public.example/api/internal/wxpost/render"
+    assert request.headers["authorization"] == "Bearer shared-token"
+    assert json.loads(request.content) == {
+        "renderDocument": render_document,
+        "presentation": render_document["presentation"],
+        "context": {
+            "assetUrls": {"M01": "https://assets.example/m01.jpg"},
+            "publisherName": "SoarHigh",
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "expected_detail"),
+    [
+        (
+            httpx.Response(422, json={"error": "invalid"}),
+            "WxPost canonical renderer rejected the document.",
+        ),
+        (
+            httpx.Response(200, content=b"not-json"),
+            "WxPost canonical renderer returned invalid JSON.",
+        ),
+        (
+            httpx.Response(200, json={"renderVersion": 1, "html": ""}),
+            "WxPost canonical renderer returned an invalid result.",
+        ),
+    ],
+)
+async def test_trusted_renderer_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    response: httpx.Response,
+    expected_detail: str,
+) -> None:
+    async_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda _: response)
+    monkeypatch.setattr(
+        wxpost_route.httpx,
+        "AsyncClient",
+        lambda **_: async_client(transport=transport),
+    )
+    monkeypatch.setattr(wxpost_route, "WXPOST_PUBLIC_BASE_URL", "https://public.example")
+    monkeypatch.setattr(wxpost_route, "WXPOST_SERVICE_TOKEN", "shared-token")
+
+    with pytest.raises(HTTPException) as caught:
+        await wxpost_route._compile_trusted_render({"presentation": {}, "media": []})
+
+    assert caught.value.status_code == 503
+    assert caught.value.detail == expected_detail
+
+
 def test_capabilities_describe_the_versioned_authoring_contract(client: TestClient) -> None:
     response = client.get("/posts/wxposts/capabilities")
 
@@ -61,6 +161,8 @@ def test_capabilities_describe_the_versioned_authoring_contract(client: TestClie
         "custom",
     ]
     assert payload["directives"] == [
+        "section",
+        "image",
         "gallery",
         "video",
         "takeaway",
@@ -190,6 +292,75 @@ def test_custom_article_accepts_plain_markdown_without_directives(client: TestCl
     ]
 
 
+def test_section_marker_preserves_free_markdown_and_requires_an_h2(
+    client: TestClient,
+) -> None:
+    article = _plain_article()
+    article["bodyMarkdown"] = (
+        "The room settled around one shared question.\n\n"
+        ":::section\n"
+        "kicker: Opening\n"
+        ":::\n"
+        "## One Question Changed the Room\n\n"
+        "The first answer gave everyone a concrete place to begin."
+    )
+
+    response = client.post("/posts/wxposts/validate", json=article)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["directives"] == [{"name": "section", "line": 3, "mediaIds": []}]
+    assert [node["kind"] for node in payload["renderDocument"]["body"]] == [
+        "markdown",
+        "directive",
+        "markdown",
+    ]
+    assert payload["renderDocument"]["body"][2]["source"].lstrip().startswith("## One Question Changed the Room")
+
+    article["bodyMarkdown"] = ":::section\n" "kicker: Opening\n" ":::\n" "The heading is missing."
+    invalid = client.post("/posts/wxposts/validate", json=article)
+
+    assert invalid.status_code == 422
+    assert invalid.json()["errors"] == [
+        {
+            "code": "section_heading_required",
+            "path": ["bodyMarkdown", "directive:section"],
+            "message": ("A section directive must be followed by a Markdown H2 heading."),
+            "line": 1,
+            "directive": "section",
+        }
+    ]
+
+
+def test_single_image_directive_uses_one_included_image(
+    client: TestClient,
+    complete_article: dict,
+) -> None:
+    article = copy.deepcopy(complete_article)
+    article["bodyMarkdown"] = (
+        ":::image\n" "media: M01\n" "caption: Members listen during the prepared speeches.\n" ":::"
+    )
+    article["media"] = [article["media"][0]]
+    article["coverMediaId"] = "M01"
+
+    response = client.post("/posts/wxposts/validate", json=article)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["directives"] == [{"name": "image", "line": 1, "mediaIds": ["M01"]}]
+    assert payload["renderDocument"]["body"] == [
+        {
+            "kind": "directive",
+            "name": "image",
+            "payload": {
+                "media": "M01",
+                "caption": "Members listen during the prepared speeches.",
+            },
+            "line": 1,
+        }
+    ]
+
+
 def test_validation_returns_the_canonical_camel_case_document(
     client: TestClient,
     complete_article: dict,
@@ -244,7 +415,7 @@ def test_article_types_do_not_impose_modules_or_order(
     complete_article: dict,
 ) -> None:
     custom = _plain_article(custom_type="Photo Essay with Practical Notes")
-    custom["media"] = complete_article["media"]
+    custom["media"] = [item for item in complete_article["media"] if item["id"] in {"M01", "M03"}]
     custom["bodyMarkdown"] = (
         ":::takeaway\n"
         "text: Begin with the conclusion when that serves the reader.\n"
@@ -323,25 +494,14 @@ def test_every_advertised_presentation_value_is_accepted(
     assert response.status_code == 200
 
 
-def test_custom_article_requires_a_meaningful_label(client: TestClient) -> None:
+def test_custom_article_type_label_is_optional(client: TestClient) -> None:
     response = client.post(
         "/posts/wxposts/validate",
         json=_plain_article(custom_type=None),
     )
 
-    assert response.status_code == 422
-    assert response.json() == {
-        "valid": False,
-        "errors": [
-            {
-                "code": "custom_article_type_required",
-                "path": ["customArticleType"],
-                "message": "customArticleType is required when articleType is custom.",
-                "line": None,
-                "directive": None,
-            }
-        ],
-    }
+    assert response.status_code == 200
+    assert response.json()["document"]["customArticleType"] is None
 
 
 def test_standard_article_rejects_a_custom_type_label(client: TestClient) -> None:
@@ -408,6 +568,11 @@ def test_markdown_failures_return_repairable_errors(
             ["directive:takeaway"],
         ),
         (
+            ":::gallery\nitems:\n  - M01\n:::",
+            "invalid_directive_payload",
+            ["items"],
+        ),
+        (
             ":::pull-quote\ntext: <strong>Untrusted HTML</strong>\n:::",
             "unsafe_html",
             ["text"],
@@ -429,7 +594,32 @@ def test_directive_payload_failures_identify_the_repair_location(
     matching = next(error for error in response.json()["errors"] if error["code"] == expected_code)
     assert matching["path"][-len(expected_path_tail) :] == expected_path_tail
     expected_directive = "takeaway" if "takeaway" in body else "pull-quote"
+    if "gallery" in body:
+        expected_directive = "gallery"
     assert matching["directive"] == expected_directive
+
+
+def test_each_included_medium_may_appear_only_once(
+    client: TestClient,
+    complete_article: dict,
+) -> None:
+    article = copy.deepcopy(complete_article)
+    article["media"] = [article["media"][0]]
+    article["coverMediaId"] = "M01"
+    article["bodyMarkdown"] = (
+        ":::image\nmedia: M01\n:::\n\n" "The same image must not be inserted twice.\n\n" ":::image\nmedia: M01\n:::"
+    )
+
+    response = client.post("/posts/wxposts/validate", json=article)
+
+    assert response.status_code == 422
+    duplicate = next(error for error in response.json()["errors"] if error["code"] == "duplicate_media_reference")
+    assert duplicate["path"] == [
+        "bodyMarkdown",
+        "directive:image",
+        "media",
+    ]
+    assert duplicate["directive"] == "image"
 
 
 def test_directive_media_must_exist_be_included_and_have_the_right_kind(
@@ -451,9 +641,42 @@ def test_directive_media_must_exist_be_included_and_have_the_right_kind(
         "media_kind_mismatch",
         "media_not_included",
         "media_kind_mismatch",
+        "included_media_not_referenced",
+        "included_media_not_referenced",
     ]
     assert errors[0]["path"] == ["bodyMarkdown", "directive:gallery", "items", 0]
-    assert errors[-1]["path"] == ["bodyMarkdown", "directive:video", "media"]
+    assert errors[3]["path"] == ["bodyMarkdown", "directive:video", "media"]
+    assert {error["message"].split("'")[1] for error in errors[4:]} == {
+        "M03",
+        "M04",
+    }
+
+
+def test_included_media_must_use_a_supported_body_directive(
+    client: TestClient,
+    complete_article: dict,
+) -> None:
+    article = copy.deepcopy(complete_article)
+    article["bodyMarkdown"] = (
+        "The room welcomed every voice.\n\n" "{{media:M01}}\n\n" "The placeholder above is not a supported directive."
+    )
+    article["media"] = [article["media"][0]]
+    article["coverMediaId"] = "M01"
+
+    response = client.post("/posts/wxposts/validate", json=article)
+
+    assert response.status_code == 422
+    assert response.json()["errors"] == [
+        {
+            "code": "included_media_not_referenced",
+            "path": ["bodyMarkdown"],
+            "message": (
+                "Included media 'M01' must appear in a supported image, gallery, " "video, or person directive."
+            ),
+            "line": None,
+            "directive": None,
+        }
+    ]
 
 
 def test_media_manifest_and_cover_failures_are_structured(

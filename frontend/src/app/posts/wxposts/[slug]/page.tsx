@@ -11,16 +11,9 @@ import {
 } from '@/components/wxpost/WxPostPresentationControls';
 import { WxPostPresentationDrawer } from '@/components/wxpost/WxPostPresentationDrawer';
 import { WxPostRenderer } from '@/components/wxpost/WxPostRenderer';
+import { formatWxPostDisplayDate } from '@/components/wxpost/renderer/context';
 import type { WxPostPublicDetail } from '@/components/wxpost/types';
 import { useWxPost } from '@/hooks/useWxPost';
-
-function formatDate(dateString: string) {
-  return new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  }).format(new Date(dateString));
-}
 
 function PublicWxPost({ detail }: { detail: WxPostPublicDetail }) {
   const defaultSelection: WxPostPresentationSelection = {
@@ -48,7 +41,7 @@ function PublicWxPost({ detail }: { detail: WxPostPublicDetail }) {
         </div>
         <div className='flex items-center gap-2 text-xs text-slate-500'>
           <CalendarDays className='h-4 w-4' />
-          <span>{formatDate(detail.created_at)}</span>
+          <span>{formatWxPostDisplayDate(detail.created_at)}</span>
           <span aria-hidden='true'>·</span>
           <span>Revision {detail.article_revision}</span>
         </div>
@@ -77,7 +70,11 @@ function PublicWxPost({ detail }: { detail: WxPostPublicDetail }) {
           typeface: selection.typeface,
         }}
         previewSize={selection.previewSize}
-        contextLabel={detail.context_label}
+        context={{
+          contextLabel: detail.context_label,
+          displayDate: formatWxPostDisplayDate(detail.created_at),
+          publisherName: 'SoarHigh Toastmasters',
+        }}
       />
 
       <footer className='mx-auto mt-10 max-w-3xl border-t border-slate-200 py-6 text-center text-xs text-slate-500'>

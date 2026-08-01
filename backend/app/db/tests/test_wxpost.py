@@ -79,6 +79,15 @@ def test_slugify_is_stable_and_has_a_safe_fallback() -> None:
     assert wxpost_db.slugify_wxpost_title("勇气") == "wxpost"
 
 
+def test_custom_article_without_a_label_uses_the_database_default() -> None:
+    payload = _document().model_copy(update={"custom_article_type": None})
+
+    values = wxpost_db._document_values(payload)
+
+    assert values["article_type"] == "custom"
+    assert values["custom_article_type"] == "Custom"
+
+
 def test_create_suffixes_only_after_a_real_slug_collision(monkeypatch) -> None:
     collision = FakeInsertQuery(
         APIError(

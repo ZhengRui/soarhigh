@@ -70,6 +70,46 @@ def test_meeting_media_exposes_import_metadata_to_the_scoped_service(
     ]
 
 
+def test_meeting_detail_is_available_to_the_scoped_wxpost_service(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(meeting_route, "WXPOST_SERVICE_TOKEN", "service-token")
+
+    def get_meeting(meeting_id: str, user_id: str | None = None):
+        captured.update(meeting_id=meeting_id, user_id=user_id)
+        return {
+            "id": meeting_id,
+            "no": 462,
+            "type": "Regular",
+            "theme": "Culture in Every Voice",
+            "manager": {"id": None, "name": "Rui Zheng", "member_id": ""},
+            "date": "2026-07-15",
+            "start_time": "19:15",
+            "end_time": "21:15",
+            "location": "SoarHigh Club",
+            "introduction": "An evening of stories and careful listening.",
+            "segments": [],
+            "status": "draft",
+            "awards": [],
+        }
+
+    monkeypatch.setattr(meeting_route, "get_meeting_by_id", get_meeting)
+
+    response = client.get(
+        f"/meetings/{MEETING_ID}",
+        headers={"Authorization": "Bearer service-token"},
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "meeting_id": MEETING_ID,
+        "user_id": "wxpost-service",
+    }
+    assert response.json()["theme"] == "Culture in Every Voice"
+
+
 def test_meeting_media_preserves_not_found_instead_of_returning_500(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
