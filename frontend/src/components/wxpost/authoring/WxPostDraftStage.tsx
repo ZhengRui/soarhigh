@@ -67,6 +67,7 @@ export function WxPostDraftStage({
   onContextChange,
   onRegenerate,
   regeneratePending,
+  initialMode = 'edit',
 }: {
   active: boolean;
   workspaceId: string;
@@ -75,6 +76,7 @@ export function WxPostDraftStage({
   onContextChange: (context: WorkspaceContext) => void;
   onRegenerate: () => Promise<void>;
   regeneratePending: boolean;
+  initialMode?: DraftMode;
 }) {
   const savedDraft = context.draft;
   const [document, setDocument] = useState(savedDraft?.document ?? null);
@@ -86,7 +88,7 @@ export function WxPostDraftStage({
   const [sessionStatus, setSessionStatus] = useState<
     'connecting' | 'online' | 'unavailable'
   >('connecting');
-  const [mode, setMode] = useState<DraftMode>('edit');
+  const [mode, setMode] = useState<DraftMode>(initialMode);
   const [previewSize, setPreviewSize] =
     useState<WxPostPreviewSize>('desktop-760');
   const [mobileHermesOpen, setMobileHermesOpen] = useState(false);

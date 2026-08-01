@@ -19,6 +19,10 @@ export function workspaceEditorPath(workspaceId: string) {
   )}`;
 }
 
+export function workspaceDraftPreviewPath(workspaceId: string) {
+  return `${workspaceEditorPath(workspaceId)}?view=preview`;
+}
+
 export function workspaceListPath(workspaceId: string | null) {
   if (!workspaceId) return '/posts/wxposts/workspaces?from=new';
   return `/posts/wxposts/workspaces?from=edit&workspace=${encodeURIComponent(

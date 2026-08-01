@@ -31,6 +31,7 @@ import { formatMeetingLabel, isEventMeeting } from './meetingLabels';
 import { type LinkedMeetingOption, WxPostSetupStage } from './WxPostSetupStage';
 import { WxPostMaterialsStage } from './WxPostMaterialsStage';
 import { WxPostDraftStage } from './WxPostDraftStage';
+import type { DraftMode } from './WxPostDraftControls';
 import { STAGE_BUTTON_CLASS } from './authoringStyles';
 
 function createInitialEditorial(
@@ -171,14 +172,19 @@ function StageTabs({
 
 export function WxPostAuthoringWorkspace({
   initialWorkspaceId,
+  initialDraftMode,
 }: {
   initialWorkspaceId: string | null;
+  initialDraftMode?: DraftMode;
 }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [stage, setStage] = useState<WxPostAuthoringStage>(
-    initialWorkspaceId ? 'materials' : 'setup'
+    initialDraftMode ? 'draft' : initialWorkspaceId ? 'materials' : 'setup'
   );
+  const [draftInitialMode, setDraftInitialMode] = useState<
+    DraftMode | undefined
+  >(initialDraftMode);
   const [linked, setLinked] = useState(true);
   const [selectedMeeting, setSelectedMeeting] =
     useState<LinkedMeetingOption | null>(null);
@@ -263,6 +269,10 @@ export function WxPostAuthoringWorkspace({
       .then((context) => {
         if (!active) return;
         applyWorkspaceContext(context);
+        if (initialDraftMode && !context.draft) {
+          setDraftInitialMode(undefined);
+          setStage('materials');
+        }
         setWorkspaceError(null);
       })
       .catch((error) => {
@@ -279,7 +289,7 @@ export function WxPostAuthoringWorkspace({
     return () => {
       active = false;
     };
-  }, [applyWorkspaceContext, initialWorkspaceId]);
+  }, [applyWorkspaceContext, initialDraftMode, initialWorkspaceId]);
 
   useEffect(() => {
     const meetingId = workspaceContext?.manifest.meetingId;
@@ -491,7 +501,7 @@ export function WxPostAuthoringWorkspace({
         </div>
 
         <div hidden={stage !== 'materials'}>
-          {workspacePending && !workspaceContext ? (
+          {stage === 'materials' && workspacePending && !workspaceContext ? (
             <div
               className='grid min-h-[50vh] place-content-center'
               role='status'
@@ -550,7 +560,31 @@ export function WxPostAuthoringWorkspace({
               onContextChange={applyChangedWorkspaceContext}
               onRegenerate={handleGenerateDraft}
               regeneratePending={draftGenerationPending}
+              initialMode={draftInitialMode}
             />
+          </div>
+        )}
+
+        {stage === 'draft' && workspacePending && !workspaceContext && (
+          <div
+            className='grid min-h-[50vh] place-content-center'
+            role='status'
+            data-testid='workspace-resume-status'
+          >
+            <Loader2
+              className='h-8 w-8 animate-spin text-blue-500'
+              aria-hidden='true'
+            />
+            <span className='sr-only'>Loading workspace…</span>
+          </div>
+        )}
+
+        {stage === 'draft' && workspaceError && !workspaceContext && (
+          <div
+            className='grid min-h-40 place-content-center text-sm text-red-700'
+            role='alert'
+          >
+            {workspaceError}
           </div>
         )}
       </div>

@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-query';
 import {
   ArrowLeft,
+  BookOpenText,
   CircleCheck,
   Clock3,
   FileText,
@@ -27,6 +28,7 @@ import {
   WorkspaceApiError,
   deleteWorkspace,
   listWorkspaces,
+  workspaceDraftPreviewPath,
   workspaceEditorPath,
   workspaceIdFromEditorKey,
   type WorkspaceSummary,
@@ -314,6 +316,21 @@ export default function WxPostWorkspacesPage() {
                           <span className='rounded-full bg-fuchsia-50 px-2 py-1.5 text-xs font-medium text-fuchsia-500'>
                             {reference}
                           </span>
+                        )}
+                        {workspace.draftVersion !== null && (
+                          <Link
+                            href={workspaceDraftPreviewPath(
+                              workspace.workspaceId
+                            )}
+                            className='rounded-full bg-indigo-50 p-1.5 transition hover:bg-indigo-100 hover:shadow-md'
+                            aria-label='Preview Draft'
+                            title='Preview Draft'
+                          >
+                            <BookOpenText
+                              className='h-4 w-4 text-indigo-500 hover:text-indigo-600'
+                              aria-hidden='true'
+                            />
+                          </Link>
                         )}
                         <Link
                           href={workspaceEditorPath(workspace.workspaceId)}

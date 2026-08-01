@@ -144,6 +144,24 @@ async function createAndGenerateDraft(
   return workspace;
 }
 
+test('opens an existing Draft directly in Preview mode', async ({ page }) => {
+  const workspace = await createAndGenerateDraft(page);
+  const workspaceId = Array.from(workspace.contexts.keys())[0];
+  const workspaceKey = workspaceId.replace(/^wxpost-/, '');
+
+  await page.goto(`/posts/wxposts/edit/${workspaceKey}?view=preview`);
+
+  await expect(page.getByTestId('draft-workbench')).toBeVisible();
+  await expect(page.getByTestId('draft-mode-preview')).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  await expect(
+    page.getByRole('heading', { name: 'Draft Assistant' })
+  ).toBeHidden();
+  await expect(page.getByTestId('wxpost-article')).toBeVisible();
+});
+
 test('keeps local Draft edits isolated until an explicit Save Draft', async ({
   page,
 }) => {

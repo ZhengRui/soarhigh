@@ -225,6 +225,13 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
   await expect(workspace.getByText('Draft · v14')).toBeVisible();
   expect(meetingBatchRequests).toEqual([['meeting-462', 'meeting-461']]);
   expect(fullMeetingRequests).toEqual([]);
+  const previewDraft = workspace.getByRole('link', {
+    name: 'Preview Draft',
+  });
+  await expect(previewDraft).toHaveAttribute(
+    'href',
+    '/posts/wxposts/edit/4f2c9a7bd861?view=preview'
+  );
   const continueWorkspace = workspace.getByRole('link', {
     name: 'Continue workspace',
   });
@@ -233,6 +240,11 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
     '/posts/wxposts/edit/4f2c9a7bd861'
   );
   await expect(continueWorkspace).toHaveCSS('border-radius', '9999px');
+  await expect(
+    page
+      .getByTestId('workspace-wxpost-second')
+      .getByRole('link', { name: 'Preview Draft' })
+  ).toHaveCount(0);
 
   await page.setViewportSize({ width: 320, height: 720 });
   expect((await continueWorkspace.boundingBox())?.y).toBeLessThan(
