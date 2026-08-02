@@ -1,6 +1,6 @@
 ---
 name: soarhigh-wxpost-authoring
-description: Generate selected-image descriptions and author one canonical SoarHigh WxPost draft from a controller-owned workspace. Use for web Materials descriptions, Draft generation, Regenerate, and focused Hermes revisions.
+description: Generate selected-image descriptions and author or revise one canonical Draft from a controller-owned workspace. Use for web Materials descriptions, Draft generation, Regenerate, and explicit Draft Assistant writing revisions.
 ---
 
 # SoarHigh WxPost authoring
@@ -28,8 +28,11 @@ Materials or the Draft during this workflow.
 
 ## Web Draft workflow
 
-1. Call `wxpost_get_context` with the requested workspace ID.
-2. Compare the returned `manifestVersion` and `draftVersion` with the expected
+1. For Generate, Regenerate, a question about the saved article, or a Draft
+   revision, call `wxpost_get_context` with the requested workspace ID. A
+   general question that does not depend on the workspace can be answered
+   directly without calling a workspace tool.
+2. When context is read, compare its `manifestVersion` and `draftVersion` with the expected
    versions in the request. If either differs, stop without saving; never adopt
    a newer version or retry with guessed versions.
 3. Treat the returned manifest, saved draft, and `meetingContext` as the only
@@ -39,26 +42,44 @@ Materials or the Draft during this workflow.
 4. For Generate or Regenerate, create one complete English article proposal
    from the saved editorial brief, the selected content recipe, live linked
    meeting facts when present, and saved included materials.
-5. For a revision, change only what the member requested. Preserve unrelated
-   article content, media, and metadata. Presentation is not part of the
-   proposal and is preserved by the controller.
+5. For a question about the saved article, answer from the context without
+   saving. For a revision, change only what the member requested and save one
+   complete proposal. Preserve unrelated article content, media, cover, and
+   metadata. Presentation is not part of the proposal and is preserved by the
+   controller.
 6. Call `wxpost_save_draft` with the request's expected `manifestVersion`,
    expected `draftVersion` (zero when absent), `operation_id`,
-   `refresh_from_materials`, and the complete `proposal`. The call must include
-   all six top-level arguments:
+   `refresh_from_materials`, and the complete `proposal`. Generate and
+   Regenerate use the six top-level arguments:
    `workspace_id`, `expected_manifest_version`, `expected_draft_version`,
    `operation_id`, `refresh_from_materials`, and `proposal`. Use `true` for
-   Generate or Regenerate so the new Draft adopts current Materials. Use
-   `false` for a focused revision so it keeps the saved Draft's source
-   snapshot. Copy the operation ID exactly from the
+   Generate or Regenerate so the new Draft adopts current Materials. A focused
+   revision also includes `media_changes` and uses
+   `refresh_from_materials=false`. Copy the operation ID exactly from the
    request; it identifies this turn's successful save and is not article
-   content.
+   content. Never call a Materials mutation tool during a Draft Assistant turn.
 7. Report success only after one save succeeds. If the first call is rejected
    before saving solely by the proposal schema or ArticleDocument validation,
    correct the proposal from that formal validation error and make one
    replacement call with the same expected versions. Never parse or repair
    serialized YAML, guess a version, retry a version conflict, or make more
    than two total save attempts.
+
+## Draft Assistant media terminology
+
+- The Draft Assistant's entire usable media library is the imported or uploaded
+  `workspaceReady` image and video set. This is the only physical media the
+  Draft can use.
+- In Draft Assistant conversation, treat “素材库”, “候选素材”, “可用素材”,
+  “media library”, “candidate media”, and “available media” as that same
+  imported `workspaceReady` set.
+- Never count or list `workspaceReady: false` meeting-library entries as Draft
+  media. They are import options visible only in the Materials stage. Mention
+  them only when the member explicitly asks about meeting images that have not
+  been imported, and label them as unimported Materials-stage options.
+- Materials `included` is a separate filter used only by Generate and
+  Regenerate. A focused Draft revision may use any imported workspace-ready
+  medium whether or not it is included.
 
 ## Draft proposal rules
 
@@ -75,10 +96,20 @@ Materials or the Draft during this workflow.
   saved member-selected presentation for later generations and revisions.
 - Use an empty `media` array and null `coverMediaId` when there are no included
   images or videos. Do not omit either field.
-- Every included image or video must appear exactly once in `media`; do not add
-  excluded or non-media sources. Each item contains its manifest `id`, a
-  concise natural-English article `description`, optional `credit`, and
-  optional `people`.
+- For Generate or Regenerate, every Materials-included image or video must
+  appear exactly once in `media`; do not add excluded or non-media sources.
+- For a focused revision, Materials inclusion no longer controls the Draft.
+  The available pool is every imported `workspaceReady` image or video. Keep
+  existing Draft media unless the member explicitly requests a removal. An
+  imported source may be added even when its Materials `included` value is
+  false. Never add a source that has not been imported.
+- Clearing a cover does not move that image into the article body. If the
+  current cover is cover-only, clear `coverMediaId` and declare that source in
+  `removedMediaIds`; it remains imported and available in the workspace media
+  library. Keep it in Draft media only when the article body already references
+  it, or when the member explicitly asks to place it in the body.
+- Each media item contains its manifest `id`, a concise natural-English article
+  `description`, optional `credit`, and optional `people`.
 - Build the article as an ordered list of typed `blocks`. Use `markdown` blocks
   for unconstrained introductory prose, transitions, or lists. Use a semantic
   block for every section, image, gallery, video, person, takeaway, information
@@ -143,6 +174,34 @@ Materials or the Draft during this workflow.
   then combine those instructions with every selected custom profile's saved
   `instruction`. A custom profile with `selected: false` is not active.
 - Generate a complete article, not an outline or commentary about the article.
+
+## Focused revision media changes
+
+Every focused revision save includes `media_changes` alongside the proposal:
+
+```json
+{
+  "addedMediaIds": [],
+  "removedMediaIds": [],
+  "cover": {"action": "preserve"}
+}
+```
+
+- For an unrelated text edit, leave both ID lists empty and preserve the cover.
+- `addedMediaIds` and `removedMediaIds` describe membership in the Draft media
+  array, not where an existing medium appears in the body. Add an ID only when
+  it is absent from the saved Draft and the member asks to insert that imported
+  medium or use it as the cover. If a cover-only medium is moved into the body,
+  leave both lists unchanged.
+- Remove an ID only when the member asks to remove it from the Draft entirely.
+  If a body medium remains as the cover, leave both lists unchanged. Draft
+  membership changes do not delete the workspace source or change its
+  Materials inclusion.
+- Use `{"action":"set","sourceId":"M02"}` to select a cover and
+  `{"action":"clear"}` to remove one. Otherwise use `preserve`.
+- The proposal and declared changes must agree. A removed medium must no longer
+  be referenced by a block or cover. An added medium must be represented in the
+  proposal and referenced by a media-bearing block or cover.
 
 ## Evidence priority and narrative shape
 

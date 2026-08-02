@@ -333,9 +333,7 @@ test('keeps the desktop Hermes composer visible while long history scrolls', asy
       composerBox!.y + composerBox!.height - (panelBox!.y + panelBox!.height)
     )
   ).toBeLessThanOrEqual(1);
-  const textarea = page.getByPlaceholder(
-    'Ask the assistant to revise the Draft…'
-  );
+  const textarea = page.getByPlaceholder('Ask about or revise the Draft…');
   await expect(textarea).toBeInViewport();
   await expect(textarea).toHaveCSS('resize', 'none');
   const initialTextareaHeight = (await textarea.boundingBox())!.height;
@@ -352,6 +350,15 @@ test('keeps the desktop Hermes composer visible while long history scrolls', asy
       (element) => element.scrollHeight > element.clientHeight
     )
   ).toBe(true);
+  await expect
+    .poll(() =>
+      history.evaluate((element) =>
+        Math.abs(
+          element.scrollHeight - element.scrollTop - element.clientHeight
+        )
+      )
+    )
+    .toBeLessThanOrEqual(1);
   await textarea.fill('Short again');
   expect((await textarea.boundingBox())!.height).toBe(initialTextareaHeight);
   expect(
@@ -367,4 +374,40 @@ test('keeps the desktop Hermes composer visible while long history scrolls', asy
         ) <= 1
     )
   ).toBe(true);
+
+  await history.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  workspace.answerNextDraftChat = true;
+  await textarea.fill('How many sections are there?');
+  await textarea.press('Enter');
+  await expect
+    .poll(() => history.evaluate((element) => element.scrollTop))
+    .toBe(0);
+  await expect(history).toContainText(
+    'The saved Draft has four main sections.'
+  );
+  expect(await history.evaluate((element) => element.scrollTop)).toBe(0);
+
+  await history.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  workspace.answerNextDraftChat = true;
+  await textarea.fill('Confirm that section count again.');
+  await textarea.press('Enter');
+  await expect(history).toContainText(
+    'The saved Draft has four main sections.'
+  );
+  await expect
+    .poll(() =>
+      history.evaluate(
+        (element) =>
+          Math.abs(
+            element.scrollHeight - element.scrollTop - element.clientHeight
+          ) <= 1
+      )
+    )
+    .toBe(true);
 });

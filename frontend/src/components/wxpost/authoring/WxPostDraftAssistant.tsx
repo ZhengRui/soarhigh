@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
@@ -7,6 +8,11 @@ import type { WorkspaceDraftSession } from '@/utils/wxpostWorkspace';
 
 import type { DraftMode } from './WxPostDraftControls';
 import { WxPostHermesPanel } from './WxPostHermesPanel';
+import type {
+  CompletedDraftProgress,
+  DraftProgressActivity,
+} from './useWxPostDraftAssistant';
+import { WorkspaceConflictDialog } from './WorkspaceConflictDialog';
 
 type AssistantProps = {
   active: boolean;
@@ -16,6 +22,9 @@ type AssistantProps = {
   session: WorkspaceDraftSession | null;
   sessionStatus: 'connecting' | 'online' | 'unavailable';
   chatPending: boolean;
+  resetPending: boolean;
+  progress: DraftProgressActivity[];
+  completedProgress: CompletedDraftProgress[];
   selectedText: string | null;
   message: string;
   dirty: boolean;
@@ -23,20 +32,29 @@ type AssistantProps = {
   onClearSelection: () => void;
   onMessageChange: (message: string) => void;
   onSend: () => void;
+  onReset: () => Promise<boolean>;
 };
 
 export function WxPostDraftAssistant(props: AssistantProps) {
+  const [resetConfirming, setResetConfirming] = useState(false);
   if (props.mode !== 'edit') return null;
   const panelProps = {
     session: props.session,
     sessionStatus: props.sessionStatus,
     chatPending: props.chatPending,
+    progress: props.progress,
+    completedProgress: props.completedProgress,
     selectedText: props.selectedText,
     message: props.message,
     dirty: props.dirty,
     onClearSelection: props.onClearSelection,
     onMessageChange: props.onMessageChange,
     onSend: props.onSend,
+    onNewConversationRequest: () => setResetConfirming(true),
+  };
+
+  const confirmReset = async () => {
+    if (await props.onReset()) setResetConfirming(false);
   };
 
   return (
@@ -97,6 +115,22 @@ export function WxPostDraftAssistant(props: AssistantProps) {
           </>,
           globalThis.document.body
         )}
+      {props.portalReady && resetConfirming && (
+        <WorkspaceConflictDialog
+          title='Start a new conversation?'
+          error={null}
+          pending={props.resetPending}
+          testId='draft-session-reset-dialog'
+          keepLabel='Cancel'
+          loadLabel='Start new conversation'
+          pendingLabel='Starting…'
+          onKeepCurrent={() => setResetConfirming(false)}
+          onLoadLatest={() => void confirmReset()}
+        >
+          This clears the Draft Assistant chat. Your workspace, Materials, and
+          saved Draft will not change.
+        </WorkspaceConflictDialog>
+      )}
     </>
   );
 }

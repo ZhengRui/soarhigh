@@ -79,7 +79,7 @@ def _article_document(*, title: str = "One Shared Workspace") -> dict[str, Any]:
         "articleType": "meeting-recap",
         "sourceMeetingId": "1cf40bec-f94d-45f4-b5df-18e3a9bffac8",
         "bodyMarkdown": (
-            "The meeting began with a warm welcome.\n\n" ":::image\nmedia: M03\n:::"
+            "The meeting began with a warm welcome.\n\n:::image\nmedia: M03\n:::"
         ),
         "media": [
             {
@@ -414,6 +414,122 @@ def test_http_draft_save_returns_the_complete_updated_context(
         thread.join(timeout=5)
 
 
+def test_http_draft_chat_streams_progress_before_the_complete_result(
+    tmp_path: Path,
+) -> None:
+    class DraftService:
+        def chat(self, workspace_id: str, *, on_progress, **kwargs):
+            assert workspace_id == "wxpost-stream"
+            on_progress(
+                {
+                    "stage": "activity_started",
+                    "activityId": "context-1",
+                    "label": "Reading the saved Draft and media",
+                }
+            )
+            on_progress(
+                {
+                    "stage": "activity_completed",
+                    "activityId": "context-1",
+                    "label": "Reading the saved Draft and media",
+                }
+            )
+            return {
+                "workspaceId": workspace_id,
+                "sessionId": "session-stream",
+                "reply": "Saved.",
+                "context": {"workspaceId": workspace_id},
+                "draftChanged": True,
+            }
+
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.draft_service = DraftService()  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        (f"http://127.0.0.1:{server.server_port}/workspaces/wxpost-stream/draft/chat"),
+        data=json.dumps(
+            {
+                "expectedManifestVersion": 4,
+                "expectedDraftVersion": 2,
+                "message": "Tighten it.",
+                "selectedText": None,
+            }
+        ).encode(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = response.read().decode()
+
+        assert response.headers["Content-Type"] == ("text/event-stream; charset=utf-8")
+        assert body.index('"stage": "request_started"') < body.index(
+            '"stage": "activity_started"'
+        )
+        assert body.index('"stage": "activity_started"') < body.index(
+            '"stage": "activity_completed"'
+        )
+        assert body.index("event: progress") < body.index("event: complete")
+        assert '"reply": "Saved."' in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_draft_session_delete_resets_only_the_assistant_history(
+    tmp_path: Path,
+) -> None:
+    class DraftService:
+        def __init__(self) -> None:
+            self.workspace_ids: list[str] = []
+
+        def reset(self, workspace_id: str) -> dict[str, Any]:
+            self.workspace_ids.append(workspace_id)
+            return {
+                "workspaceId": workspace_id,
+                "sessionId": None,
+                "messages": [],
+            }
+
+    draft_service = DraftService()
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.draft_service = draft_service  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}/workspaces/wxpost-reset/draft/session"
+    try:
+        unauthorized, _ = _json_request(url, method="DELETE", token="wrong")
+        status, result = _json_request(url, method="DELETE")
+
+        assert unauthorized == HTTPStatus.UNAUTHORIZED
+        assert status == HTTPStatus.OK
+        assert result == {
+            "workspaceId": "wxpost-reset",
+            "sessionId": None,
+            "messages": [],
+        }
+        assert draft_service.workspace_ids == ["wxpost-reset"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def _mcp_parameters(root: Path, validation_url: str) -> StdioServerParameters:
     return StdioServerParameters(
         command=sys.executable,
@@ -449,10 +565,13 @@ async def test_mcp_save_draft_exposes_only_strict_proposal_fields(
     assert "operation_id" in schema["required"]
     assert "refresh_from_materials" in schema["properties"]
     assert "refresh_from_materials" in schema["required"]
+    assert "media_changes" in schema["properties"]
+    assert "media_changes" not in schema["required"]
     assert "document" not in schema["properties"]
     proposal_schema = schema["$defs"]["DraftProposal"]
     media_schema = schema["$defs"]["DraftMediaProposal"]
     section_schema = schema["$defs"]["DraftSectionBlock"]
+    changes_schema = schema["$defs"]["DraftMediaChanges"]
     assert proposal_schema["additionalProperties"] is False
     assert proposal_schema["properties"]["schemaVersion"]["const"] == 2
     assert media_schema["required"] == ["id", "description"]
@@ -465,6 +584,11 @@ async def test_mcp_save_draft_exposes_only_strict_proposal_fields(
         in (section_schema["properties"]["body"]["description"])
     )
     assert "presentation" not in proposal_schema["properties"]
+    assert set(changes_schema["properties"]) == {
+        "addedMediaIds",
+        "removedMediaIds",
+        "cover",
+    }
     assert set(media_schema["properties"]) == {
         "id",
         "description",
@@ -854,7 +978,7 @@ def test_draft_media_must_match_the_manifest_snapshot(
         document["bodyMarkdown"] = document["bodyMarkdown"].replace("M03", "M99")
     elif field == "kind":
         document["bodyMarkdown"] = (
-            "The meeting began with a warm welcome.\n\n" ":::video\nmedia: M03\n:::"
+            "The meeting began with a warm welcome.\n\n:::video\nmedia: M03\n:::"
         )
     elif field == "include":
         document["bodyMarkdown"] = "The meeting began with a warm welcome."
@@ -986,6 +1110,242 @@ def test_direct_draft_edit_can_add_a_ready_image_as_cover_only(
     ]
 
 
+def test_focused_revision_preserves_an_excluded_cover_only_image(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    saved = controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    initial = copy.deepcopy(saved["document"])
+    initial["media"].append(
+        {
+            "id": SPEAKER_ID,
+            "kind": "image",
+            "sourceUrl": "https://workspace.invalid/M02.jpg",
+            "description": "A speaker addresses the room.",
+            "include": True,
+            "order": 3,
+            "descriptionSource": "user",
+            "descriptionStatus": "confirmed",
+        }
+    )
+    initial["coverMediaId"] = SPEAKER_ID
+    controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=1,
+        document=initial,
+    )
+    proposal = _draft_proposal()
+    proposal["coverMediaId"] = None
+
+    revised = controller.save_draft_proposal(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=2,
+        proposal=proposal,
+        refresh_from_materials=False,
+        media_changes={
+            "addedMediaIds": [],
+            "removedMediaIds": [],
+            "cover": {"action": "preserve"},
+        },
+    )
+
+    assert revised["document"]["coverMediaId"] == SPEAKER_ID
+    assert [item["id"] for item in revised["document"]["media"]] == [
+        WEB_IMAGE_ID,
+        SPEAKER_ID,
+    ]
+    source = next(
+        item
+        for item in controller.get_context(workspace_id)["manifest"]["sources"]
+        if item["id"] == SPEAKER_ID
+    )
+    assert source["included"] is False
+
+
+def test_focused_revision_moves_a_cover_only_image_into_the_body_without_adding_it(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    saved = controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    initial = copy.deepcopy(saved["document"])
+    initial["media"].append(
+        {
+            "id": SPEAKER_ID,
+            "kind": "image",
+            "sourceUrl": "https://workspace.invalid/M02.jpg",
+            "description": "A speaker addresses the room.",
+            "include": True,
+            "order": 3,
+            "descriptionSource": "user",
+            "descriptionStatus": "confirmed",
+        }
+    )
+    initial["coverMediaId"] = SPEAKER_ID
+    controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=1,
+        document=initial,
+    )
+    proposal = _draft_proposal(media_ids=(WEB_IMAGE_ID, SPEAKER_ID))
+    proposal["coverMediaId"] = None
+
+    revised = controller.save_draft_proposal(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=2,
+        proposal=proposal,
+        refresh_from_materials=False,
+        media_changes={
+            "addedMediaIds": [],
+            "removedMediaIds": [],
+            "cover": {"action": "preserve"},
+        },
+    )
+
+    assert revised["document"]["coverMediaId"] == SPEAKER_ID
+    assert '"media": "M02"' in revised["document"]["bodyMarkdown"]
+    assert [item["id"] for item in revised["document"]["media"]] == [
+        WEB_IMAGE_ID,
+        SPEAKER_ID,
+    ]
+
+
+def test_focused_revision_can_add_and_remove_imported_media_without_materials_change(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    added_proposal = _draft_proposal(media_ids=(WEB_IMAGE_ID, SPEAKER_ID))
+    added_proposal["coverMediaId"] = SPEAKER_ID
+
+    added = controller.save_draft_proposal(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=1,
+        proposal=added_proposal,
+        refresh_from_materials=False,
+        media_changes={
+            "addedMediaIds": [SPEAKER_ID],
+            "removedMediaIds": [],
+            "cover": {"action": "set", "sourceId": SPEAKER_ID},
+        },
+    )
+
+    assert [item["id"] for item in added["document"]["media"]] == [
+        WEB_IMAGE_ID,
+        SPEAKER_ID,
+    ]
+    assert added["document"]["coverMediaId"] == SPEAKER_ID
+    speaker = next(
+        item
+        for item in controller.get_context(workspace_id)["manifest"]["sources"]
+        if item["id"] == SPEAKER_ID
+    )
+    assert speaker["workspaceReady"] is True
+    assert speaker["included"] is False
+
+    removed_proposal = _draft_proposal(media_ids=(SPEAKER_ID,))
+    removed_proposal["coverMediaId"] = None
+    removed = controller.save_draft_proposal(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=2,
+        proposal=removed_proposal,
+        refresh_from_materials=False,
+        media_changes={
+            "addedMediaIds": [],
+            "removedMediaIds": [WEB_IMAGE_ID],
+            "cover": {"action": "preserve"},
+        },
+    )
+
+    assert [item["id"] for item in removed["document"]["media"]] == [SPEAKER_ID]
+    assert removed["document"]["coverMediaId"] == SPEAKER_ID
+    included_source = next(
+        item
+        for item in controller.get_context(workspace_id)["manifest"]["sources"]
+        if item["id"] == WEB_IMAGE_ID
+    )
+    assert included_source["included"] is True
+
+    cleared_proposal = _draft_proposal(media_ids=())
+    cleared_proposal["coverMediaId"] = None
+    cleared = controller.save_draft_proposal(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=3,
+        proposal=cleared_proposal,
+        refresh_from_materials=False,
+        media_changes={
+            "addedMediaIds": [],
+            "removedMediaIds": [SPEAKER_ID],
+            "cover": {"action": "clear"},
+        },
+    )
+
+    assert cleared["document"]["media"] == []
+    assert cleared["document"]["coverMediaId"] is None
+
+
+def test_focused_revision_rejects_an_unimported_media_addition(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    proposal = copy.deepcopy(_draft_proposal())
+    proposal["blocks"].append({"type": "image", "media": GROUP_PHOTO_ID})
+    proposal["media"].append(
+        {
+            "id": GROUP_PHOTO_ID,
+            "description": "Members gather for a group photograph.",
+            "credit": None,
+            "people": [],
+        }
+    )
+    proposal["coverMediaId"] = None
+
+    with pytest.raises(InvalidRequest, match="must be imported workspace media"):
+        controller.save_draft_proposal(
+            workspace_id,
+            expected_manifest_version=1,
+            expected_draft_version=1,
+            proposal=proposal,
+            refresh_from_materials=False,
+            media_changes={
+                "addedMediaIds": [GROUP_PHOTO_ID],
+                "removedMediaIds": [],
+                "cover": {"action": "preserve"},
+            },
+        )
+
+
 def test_direct_draft_edit_cannot_add_media_outside_its_saved_snapshot(
     seeded_workspace: tuple[Path, str],
 ) -> None:
@@ -1001,7 +1361,7 @@ def test_direct_draft_edit_cannot_add_media_outside_its_saved_snapshot(
     edited["media"][0]["id"] = "M99"
     edited["bodyMarkdown"] = edited["bodyMarkdown"].replace("M03", "M99")
 
-    with pytest.raises(InvalidRequest, match="saved source snapshot"):
+    with pytest.raises(InvalidRequest, match="imported workspace media"):
         controller.save_draft(
             workspace_id,
             expected_manifest_version=1,
@@ -1644,12 +2004,19 @@ def test_materials_update_preserves_a_saved_draft(
         == 1
     )
 
+    revision_proposal = _draft_proposal()
+    revision_proposal["coverMediaId"] = None
     revised = controller.save_draft_proposal(
         workspace_id,
         expected_manifest_version=2,
         expected_draft_version=2,
-        proposal=_draft_proposal(),
+        proposal=revision_proposal,
         refresh_from_materials=False,
+        media_changes={
+            "addedMediaIds": [],
+            "removedMediaIds": [],
+            "cover": {"action": "preserve"},
+        },
     )
     assert revised["document"]["articleType"] == "meeting-recap"
     assert revised["document"]["media"][0]["id"] == WEB_IMAGE_ID

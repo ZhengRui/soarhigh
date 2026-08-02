@@ -1,15 +1,65 @@
 'use client';
 
-import { useLayoutEffect, useRef } from 'react';
-import { ArrowUp, Loader2, Sparkles, X } from 'lucide-react';
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type KeyboardEvent,
+  type UIEvent,
+} from 'react';
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  CircleX,
+  Loader2,
+  Sparkles,
+  X,
+} from 'lucide-react';
 
 import type { WorkspaceDraftSession } from '@/utils/wxpostWorkspace';
+
+import type {
+  CompletedDraftProgress,
+  DraftProgressActivity,
+} from './useWxPostDraftAssistant';
+
+function CompletedProgressDisclosure({
+  completed,
+}: {
+  completed: CompletedDraftProgress;
+}) {
+  return (
+    <details className='group text-xs text-slate-500'>
+      <summary className='flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-slate-100'>
+        <Check className='h-3.5 w-3.5 text-emerald-600' />
+        {completed.steps.length}{' '}
+        {completed.steps.length === 1 ? 'step' : 'steps'} completed
+        <ChevronDown className='h-3.5 w-3.5 transition group-open:rotate-180' />
+      </summary>
+      <div className='mt-1 grid gap-1 pl-2'>
+        {completed.steps.map((step) => (
+          <p
+            key={step.activityId}
+            className='m-0 flex items-start gap-2 leading-5'
+          >
+            <Check className='mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600' />
+            <span>{step.label}</span>
+          </p>
+        ))}
+      </div>
+    </details>
+  );
+}
 
 export function WxPostHermesPanel({
   mobile,
   session,
   sessionStatus,
   chatPending,
+  progress,
+  completedProgress,
   selectedText,
   message,
   dirty,
@@ -17,11 +67,14 @@ export function WxPostHermesPanel({
   onClearSelection,
   onMessageChange,
   onSend,
+  onNewConversationRequest,
 }: {
   mobile: boolean;
   session: WorkspaceDraftSession | null;
   sessionStatus: 'connecting' | 'online' | 'unavailable';
   chatPending: boolean;
+  progress: DraftProgressActivity[];
+  completedProgress: CompletedDraftProgress[];
   selectedText: string | null;
   message: string;
   dirty: boolean;
@@ -29,16 +82,52 @@ export function WxPostHermesPanel({
   onClearSelection: () => void;
   onMessageChange: (message: string) => void;
   onSend: () => void;
+  onNewConversationRequest: () => void;
 }) {
   const historyRef = useRef<HTMLDivElement>(null);
+  const autoScrollRef = useRef(true);
+  const historySizeRef = useRef<{
+    clientHeight: number;
+    scrollHeight: number;
+  } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messages = session?.messages ?? [];
+  const progressState = progress
+    .map(
+      ({ activityId, label, completed, failed }) =>
+        `${activityId}:${label}:${failed ? 'failed' : completed ? 'done' : 'active'}`
+    )
+    .join('|');
 
   useLayoutEffect(() => {
     const history = historyRef.current;
     if (!history) return;
-    history.scrollTop = history.scrollHeight;
-  }, [chatPending, messages.length]);
+    if (autoScrollRef.current) history.scrollTop = history.scrollHeight;
+  }, [chatPending, completedProgress.length, messages.length, progressState]);
+
+  useEffect(() => {
+    const history = historyRef.current;
+    if (!history) return;
+    const observer = new ResizeObserver(() => {
+      const previousSize = historySizeRef.current;
+      const wasAtBottomBeforeResize = previousSize
+        ? previousSize.scrollHeight -
+            history.scrollTop -
+            previousSize.clientHeight <
+          24
+        : autoScrollRef.current;
+      if (autoScrollRef.current || wasAtBottomBeforeResize) {
+        autoScrollRef.current = true;
+        history.scrollTop = history.scrollHeight;
+      }
+      historySizeRef.current = {
+        clientHeight: history.clientHeight,
+        scrollHeight: history.scrollHeight,
+      };
+    });
+    observer.observe(history);
+    return () => observer.disconnect();
+  }, []);
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -46,6 +135,39 @@ export function WxPostHermesPanel({
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
   }, [message]);
+
+  const submitMessage = () => {
+    const request = message.trim();
+    if (!request || chatPending) return;
+    if (request === '/new') {
+      onNewConversationRequest();
+      return;
+    }
+    if (dirty) return;
+    onSend();
+  };
+
+  const handleMessageKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      event.key !== 'Enter' ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing
+    ) {
+      return;
+    }
+    event.preventDefault();
+    submitMessage();
+  };
+
+  const handleHistoryScroll = (event: UIEvent<HTMLDivElement>) => {
+    const history = event.currentTarget;
+    autoScrollRef.current =
+      history.scrollHeight - history.scrollTop - history.clientHeight < 24;
+  };
+
+  const hasActiveActivity = progress.some(
+    (activity) => !activity.completed && !activity.failed
+  );
 
   return (
     <div className='flex h-full min-h-0 flex-col overflow-hidden bg-white'>
@@ -58,7 +180,7 @@ export function WxPostHermesPanel({
             </h2>
           </div>
           <p className='mb-0 mt-1 text-[11px] text-slate-500'>
-            Revisions are saved as a new Draft version.
+            Answers questions and saves edits as new Draft versions.
           </p>
         </div>
         <div className='flex items-center gap-2'>
@@ -94,31 +216,74 @@ export function WxPostHermesPanel({
         data-testid={
           mobile ? 'mobile-draft-chat-history' : 'draft-chat-history'
         }
+        onScroll={handleHistoryScroll}
       >
         {messages.length === 0 ? (
           <div className='grid min-h-44 place-content-center text-center text-sm text-slate-500'>
             <Sparkles className='mx-auto mb-2 h-5 w-5 text-blue-500' />
-            Ask the assistant to revise the saved Draft.
+            Ask about the article or request a Draft edit.
           </div>
         ) : (
-          messages.map((item, index) => (
-            <p
-              key={`${item.role}-${index}`}
-              className={`m-0 max-w-[92%] rounded-2xl px-3.5 py-2.5 text-sm leading-6 ${
-                item.role === 'user'
-                  ? 'ml-auto rounded-br-md bg-blue-600 text-white'
-                  : 'rounded-bl-md border border-slate-200 bg-white text-slate-700'
-              }`}
-            >
-              {item.text}
-            </p>
-          ))
-        )}
-        {chatPending && (
-          <p className='m-0 flex items-center gap-2 text-sm text-slate-500'>
-            <Loader2 className='h-4 w-4 animate-spin' />
-            Draft Assistant is revising…
-          </p>
+          messages.map((item, index) => {
+            const completed = completedProgress.find(
+              (run) => run.assistantMessageIndex === index
+            );
+            const isPendingMessage =
+              chatPending &&
+              item.role === 'user' &&
+              index === messages.length - 1;
+            return (
+              <Fragment key={`${item.role}-${index}`}>
+                {completed && (
+                  <CompletedProgressDisclosure completed={completed} />
+                )}
+                <p
+                  className={`m-0 max-w-[92%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-6 ${
+                    item.role === 'user'
+                      ? 'ml-auto rounded-br-md bg-blue-600 text-white'
+                      : 'rounded-bl-md border border-slate-200 bg-white text-slate-700'
+                  }`}
+                >
+                  {item.text}
+                </p>
+                {isPendingMessage && (
+                  <div
+                    className='grid gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500'
+                    data-testid='draft-assistant-progress'
+                  >
+                    {progress.map((activity) => {
+                      return (
+                        <p
+                          key={activity.activityId}
+                          className='m-0 flex min-w-0 items-start gap-2 leading-5'
+                        >
+                          {activity.failed ? (
+                            <CircleX
+                              className='mt-0.5 h-4 w-4 shrink-0 text-red-600'
+                              aria-label='Failed'
+                            />
+                          ) : activity.completed ? (
+                            <Check className='mt-0.5 h-4 w-4 shrink-0 text-emerald-600' />
+                          ) : (
+                            <Loader2 className='mt-0.5 h-4 w-4 shrink-0 animate-spin' />
+                          )}
+                          <span>{activity.label}</span>
+                        </p>
+                      );
+                    })}
+                    {!hasActiveActivity && (
+                      <p className='m-0 flex min-w-0 items-start gap-2 leading-5'>
+                        <Loader2 className='mt-0.5 h-4 w-4 shrink-0 animate-spin' />
+                        <span>
+                          {progress.length > 0 ? 'Working…' : 'Thinking…'}
+                        </span>
+                      </p>
+                    )}
+                  </div>
+                )}
+              </Fragment>
+            );
+          })
         )}
       </div>
       <div
@@ -144,10 +309,11 @@ export function WxPostHermesPanel({
           <textarea
             ref={textareaRef}
             className='block min-h-20 max-h-40 w-full resize-none overflow-y-auto border-0 bg-transparent p-1 text-sm outline-none'
-            placeholder='Ask the assistant to revise the Draft…'
+            placeholder='Ask about or revise the Draft…'
             value={message}
             disabled={chatPending}
             onChange={(event) => onMessageChange(event.target.value)}
+            onKeyDown={handleMessageKeyDown}
           />
           <div className='mt-1 flex items-center justify-between gap-2'>
             <span className='text-[10px] font-medium text-slate-500'>
@@ -160,12 +326,18 @@ export function WxPostHermesPanel({
             <button
               type='button'
               className='grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300'
-              aria-label='Send revision request'
-              disabled={!message.trim() || dirty || chatPending}
-              title={
-                dirty ? 'Save local edits before asking Hermes.' : undefined
+              aria-label='Send message'
+              disabled={
+                !message.trim() ||
+                chatPending ||
+                (dirty && message.trim() !== '/new')
               }
-              onClick={onSend}
+              title={
+                dirty && message.trim() !== '/new'
+                  ? 'Save local edits before asking the assistant.'
+                  : undefined
+              }
+              onClick={submitMessage}
               data-testid={
                 mobile ? 'send-mobile-draft-chat' : 'send-draft-chat'
               }

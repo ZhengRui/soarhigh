@@ -519,6 +519,41 @@ class DraftProposal(ContractModel):
         return self
 
 
+class DraftCoverChange(ContractModel):
+    action: Literal["preserve", "set", "clear"]
+    source_id: SourceId | None = None
+
+    @model_validator(mode="after")
+    def _validate_action(self) -> DraftCoverChange:
+        if self.action == "set" and self.source_id is None:
+            raise ValueError("setting the Draft cover requires sourceId")
+        if self.action != "set" and self.source_id is not None:
+            raise ValueError("sourceId is only valid when setting the Draft cover")
+        return self
+
+
+class DraftMediaChanges(ContractModel):
+    """Explicit media membership changes for one focused Draft revision."""
+
+    added_media_ids: list[SourceId] = Field(default_factory=list)
+    removed_media_ids: list[SourceId] = Field(default_factory=list)
+    cover: DraftCoverChange
+
+    @model_validator(mode="after")
+    def _validate_changes(self) -> DraftMediaChanges:
+        if len(self.added_media_ids) != len(set(self.added_media_ids)):
+            raise ValueError("addedMediaIds must be unique")
+        if len(self.removed_media_ids) != len(set(self.removed_media_ids)):
+            raise ValueError("removedMediaIds must be unique")
+        overlap = sorted(set(self.added_media_ids) & set(self.removed_media_ids))
+        if overlap:
+            raise ValueError(
+                "media cannot be added and removed in one revision: "
+                + ", ".join(overlap)
+            )
+        return self
+
+
 class SourceUpdate(ContractModel):
     source_id: SourceId
     included: bool | None = Field(default=None, strict=True)

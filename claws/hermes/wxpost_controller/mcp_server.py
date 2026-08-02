@@ -8,7 +8,7 @@ from typing import Any, Literal
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
-from .contracts import DraftProposal
+from .contracts import DraftMediaChanges, DraftProposal
 from .core import (
     WorkspaceController,
     WorkspaceError,
@@ -194,6 +194,7 @@ def wxpost_save_draft(
     operation_id: str,
     refresh_from_materials: bool,
     proposal: DraftProposal,
+    media_changes: DraftMediaChanges | None = None,
 ) -> dict[str, Any]:
     """Assemble and save a canonical draft from strict editorial output."""
     return _run(
@@ -204,6 +205,7 @@ def wxpost_save_draft(
             proposal=proposal,
             operation_id=operation_id,
             refresh_from_materials=refresh_from_materials,
+            media_changes=media_changes,
         )
     )
 

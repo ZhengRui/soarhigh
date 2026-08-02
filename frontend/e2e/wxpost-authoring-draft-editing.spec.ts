@@ -574,7 +574,7 @@ test('selects, saves, and removes a cover-only workspace image', async ({
     'The cover does not have to appear inside the article.'
   );
   await expect(page.getByTestId(`cover-candidate-${coverId}`)).toContainText(
-    'Cover only'
+    'Not in article'
   );
   await page.getByTestId(`cover-candidate-${coverId}`).click();
   await page.getByTestId('apply-cover-selection').click();
@@ -593,6 +593,15 @@ test('selects, saves, and removes a cover-only workspace image', async ({
     (context.draft!.document.media ?? []).map((media) => media.id)
   ).toEqual([coverId]);
   expect(context.draft!.document.bodyMarkdown).not.toContain(coverId);
+
+  await page.getByTestId('open-cover-picker').click();
+  await expect(page.getByTestId(`cover-candidate-${coverId}`)).toContainText(
+    'Current cover'
+  );
+  await expect(page.getByTestId(`cover-candidate-${coverId}`)).toContainText(
+    'Cover only'
+  );
+  await coverPicker.getByRole('button', { name: 'Cancel' }).click();
 
   await page.getByTestId('sync-public-wxpost').click();
   await page
@@ -622,6 +631,15 @@ test('selects, saves, and removes a cover-only workspace image', async ({
   await expect(page.getByText('Draft · v3')).toBeVisible();
   expect(context.draft!.document.coverMediaId).toBeNull();
   expect(context.draft!.document.media).toEqual([]);
+
+  await page.getByTestId('open-cover-picker').click();
+  await expect(
+    page.getByTestId(`cover-candidate-${coverId}`)
+  ).not.toContainText('Current cover');
+  await expect(page.getByTestId(`cover-candidate-${coverId}`)).toContainText(
+    'Not in article'
+  );
+  await coverPicker.getByRole('button', { name: 'Cancel' }).click();
 
   await page.getByRole('button', { name: /Materials/ }).click();
   await page.getByTestId(`workspace-${coverId}`).click();

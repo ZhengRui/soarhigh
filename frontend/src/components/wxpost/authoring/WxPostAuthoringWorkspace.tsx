@@ -554,6 +554,7 @@ export function WxPostAuthoringWorkspace({
             hidden={stage !== 'draft'}
           >
             <WxPostDraftStage
+              key={workspaceId}
               active={stage === 'draft'}
               workspaceId={workspaceId}
               context={workspaceContext}

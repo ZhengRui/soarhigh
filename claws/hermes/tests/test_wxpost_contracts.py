@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 from wxpost_controller.contracts import (
     BootstrapWorkspaceRequest,
+    DraftMediaChanges,
     MANIFEST_SCHEMA_VERSION,
     MeetingMediaReference,
     SetSourceInclusionRequest,
@@ -70,6 +71,38 @@ def test_manifest_rejects_unknown_or_python_named_fields(
 
     with pytest.raises(ValidationError):
         SourceManifest.model_validate(manifest_data)
+
+
+def test_draft_media_changes_require_explicit_non_overlapping_intent() -> None:
+    changes = DraftMediaChanges.model_validate(
+        {
+            "addedMediaIds": ["M02"],
+            "removedMediaIds": ["M03"],
+            "cover": {"action": "set", "sourceId": "M02"},
+        }
+    )
+
+    assert changes.to_wire() == {
+        "addedMediaIds": ["M02"],
+        "removedMediaIds": ["M03"],
+        "cover": {"action": "set", "sourceId": "M02"},
+    }
+    with pytest.raises(ValidationError, match="addedMediaIds must be unique"):
+        DraftMediaChanges.model_validate(
+            {
+                "addedMediaIds": ["M02", "M02"],
+                "removedMediaIds": [],
+                "cover": {"action": "preserve"},
+            }
+        )
+    with pytest.raises(ValidationError, match="requires sourceId"):
+        DraftMediaChanges.model_validate(
+            {
+                "addedMediaIds": [],
+                "removedMediaIds": [],
+                "cover": {"action": "set"},
+            }
+        )
 
 
 @pytest.mark.parametrize(

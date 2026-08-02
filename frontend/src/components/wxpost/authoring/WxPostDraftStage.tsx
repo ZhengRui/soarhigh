@@ -43,26 +43,29 @@ function errorMessage(error: unknown, fallback: string) {
 async function hydrateMedia(
   workspaceId: string,
   readyIds: ReadonlySet<string>,
-  renderDocument: WxPostRenderDocument
+  renderDocument: WxPostRenderDocument,
+  cachedUrls: Map<string, string>
 ) {
-  const objectUrls: string[] = [];
+  const createdUrls = new Map<string, string>();
   try {
     const hydrated = await Promise.all(
       renderDocument.media.map(async (media) => {
         if (!media.include) return media;
         if (!readyIds.has(media.id)) return { ...media, sourceUrl: '' };
+        const cachedUrl = cachedUrls.get(media.id);
+        if (cachedUrl) return { ...media, sourceUrl: cachedUrl };
         const blob = await getWorkspaceSourceContent(workspaceId, media.id);
         const sourceUrl = URL.createObjectURL(blob);
-        objectUrls.push(sourceUrl);
+        createdUrls.set(media.id, sourceUrl);
         return { ...media, sourceUrl };
       })
     );
     return {
       renderDocument: { ...renderDocument, media: hydrated },
-      revoke: () => objectUrls.forEach((url) => URL.revokeObjectURL(url)),
+      createdUrls,
     };
   } catch (error) {
-    objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    createdUrls.forEach((url) => URL.revokeObjectURL(url));
     throw error;
   }
 }
@@ -113,7 +116,7 @@ export function WxPostDraftStage({
     string | null
   >(null);
   const articleRef = useRef<HTMLDivElement>(null);
-  const objectUrlsRef = useRef<() => void>(() => {});
+  const mediaObjectUrlsRef = useRef(new Map<string, string>());
   const loadedDraftVersionRef = useRef<number | null>(null);
   const documentRef = useRef<WxPostArticleDocument | null>(
     savedDraft?.document ?? null
@@ -178,12 +181,13 @@ export function WxPostDraftStage({
       const hydrated = await hydrateMedia(
         workspaceId,
         availableMediaIds,
-        validated.renderDocument
+        validated.renderDocument,
+        mediaObjectUrlsRef.current
       );
       return {
         nextDocument,
         renderDocument: hydrated.renderDocument,
-        revoke: hydrated.revoke,
+        createdUrls: hydrated.createdUrls,
       };
     },
     [availableMediaIds, workspaceId]
@@ -210,11 +214,12 @@ export function WxPostDraftStage({
     void loadDocument(nextDocument)
       .then((loaded) => {
         if (!activeEffect) {
-          loaded.revoke();
+          loaded.createdUrls.forEach((url) => URL.revokeObjectURL(url));
           return;
         }
-        objectUrlsRef.current();
-        objectUrlsRef.current = loaded.revoke;
+        loaded.createdUrls.forEach((url, mediaId) => {
+          mediaObjectUrlsRef.current.set(mediaId, url);
+        });
         documentRef.current = loaded.nextDocument;
         renderDocumentRef.current = loaded.renderDocument;
         savedRenderDocumentRef.current = loaded.renderDocument;
@@ -237,7 +242,8 @@ export function WxPostDraftStage({
 
   useEffect(
     () => () => {
-      objectUrlsRef.current();
+      mediaObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      mediaObjectUrlsRef.current.clear();
     },
     []
   );
@@ -406,11 +412,35 @@ export function WxPostDraftStage({
     dirty,
     onConflict: () => showVersionConflict('publication'),
   });
-  const acceptAssistantDraft = useCallback(() => {
-    setSelectedText(null);
-    editBaseRef.current = null;
-    setActiveKey(null);
-  }, []);
+  const applyAssistantDraft = useCallback(
+    async (nextContext: WorkspaceContext) => {
+      const nextDraft = nextContext.draft;
+      if (!nextDraft) {
+        throw new Error('The Draft Assistant did not return a saved Draft.');
+      }
+      const loaded = await loadDocument(nextDraft.document).catch((caught) => {
+        // Keep the authoritative version in sync even when its preview cannot
+        // be prepared. The normal version effect will surface the load error.
+        onContextChange(nextContext);
+        throw caught;
+      });
+      loaded.createdUrls.forEach((url, mediaId) => {
+        mediaObjectUrlsRef.current.set(mediaId, url);
+      });
+      documentRef.current = loaded.nextDocument;
+      renderDocumentRef.current = loaded.renderDocument;
+      savedRenderDocumentRef.current = loaded.renderDocument;
+      loadedDraftVersionRef.current = nextDraft.draftVersion;
+      editBaseRef.current = null;
+      setActiveKey(null);
+      setSelectedText(null);
+      setDocument(loaded.nextDocument);
+      setRenderDocument(loaded.renderDocument);
+      setError(null);
+      onContextChange(nextContext);
+    },
+    [loadDocument, onContextChange]
+  );
   const assistant = useWxPostDraftAssistant({
     active,
     workspaceId,
@@ -418,8 +448,7 @@ export function WxPostDraftStage({
     savedDraft,
     dirty,
     selectedText,
-    onContextChange,
-    onDraftAccepted: acceptAssistantDraft,
+    onDraftChanged: applyAssistantDraft,
     onConflict: () => showVersionConflict(),
     onError: setError,
   });
@@ -438,8 +467,9 @@ export function WxPostDraftStage({
         throw new Error('The latest workspace no longer contains a Draft.');
       }
       const loaded = await loadDocument(latest.draft.document);
-      objectUrlsRef.current();
-      objectUrlsRef.current = loaded.revoke;
+      loaded.createdUrls.forEach((url, mediaId) => {
+        mediaObjectUrlsRef.current.set(mediaId, url);
+      });
       documentRef.current = loaded.nextDocument;
       renderDocumentRef.current = loaded.renderDocument;
       savedRenderDocumentRef.current = loaded.renderDocument;
@@ -691,6 +721,9 @@ export function WxPostDraftStage({
           session={assistant.session}
           sessionStatus={assistant.status}
           chatPending={assistant.pending}
+          resetPending={assistant.resetPending}
+          progress={assistant.progress}
+          completedProgress={assistant.completedProgress}
           selectedText={selectedText}
           message={assistant.message}
           dirty={dirty}
@@ -698,6 +731,7 @@ export function WxPostDraftStage({
           onClearSelection={() => setSelectedText(null)}
           onMessageChange={assistant.setMessage}
           onSend={() => void assistant.send()}
+          onReset={assistant.reset}
         />
       </div>
     </section>

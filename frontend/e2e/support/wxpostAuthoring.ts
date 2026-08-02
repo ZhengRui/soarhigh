@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Page, type Route } from '@playwright/test';
 import { parse as parseYaml } from 'yaml';
 
 import type {
@@ -107,6 +107,7 @@ export type WorkspaceMock = {
   failDraftValidation: boolean;
   failSourceContent: boolean;
   failNextDraftChat: boolean;
+  answerNextDraftChat: boolean;
   failNextDescriptionSuggestion: boolean;
   conflictNextPublication: boolean;
   failNextPublication: boolean;
@@ -114,6 +115,7 @@ export type WorkspaceMock = {
   draftSessionUnavailable: boolean;
   contextDelayMs: number;
   draftSaveDelayMs: number;
+  draftChatDelayMs: number;
   publicationStatusDelayMs: number;
   descriptionSuggestionDelayMs: number;
   nextDescriptionSuggestion: string;
@@ -127,10 +129,30 @@ export type WorkspaceMock = {
     string,
     Array<{ role: 'user' | 'assistant'; text: string }>
   >;
+  draftSessionIds: Map<string, string | null>;
+  nextDraftSessionNumber: number;
   publications: Map<string, WorkspacePublicationStatus>;
 };
 
 export type DraftDocument = WxPostArticleDocument;
+
+async function fulfillDraftChatStream(
+  route: Route,
+  progress: Array<Record<string, unknown>>,
+  result: Record<string, unknown>
+) {
+  const event = (name: string, data: Record<string, unknown>) =>
+    `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+  await route.fulfill({
+    status: 200,
+    contentType: 'text/event-stream; charset=utf-8',
+    headers: { 'Cache-Control': 'private, no-store' },
+    body: [
+      ...progress.map((item) => event('progress', item)),
+      event('complete', result),
+    ].join(''),
+  });
+}
 
 function syncDraftMediaReferences(
   mock: WorkspaceMock,
@@ -237,6 +259,7 @@ export async function mockWxPostWorkspaceApi(
     failDraftValidation: false,
     failSourceContent: false,
     failNextDraftChat: false,
+    answerNextDraftChat: false,
     failNextDescriptionSuggestion: false,
     conflictNextPublication: false,
     failNextPublication: false,
@@ -244,6 +267,7 @@ export async function mockWxPostWorkspaceApi(
     draftSessionUnavailable: false,
     contextDelayMs: 0,
     draftSaveDelayMs: 0,
+    draftChatDelayMs: 0,
     publicationStatusDelayMs: 0,
     descriptionSuggestionDelayMs: 0,
     nextDescriptionSuggestion:
@@ -252,7 +276,19 @@ export async function mockWxPostWorkspaceApi(
     nextGeneratedDocument: null,
     referencedSourceIds: new Set(),
     draftMessages: new Map(),
+    draftSessionIds: new Map(),
+    nextDraftSessionNumber: 1,
     publications: new Map(),
+  };
+
+  const activeDraftSessionId = (workspaceId: string) => {
+    let sessionId = mock.draftSessionIds.get(workspaceId) ?? null;
+    if (sessionId === null) {
+      sessionId = `session-${workspaceId}-${mock.nextDraftSessionNumber}`;
+      mock.nextDraftSessionNumber += 1;
+      mock.draftSessionIds.set(workspaceId, sessionId);
+    }
+    return sessionId;
   };
 
   await page.route(/\/posts\/wxposts\/validate$/, async (route) => {
@@ -466,6 +502,23 @@ export async function mockWxPostWorkspaceApi(
           return;
         }
       }
+      if (
+        method === 'DELETE' &&
+        parts[0] === 'draft' &&
+        parts[1] === 'session'
+      ) {
+        mock.draftMessages.set(workspaceId, []);
+        mock.draftSessionIds.set(workspaceId, null);
+        await route.fulfill({
+          status: 200,
+          json: {
+            workspaceId,
+            sessionId: null,
+            messages: [],
+          },
+        });
+        return;
+      }
       if (method === 'GET' && parts[0] === 'draft' && parts[1] === 'session') {
         if (mock.draftSessionUnavailable) {
           await route.fulfill({
@@ -483,7 +536,11 @@ export async function mockWxPostWorkspaceApi(
           status: 200,
           json: {
             workspaceId,
-            sessionId: context.draft ? `session-${workspaceId}` : null,
+            sessionId: mock.draftSessionIds.has(workspaceId)
+              ? (mock.draftSessionIds.get(workspaceId) ?? null)
+              : context.draft
+                ? activeDraftSessionId(workspaceId)
+                : null,
             messages: mock.draftMessages.get(workspaceId) ?? [],
           },
         });
@@ -594,14 +651,20 @@ export async function mockWxPostWorkspaceApi(
           status: 200,
           json: {
             workspaceId,
-            sessionId: `session-${workspaceId}`,
+            sessionId: activeDraftSessionId(workspaceId),
             reply: `Generated draft version ${nextVersion}.`,
             context,
+            draftChanged: true,
           },
         });
         return;
       }
       if (method === 'POST' && parts[0] === 'draft' && parts[1] === 'chat') {
+        if (mock.draftChatDelayMs > 0) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, mock.draftChatDelayMs)
+          );
+        }
         if (mock.failNextDraftChat) {
           mock.failNextDraftChat = false;
           await route.fulfill({
@@ -637,6 +700,24 @@ export async function mockWxPostWorkspaceApi(
           });
           return;
         }
+        if (mock.answerNextDraftChat) {
+          mock.answerNextDraftChat = false;
+          const reply = 'The saved Draft has four main sections.';
+          const messages = mock.draftMessages.get(workspaceId) ?? [];
+          mock.draftMessages.set(workspaceId, [
+            ...messages,
+            { role: 'user', text: input.message },
+            { role: 'assistant', text: reply },
+          ]);
+          await fulfillDraftChatStream(route, [{ stage: 'request_started' }], {
+            workspaceId,
+            sessionId: activeDraftSessionId(workspaceId),
+            reply,
+            context,
+            draftChanged: false,
+          });
+          return;
+        }
         const nextVersion = actualDraftVersion + 1;
         const nextDocument = {
           ...(context.draft?.document as unknown as DraftDocument),
@@ -659,15 +740,59 @@ export async function mockWxPostWorkspaceApi(
           { role: 'user', text: input.message },
           { role: 'assistant', text: reply },
         ]);
-        await route.fulfill({
-          status: 200,
-          json: {
+        await fulfillDraftChatStream(
+          route,
+          [
+            { stage: 'request_started' },
+            {
+              stage: 'activity_started',
+              activityId: 'context-1',
+              label: 'Reading the saved Draft and media',
+            },
+            {
+              stage: 'activity_completed',
+              activityId: 'context-1',
+              label: 'Reading the saved Draft and media',
+            },
+            {
+              stage: 'activity_started',
+              activityId: 'skill-1',
+              label: 'Loading the writing guidance',
+            },
+            {
+              stage: 'activity_completed',
+              activityId: 'skill-1',
+              label: 'Loading the writing guidance',
+            },
+            {
+              stage: 'activity_started',
+              activityId: 'save-1',
+              label: `Saving Draft v${nextVersion}`,
+            },
+            {
+              stage: 'activity_completed',
+              activityId: 'save-1',
+              label: `Saving Draft v${nextVersion}`,
+            },
+            {
+              stage: 'activity_started',
+              activityId: 'verify-1',
+              label: 'Verifying the saved Draft',
+            },
+            {
+              stage: 'activity_completed',
+              activityId: 'verify-1',
+              label: 'Verifying the saved Draft',
+            },
+          ],
+          {
             workspaceId,
-            sessionId: `session-${workspaceId}`,
+            sessionId: activeDraftSessionId(workspaceId),
             reply,
             context,
-          },
-        });
+            draftChanged: true,
+          }
+        );
         return;
       }
       if (

@@ -24,6 +24,334 @@ test('opens an existing Draft directly in Preview mode', async ({ page }) => {
   await expect(page.getByTestId('wxpost-article')).toBeVisible();
 });
 
+test('keeps loaded Draft media stable when the assistant saves a revision', async ({
+  page,
+}) => {
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  const context = Array.from(workspace.contexts.values())[0];
+  context.manifest.sources.forEach((source) => {
+    source.workspaceReady = true;
+    source.included = true;
+  });
+  workspace.nextGeneratedDocument = completeDraftDocument();
+  await page.getByTestId('generate-draft').click();
+
+  const firstImage = page.getByTestId('wxpost-article').locator('img').first();
+  await expect(firstImage).toBeVisible();
+  const sourceBeforeRevision = await firstImage.getAttribute('src');
+  expect(sourceBeforeRevision).toMatch(/^blob:/);
+
+  const chatInput = page.getByPlaceholder('Ask about or revise the Draft…');
+  await chatInput.fill('Make the title more concise.');
+  await chatInput.press('Enter');
+
+  await expect(page.getByText('Draft · v2')).toBeVisible();
+  await expect(firstImage).toHaveAttribute('src', sourceBeforeRevision!);
+  await expect(
+    page.getByText('Preparing Draft preview and media…')
+  ).toHaveCount(0);
+});
+
+test('shows only milestones delivered by the live Draft chat stream', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    let draftChatRequests = 0;
+    window.fetch = async (input, init) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url;
+      if (!url.endsWith('/draft/chat')) return originalFetch(input, init);
+      draftChatRequests += 1;
+      const encoder = new TextEncoder();
+      const event = (name: string, data: Record<string, unknown>) =>
+        encoder.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
+      const events =
+        draftChatRequests === 1
+          ? ([
+              ['progress', { stage: 'request_started' }],
+              [
+                'progress',
+                {
+                  stage: 'activity_started',
+                  activityId: 'search-1',
+                  label: 'Searching the web for current club news',
+                },
+              ],
+              [
+                'progress',
+                {
+                  stage: 'activity_completed',
+                  activityId: 'search-1',
+                  label: 'Searching the web for current club news',
+                },
+              ],
+              [
+                'progress',
+                {
+                  stage: 'activity_started',
+                  activityId: 'read-1',
+                  label: 'Reading https://example.com/article',
+                },
+              ],
+              [
+                'progress',
+                {
+                  stage: 'activity_completed',
+                  activityId: 'read-1',
+                  label: 'Reading https://example.com/article',
+                },
+              ],
+              [
+                'complete',
+                {
+                  workspaceId: 'wxpost-stream-test',
+                  sessionId: 'session-stream-test',
+                  reply: 'I found the current club news.',
+                  context: {},
+                  draftChanged: false,
+                },
+              ],
+            ] as const)
+          : draftChatRequests === 2
+            ? ([
+                ['progress', { stage: 'request_started' }],
+                [
+                  'complete',
+                  {
+                    workspaceId: 'wxpost-stream-test',
+                    sessionId: 'session-stream-test',
+                    reply: 'I am the SoarHigh Club AI Assistant.',
+                    context: {},
+                    draftChanged: false,
+                  },
+                ],
+              ] as const)
+            : ([
+                ['progress', { stage: 'request_started' }],
+                [
+                  'progress',
+                  {
+                    stage: 'activity_started',
+                    activityId: 'context-1',
+                    label: 'Reading the saved Draft and media',
+                  },
+                ],
+                [
+                  'progress',
+                  {
+                    stage: 'activity_failed',
+                    activityId: 'context-1',
+                    label: 'Reading the saved Draft and media',
+                  },
+                ],
+                [
+                  'error',
+                  {
+                    code: 'hermes_turn_failed',
+                    message: 'Hermes could not revise the draft',
+                  },
+                ],
+              ] as const);
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            events.forEach(([name, data], index) => {
+              window.setTimeout(() => {
+                controller.enqueue(event(name, data));
+                if (index === events.length - 1) controller.close();
+              }, index * 250);
+            });
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }
+      );
+    };
+  });
+  await createAndGenerateDraft(page);
+
+  const chatInput = page.getByPlaceholder('Ask about or revise the Draft…');
+  await chatInput.fill('Search for current club news.');
+  await chatInput.press('Enter');
+
+  const progress = page.getByTestId('draft-assistant-progress');
+  await expect(progress).toContainText(
+    'Searching the web for current club news'
+  );
+  await expect(progress).toContainText('Reading https://example.com/article');
+  await expect(progress).toHaveCount(0);
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'I found the current club news.'
+  );
+  const completedSteps = page.getByText('2 steps completed', { exact: true });
+  await expect(completedSteps).toBeVisible();
+  await expect(
+    page
+      .getByTestId('draft-chat-history')
+      .locator('details + p')
+      .filter({ hasText: 'I found the current club news.' })
+  ).toBeVisible();
+  await completedSteps.click();
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'Searching the web for current club news'
+  );
+
+  await chatInput.fill('Who are you?');
+  await chatInput.press('Enter');
+  await expect(progress).toContainText('Thinking…');
+  await expect(progress).toHaveCount(0);
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'I am the SoarHigh Club AI Assistant.'
+  );
+  await expect(page.getByText(/steps completed/)).toHaveCount(1);
+
+  await chatInput.fill('Make the opening warmer.');
+  await chatInput.press('Enter');
+  await expect(progress).toContainText('Reading the saved Draft and media');
+  await expect(progress.getByLabel('Failed')).toBeVisible();
+  await expect(progress).toHaveCount(0);
+  await expect(
+    page.getByTestId('draft-workbench').getByRole('alert')
+  ).toContainText('Hermes could not revise the draft');
+  await expect(chatInput).toHaveValue('Make the opening warmer.');
+  await expect(
+    page
+      .getByTestId('draft-chat-history')
+      .getByText('Make the opening warmer.', { exact: true })
+  ).toHaveCount(0);
+});
+
+test('starts a confirmed new Draft Assistant conversation without changing the Draft', async ({
+  page,
+}) => {
+  const workspace = await createAndGenerateDraft(page);
+  const context = Array.from(workspace.contexts.values())[0];
+  const chatInput = page.getByPlaceholder('Ask about or revise the Draft…');
+  workspace.answerNextDraftChat = true;
+  await chatInput.fill('How many sections are there?');
+  await chatInput.press('Enter');
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'The saved Draft has four main sections.'
+  );
+  const workspaceId = Array.from(workspace.contexts.keys())[0];
+  const oldSessionId = workspace.draftSessionIds.get(workspaceId);
+  const draftVersion = context.draft?.draftVersion;
+  const manifestVersion = context.manifest.manifestVersion;
+
+  await chatInput.fill('/new');
+  await chatInput.press('Enter');
+  const dialog = page.getByTestId('draft-session-reset-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(
+    'Your workspace, Materials, and saved Draft will not change.'
+  );
+  expect(
+    workspace.requests.filter((item) => item === 'POST /draft/chat')
+  ).toHaveLength(1);
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(chatInput).toHaveValue('/new');
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'The saved Draft has four main sections.'
+  );
+
+  await chatInput.press('Enter');
+  const confirmation = page.getByTestId('draft-session-reset-dialog');
+  const geometry = await confirmation.evaluate((overlay) => {
+    const dialogElement = overlay.firstElementChild;
+    if (!(dialogElement instanceof HTMLElement)) return null;
+    const box = dialogElement.getBoundingClientRect();
+    return {
+      dialogCenterX: box.left + box.width / 2,
+      dialogCenterY: box.top + box.height / 2,
+      viewportCenterX: window.innerWidth / 2,
+      viewportCenterY: window.innerHeight / 2,
+    };
+  });
+  expect(geometry).not.toBeNull();
+  expect(
+    Math.abs(geometry!.dialogCenterX - geometry!.viewportCenterX)
+  ).toBeLessThan(2);
+  expect(
+    Math.abs(geometry!.dialogCenterY - geometry!.viewportCenterY)
+  ).toBeLessThan(2);
+  await confirmation
+    .getByRole('button', { name: 'Start new conversation' })
+    .click();
+
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'Ask about the article or request a Draft edit.'
+  );
+  await expect(chatInput).toHaveValue('');
+  expect(workspace.requests).toContain('DELETE /draft/session');
+  expect(context.draft?.draftVersion).toBe(draftVersion);
+  expect(context.manifest.manifestVersion).toBe(manifestVersion);
+  expect(workspace.draftSessionIds.get(workspaceId)).toBeNull();
+
+  await page.reload();
+  await expect(page.getByTestId('materials-stage')).toBeVisible();
+  await page.getByRole('button', { name: /^3 Draft$/ }).click();
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'Ask about the article or request a Draft edit.'
+  );
+  await expect(page.getByTestId('draft-chat-history')).not.toContainText(
+    'The saved Draft has four main sections.'
+  );
+
+  const refreshedInput = page.getByPlaceholder(
+    'Ask about or revise the Draft…'
+  );
+  workspace.answerNextDraftChat = true;
+  await refreshedInput.fill('What is in the new conversation?');
+  await refreshedInput.press('Enter');
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'The saved Draft has four main sections.'
+  );
+  const newSessionId = workspace.draftSessionIds.get(workspaceId);
+  expect(newSessionId).not.toBeNull();
+  expect(newSessionId).not.toBe(oldSessionId);
+
+  await page.reload();
+  await expect(page.getByTestId('materials-stage')).toBeVisible();
+  await page.getByRole('button', { name: /^3 Draft$/ }).click();
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'What is in the new conversation?'
+  );
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'The saved Draft has four main sections.'
+  );
+});
+
+test('keeps the new-conversation confirmation usable on a narrow mobile viewport', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await createAndGenerateDraft(page);
+  await page.getByTestId('open-mobile-hermes').click();
+  const chatInput = page
+    .getByTestId('mobile-draft-chat-composer')
+    .getByPlaceholder('Ask about or revise the Draft…');
+  await chatInput.fill('/new');
+  await chatInput.press('Enter');
+
+  const overlay = page.getByTestId('draft-session-reset-dialog');
+  await expect(overlay).toBeInViewport();
+  await expect(overlay.getByRole('button', { name: 'Cancel' })).toBeVisible();
+  await expect(
+    overlay.getByRole('button', { name: 'Start new conversation' })
+  ).toBeVisible();
+});
+
 test('keeps local Draft edits isolated until an explicit Save Draft', async ({
   page,
 }) => {
@@ -225,32 +553,62 @@ test('preserves the saved Draft across generation, chat, and conflict failures',
   expect(context.draft!.draftVersion).toBe(1);
   expect(context.draft!.document.title).toBe(generatedTitle);
 
-  const chatInput = page.getByPlaceholder(
-    'Ask the assistant to revise the Draft…'
+  const chatInput = page.getByPlaceholder('Ask about or revise the Draft…');
+  workspace.answerNextDraftChat = true;
+  await chatInput.fill('How many sections does this article have?');
+  await chatInput.press('Enter');
+  await expect(page.getByText('Draft · v1')).toBeVisible();
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'The saved Draft has four main sections.'
   );
+  expect(context.draft!.draftVersion).toBe(1);
+
   await chatInput.fill('Make the opening warmer.');
+  await chatInput.press('Shift+Enter');
+  await chatInput.pressSequentially('Keep it concise.');
+  await expect(chatInput).toHaveValue(
+    'Make the opening warmer.\nKeep it concise.'
+  );
   workspace.failNextDraftChat = true;
-  await page.getByTestId('send-draft-chat').click();
+  await chatInput.press('Enter');
   await expect(
     page.getByTestId('draft-workbench').getByRole('alert')
   ).toBeVisible();
+  await expect(page.getByText('Online', { exact: true })).toBeVisible();
   await expect(page.getByTestId('draft-workbench')).toContainText(
     'Hermes could not revise the draft'
   );
   expect(context.draft!.draftVersion).toBe(1);
   expect(context.draft!.document.title).toBe(generatedTitle);
-  await expect(chatInput).toHaveValue('Make the opening warmer.');
+  await expect(chatInput).toHaveValue(
+    'Make the opening warmer.\nKeep it concise.'
+  );
   await expect(
     page
       .getByTestId('draft-chat-history')
       .getByText('Make the opening warmer.', { exact: true })
   ).toHaveCount(0);
 
-  await page.getByTestId('send-draft-chat').click();
+  workspace.draftChatDelayMs = 500;
+  await chatInput.press('Enter');
+  await expect(
+    page.getByTestId('draft-assistant-progress').getByText('Thinking…')
+  ).toBeVisible();
+  await expect(page.getByTestId('draft-workbench')).toBeVisible();
+  await expect(page.getByTestId('wxpost-article')).toContainText(
+    generatedTitle
+  );
+  await expect(
+    page.getByText('Preparing Draft preview and media…')
+  ).toHaveCount(0);
   await expect(page.getByText('Draft · v2')).toBeVisible();
+  workspace.draftChatDelayMs = 0;
   await expect(page.getByText('Online', { exact: true })).toBeVisible();
   await expect(page.getByTestId('draft-chat-history')).toContainText(
     'Make the opening warmer.'
+  );
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'Keep it concise.'
   );
   await expect(page.getByTestId('draft-chat-history')).toContainText(
     'I revised the saved draft'

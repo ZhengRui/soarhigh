@@ -1,6 +1,6 @@
 # SoarHigh Toastmasters Club - Frontend Status
 
-**Last updated:** 2026-08-01
+**Last updated:** 2026-08-03
 
 **WxPost checkpoint:** `d1c85a4` is the committed pre-Slice-6 base. The current
 working tree completes Slice 6: one workspace-scoped Hermes session and formal
@@ -18,10 +18,11 @@ complete WxPost browser suite, and full Backend/controller suites cover the
 deterministic behavior. Real Hermes generation succeeded for six linked
 meeting/event workspaces plus one independent workspace, and signed-in Chrome
 verified the complete rich-block and presentation matrix at desktop and 390 px.
-Slice 7A now adds explicit saved-Draft-to-public synchronization, one stable
-public WxPost per workspace, revision/freshness status in Draft and Workspaces,
-and atomic Supabase/OSS publication. Feishu ingestion and selected-image
-description generation remain Slice 7B; WeChat delivery remains Phase 3.
+Slice 7A adds explicit saved-Draft-to-public synchronization, one stable public
+WxPost per workspace, revision/freshness status in Draft and Workspaces, and
+atomic Supabase/OSS publication. Slice 7B adds explicit Hermes descriptions for
+selected workspace images. Feishu ingestion remains Slice 7C; WeChat delivery
+remains Phase 3.
 
 ## Application Overview
 
@@ -173,14 +174,29 @@ All routes in the (auth) group are protected by authentication middleware which 
   saved; immediate import, upload, and delete operations do not conflict with
   that rule
 - Direct rendered-block edits stay local until Save Draft; a successful
-  Generate, Regenerate, Save Draft, or explicit Hermes revision increments
-  `draftVersion`
+  Generate, Regenerate, Save Draft, or actual Hermes revision increments
+  `draftVersion`. General questions and questions about the current article
+  return a normal Draft Assistant reply without creating a Draft version
+- A successful Draft Assistant revision prepares the returned document while
+  the current article remains visible, then updates the rendered Draft and
+  version together without replacing the workbench with its initial loader
+- Entering `/new` and confirming starts a separate Draft Assistant
+  conversation without changing Materials or the saved Draft. Refreshing
+  before its first message keeps the new conversation empty; the old persisted
+  Hermes session is retired through durable cleanup
 - Draft and Materials retain separate browser-local working copies while their
   tabs remain mounted; a structural Materials update does not discard an
   unsaved Draft edit
 - A saved Draft keeps its own article type and material references. Excluding a
   material does not hide it from an older Draft, deleted files render as missing
-  placeholders, and only Generate or Regenerate adopts current Materials
+  placeholders, and only Generate or Regenerate adopts current Materials.
+  Focused revisions may explicitly add any imported workspace-ready image or
+  video without changing its Materials inclusion, and preserve unrelated media
+  and cover state by default
+- Draft Assistant references to the media library, available media, or
+  candidate media always mean imported `workspaceReady` media. Unimported
+  meeting-library options exist only in Materials and are excluded from Draft
+  media counts and lists
 - The Draft workbench maps each visible member-authored field back to its
   canonical source: article title/excerpt/byline, individual Markdown blocks,
   section kickers and headings, every directive text field, and media
@@ -200,9 +216,10 @@ All routes in the (auth) group are protected by authentication middleware which 
 - Layout, palette, appearance, typeface, and Desktop/Mobile controls remain
   available in both Draft modes
 - Draft save, generation, and Hermes revisions use manifest and draft versions;
-  each Hermes turn also carries a unique save operation ID so another tab's
-  direct save cannot be mistaken for that turn's success. Stale saves keep
-  local edits, and failed operations leave the saved Draft unchanged
+  each Hermes chat turn carries a unique optional-save operation ID so another
+  tab's direct save cannot be mistaken for that turn's success. The controller
+  accepts either no Draft change or exactly one matching increment. Stale saves
+  keep local edits, and failed operations leave the saved Draft unchanged
 - Missing workspace media renders a controlled in-article placeholder instead
   of a broken private URL
 - Regenerate replaces the current canonical Draft and advances its version;
@@ -531,14 +548,30 @@ private test workspace `wxpost-31a400fcfce7` was then permanently deleted and
 the public `/posts/wxposts/regenerate-conflict-source-v14` remained available
 at revision 5.
 
-#### Slice 7B - Feishu ingestion and image descriptions
+#### Slice 7B - Hermes image descriptions (complete)
+
+The web Materials editor can explicitly ask Hermes to describe one selected
+workspace image. Hermes returns one concise English editorial description,
+polishing an existing description in any language when present. The operation
+uses linked meeting context only as supporting evidence, stays independent of
+other Materials mutations, and writes through the versioned controller.
+
+Acceptance:
+
+- image-description generation is explicit and scoped to one selected image
+- the result is an editable English suggestion rather than a silent overwrite
+- an existing description is translated, compressed, and polished rather than
+  discarded
+- upload, import, delete, and other local Materials edits remain usable while
+  Hermes is working
+
+#### Slice 7C - Feishu ingestion (planned)
 
 Complete the cross-surface workflow without rebuilding the Materials editor
 inside Feishu cards. Feishu selects or creates the active workspace, collects
 attachments and concise instructions, reports status, and links to the web
-workspace for full editing. Selected-image description generation uses Hermes
-and writes through the same versioned controller. It reuses the completed
-Slice 7A publication status and does not add another rendering path.
+workspace for full editing. It reuses the completed Slice 7A publication state
+and Slice 7B descriptions without adding another rendering path.
 
 Acceptance:
 
@@ -547,8 +580,6 @@ Acceptance:
 - retries and duplicate Feishu events do not duplicate materials
 - attachments receive stable workspace material IDs and appear in the web
   Materials page with correct provenance
-- image-description generation is explicit, scoped to selected images, and
-  produces editable suggestions rather than silently overwriting descriptions
 - generation and public-sync status can be queried from Feishu, while complex
   editing remains in the web UI
 - one real Feishu-to-web-to-Hermes-to-public-WxPost smoke proves the complete
@@ -765,9 +796,26 @@ The meeting management workflow is now fully implemented:
      canvas selection browser-local
    - Preserves the saved Draft on generation/chat failure or version conflict;
      stale direct edits remain local for the member to recover
-   - Leaves Feishu workspace/attachment integration and selected-image
-     descriptions for the following slice; explicit public synchronization is
-     complete in Slice 7A
+   - Leaves Feishu workspace/attachment integration for Slice 7C; explicit
+     public synchronization is complete in Slice 7A and selected-image
+     descriptions are complete in Slice 7B
+
+   Validation recorded on 2026-08-03:
+
+   - A signed-in Chrome smoke test exercised a real Meeting 463 workspace across
+     general questions, focused Draft revision, live milestones, partial Draft
+     refresh, `/new` cancel/confirm, refresh before and after the first new
+     message, assistant identity, and cover removal/restoration.
+   - The smoke test found and corrected one cover-only regression: clearing a
+     cover must return that imported image to the workspace library without
+     inserting it into the article body. The same live operation then passed,
+     and M08 was restored as the cover-only image in the test workspace.
+   - The full WxPost Playwright surface passed 80/80 serially. Focused repeats
+     passed 5/5 for streamed milestones and 5/5 for chat auto-scroll behavior.
+   - Hermes/controller tests passed 151/151 and backend WxPost contract,
+     persistence, proxy, directive, Hermes, and publication tests passed
+     105/105. The only remaining output is the existing pytest-asyncio fixture
+     loop-scope deprecation warning.
 
 9. **Voting System**
 

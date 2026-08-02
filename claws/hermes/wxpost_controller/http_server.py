@@ -377,8 +377,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 "draft revision",
             ):
                 return
-            self._run_controller(
-                lambda: self.server.draft_service.revise(
+            self._run_draft_stream(
+                lambda on_progress: self.server.draft_service.chat(
                     draft_chat_match.group(1),
                     expected_manifest_version=cast(
                         int,
@@ -393,6 +393,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         str | None,
                         payload.get("selectedText"),
                     ),
+                    on_progress=on_progress,
                 )
             )
             return
@@ -470,13 +471,19 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         path = urlsplit(self.path).path
+        draft_session_match = DRAFT_SESSION_PATH.fullmatch(path)
+        if draft_session_match is not None:
+            self._run_controller(
+                lambda: self.server.draft_service.reset(draft_session_match.group(1))
+            )
+            return
         workspace_match = WORKSPACE_PATH.fullmatch(path)
         if workspace_match is not None:
             expected_version = self._read_expected_manifest_version()
             if expected_version is None:
                 return
             self._run_controller(
-                lambda: self.server.controller.delete_workspace(
+                lambda: self.server.draft_service.delete_workspace(
                     workspace_match.group(1),
                     expected_manifest_version=expected_version,
                 )
@@ -634,6 +641,44 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             )
         else:
             self._send_json(HTTPStatus.OK, result)
+
+    def _run_draft_stream(self, operation) -> None:
+        connected = True
+
+        def send_event(event: str, payload: Any) -> None:
+            nonlocal connected
+            if not connected:
+                return
+            body = (
+                f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            ).encode("utf-8")
+            try:
+                self.wfile.write(body)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                connected = False
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "private, no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        send_event("progress", {"stage": "request_started"})
+        try:
+            result = operation(lambda progress: send_event("progress", progress))
+        except WorkspaceError as exc:
+            send_event("error", error_response(exc)["error"])
+        except Exception:
+            send_event(
+                "error",
+                {
+                    "code": "internal_error",
+                    "message": "controller operation failed",
+                },
+            )
+        else:
+            send_event("complete", result)
 
     def _run_source_read(self, operation) -> None:
         try:

@@ -16,6 +16,45 @@ The Compose file mounts only the small `wxpost_controller` package read-only at
 complete host home directory, Docker socket, SSH credentials, and Git
 credentials are not mounted into the container.
 
+## Dedicated WxPost profile
+
+Container startup builds a managed Hermes profile named `wxpost` under
+`HERMES_HOME_DIR/profiles/wxpost`. Both the web Draft Assistant (`hermes
+serve`) and the normal Feishu channel run through this same profile. This is a
+plain Hermes Feishu connection; the abandoned WxPost card experiment is not
+installed or loaded.
+
+The profile inherits the configured model, provider credentials, and platform
+settings from the default Hermes configuration, enables Hermes fast mode for
+`gpt-5.6-luna`, then narrows the agent surface to:
+
+- the tracked `soarhigh-wxpost-authoring` Skill;
+- the canonical `soarhigh-wxpost` MCP server;
+- browser-based web access and image understanding;
+- Tavily search and extraction when `TAVILY_API_KEY` is configured.
+
+General terminal, filesystem, code-execution, delegation, memory, cron, and
+plugin capabilities are explicitly disabled. Profile memory and user-profile
+injection are also disabled so workspace state remains in the canonical
+controller rather than a second assistant-owned store.
+
+`wxpost_profile/configure.py` recreates the managed capability configuration
+and tracked Skill on every container start. It does not modify the default
+profile beyond removing the superseded WxPost MCP, Skill copy, and abandoned
+card plugin. `run_gateway.sh` stops any gateway restored from stale profile
+state, makes `wxpost` the active profile, and leaves exactly one supervised
+Feishu gateway plus one isolated backend on port 9119.
+
+After changing the profile source, Skill, Compose mounts, or startup script,
+recreate the services so the generated profile is refreshed:
+
+```bash
+docker compose \
+  --env-file claws/hermes/.env.local \
+  --file claws/hermes/compose.yaml \
+  up --detach --force-recreate gateway controller
+```
+
 ## First startup
 
 The first interactive `up` asks for the Hermes home, workspace, image,
@@ -170,7 +209,9 @@ operation inputs. A complete manifest example lives at
 - Hermes submits strict Draft proposal schema v2 containing only editorial
   fields, ordered typed content blocks, media references, and an optional cover
   reference. Generate and Regenerate derive source-owned fields from current
-  Materials; focused revisions derive them from the saved Draft snapshot.
+  Materials. Focused revisions start from the saved Draft and declare media
+  additions, removals, and cover intent explicitly; imported workspace-ready
+  media remains available even when it is not Materials-included.
   Hermes-authored article descriptions begin as AI proposals needing member
   confirmation;
 - generated `ArticleDocument.media` keeps the same material IDs so its body and
@@ -209,9 +250,10 @@ operation inputs. A complete manifest example lives at
   of maintaining a second ArticleDocument validator in the controller; the
   normalized document returned by that endpoint is the one stored on disk;
 - draft saves require both expected manifest and draft versions. MCP accepts
-  only proposal schema v2, rejects excluded, missing, duplicate, and unknown
+  only proposal schema v2, rejects missing, duplicate, unimported, and unknown
   material IDs, and never asks Hermes to reproduce controller-owned media
-  fields;
+  fields. Generate/Regenerate require every Materials-included medium; focused
+  revisions preserve current Draft media unless an explicit delta changes it;
 - ordinary article prose remains free-form Markdown inside typed `markdown` and
   `section.body` blocks. Hermes selects typed semantic blocks and never writes
   fenced YAML. The controller deterministically serializes those blocks into
@@ -243,6 +285,14 @@ operation ID, so a concurrent direct save cannot be adopted as Hermes output.
 Turns are serialized per workspace; unrelated workspaces do not wait behind
 one another.
 
+Draft Assistant chat uses the same session but does not force every message
+through a save. A general question may be answered without reading the
+workspace; a question about the article reads `wxpost_get_context` and answers
+without saving; an editorial request reads context and saves one new Draft
+version. The controller reports whether the Draft changed and accepts only an
+unchanged version or one operation-ID-matched increment. A chat failure does
+not make the Hermes connection unavailable.
+
 If the first save is rejected before persistence solely by the formal proposal
 or ArticleDocument validator, Hermes may correct the typed proposal once from
 that exact error and make one replacement save with the same expected versions.
@@ -250,10 +300,11 @@ It never parses or repairs YAML, guesses media IDs, retries version conflicts,
 or retries runtime failures. The versioned session title prevents a breaking
 proposal revision from reusing an older protocol conversation.
 
-The authoring session protocol is version 3. Its save call includes the
+The authoring session protocol is version 6. Its save call includes the
 turn-specific operation ID and an explicit choice between current Materials
-and the saved Draft source snapshot; the editorial proposal itself remains
-schema v2.
+and a focused revision. Revisions also declare media additions, removals, and
+cover preserve/set/clear intent. The editorial proposal itself remains schema
+v2.
 The strict proposal deliberately omits `presentation`. The controller applies
 the agreed default for the first Draft and preserves the saved/current
 presentation on Generate, Regenerate, and normal editorial revisions.
@@ -474,6 +525,7 @@ PATCH  /workspaces/{workspaceId}
 DELETE /workspaces/{workspaceId}
 GET    /workspaces/{workspaceId}/context
 GET    /workspaces/{workspaceId}/draft/session
+DELETE /workspaces/{workspaceId}/draft/session
 POST   /workspaces/{workspaceId}/draft/save
 POST   /workspaces/{workspaceId}/draft/generate
 POST   /workspaces/{workspaceId}/draft/chat
@@ -501,25 +553,34 @@ Draft version, and then delete the Materials file.
 
 The HTTP controller is connected to the authoring page's Materials and Draft
 stages. Draft contains both Edit and Preview modes; Generate and Chat resume a
-workspace-scoped `hermes serve` session, and the mounted formal Skill requires
-one version-checked MCP draft save. The deterministic workspace core remains
-the only writer.
+workspace-scoped `hermes serve` session. Generate requires one version-checked
+MCP save, while Chat may answer without saving or perform one verified focused
+revision. The deterministic workspace core remains the only writer.
+
+Entering `/new` in Draft Assistant and confirming atomically points the
+workspace at a fresh conversation before retiring the previous persisted
+Hermes session. The new session is created by Hermes only when its first
+message is sent; refreshing before that message keeps the new conversation
+empty. Draft, Materials, and workspace files are unaffected. Session pointers
+also record the Draft protocol version so a future protocol bump retires an
+incompatible conversation instead of resuming it by stored ID.
 
 The remaining implementation order preserves the existing plan. Phase 2 Slice
 7A public synchronization is complete: Backend projects one saved Draft into
 one stable public WxPost, uploads or reuses public OSS assets idempotently, and
 exposes derived publication status to Draft and Workspaces.
 
-1. **Phase 2, Slice 7B - cross-surface completion:** the web Materials stage
-   can now ask Hermes for a selected image's English description, using the
-   image and any current description as factual authority and linked meeting
-   theme, introduction, and agenda as supporting context. The suggestion stays
-   local until `Save Materials`. Remaining work is Feishu workspace selection
-   and deduplicated attachments; Feishu may query the completed public-sync
-   status, while complex editing remains in the web workspace.
-2. **Phase 3 - WeChat Draft integration:** upload WeChat media, replace URLs,
+1. **Phase 2, Slice 7B - Hermes image descriptions (complete):** the web
+   Materials stage can ask Hermes for a selected image's English description,
+   using the image and any current description as factual authority and linked
+   meeting theme, introduction, and agenda as supporting context. The
+   suggestion stays local until `Save Materials`.
+2. **Phase 2, Slice 7C - Feishu ingestion:** add Feishu workspace selection and
+   deduplicated attachments. Feishu may query the completed public-sync status,
+   while complex editing remains in the web workspace.
+3. **Phase 3 - WeChat Draft integration:** upload WeChat media, replace URLs,
    submit the same canonical inline HTML, create/update the Draft idempotently,
    and verify platform readback plus mobile preview.
-3. **Phase 4 - optional hardening:** version history/rollback, simultaneous
+4. **Phase 4 - optional hardening:** version history/rollback, simultaneous
    collaborative editing, analytics, bulk operations, shareable style presets,
    and Bitable.

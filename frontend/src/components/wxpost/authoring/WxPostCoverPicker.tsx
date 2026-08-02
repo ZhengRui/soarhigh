@@ -121,7 +121,11 @@ export function WxPostCoverPicker({
                         {candidate.filename}
                       </span>
                       <span className='text-[11px] font-semibold text-slate-500'>
-                        {candidate.inArticle ? 'In article' : 'Cover only'}
+                        {candidate.inArticle
+                          ? 'In article'
+                          : current
+                            ? 'Cover only'
+                            : 'Not in article'}
                       </span>
                     </div>
                   </button>

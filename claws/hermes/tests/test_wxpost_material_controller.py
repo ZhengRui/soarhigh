@@ -146,7 +146,7 @@ def _draft(source_id: str) -> dict[str, Any]:
         "customArticleType": None,
         "sourceMeetingId": MEETING_ID,
         "bodyMarkdown": (
-            "A short recap.\n\n:::gallery\nitems:\n" f"  - {source_id}\n:::\n"
+            f"A short recap.\n\n:::gallery\nitems:\n  - {source_id}\n:::\n"
         ),
         "media": [
             {

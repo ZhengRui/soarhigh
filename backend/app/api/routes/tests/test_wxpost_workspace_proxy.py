@@ -660,6 +660,7 @@ def test_workspace_proxy_allows_only_the_scoped_draft_routes(
 
     requests = [
         ("GET", "/draft/session", None),
+        ("DELETE", "/draft/session", None),
         (
             "POST",
             "/draft/save",
@@ -703,7 +704,45 @@ def test_workspace_proxy_allows_only_the_scoped_draft_routes(
     assert rejected.status_code == 404
     assert [(request.method, request.url.path) for request in captured] == [
         ("GET", "/workspaces/wxpost-abc/draft/session"),
+        ("DELETE", "/workspaces/wxpost-abc/draft/session"),
         ("POST", "/workspaces/wxpost-abc/draft/save"),
         ("POST", "/workspaces/wxpost-abc/draft/generate"),
         ("POST", "/workspaces/wxpost-abc/draft/chat"),
     ]
+
+
+def test_workspace_draft_chat_preserves_the_controller_event_stream(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = (
+        'event: progress\ndata: {"stage":"request_started"}\n\n'
+        'event: progress\ndata: {"stage":"activity_started",'
+        '"activityId":"context-1","label":"Reading the saved Draft"}\n\n'
+        'event: complete\ndata: {"reply":"Done."}\n\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/workspaces/wxpost-abc/draft/chat"
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream; charset=utf-8"},
+            content=stream.encode(),
+        )
+
+    _configure_controller(monkeypatch, handler)
+
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/draft/chat",
+        headers={"Authorization": "Bearer member-token"},
+        json={
+            "expectedManifestVersion": 3,
+            "expectedDraftVersion": 1,
+            "message": "How many sections are there?",
+            "selectedText": None,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text == stream

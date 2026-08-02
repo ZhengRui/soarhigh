@@ -26,6 +26,7 @@ from .contracts import (
     DraftEnvelope,
     DraftImageBlock,
     DraftMarkdownBlock,
+    DraftMediaChanges,
     DraftPersonBlock,
     DraftProposal,
     DraftSectionBlock,
@@ -1033,6 +1034,7 @@ class WorkspaceController:
         proposal: DraftProposal | Mapping[str, Any],
         operation_id: str | None = None,
         refresh_from_materials: bool = True,
+        media_changes: DraftMediaChanges | Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Assemble and save a canonical document from Hermes-owned fields."""
         validated_proposal = (
@@ -1044,6 +1046,27 @@ class WorkspaceController:
                 label="draft proposal",
             )
         )
+        validated_media_changes = (
+            media_changes
+            if isinstance(media_changes, DraftMediaChanges)
+            else (
+                self._validate_request(
+                    DraftMediaChanges,
+                    media_changes,
+                    label="Draft media changes",
+                )
+                if media_changes is not None
+                else None
+            )
+        )
+        if refresh_from_materials and validated_media_changes is not None:
+            raise InvalidRequest(
+                "mediaChanges is only valid for a focused Draft revision"
+            )
+        if not refresh_from_materials and validated_media_changes is None:
+            raise InvalidRequest(
+                "a focused Draft revision requires explicit mediaChanges"
+            )
         workspace = self._resolve_workspace(workspace_id)
         with self._workspace_lock(workspace):
             manifest = self._read_manifest(workspace, workspace_id)
@@ -1065,6 +1088,7 @@ class WorkspaceController:
                 presentation,
                 current.document if current is not None else None,
                 refresh_from_materials=refresh_from_materials,
+                media_changes=validated_media_changes,
             )
 
         # save_draft rechecks both versions under the write lock. A Materials
@@ -1235,8 +1259,7 @@ class WorkspaceController:
             if self._soarhigh_service_token:
                 headers["Authorization"] = f"Bearer {self._soarhigh_service_token}"
             request = Request(
-                f"{self._soarhigh_api_base_url}/meetings/"
-                f"{quote(meeting_id, safe='')}",
+                f"{self._soarhigh_api_base_url}/meetings/{quote(meeting_id, safe='')}",
                 headers=headers,
                 method="GET",
             )
@@ -1947,11 +1970,12 @@ class WorkspaceController:
         current_document: Mapping[str, Any] | None,
         *,
         refresh_from_materials: bool,
+        media_changes: DraftMediaChanges | None,
     ) -> dict[str, Any]:
         if not refresh_from_materials and current_document is None:
             raise InvalidRequest("a Draft revision requires an existing saved Draft")
         snapshot_document = current_document or {}
-        current_media = (
+        current_media: dict[str, Mapping[str, Any]] = (
             {
                 item["id"]: item
                 for item in current_document.get("media", [])
@@ -1960,6 +1984,8 @@ class WorkspaceController:
             if current_document is not None
             else {}
         )
+        source_media: dict[str, Mapping[str, Any]]
+        revision_changes: DraftMediaChanges | None = None
         if refresh_from_materials:
             source_media = {
                 source.id: {
@@ -1974,8 +2000,85 @@ class WorkspaceController:
                 if source.included
                 and source.kind in {SourceKind.IMAGE, SourceKind.VIDEO}
             }
+            final_media_ids = set(source_media)
+            cover_media_id = proposal.cover_media_id
         else:
-            source_media = current_media
+            assert current_document is not None
+            assert media_changes is not None
+            revision_changes = media_changes
+            available_media = {
+                source.id: {
+                    "id": source.id,
+                    "kind": source.kind.value,
+                    "sourceUrl": (
+                        "https://workspace.invalid/"
+                        f"{quote(workspace_id, safe='')}/materials/{source.id}"
+                    ),
+                }
+                for source in manifest.sources
+                if source.workspace_ready
+                and source.kind in {SourceKind.IMAGE, SourceKind.VIDEO}
+            }
+            added_ids = set(media_changes.added_media_ids)
+            removed_ids = set(media_changes.removed_media_ids)
+            unknown_additions = sorted(added_ids - set(available_media))
+            if unknown_additions:
+                raise InvalidRequest(
+                    "Draft media additions must be imported workspace media: "
+                    + ", ".join(unknown_additions)
+                )
+            existing_additions = sorted(added_ids & set(current_media))
+            if existing_additions:
+                raise InvalidRequest(
+                    "Draft media additions already exist in the saved Draft: "
+                    + ", ".join(existing_additions)
+                )
+            unknown_removals = sorted(removed_ids - set(current_media))
+            if unknown_removals:
+                raise InvalidRequest(
+                    "Draft media removals are not in the saved Draft: "
+                    + ", ".join(unknown_removals)
+                )
+            final_media_order = [
+                source_id for source_id in current_media if source_id not in removed_ids
+            ]
+            final_media_order.extend(media_changes.added_media_ids)
+            final_media_ids = set(final_media_order)
+            source_media = {
+                source_id: (
+                    current_media[source_id]
+                    if source_id in current_media
+                    else available_media[source_id]
+                )
+                for source_id in final_media_order
+            }
+            current_cover = current_document.get("coverMediaId")
+            cover_change = media_changes.cover
+            if cover_change.action == "preserve":
+                cover_media_id = current_cover
+                if proposal.cover_media_id not in {None, current_cover}:
+                    raise InvalidRequest(
+                        "Draft proposal cover conflicts with cover action preserve"
+                    )
+            elif cover_change.action == "clear":
+                cover_media_id = None
+                if proposal.cover_media_id is not None:
+                    raise InvalidRequest(
+                        "Draft proposal cover conflicts with cover action clear"
+                    )
+            else:
+                cover_media_id = cover_change.source_id
+                if proposal.cover_media_id != cover_media_id:
+                    raise InvalidRequest(
+                        "Draft proposal cover must match cover action set"
+                    )
+            if cover_media_id is not None:
+                if cover_media_id not in final_media_ids:
+                    raise InvalidRequest(
+                        "Draft cover must remain in the final Draft media"
+                    )
+                if source_media[cover_media_id]["kind"] != SourceKind.IMAGE.value:
+                    raise InvalidRequest("Draft cover must be an image source")
         proposal_ids = [item.id for item in proposal.media]
         unexpected = [
             source_id for source_id in proposal_ids if source_id not in source_media
@@ -1988,20 +2091,38 @@ class WorkspaceController:
         missing = [
             source_id for source_id in source_media if source_id not in proposal_ids
         ]
-        if missing:
+        if refresh_from_materials and missing:
             raise InvalidRequest(
                 "draft proposal media is missing sources from its source snapshot: "
                 + ", ".join(missing)
             )
+        if not refresh_from_materials:
+            assert revision_changes is not None
+            missing_additions = sorted(
+                set(revision_changes.added_media_ids) - set(proposal_ids)
+            )
+            if missing_additions:
+                raise InvalidRequest(
+                    "Draft proposal is missing declared media additions: "
+                    + ", ".join(missing_additions)
+                )
 
         media_proposals = {item.id: item for item in proposal.media}
         media: list[dict[str, Any]] = []
-        for order, source_id in enumerate(
-            WorkspaceController._proposal_media_order(proposal)
-        ):
-            item = media_proposals[source_id]
+        ordered_media_ids = WorkspaceController._proposal_media_order(proposal)
+        ordered_media_ids.extend(
+            source_id
+            for source_id in source_media
+            if source_id not in ordered_media_ids
+        )
+        for order, source_id in enumerate(ordered_media_ids):
+            item = media_proposals.get(source_id)
             source = source_media[source_id]
             previous = current_media.get(source_id)
+            if item is None:
+                assert previous is not None
+                media.append({**previous, "include": True, "order": order})
+                continue
             description_unchanged = (
                 previous is not None and previous.get("description") == item.description
             )
@@ -2052,7 +2173,7 @@ class WorkspaceController:
             ),
             "bodyMarkdown": WorkspaceController._proposal_body_markdown(proposal),
             "media": media,
-            "coverMediaId": proposal_wire.get("coverMediaId"),
+            "coverMediaId": cover_media_id,
             "presentation": dict(presentation),
         }
 
@@ -2137,23 +2258,27 @@ class WorkspaceController:
                 for item in snapshot.get("media", [])
                 if isinstance(item, Mapping) and isinstance(item.get("id"), str)
             }
-            cover_id = document.get("coverMediaId")
-            if isinstance(cover_id, str) and cover_id not in expected_media:
-                cover_source = next(
-                    (
-                        source
-                        for source in manifest.sources
-                        if source.id == cover_id
-                        and source.workspace_ready
-                        and source.kind == SourceKind.IMAGE
-                    ),
-                    None,
-                )
-                if cover_source is None:
+            actual_media = document.get("media")
+            if not isinstance(actual_media, list):
+                raise InvalidRequest("ArticleDocument media must be a list")
+            ready_media = {
+                source.id: source.kind.value
+                for source in manifest.sources
+                if source.workspace_ready
+                and source.kind in {SourceKind.IMAGE, SourceKind.VIDEO}
+            }
+            for item in actual_media:
+                if not isinstance(item, Mapping):
+                    continue
+                source_id = item.get("id")
+                if not isinstance(source_id, str) or source_id in expected_media:
+                    continue
+                kind = ready_media.get(source_id)
+                if kind is None:
                     raise InvalidRequest(
-                        "Draft cover must be a workspace-ready image source"
+                        "Draft media additions must be imported workspace media"
                     )
-                expected_media[cover_id] = (SourceKind.IMAGE.value, True)
+                expected_media[source_id] = (kind, True)
             WorkspaceController._validate_media_snapshot(
                 document,
                 expected_media,

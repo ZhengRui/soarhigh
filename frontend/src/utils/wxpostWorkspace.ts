@@ -191,11 +191,43 @@ export interface WorkspaceDraftSession {
   messages: Array<{ role: 'user' | 'assistant'; text: string }>;
 }
 
-interface WorkspaceDraftTurn {
+export interface WorkspaceDraftTurn {
   workspaceId: string;
   sessionId: string;
   reply: string;
   context: WorkspaceContext;
+  draftChanged: boolean;
+}
+
+export type WorkspaceDraftProgressStage =
+  | 'request_started'
+  | 'activity_started'
+  | 'activity_completed'
+  | 'activity_failed';
+
+export interface WorkspaceDraftProgress {
+  stage: WorkspaceDraftProgressStage;
+  activityId?: string;
+  label?: string;
+}
+
+function isWorkspaceDraftProgress(
+  payload: unknown
+): payload is WorkspaceDraftProgress {
+  if (!payload || typeof payload !== 'object' || !('stage' in payload)) {
+    return false;
+  }
+  const stage = payload.stage;
+  if (stage === 'request_started') return true;
+  return (
+    (stage === 'activity_started' ||
+      stage === 'activity_completed' ||
+      stage === 'activity_failed') &&
+    'activityId' in payload &&
+    typeof payload.activityId === 'string' &&
+    'label' in payload &&
+    typeof payload.label === 'string'
+  );
 }
 
 interface WxPostValidationResult {
@@ -396,6 +428,13 @@ export function getWorkspaceDraftSession(workspaceId: string) {
   );
 }
 
+export function resetWorkspaceDraftSession(workspaceId: string) {
+  return requestJson<WorkspaceDraftSession>(
+    `${workspacePath(workspaceId)}/draft/session`,
+    { method: 'DELETE' }
+  );
+}
+
 export function validateWorkspaceDraft(document: WxPostArticleDocument) {
   return requestJson<WxPostValidationResult>('/posts/wxposts/validate', {
     method: 'POST',
@@ -439,23 +478,117 @@ export function generateWorkspaceDraft(
   );
 }
 
-export function reviseWorkspaceDraft(
+export function chatWithWorkspaceDraft(
   workspaceId: string,
   input: {
     expectedManifestVersion: number;
     expectedDraftVersion: number;
     message: string;
     selectedText: string | null;
+  },
+  options: {
+    onProgress?: (progress: WorkspaceDraftProgress) => void;
+    signal?: AbortSignal;
+  } = {}
+) {
+  return requestDraftChatStream(workspaceId, input, options);
+}
+
+async function requestDraftChatStream(
+  workspaceId: string,
+  input: {
+    expectedManifestVersion: number;
+    expectedDraftVersion: number;
+    message: string;
+    selectedText: string | null;
+  },
+  options: {
+    onProgress?: (progress: WorkspaceDraftProgress) => void;
+    signal?: AbortSignal;
   }
 ) {
-  return requestJson<WorkspaceDraftTurn>(
-    `${workspacePath(workspaceId)}/draft/chat`,
+  const response = await fetch(
+    `${apiEndpoint}${workspacePath(workspaceId)}/draft/chat`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: memberHeaders({
+        Accept: 'text/event-stream',
+        'Content-Type': 'application/json',
+      }),
       body: JSON.stringify(input),
+      signal: options.signal,
     }
   );
+  if (!response.ok) throw await errorFromResponse(response);
+  if (!response.body) {
+    throw new WorkspaceApiError(
+      502,
+      'The Draft Assistant returned an empty stream.',
+      'invalid_stream'
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let completed: WorkspaceDraftTurn | null = null;
+
+  const handleEvent = (block: string) => {
+    let event = 'message';
+    const data: string[] = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+    }
+    if (data.length === 0) return;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data.join('\n'));
+    } catch {
+      throw new WorkspaceApiError(
+        502,
+        'The Draft Assistant returned an invalid stream event.',
+        'invalid_stream'
+      );
+    }
+    if (event === 'progress') {
+      if (isWorkspaceDraftProgress(payload)) options.onProgress?.(payload);
+      return;
+    }
+    if (event === 'error') {
+      const error = payload as { code?: unknown; message?: unknown };
+      throw new WorkspaceApiError(
+        error.code === 'version_conflict' ? 409 : 502,
+        typeof error.message === 'string'
+          ? error.message
+          : 'The Draft Assistant could not complete the request.',
+        typeof error.code === 'string' ? error.code : null
+      );
+    }
+    if (event === 'complete') completed = payload as WorkspaceDraftTurn;
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary >= 0) {
+      handleEvent(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf('\n\n');
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) handleEvent(buffer);
+  const result = completed as WorkspaceDraftTurn | null;
+  if (!result) {
+    throw new WorkspaceApiError(
+      502,
+      'The Draft Assistant stream ended before completing the request.',
+      'incomplete_stream'
+    );
+  }
+  return result;
 }
 
 export function saveWorkspaceMaterials(

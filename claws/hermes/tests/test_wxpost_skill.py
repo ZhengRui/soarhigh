@@ -58,6 +58,7 @@ def test_skill_covers_semantic_vocabulary_without_presentation() -> None:
     assert "When inputs disagree, use this order" in skill
     assert "the first marked `section` block" in skill
     assert "`coverMediaId` alone does not make an\n  image a body hero" in skill
+    assert "Clearing a cover does not move that image into the article body" in skill
     assert "emphasize it\nonce with `==important phrase==`" in skill
     assert (
         "explicit request in `writingGuidance` for a supported semantic block" in skill
