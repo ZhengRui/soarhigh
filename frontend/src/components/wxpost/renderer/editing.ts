@@ -6,6 +6,11 @@ import type {
   WxPostMediaAsset,
   WxPostRenderDocument,
 } from '../types';
+import {
+  isWxPostOptionalDirectiveTextPath,
+  wxPostDirectiveCollection,
+  wxPostDirectiveMediaIds,
+} from './directiveRegistry';
 
 export type WxPostEditTarget =
   | {
@@ -195,36 +200,7 @@ function isOptionalDirectiveTextField(
   node: WxPostDirectiveNode,
   path: Array<string | number>
 ) {
-  const topLevelField =
-    path.length === 1 && typeof path[0] === 'string' ? path[0] : null;
-  switch (node.name) {
-    case 'image':
-    case 'gallery':
-    case 'video':
-      return topLevelField === 'caption';
-    case 'takeaway':
-      return topLevelField === 'title';
-    case 'person':
-      return (
-        topLevelField === 'role' ||
-        topLevelField === 'summary' ||
-        topLevelField === 'quote'
-      );
-    case 'info-grid':
-      return topLevelField === 'title';
-    case 'timeline':
-      return (
-        topLevelField === 'title' ||
-        (path.length === 3 &&
-          path[0] === 'items' &&
-          typeof path[1] === 'number' &&
-          path[2] === 'description')
-      );
-    case 'pull-quote':
-      return topLevelField === 'attribution';
-    default:
-      return false;
-  }
+  return isWxPostOptionalDirectiveTextPath(node, path);
 }
 
 function directiveItemTarget(
@@ -241,17 +217,17 @@ function directiveItemTarget(
     throw new Error('Directive item delete target is invalid.');
   }
   const node = renderDocument.body[target.nodeIndex];
-  if (
-    !node ||
-    node.kind !== 'directive' ||
-    (node.name !== 'info-grid' && node.name !== 'timeline')
-  ) {
+  if (!node || node.kind !== 'directive') {
     throw new Error('Directive item delete target no longer exists.');
   }
-  if (target.path[1] >= node.payload.items.length) {
+  const collection = wxPostDirectiveCollection(node);
+  if (!collection || target.path[0] !== collection.definition.path) {
+    throw new Error('Directive item delete target no longer exists.');
+  }
+  if (target.path[1] >= collection.items.length) {
     throw new Error('Directive item delete target is outside its item list.');
   }
-  return { target, node, itemIndex: target.path[1] };
+  return { target, node, collection, itemIndex: target.path[1] };
 }
 
 function updateRenderBodyLines(
@@ -300,24 +276,10 @@ function directiveLines(node: WxPostDirectiveNode) {
   ];
 }
 
-function directiveMediaIds(node: WxPostDirectiveNode) {
-  switch (node.name) {
-    case 'image':
-    case 'video':
-      return [node.payload.media];
-    case 'gallery':
-      return node.payload.items;
-    case 'person':
-      return node.payload.media ? [node.payload.media] : [];
-    default:
-      return [];
-  }
-}
-
 export function wxPostBodyMediaIds(renderDocument: WxPostRenderDocument) {
   return new Set(
     renderDocument.body.flatMap((node) =>
-      node.kind === 'directive' ? directiveMediaIds(node) : []
+      node.kind === 'directive' ? wxPostDirectiveMediaIds(node) : []
     )
   );
 }
@@ -473,7 +435,8 @@ export function applyWxPostMediaDelete(
     document.coverMediaId === mediaId ||
     nextBody.some(
       (item) =>
-        item.kind === 'directive' && directiveMediaIds(item).includes(mediaId)
+        item.kind === 'directive' &&
+        wxPostDirectiveMediaIds(item).includes(mediaId)
     );
 
   return {
@@ -505,10 +468,11 @@ export function getWxPostDirectiveItemDeleteDetails(
   renderDocument: WxPostRenderDocument,
   key: string
 ) {
-  const { node } = directiveItemTarget(renderDocument, key);
+  const { collection } = directiveItemTarget(renderDocument, key);
   return {
-    label: node.name === 'info-grid' ? 'info item' : 'timeline item',
-    removesBlock: node.payload.items.length === 1,
+    label: collection.definition.itemLabel,
+    removesBlock:
+      collection.items.length === collection.definition.minimumItems,
   };
 }
 
@@ -517,8 +481,11 @@ export function applyWxPostDirectiveItemDelete(
   renderDocument: WxPostRenderDocument,
   key: string
 ) {
-  const { target, node, itemIndex } = directiveItemTarget(renderDocument, key);
-  const remainingItems = node.payload.items.filter(
+  const { target, node, collection, itemIndex } = directiveItemTarget(
+    renderDocument,
+    key
+  );
+  const remainingItems = collection.items.filter(
     (_item, index) => index !== itemIndex
   );
   const nextNode =

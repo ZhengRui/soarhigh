@@ -8,14 +8,13 @@ from typing import Any, Iterable
 
 import yaml
 from markdown_it import MarkdownIt
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 from ..models.wxpost import (
     Appearance,
     ArticleDocument,
     ArticleType,
     DirectiveBodyNode,
-    DirectiveCapability,
     DirectiveSummary,
     InlineExtensionSummary,
     Layout,
@@ -31,6 +30,7 @@ from ..models.wxpost import (
     WxPostCapabilities,
     WxPostRenderDocument,
 )
+from .wxpost_directives import DIRECTIVE_DEFINITIONS, DIRECTIVE_REGISTRY, DirectiveModel
 
 _DIRECTIVE_OPEN = re.compile(r"^:::([a-z][a-z0-9-]*)[ \t]*$")
 _DIRECTIVE_CLOSE = re.compile(r"^:::[ \t]*$")
@@ -38,192 +38,16 @@ _KEY_POINT = re.compile(r"(?<!\\)==(?P<text>[^=\n][^=\n]*?)==")
 _MARKDOWN = MarkdownIt("commonmark", {"html": True})
 
 
-class _DirectiveModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-
-class _ImagePayload(_DirectiveModel):
-    media: str = Field(min_length=1)
-    caption: str | None = Field(default=None, min_length=1)
-
-
-class _GalleryPayload(_DirectiveModel):
-    items: list[str] = Field(min_length=2)
-    caption: str | None = Field(default=None, min_length=1)
-
-
-class _SectionPayload(_DirectiveModel):
-    kicker: str = Field(min_length=1, max_length=64)
-
-
-class _VideoPayload(_DirectiveModel):
-    media: str = Field(min_length=1)
-    caption: str | None = Field(default=None, min_length=1)
-
-
-class _TakeawayPayload(_DirectiveModel):
-    text: str = Field(min_length=1)
-    title: str | None = Field(default=None, min_length=1)
-
-
-class _PersonPayload(_DirectiveModel):
-    name: str = Field(min_length=1)
-    role: str | None = Field(default=None, min_length=1)
-    media: str | None = Field(default=None, min_length=1)
-    summary: str | None = Field(default=None, min_length=1)
-    quote: str | None = Field(default=None, min_length=1)
-
-
-class _InfoGridItem(_DirectiveModel):
-    label: str = Field(min_length=1)
-    value: str = Field(min_length=1)
-
-
-class _InfoGridPayload(_DirectiveModel):
-    title: str | None = Field(default=None, min_length=1)
-    items: list[_InfoGridItem] = Field(min_length=1)
-
-
-class _TimelineItem(_DirectiveModel):
-    label: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    description: str | None = Field(default=None, min_length=1)
-
-
-class _TimelinePayload(_DirectiveModel):
-    title: str | None = Field(default=None, min_length=1)
-    items: list[_TimelineItem] = Field(min_length=1)
-
-
-class _PullQuotePayload(_DirectiveModel):
-    text: str = Field(min_length=1)
-    attribution: str | None = Field(default=None, min_length=1)
-
-
-@dataclass(frozen=True)
-class _DirectiveDefinition:
-    name: str
-    payload_model: type[_DirectiveModel]
-    required_fields: tuple[str, ...]
-    optional_fields: tuple[str, ...]
-    example: dict[str, Any]
-
-    def capability(self) -> DirectiveCapability:
-        return DirectiveCapability(
-            name=self.name,
-            required_fields=list(self.required_fields),
-            optional_fields=list(self.optional_fields),
-            example=self.example,
-            payload_schema=self.payload_model.model_json_schema(),
-        )
-
-
-_DIRECTIVE_DEFINITIONS = (
-    _DirectiveDefinition(
-        name="section",
-        payload_model=_SectionPayload,
-        required_fields=("kicker",),
-        optional_fields=(),
-        example={"kicker": "Opening"},
-    ),
-    _DirectiveDefinition(
-        name="image",
-        payload_model=_ImagePayload,
-        required_fields=("media",),
-        optional_fields=("caption",),
-        example={"media": "M01", "caption": "Members listen during the prepared speeches"},
-    ),
-    _DirectiveDefinition(
-        name="gallery",
-        payload_model=_GalleryPayload,
-        required_fields=("items",),
-        optional_fields=("caption",),
-        example={"items": ["M01", "M02"], "caption": "Two moments from the evening"},
-    ),
-    _DirectiveDefinition(
-        name="video",
-        payload_model=_VideoPayload,
-        required_fields=("media",),
-        optional_fields=("caption",),
-        example={"media": "V01", "caption": "A member tries the exercise again"},
-    ),
-    _DirectiveDefinition(
-        name="takeaway",
-        payload_model=_TakeawayPayload,
-        required_fields=("text",),
-        optional_fields=("title",),
-        example={"title": "Try this next", "text": "Make the next action small enough to begin today."},
-    ),
-    _DirectiveDefinition(
-        name="person",
-        payload_model=_PersonPayload,
-        required_fields=("name",),
-        optional_fields=("role", "media", "summary", "quote"),
-        example={
-            "name": "Maya Chen",
-            "role": "First-time speaker",
-            "media": "M03",
-            "summary": "She returned to the stage after feedback.",
-        },
-    ),
-    _DirectiveDefinition(
-        name="info-grid",
-        payload_model=_InfoGridPayload,
-        required_fields=("items",),
-        optional_fields=("title",),
-        example={
-            "title": "Meeting details",
-            "items": [
-                {"label": "Date", "value": "July 18"},
-                {"label": "Theme", "value": "Learning in public"},
-            ],
-        },
-    ),
-    _DirectiveDefinition(
-        name="timeline",
-        payload_model=_TimelinePayload,
-        required_fields=("items",),
-        optional_fields=("title",),
-        example={
-            "title": "How the evening unfolded",
-            "items": [
-                {
-                    "label": "19:30",
-                    "title": "The first attempt",
-                    "description": "A new speaker takes the floor.",
-                }
-            ],
-        },
-    ),
-    _DirectiveDefinition(
-        name="pull-quote",
-        payload_model=_PullQuotePayload,
-        required_fields=("text",),
-        optional_fields=("attribution",),
-        example={"text": "I will add two more sentences.", "attribution": "A first-time speaker"},
-    ),
-)
-
-_DIRECTIVE_REGISTRY = {definition.name: definition for definition in _DIRECTIVE_DEFINITIONS}
-
-
 @dataclass(frozen=True)
 class ParsedDirective:
     name: str
     line: int
-    payload: _DirectiveModel
+    payload: DirectiveModel
 
     @property
     def media_ids(self) -> list[str]:
-        if isinstance(self.payload, _ImagePayload):
-            return [self.payload.media]
-        if isinstance(self.payload, _GalleryPayload):
-            return self.payload.items
-        if isinstance(self.payload, _VideoPayload):
-            return [self.payload.media]
-        if isinstance(self.payload, _PersonPayload) and self.payload.media:
-            return [self.payload.media]
-        return []
+        definition = DIRECTIVE_REGISTRY[self.name]
+        return [reference.media_id for reference in definition.media_references(self.payload)]
 
 
 @dataclass(frozen=True)
@@ -267,7 +91,7 @@ def capabilities() -> WxPostCapabilities:
         document_schema=ArticleDocument.model_json_schema(by_alias=True),
         render_document_schema=WxPostRenderDocument.model_json_schema(by_alias=True),
         article_types=[item.value for item in ArticleType],
-        directives=list(_DIRECTIVE_REGISTRY),
+        directives=list(DIRECTIVE_REGISTRY),
         inline_extensions=["key-point"],
         presentation=PresentationCapabilities(
             layouts=[item.value for item in Layout],
@@ -282,7 +106,7 @@ def capabilities() -> WxPostCapabilities:
             typeface=Typeface.EDITORIAL_SERIF,
         ),
         directive_syntax=":::name\\nYAML mapping\\n:::",
-        directive_schemas=[definition.capability() for definition in _DIRECTIVE_DEFINITIONS],
+        directive_schemas=[definition.capability() for definition in DIRECTIVE_DEFINITIONS],
         inline_syntax={"key-point": "==important phrase=="},
     )
 
@@ -447,7 +271,7 @@ def _parse_markdown(body: str, errors: list[ValidationIssue]) -> ParsedArticle:
         for line_index in range(index, closing_index + 1):
             markdown_lines[line_index] = ""
 
-        if name not in _DIRECTIVE_REGISTRY:
+        if name not in DIRECTIVE_REGISTRY:
             errors.append(
                 ValidationIssue(
                     code="unknown_directive",
@@ -552,7 +376,7 @@ def _load_directive_payload(
     payload_text: str,
     opening_line: int,
     errors: list[ValidationIssue],
-) -> _DirectiveModel | None:
+) -> DirectiveModel | None:
     try:
         raw_payload = yaml.safe_load(payload_text)
     except yaml.YAMLError as error:
@@ -594,7 +418,7 @@ def _load_directive_payload(
         )
         return None
 
-    model = _DIRECTIVE_REGISTRY[name].payload_model
+    model = DIRECTIVE_REGISTRY[name].payload_model
     try:
         return model.model_validate(raw_payload)
     except ValidationError as error:
@@ -642,30 +466,10 @@ def _validate_directive_media(
     by_id = {asset.id: asset for asset in media}
     referenced_ids: set[str] = set()
     for directive in directives:
-        expected_kind: MediaKind | None = None
-        references: list[tuple[str, list[str | int]]] = []
-        if isinstance(directive.payload, _ImagePayload):
-            expected_kind = MediaKind.IMAGE
-            references = [
-                (
-                    directive.payload.media,
-                    ["bodyMarkdown", f"directive:{directive.name}", "media"],
-                )
-            ]
-        elif isinstance(directive.payload, _GalleryPayload):
-            expected_kind = MediaKind.IMAGE
-            references = [
-                (media_id, ["bodyMarkdown", f"directive:{directive.name}", "items", index])
-                for index, media_id in enumerate(directive.payload.items)
-            ]
-        elif isinstance(directive.payload, _VideoPayload):
-            expected_kind = MediaKind.VIDEO
-            references = [(directive.payload.media, ["bodyMarkdown", f"directive:{directive.name}", "media"])]
-        elif isinstance(directive.payload, _PersonPayload) and directive.payload.media:
-            expected_kind = MediaKind.IMAGE
-            references = [(directive.payload.media, ["bodyMarkdown", f"directive:{directive.name}", "media"])]
-
-        for media_id, path in references:
+        definition = DIRECTIVE_REGISTRY[directive.name]
+        for reference in definition.media_references(directive.payload):
+            media_id = reference.media_id
+            path = ["bodyMarkdown", f"directive:{directive.name}", *reference.payload_path]
             if media_id in referenced_ids:
                 errors.append(
                     ValidationIssue(
@@ -699,7 +503,7 @@ def _validate_directive_media(
                         message=f"Media {media_id!r} is excluded from the article.",
                     )
                 )
-            elif expected_kind is not None and asset.kind != expected_kind:
+            elif asset.kind != reference.expected_kind:
                 errors.append(
                     ValidationIssue(
                         code="media_kind_mismatch",
@@ -707,7 +511,7 @@ def _validate_directive_media(
                         line=directive.line,
                         directive=directive.name,
                         message=(
-                            f"Directive {directive.name!r} requires {expected_kind.value} media; "
+                            f"Directive {directive.name!r} requires {reference.expected_kind.value} media; "
                             f"{media_id!r} is {asset.kind.value}."
                         ),
                     )

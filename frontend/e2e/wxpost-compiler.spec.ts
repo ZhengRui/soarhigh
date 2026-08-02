@@ -1,14 +1,23 @@
+import { createHash } from 'node:crypto';
+
 import { expect, test } from '@playwright/test';
 
 import { POST } from '../src/app/api/internal/wxpost/render/route';
 import { WXPOST_FIXTURES } from '../src/components/wxpost/fixtures';
 import { compileWxPost } from '../src/components/wxpost/renderer/compiler';
 import {
+  isWxPostOptionalDirectiveTextPath,
+  WXPOST_DIRECTIVE_REGISTRY,
+  wxPostDirectiveCollection,
+  wxPostDirectiveMediaIds,
+} from '../src/components/wxpost/renderer/directiveRegistry';
+import {
   WXPOST_APPEARANCES,
   WXPOST_LAYOUTS,
   WXPOST_PALETTES,
   WXPOST_TYPEFACES,
   type WxPostCompileRequest,
+  type WxPostDirectiveNode,
 } from '../src/components/wxpost/types';
 
 function request(): WxPostCompileRequest {
@@ -25,6 +34,125 @@ function request(): WxPostCompileRequest {
       publisherName: 'SoarHigh Toastmasters',
     },
   };
+}
+
+test('preserves the complete v1 published and editable HTML contract', () => {
+  const outputs = {
+    published: [] as string[],
+    editable: [] as string[],
+  };
+
+  for (const fixtureId of Object.keys(WXPOST_FIXTURES).sort()) {
+    const renderDocument = structuredClone(
+      WXPOST_FIXTURES[fixtureId as keyof typeof WXPOST_FIXTURES]
+    );
+    const context = {
+      assetUrls: Object.fromEntries(
+        renderDocument.media.map((media) => [media.id, media.sourceUrl])
+      ),
+      contextLabel: 'Compatibility context',
+      displayDate: 'August 2, 2026',
+      publisherName: 'SoarHigh Toastmasters',
+    };
+
+    for (const layout of WXPOST_LAYOUTS) {
+      for (const palette of WXPOST_PALETTES) {
+        for (const appearance of WXPOST_APPEARANCES) {
+          for (const typeface of WXPOST_TYPEFACES) {
+            const compileRequest = {
+              renderDocument,
+              presentation: { layout, palette, appearance, typeface },
+              context,
+            };
+            outputs.published.push(compileWxPost(compileRequest).html);
+            outputs.editable.push(
+              compileWxPost(compileRequest, { editable: true }).html
+            );
+          }
+        }
+      }
+    }
+  }
+
+  const digest = (html: string[]) =>
+    createHash('sha256')
+      .update(html.join('\n---WXPOST-OUTPUT---\n'))
+      .digest('hex');
+
+  expect(outputs.published).toHaveLength(162);
+  expect(outputs.editable).toHaveLength(162);
+  expect(digest(outputs.published)).toBe(
+    'e8a4b89c89fd64118c1763b27baf5afdc9f9a51a3b3e4a39d73a230ad3a6bf1c'
+  );
+  expect(digest(outputs.editable)).toBe(
+    '57407f1c694e2c0cb9c61e267acf0a597107be53342585a6e36f721bbe88254d'
+  );
+});
+
+test('registers all directive editing and media behavior in one exhaustive map', () => {
+  expect(Object.keys(WXPOST_DIRECTIVE_REGISTRY)).toEqual([
+    'section',
+    'image',
+    'gallery',
+    'video',
+    'takeaway',
+    'person',
+    'info-grid',
+    'timeline',
+    'pull-quote',
+  ]);
+
+  const directives = Object.fromEntries(
+    WXPOST_FIXTURES['meeting-recap'].body
+      .filter((node): node is WxPostDirectiveNode => node.kind === 'directive')
+      .map((node) => [node.name, node])
+  ) as Partial<Record<WxPostDirectiveNode['name'], WxPostDirectiveNode>>;
+
+  expect(wxPostDirectiveMediaIds(directives.image!)).toEqual(['M01']);
+  expect(wxPostDirectiveMediaIds(directives.gallery!)).toEqual(['M02', 'M03']);
+  expect(wxPostDirectiveMediaIds(directives.video!)).toEqual(['V01']);
+  expect(wxPostDirectiveMediaIds(directives.person!)).toEqual(['M04']);
+  expect(wxPostDirectiveMediaIds(directives.timeline!)).toEqual([]);
+
+  expect(
+    isWxPostOptionalDirectiveTextPath(directives.timeline!, [
+      'items',
+      0,
+      'description',
+    ])
+  ).toBe(true);
+  expect(
+    isWxPostOptionalDirectiveTextPath(directives.timeline!, [
+      'items',
+      0,
+      'title',
+    ])
+  ).toBe(false);
+  expect(wxPostDirectiveCollection(directives['info-grid']!)).toMatchObject({
+    definition: { itemLabel: 'info item', minimumItems: 1 },
+  });
+  expect(wxPostDirectiveCollection(directives.timeline!)).toMatchObject({
+    definition: { itemLabel: 'timeline item', minimumItems: 1 },
+  });
+  expect(wxPostDirectiveCollection(directives.person!)).toBeNull();
+});
+
+for (const directiveName of ['hero', 'toString']) {
+  test(`fails closed for the runtime directive name ${directiveName}`, () => {
+    const input = request();
+    input.renderDocument.body = [
+      {
+        kind: 'directive',
+        name: directiveName,
+        payload: {},
+        line: 1,
+      } as unknown as WxPostDirectiveNode,
+    ];
+
+    expect(() => compileWxPost(input)).toThrow(
+      `Unsupported WxPost directive: ${directiveName}`
+    );
+  });
 }
 
 test('compiles deterministic self-contained inline HTML for every registered style', () => {

@@ -1,6 +1,7 @@
 import type {
   WxPostCompileRequest,
   WxPostCompileResult,
+  WxPostDirectiveName,
   WxPostDirectiveNode,
   WxPostMarkdownNode,
   WxPostMediaAsset,
@@ -487,6 +488,392 @@ function renderGallery(
   );
 }
 
+interface DirectiveRenderOptions {
+  mediaById: Map<string, WxPostMediaAsset>;
+  context: WxPostRenderContext;
+  tokens: PresentationTokens;
+  inset: string;
+  layout: WxPostCompileRequest['presentation']['layout'];
+  editable: boolean;
+  nodeIndex: number;
+}
+
+type DirectiveRendererRegistry = {
+  [Name in WxPostDirectiveName]: (
+    node: Extract<WxPostDirectiveNode, { name: Name }>,
+    options: DirectiveRenderOptions
+  ) => string;
+};
+
+const DIRECTIVE_RENDERERS = {
+  section: () => '',
+  image: (node, { mediaById, context, tokens, editable, nodeIndex }) =>
+    renderImage(node, mediaById, context, tokens, editable, nodeIndex),
+  gallery: (node, { mediaById, context, tokens, editable, nodeIndex }) =>
+    renderGallery(node, mediaById, context, tokens, editable, nodeIndex),
+  video: (node, { mediaById, context, tokens, editable, nodeIndex }) => {
+    const media = mediaById.get(node.payload.media);
+    const url = mediaUrl(media, context);
+    const video =
+      media?.kind === 'video' && url
+        ? `<video data-testid="wxpost-video" controls preload="metadata"${
+            media.posterUrl
+              ? ` poster="${escapeAttribute(safeAssetUrl(media.posterUrl))}"`
+              : ''
+          } aria-label="${escapeAttribute(media.description)}" ${styleAttribute(
+            [
+              ['display', 'block'],
+              ['width', '100%'],
+              ['height', 'auto'],
+              ['background', '#000000'],
+            ]
+          )}><source src="${escapeAttribute(url)}"></video>`
+        : mediaPlaceholder(`Missing video ${node.payload.media}`, tokens);
+    const heading = node.payload.caption
+      ? `${moduleLabel('Video', tokens)}${moduleHeading(
+          node.payload.caption,
+          tokens,
+          directiveEditAttributes(
+            editable,
+            nodeIndex,
+            ['caption'],
+            'video caption'
+          )
+        )}`
+      : moduleLabel('Video', tokens);
+    return moduleShell(
+      'video',
+      node.line,
+      `<div ${styleAttribute([
+        ['margin-bottom', '14px'],
+      ])}>${heading}</div>${editableMediaFrame(
+        video,
+        editable,
+        node.payload.media,
+        wxPostEditKey({ kind: 'directive', nodeIndex, path: ['media'] }),
+        `Remove ${node.payload.media} from Draft`
+      )}${
+        media
+          ? caption(
+              media.description,
+              tokens,
+              mediaEditAttributes(editable, media.id, 'video description')
+            )
+          : ''
+      }`,
+      '0'
+    );
+  },
+  takeaway: (node, { tokens, editable, nodeIndex, inset, layout }) =>
+    moduleShell(
+      'takeaway',
+      node.line,
+      `${moduleLabel('Takeaway', tokens)}${
+        node.payload.title
+          ? `${moduleHeading(
+              node.payload.title,
+              tokens,
+              directiveEditAttributes(
+                editable,
+                nodeIndex,
+                ['title'],
+                'takeaway title'
+              )
+            )}`
+          : ''
+      }<p ${directiveEditAttributes(
+        editable,
+        nodeIndex,
+        ['text'],
+        'takeaway text'
+      )} ${styleAttribute([
+        ['margin', node.payload.title ? '10px 0 0' : '0'],
+        ['color', tokens.text],
+      ])}>${escapeHtml(node.payload.text)}</p>`,
+      inset,
+      layout === 'editorial-feature'
+        ? [
+            ['padding', '20px 0'],
+            ['border-top', `1px solid ${tokens.border}`],
+            ['border-bottom', `1px solid ${tokens.border}`],
+            ['text-align', 'center'],
+          ]
+        : [
+            ['padding-left', '16px'],
+            ['border-left', `3px solid ${tokens.accent}`],
+          ]
+    ),
+  person: (
+    node,
+    { mediaById, context, tokens, editable, nodeIndex, inset }
+  ) => {
+    const media = node.payload.media
+      ? mediaById.get(node.payload.media)
+      : undefined;
+    const portrait = node.payload.media
+      ? imageMarkup(media, context, tokens, `Portrait of ${node.payload.name}`)
+      : '';
+    const copy = `${moduleHeading(
+      node.payload.name,
+      tokens,
+      directiveEditAttributes(editable, nodeIndex, ['name'], 'person name')
+    )}${
+      node.payload.role
+        ? caption(
+            node.payload.role,
+            tokens,
+            directiveEditAttributes(
+              editable,
+              nodeIndex,
+              ['role'],
+              'person role'
+            )
+          )
+        : ''
+    }${
+      node.payload.summary
+        ? `<p ${directiveEditAttributes(
+            editable,
+            nodeIndex,
+            ['summary'],
+            'person summary'
+          )} ${styleAttribute([
+            ['margin', '12px 0 0'],
+            ['color', tokens.text],
+          ])}>${escapeHtml(node.payload.summary)}</p>`
+        : ''
+    }${
+      node.payload.quote
+        ? `<blockquote ${styleAttribute([
+            ['margin', '14px 0 0'],
+            ['padding-left', '12px'],
+            ['border-left', `2px solid ${tokens.accent}`],
+            ['color', tokens.muted],
+          ])}>“<span ${directiveEditAttributes(
+            editable,
+            nodeIndex,
+            ['quote'],
+            'person quote'
+          )}>${escapeHtml(node.payload.quote)}</span>”</blockquote>`
+        : ''
+    }`;
+    return moduleShell(
+      'person',
+      node.line,
+      `${moduleLabel('Profile', tokens)}<div ${styleAttribute([
+        ['display', 'flex'],
+        ['flex-wrap', 'wrap'],
+        ['align-items', 'flex-start'],
+        ['gap', '20px'],
+      ])}>${
+        portrait
+          ? `<div ${styleAttribute([
+              ['flex', '1 1 180px'],
+              ['min-width', '0'],
+            ])}>${editableMediaFrame(
+              portrait,
+              editable,
+              node.payload.media!,
+              wxPostEditKey({
+                kind: 'directive',
+                nodeIndex,
+                path: ['media'],
+              }),
+              `Remove ${node.payload.media} from Draft`
+            )}</div>`
+          : ''
+      }<div ${styleAttribute([
+        ['flex', '2 1 260px'],
+        ['min-width', '0'],
+      ])}>${copy}</div></div>`,
+      inset
+    );
+  },
+  'info-grid': (node, { tokens, editable, nodeIndex, inset }) => {
+    const items = node.payload.items
+      .map(
+        (item, index) =>
+          `<div ${styleAttribute([
+            ['position', 'relative'],
+            ['flex', '1 1 140px'],
+            ['min-width', '0'],
+            ['padding-right', editable ? '34px' : false],
+          ])} data-wxpost-item-container><span ${styleAttribute([
+            ['display', 'block'],
+            ['color', tokens.muted],
+            ['font-size', '16px'],
+            ['line-height', '1.85'],
+          ])} ${directiveEditAttributes(
+            editable,
+            nodeIndex,
+            ['items', index, 'label'],
+            'info label'
+          )}>${escapeHtml(item.label)}</span><strong ${directiveEditAttributes(
+            editable,
+            nodeIndex,
+            ['items', index, 'value'],
+            'info value'
+          )} ${styleAttribute([
+            ['color', tokens.text],
+            ['font-weight', '600'],
+          ])}>${escapeHtml(item.value)}</strong>${directiveItemDeleteButton(
+            editable,
+            nodeIndex,
+            index,
+            'info item'
+          )}</div>`
+      )
+      .join('');
+    return moduleShell(
+      'info-grid',
+      node.line,
+      `${moduleLabel('At a glance', tokens)}${
+        node.payload.title
+          ? `<div ${styleAttribute([
+              ['margin-bottom', '14px'],
+            ])}>${moduleHeading(
+              node.payload.title,
+              tokens,
+              directiveEditAttributes(
+                editable,
+                nodeIndex,
+                ['title'],
+                'info grid title'
+              )
+            )}</div>`
+          : ''
+      }<div ${styleAttribute([
+        ['display', 'flex'],
+        ['flex-wrap', 'wrap'],
+        ['gap', '16px'],
+        ['padding', '16px 0'],
+        ['border-top', `1px solid ${tokens.border}`],
+        ['border-bottom', `1px solid ${tokens.border}`],
+      ])}>${items}</div>`,
+      inset
+    );
+  },
+  timeline: (node, { tokens, editable, nodeIndex, inset }) => {
+    const items = node.payload.items
+      .map(
+        (item, index) =>
+          `<div ${styleAttribute([
+            ['position', 'relative'],
+            ['display', 'flex'],
+            ['flex-wrap', 'wrap'],
+            ['gap', '8px 16px'],
+            ['padding', '14px 0'],
+            ['padding-right', editable ? '34px' : false],
+            ['border-top', index > 0 ? `1px solid ${tokens.border}` : false],
+          ])} data-wxpost-item-container><strong ${styleAttribute([
+            ['flex', '0 1 80px'],
+            ['color', tokens.muted],
+            ['font-size', '16px'],
+            ['letter-spacing', '0.08em'],
+            ['line-height', '1.85'],
+            ['text-transform', 'uppercase'],
+          ])} ${directiveEditAttributes(
+            editable,
+            nodeIndex,
+            ['items', index, 'label'],
+            'timeline label'
+          )}>${escapeHtml(item.label)}</strong><div ${styleAttribute([
+            ['flex', '1 1 220px'],
+            ['min-width', '0'],
+          ])}><strong ${directiveEditAttributes(
+            editable,
+            nodeIndex,
+            ['items', index, 'title'],
+            'timeline item title'
+          )} ${styleAttribute([
+            ['color', tokens.text],
+            ['font-weight', '600'],
+          ])}>${escapeHtml(item.title)}</strong>${
+            item.description
+              ? `<p ${directiveEditAttributes(
+                  editable,
+                  nodeIndex,
+                  ['items', index, 'description'],
+                  'timeline item description'
+                )} ${styleAttribute([
+                  ['margin', '4px 0 0'],
+                  ['color', tokens.text],
+                ])}>${escapeHtml(item.description)}</p>`
+              : ''
+          }</div>${directiveItemDeleteButton(
+            editable,
+            nodeIndex,
+            index,
+            'timeline item'
+          )}</div>`
+      )
+      .join('');
+    return moduleShell(
+      'timeline',
+      node.line,
+      `${moduleLabel('Timeline', tokens)}${
+        node.payload.title
+          ? `<div ${styleAttribute([['margin-bottom', '8px']])}>${moduleHeading(
+              node.payload.title,
+              tokens,
+              directiveEditAttributes(
+                editable,
+                nodeIndex,
+                ['title'],
+                'timeline title'
+              )
+            )}</div>`
+          : ''
+      }<div ${styleAttribute([
+        ['padding-left', '16px'],
+        ['border-left', `1px solid ${tokens.border}`],
+      ])}>${items}</div>`,
+      inset
+    );
+  },
+  'pull-quote': (node, { tokens, editable, nodeIndex, inset, layout }) =>
+    moduleShell(
+      'pull-quote',
+      node.line,
+      `${moduleLabel('Quote', tokens)}<blockquote ${styleAttribute([
+        ['margin', '0'],
+        ['color', tokens.text],
+        ['font-family', tokens.titleFont],
+        ['font-size', '20px'],
+        ['line-height', '1.45'],
+      ])}>“<span ${directiveEditAttributes(
+        editable,
+        nodeIndex,
+        ['text'],
+        'pull quote'
+      )}>${escapeHtml(node.payload.text)}</span>”</blockquote>${
+        node.payload.attribution
+          ? `<p ${styleAttribute([
+              ['margin', '10px 0 0'],
+              ['color', tokens.muted],
+              ['font-size', '16px'],
+              ['line-height', '1.85'],
+            ])}>— <span ${directiveEditAttributes(
+              editable,
+              nodeIndex,
+              ['attribution'],
+              'quote attribution'
+            )}>${escapeHtml(node.payload.attribution)}</span></p>`
+          : ''
+      }`,
+      inset,
+      [
+        ['max-width', layout === 'editorial-feature' ? '544px' : 'none'],
+        ['margin-left', layout === 'editorial-feature' ? 'auto' : inset],
+        ['margin-right', layout === 'editorial-feature' ? 'auto' : '0'],
+        ['padding', '20px 0'],
+        ['border-top', `1px solid ${tokens.border}`],
+        ['border-bottom', `1px solid ${tokens.border}`],
+        ['text-align', 'center'],
+      ]
+    ),
+} satisfies DirectiveRendererRegistry;
+
 function renderDirective(
   node: WxPostDirectiveNode,
   mediaById: Map<string, WxPostMediaAsset>,
@@ -497,386 +884,22 @@ function renderDirective(
   editable: boolean,
   nodeIndex: number
 ) {
-  switch (node.name) {
-    case 'section':
-      return '';
-    case 'image':
-      return renderImage(node, mediaById, context, tokens, editable, nodeIndex);
-    case 'gallery':
-      return renderGallery(
-        node,
-        mediaById,
-        context,
-        tokens,
-        editable,
-        nodeIndex
-      );
-    case 'video': {
-      const media = mediaById.get(node.payload.media);
-      const url = mediaUrl(media, context);
-      const video =
-        media?.kind === 'video' && url
-          ? `<video data-testid="wxpost-video" controls preload="metadata"${
-              media.posterUrl
-                ? ` poster="${escapeAttribute(safeAssetUrl(media.posterUrl))}"`
-                : ''
-            } aria-label="${escapeAttribute(
-              media.description
-            )}" ${styleAttribute([
-              ['display', 'block'],
-              ['width', '100%'],
-              ['height', 'auto'],
-              ['background', '#000000'],
-            ])}><source src="${escapeAttribute(url)}"></video>`
-          : mediaPlaceholder(`Missing video ${node.payload.media}`, tokens);
-      const heading = node.payload.caption
-        ? `${moduleLabel('Video', tokens)}${moduleHeading(
-            node.payload.caption,
-            tokens,
-            directiveEditAttributes(
-              editable,
-              nodeIndex,
-              ['caption'],
-              'video caption'
-            )
-          )}`
-        : moduleLabel('Video', tokens);
-      return moduleShell(
-        'video',
-        node.line,
-        `<div ${styleAttribute([
-          ['margin-bottom', '14px'],
-        ])}>${heading}</div>${editableMediaFrame(
-          video,
-          editable,
-          node.payload.media,
-          wxPostEditKey({ kind: 'directive', nodeIndex, path: ['media'] }),
-          `Remove ${node.payload.media} from Draft`
-        )}${
-          media
-            ? caption(
-                media.description,
-                tokens,
-                mediaEditAttributes(editable, media.id, 'video description')
-              )
-            : ''
-        }`,
-        '0'
-      );
-    }
-    case 'takeaway':
-      return moduleShell(
-        'takeaway',
-        node.line,
-        `${moduleLabel('Takeaway', tokens)}${
-          node.payload.title
-            ? `${moduleHeading(
-                node.payload.title,
-                tokens,
-                directiveEditAttributes(
-                  editable,
-                  nodeIndex,
-                  ['title'],
-                  'takeaway title'
-                )
-              )}`
-            : ''
-        }<p ${directiveEditAttributes(
-          editable,
-          nodeIndex,
-          ['text'],
-          'takeaway text'
-        )} ${styleAttribute([
-          ['margin', node.payload.title ? '10px 0 0' : '0'],
-          ['color', tokens.text],
-        ])}>${escapeHtml(node.payload.text)}</p>`,
-        inset,
-        layout === 'editorial-feature'
-          ? [
-              ['padding', '20px 0'],
-              ['border-top', `1px solid ${tokens.border}`],
-              ['border-bottom', `1px solid ${tokens.border}`],
-              ['text-align', 'center'],
-            ]
-          : [
-              ['padding-left', '16px'],
-              ['border-left', `3px solid ${tokens.accent}`],
-            ]
-      );
-    case 'person': {
-      const media = node.payload.media
-        ? mediaById.get(node.payload.media)
-        : undefined;
-      const portrait = node.payload.media
-        ? imageMarkup(
-            media,
-            context,
-            tokens,
-            `Portrait of ${node.payload.name}`
-          )
-        : '';
-      const copy = `${moduleHeading(
-        node.payload.name,
-        tokens,
-        directiveEditAttributes(editable, nodeIndex, ['name'], 'person name')
-      )}${
-        node.payload.role
-          ? caption(
-              node.payload.role,
-              tokens,
-              directiveEditAttributes(
-                editable,
-                nodeIndex,
-                ['role'],
-                'person role'
-              )
-            )
-          : ''
-      }${
-        node.payload.summary
-          ? `<p ${directiveEditAttributes(
-              editable,
-              nodeIndex,
-              ['summary'],
-              'person summary'
-            )} ${styleAttribute([
-              ['margin', '12px 0 0'],
-              ['color', tokens.text],
-            ])}>${escapeHtml(node.payload.summary)}</p>`
-          : ''
-      }${
-        node.payload.quote
-          ? `<blockquote ${styleAttribute([
-              ['margin', '14px 0 0'],
-              ['padding-left', '12px'],
-              ['border-left', `2px solid ${tokens.accent}`],
-              ['color', tokens.muted],
-            ])}>“<span ${directiveEditAttributes(
-              editable,
-              nodeIndex,
-              ['quote'],
-              'person quote'
-            )}>${escapeHtml(node.payload.quote)}</span>”</blockquote>`
-          : ''
-      }`;
-      return moduleShell(
-        'person',
-        node.line,
-        `${moduleLabel('Profile', tokens)}<div ${styleAttribute([
-          ['display', 'flex'],
-          ['flex-wrap', 'wrap'],
-          ['align-items', 'flex-start'],
-          ['gap', '20px'],
-        ])}>${
-          portrait
-            ? `<div ${styleAttribute([
-                ['flex', '1 1 180px'],
-                ['min-width', '0'],
-              ])}>${editableMediaFrame(
-                portrait,
-                editable,
-                node.payload.media!,
-                wxPostEditKey({
-                  kind: 'directive',
-                  nodeIndex,
-                  path: ['media'],
-                }),
-                `Remove ${node.payload.media} from Draft`
-              )}</div>`
-            : ''
-        }<div ${styleAttribute([
-          ['flex', '2 1 260px'],
-          ['min-width', '0'],
-        ])}>${copy}</div></div>`,
-        inset
-      );
-    }
-    case 'info-grid': {
-      const items = node.payload.items
-        .map(
-          (item, index) =>
-            `<div ${styleAttribute([
-              ['position', 'relative'],
-              ['flex', '1 1 140px'],
-              ['min-width', '0'],
-              ['padding-right', editable ? '34px' : false],
-            ])} data-wxpost-item-container><span ${styleAttribute([
-              ['display', 'block'],
-              ['color', tokens.muted],
-              ['font-size', '16px'],
-              ['line-height', '1.85'],
-            ])} ${directiveEditAttributes(
-              editable,
-              nodeIndex,
-              ['items', index, 'label'],
-              'info label'
-            )}>${escapeHtml(item.label)}</span><strong ${directiveEditAttributes(
-              editable,
-              nodeIndex,
-              ['items', index, 'value'],
-              'info value'
-            )} ${styleAttribute([
-              ['color', tokens.text],
-              ['font-weight', '600'],
-            ])}>${escapeHtml(item.value)}</strong>${directiveItemDeleteButton(
-              editable,
-              nodeIndex,
-              index,
-              'info item'
-            )}</div>`
-        )
-        .join('');
-      return moduleShell(
-        'info-grid',
-        node.line,
-        `${moduleLabel('At a glance', tokens)}${
-          node.payload.title
-            ? `<div ${styleAttribute([
-                ['margin-bottom', '14px'],
-              ])}>${moduleHeading(
-                node.payload.title,
-                tokens,
-                directiveEditAttributes(
-                  editable,
-                  nodeIndex,
-                  ['title'],
-                  'info grid title'
-                )
-              )}</div>`
-            : ''
-        }<div ${styleAttribute([
-          ['display', 'flex'],
-          ['flex-wrap', 'wrap'],
-          ['gap', '16px'],
-          ['padding', '16px 0'],
-          ['border-top', `1px solid ${tokens.border}`],
-          ['border-bottom', `1px solid ${tokens.border}`],
-        ])}>${items}</div>`,
-        inset
-      );
-    }
-    case 'timeline': {
-      const items = node.payload.items
-        .map(
-          (item, index) =>
-            `<div ${styleAttribute([
-              ['position', 'relative'],
-              ['display', 'flex'],
-              ['flex-wrap', 'wrap'],
-              ['gap', '8px 16px'],
-              ['padding', '14px 0'],
-              ['padding-right', editable ? '34px' : false],
-              ['border-top', index > 0 ? `1px solid ${tokens.border}` : false],
-            ])} data-wxpost-item-container><strong ${styleAttribute([
-              ['flex', '0 1 80px'],
-              ['color', tokens.muted],
-              ['font-size', '16px'],
-              ['letter-spacing', '0.08em'],
-              ['line-height', '1.85'],
-              ['text-transform', 'uppercase'],
-            ])} ${directiveEditAttributes(
-              editable,
-              nodeIndex,
-              ['items', index, 'label'],
-              'timeline label'
-            )}>${escapeHtml(item.label)}</strong><div ${styleAttribute([
-              ['flex', '1 1 220px'],
-              ['min-width', '0'],
-            ])}><strong ${directiveEditAttributes(
-              editable,
-              nodeIndex,
-              ['items', index, 'title'],
-              'timeline item title'
-            )} ${styleAttribute([
-              ['color', tokens.text],
-              ['font-weight', '600'],
-            ])}>${escapeHtml(item.title)}</strong>${
-              item.description
-                ? `<p ${directiveEditAttributes(
-                    editable,
-                    nodeIndex,
-                    ['items', index, 'description'],
-                    'timeline item description'
-                  )} ${styleAttribute([
-                    ['margin', '4px 0 0'],
-                    ['color', tokens.text],
-                  ])}>${escapeHtml(item.description)}</p>`
-                : ''
-            }</div>${directiveItemDeleteButton(
-              editable,
-              nodeIndex,
-              index,
-              'timeline item'
-            )}</div>`
-        )
-        .join('');
-      return moduleShell(
-        'timeline',
-        node.line,
-        `${moduleLabel('Timeline', tokens)}${
-          node.payload.title
-            ? `<div ${styleAttribute([
-                ['margin-bottom', '8px'],
-              ])}>${moduleHeading(
-                node.payload.title,
-                tokens,
-                directiveEditAttributes(
-                  editable,
-                  nodeIndex,
-                  ['title'],
-                  'timeline title'
-                )
-              )}</div>`
-            : ''
-        }<div ${styleAttribute([
-          ['padding-left', '16px'],
-          ['border-left', `1px solid ${tokens.border}`],
-        ])}>${items}</div>`,
-        inset
-      );
-    }
-    case 'pull-quote':
-      return moduleShell(
-        'pull-quote',
-        node.line,
-        `${moduleLabel('Quote', tokens)}<blockquote ${styleAttribute([
-          ['margin', '0'],
-          ['color', tokens.text],
-          ['font-family', tokens.titleFont],
-          ['font-size', '20px'],
-          ['line-height', '1.45'],
-        ])}>“<span ${directiveEditAttributes(
-          editable,
-          nodeIndex,
-          ['text'],
-          'pull quote'
-        )}>${escapeHtml(node.payload.text)}</span>”</blockquote>${
-          node.payload.attribution
-            ? `<p ${styleAttribute([
-                ['margin', '10px 0 0'],
-                ['color', tokens.muted],
-                ['font-size', '16px'],
-                ['line-height', '1.85'],
-              ])}>— <span ${directiveEditAttributes(
-                editable,
-                nodeIndex,
-                ['attribution'],
-                'quote attribution'
-              )}>${escapeHtml(node.payload.attribution)}</span></p>`
-            : ''
-        }`,
-        inset,
-        [
-          ['max-width', layout === 'editorial-feature' ? '544px' : 'none'],
-          ['margin-left', layout === 'editorial-feature' ? 'auto' : inset],
-          ['margin-right', layout === 'editorial-feature' ? 'auto' : '0'],
-          ['padding', '20px 0'],
-          ['border-top', `1px solid ${tokens.border}`],
-          ['border-bottom', `1px solid ${tokens.border}`],
-          ['text-align', 'center'],
-        ]
-      );
+  if (!Object.prototype.hasOwnProperty.call(DIRECTIVE_RENDERERS, node.name)) {
+    throw new Error(`Unsupported WxPost directive: ${String(node.name)}`);
   }
+  const renderer = DIRECTIVE_RENDERERS[node.name] as unknown as (
+    directiveNode: WxPostDirectiveNode,
+    options: DirectiveRenderOptions
+  ) => string;
+  return renderer(node, {
+    mediaById,
+    context,
+    tokens,
+    inset,
+    layout,
+    editable,
+    nodeIndex,
+  });
 }
 
 function renderHeader(
