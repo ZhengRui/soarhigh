@@ -62,6 +62,23 @@ DEFAULT_DRAFT_PRESENTATION = {
 }
 
 
+def _draft_excerpt(draft: DraftEnvelope | None, limit: int = 180) -> str | None:
+    if draft is None:
+        return None
+    excerpt = draft.document.get("excerpt")
+    if isinstance(excerpt, str) and excerpt.strip():
+        return excerpt.strip()
+    markdown = draft.document.get("bodyMarkdown")
+    if not isinstance(markdown, str):
+        return None
+    without_directives = re.sub(r":::[\s\S]*?:::", " ", markdown)
+    plain = re.sub(r"[#*_`>\[\]()~=!-]+", " ", without_directives)
+    compact = " ".join(plain.split())
+    if not compact:
+        return None
+    return compact if len(compact) <= limit else f"{compact[: limit - 1].rstrip()}…"
+
+
 class WorkspaceError(Exception):
     """Base error for a rejected workspace operation."""
 
@@ -387,7 +404,8 @@ class WorkspaceController:
                 workspace = self._resolve_workspace(candidate.name)
                 with self._workspace_lock(workspace):
                     manifest = self._read_manifest(workspace, candidate.name)
-                    items.append(self._workspace_summary(manifest))
+                    draft = self._read_draft(workspace, manifest)
+                    items.append(self._workspace_summary(manifest, draft))
             except (WorkspaceError, OSError) as exc:
                 logger.warning(
                     "Skipping unreadable WxPost workspace %s: %s",
@@ -1435,7 +1453,10 @@ class WorkspaceController:
         return updated
 
     @staticmethod
-    def _workspace_summary(manifest: SourceManifest) -> dict[str, Any]:
+    def _workspace_summary(
+        manifest: SourceManifest,
+        draft: DraftEnvelope | None = None,
+    ) -> dict[str, Any]:
         wire = manifest.to_wire()
         return {
             "workspaceId": manifest.workspace_id,
@@ -1454,6 +1475,7 @@ class WorkspaceController:
             "draftVersion": (
                 manifest.draft.version if manifest.draft is not None else None
             ),
+            "draftExcerpt": _draft_excerpt(draft),
         }
 
     @staticmethod

@@ -83,7 +83,7 @@ async def r_update_post(
     Update an existing post.
 
     Requires authentication.
-    Only the author can update their own posts.
+    Any authenticated member can update any post.
     """
     # Convert Pydantic model to dict
     post_dict = post_data.dict(exclude_unset=True, exclude={"author"})
@@ -105,7 +105,7 @@ async def r_delete_post(
     Delete an existing post.
 
     Requires authentication.
-    Only the author can delete their own posts.
+    Only the author or an administrator can delete a post.
     """
     # Delete the post
     success = delete_post(slug=slug, user_id=user.uid)

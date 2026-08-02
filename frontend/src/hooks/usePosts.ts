@@ -19,6 +19,12 @@ export function usePosts(options: UsePostsOptions = {}) {
   const query = useQuery<PaginatedContentItems>({
     queryKey: ['posts', { page, pageSize, kind }],
     queryFn: () => getPosts({ page, pageSize, kind }),
+    placeholderData: (previousData, previousQuery) => {
+      const previousOptions = previousQuery?.queryKey[1] as
+        | UsePostsOptions
+        | undefined;
+      return previousOptions?.kind === kind ? previousData : undefined;
+    },
     staleTime: 60 * 1000, // 1 minute
   });
 

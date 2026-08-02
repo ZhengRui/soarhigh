@@ -20,14 +20,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog';
+import { Pagination } from '@/components/Pagination';
 import { useAuth } from '@/hooks/useAuth';
 import { usePosts } from '@/hooks/usePosts';
-import type {
-  ContentKind,
-  ContentListItemIF,
-  PaginatedContentItems,
-} from '@/interfaces';
+import type { ContentKind, ContentListItemIF } from '@/interfaces';
 import { deletePublicWxPost } from '@/utils/wxposts';
+
+const POSTS_PAGE_SIZE = 10;
 
 const FILTERS = [
   { value: 'all', label: 'All', icon: Files },
@@ -122,6 +121,7 @@ export default function PostsPage() {
   const { data: user } = useAuth();
   const queryClient = useQueryClient();
   const [kind, setKind] = useState<ContentKind>('all');
+  const [currentPage, setCurrentPage] = useState(1);
   const [deleteTarget, setDeleteTarget] = useState<ContentListItemIF | null>(
     null
   );
@@ -131,12 +131,20 @@ export default function PostsPage() {
     data: content,
     isPending,
     isRefreshingInBackground,
+    refetch,
   } = usePosts({
-    page: 1,
-    pageSize: 10,
+    page: currentPage,
+    pageSize: POSTS_PAGE_SIZE,
     kind,
   });
   const items = content?.items ?? [];
+  const totalPages = content?.pages ?? 1;
+
+  useEffect(() => {
+    if (content && currentPage > content.pages) {
+      setCurrentPage(Math.max(1, content.pages));
+    }
+  }, [content, currentPage]);
 
   async function confirmDelete() {
     if (!deleteTarget || deleteTarget.kind !== 'wxpost') return;
@@ -149,23 +157,7 @@ export default function PostsPage() {
       }
       await deletePublicWxPost(deleteTarget.id, deleteTarget.article_revision);
 
-      queryClient.setQueryData<PaginatedContentItems>(
-        ['posts', { page: 1, pageSize: 10, kind }],
-        (current) => {
-          if (!current) return current;
-          const total = Math.max(0, current.total - 1);
-          return {
-            ...current,
-            items: current.items.filter(
-              (item) =>
-                item.kind !== deleteTarget.kind || item.id !== deleteTarget.id
-            ),
-            total,
-            pages: total ? Math.ceil(total / current.page_size) : 0,
-          };
-        }
-      );
-      void queryClient.invalidateQueries({
+      await queryClient.invalidateQueries({
         queryKey: ['posts'],
         refetchType: 'none',
       });
@@ -173,6 +165,11 @@ export default function PostsPage() {
         queryKey: ['wxpost-workspaces'],
         refetchType: 'none',
       });
+      if (items.length === 1 && currentPage > 1) {
+        setCurrentPage((page) => page - 1);
+      } else {
+        await refetch();
+      }
       toast.success('Public WxPost deleted successfully!');
       setDeleteTarget(null);
     } catch (error) {
@@ -202,7 +199,7 @@ export default function PostsPage() {
           </div>
 
           {user && (
-            <div className='flex w-full items-center justify-between sm:w-auto sm:justify-start sm:gap-2'>
+            <div className='flex w-full items-center justify-between max-[319px]:flex-col max-[319px]:items-start max-[319px]:gap-2 sm:w-auto sm:justify-start sm:gap-2'>
               <NewPostMenu />
               <Link
                 href='/posts/wxposts/workspaces'
@@ -234,7 +231,10 @@ export default function PostsPage() {
                     ? 'bg-white text-slate-950 shadow-sm ring-1 ring-black/5'
                     : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'
                 }`}
-                onClick={() => setKind(filter.value)}
+                onClick={() => {
+                  setKind(filter.value);
+                  setCurrentPage(1);
+                }}
               >
                 <span
                   className={`grid h-5 w-5 shrink-0 place-items-center rounded-lg transition-all duration-200 ${
@@ -310,7 +310,7 @@ export default function PostsPage() {
                       </div>
                       <Link href={href} className='block'>
                         {item.excerpt && (
-                          <p className='mt-2 line-clamp-2 text-sm leading-6 text-slate-600'>
+                          <p className='mt-2 line-clamp-4 text-sm leading-6 text-slate-600 sm:line-clamp-2'>
                             {item.excerpt}
                           </p>
                         )}
@@ -383,6 +383,25 @@ export default function PostsPage() {
                 </article>
               );
             })}
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={(page) => {
+                setCurrentPage(page);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+            />
+            {content && content.total > 0 && (
+              <div className='mt-4 text-center text-sm text-slate-500'>
+                Showing{' '}
+                {Math.min(
+                  (currentPage - 1) * POSTS_PAGE_SIZE + 1,
+                  content.total
+                )}{' '}
+                to {Math.min(currentPage * POSTS_PAGE_SIZE, content.total)} of{' '}
+                {content.total} posts
+              </div>
+            )}
           </div>
         )}
       </div>

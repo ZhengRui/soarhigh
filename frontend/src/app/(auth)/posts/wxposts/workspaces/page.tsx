@@ -86,11 +86,7 @@ function workspacePublicationLabel(workspace: WorkspaceSummary) {
     return 'Public status unavailable';
   }
 
-  const published = `Public revision ${publication.publicRevision} · from Draft v${publication.sourceDraftVersion}`;
-  return publication.state === 'update-available' &&
-    workspace.draftVersion !== null
-    ? `${published} · Draft v${workspace.draftVersion} ready to publish`
-    : published;
+  return `Public revision ${publication.publicRevision} · from Draft v${publication.sourceDraftVersion}`;
 }
 
 export default function WxPostWorkspacesPage() {
@@ -336,32 +332,37 @@ export default function WxPostWorkspacesPage() {
                             {reference}
                           </span>
                         )}
-                        <Link
-                          href={workspaceEditorPath(workspace.workspaceId)}
-                          className='rounded-full bg-indigo-50 p-1.5 transition hover:bg-indigo-100 hover:shadow-md'
-                          aria-label='Go to Materials'
-                          title='Go to Materials'
+                        <span
+                          className='inline-flex shrink-0 items-center gap-2'
+                          data-testid={`workspace-navigation-${workspace.workspaceId}`}
                         >
-                          <Images
-                            className='h-4 w-4 text-indigo-500 hover:text-indigo-600'
-                            aria-hidden='true'
-                          />
-                        </Link>
-                        {workspace.draftVersion !== null && (
                           <Link
-                            href={workspaceDraftPreviewPath(
-                              workspace.workspaceId
-                            )}
+                            href={workspaceEditorPath(workspace.workspaceId)}
                             className='rounded-full bg-indigo-50 p-1.5 transition hover:bg-indigo-100 hover:shadow-md'
-                            aria-label='Go to Draft'
-                            title='Go to Draft'
+                            aria-label='Go to Materials'
+                            title='Go to Materials'
                           >
-                            <BookOpenText
+                            <Images
                               className='h-4 w-4 text-indigo-500 hover:text-indigo-600'
                               aria-hidden='true'
                             />
                           </Link>
-                        )}
+                          {workspace.draftVersion !== null && (
+                            <Link
+                              href={workspaceDraftPreviewPath(
+                                workspace.workspaceId
+                              )}
+                              className='rounded-full bg-indigo-50 p-1.5 transition hover:bg-indigo-100 hover:shadow-md'
+                              aria-label='Go to Draft'
+                              title='Go to Draft'
+                            >
+                              <BookOpenText
+                                className='h-4 w-4 text-indigo-500 hover:text-indigo-600'
+                                aria-hidden='true'
+                              />
+                            </Link>
+                          )}
+                        </span>
                       </div>
                       <h2 className='mt-3 text-2xl font-bold text-slate-800'>
                         {subject}
@@ -397,55 +398,69 @@ export default function WxPostWorkspacesPage() {
                       </span>
                     </div>
 
-                    <div className='mt-5 grid gap-2 border-t border-dashed border-slate-300 pt-4 sm:flex sm:items-center sm:justify-between'>
-                      <span
-                        className={`inline-flex items-center gap-2 text-sm font-medium ${
-                          workspace.draftVersion !== null
-                            ? 'text-slate-700'
-                            : 'text-slate-500'
-                        }`}
-                      >
-                        {workspace.draftVersion !== null ? (
-                          <CircleCheck
-                            className='h-4 w-4 text-blue-600'
-                            aria-hidden='true'
-                          />
-                        ) : (
-                          <FileText
-                            className='h-4 w-4 text-slate-400'
-                            aria-hidden='true'
-                          />
-                        )}
-                        {workspace.draftVersion !== null
-                          ? `Draft · v${workspace.draftVersion}`
-                          : 'No draft yet'}
-                      </span>
-                      <span className='inline-flex items-center gap-2 text-sm font-medium text-slate-500'>
-                        <Globe2
-                          className={`h-4 w-4 ${
-                            workspace.publication.state === 'up-to-date'
-                              ? 'text-blue-600'
-                              : 'text-slate-400'
+                    <div className='mt-5 border-t border-dashed border-slate-300 pt-4'>
+                      <div className='grid gap-2 sm:flex sm:items-start sm:justify-between'>
+                        <span
+                          className={`inline-flex items-center gap-2 text-sm font-medium ${
+                            workspace.draftVersion !== null
+                              ? 'text-slate-700'
+                              : 'text-slate-500'
                           }`}
-                          aria-hidden='true'
-                        />
-                        {workspacePublicationLabel(workspace)}
-                        {workspace.publication.publicUrl && (
-                          <a
-                            href={workspace.publication.publicUrl}
-                            target='_blank'
-                            rel='noreferrer'
-                            className='rounded-full p-1 text-blue-600 transition hover:bg-blue-50 hover:text-blue-700'
-                            aria-label={`Open public WxPost for ${subject}`}
-                            title='Open public WxPost'
-                          >
-                            <ExternalLink
-                              className='h-3.5 w-3.5'
+                        >
+                          {workspace.draftVersion !== null ? (
+                            <CircleCheck
+                              className='h-4 w-4 shrink-0 text-blue-600'
                               aria-hidden='true'
                             />
-                          </a>
-                        )}
-                      </span>
+                          ) : (
+                            <FileText
+                              className='h-4 w-4 shrink-0 text-slate-400'
+                              aria-hidden='true'
+                            />
+                          )}
+                          {workspace.draftVersion !== null
+                            ? `Draft · v${workspace.draftVersion}`
+                            : 'No draft yet'}
+                        </span>
+                        <span className='inline-flex items-center gap-2 text-sm font-medium text-slate-500'>
+                          <Globe2
+                            className={`h-4 w-4 shrink-0 ${
+                              workspace.publication.state === 'up-to-date'
+                                ? 'text-blue-600'
+                                : workspace.publication.state ===
+                                    'update-available'
+                                  ? 'text-amber-500'
+                                  : 'text-slate-400'
+                            }`}
+                            aria-hidden='true'
+                            data-testid={`workspace-publication-icon-${workspace.workspaceId}`}
+                          />
+                          {workspacePublicationLabel(workspace)}
+                          {workspace.publication.publicUrl && (
+                            <a
+                              href={workspace.publication.publicUrl}
+                              target='_blank'
+                              rel='noreferrer'
+                              className='rounded-full p-1 text-blue-600 transition hover:bg-blue-50 hover:text-blue-700'
+                              aria-label={`Open public WxPost for ${subject}`}
+                              title='Open public WxPost'
+                            >
+                              <ExternalLink
+                                className='h-3.5 w-3.5'
+                                aria-hidden='true'
+                              />
+                            </a>
+                          )}
+                        </span>
+                      </div>
+                      {workspace.draftExcerpt && (
+                        <p
+                          className='mb-0 mt-2 line-clamp-4 text-sm leading-6 text-slate-600 sm:line-clamp-2'
+                          data-testid={`workspace-draft-excerpt-${workspace.workspaceId}`}
+                        >
+                          {workspace.draftExcerpt}
+                        </p>
+                      )}
                     </div>
                   </article>
                 );

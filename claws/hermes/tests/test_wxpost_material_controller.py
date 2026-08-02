@@ -237,6 +237,7 @@ def test_workspace_list_and_delete_expose_collaboration_metadata(
                 "readySourceCount": 0,
                 "includedSourceCount": 0,
                 "draftVersion": None,
+                "draftExcerpt": None,
             }
         ],
         "total": 1,
@@ -259,6 +260,56 @@ def test_workspace_list_and_delete_expose_collaboration_metadata(
         "page_size": 10,
         "pages": 1,
     }
+
+
+def test_workspace_list_includes_latest_draft_excerpt(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, [], {})
+    workspace_id = "workspace-with-draft"
+    created = _bootstrap(controller, workspace_id)["manifest"]
+    controller.save_draft(
+        workspace_id,
+        expected_manifest_version=created["manifestVersion"],
+        expected_draft_version=0,
+        document={
+            "excerpt": None,
+            "articleType": "meeting-recap",
+            "customArticleType": None,
+            "sourceMeetingId": MEETING_ID,
+            "bodyMarkdown": (
+                "## A shared beginning\n\n"
+                "Members arrived ready to listen and learn together.\n\n"
+                ":::takeaway\nA semantic block is omitted from the preview.\n:::"
+            ),
+            "media": [],
+            "coverMediaId": None,
+        },
+    )
+
+    summary = controller.list_workspaces()["items"][0]
+
+    assert summary["draftVersion"] == 1
+    assert summary["draftExcerpt"] == (
+        "A shared beginning Members arrived ready to listen and learn together."
+    )
+
+    controller.save_draft(
+        workspace_id,
+        expected_manifest_version=created["manifestVersion"],
+        expected_draft_version=1,
+        document={
+            "excerpt": "A concise editorial summary.",
+            "articleType": "meeting-recap",
+            "customArticleType": None,
+            "sourceMeetingId": MEETING_ID,
+            "bodyMarkdown": "This body should not replace the explicit excerpt.",
+            "media": [],
+            "coverMediaId": None,
+        },
+    )
+
+    updated_summary = controller.list_workspaces()["items"][0]
+    assert updated_summary["draftVersion"] == 2
+    assert updated_summary["draftExcerpt"] == "A concise editorial summary."
 
 
 def test_workspace_list_is_paginated_by_latest_creation(

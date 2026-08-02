@@ -233,6 +233,7 @@ export interface WorkspaceSummary {
   readySourceCount: number;
   includedSourceCount: number;
   draftVersion: number | null;
+  draftExcerpt: string | null;
   publication: WorkspacePublicationStatus;
 }
 

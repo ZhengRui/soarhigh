@@ -28,6 +28,7 @@ function workspaceSummary(
     readySourceCount: 0,
     includedSourceCount: 0,
     draftVersion: null,
+    draftExcerpt: null,
     publication: {
       state: 'not-synced',
       workspaceId,
@@ -182,6 +183,8 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
                 readySourceCount: 1,
                 includedSourceCount: 1,
                 draftVersion: 14,
+                draftExcerpt:
+                  'Members found belonging by making room for every voice.',
                 publication: {
                   state: 'up-to-date',
                   workspaceId: 'wxpost-4f2c9a7bd861',
@@ -202,6 +205,8 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
                 articleType: 'custom',
                 customArticleType: 'Field Guide',
                 draftVersion: 15,
+                draftExcerpt:
+                  'A practical guide to noticing what a shared garden needs.',
                 publication: {
                   state: 'update-available',
                   workspaceId: 'wxpost-newer-draft',
@@ -260,16 +265,31 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
   ).toHaveCount(0);
   await expect(workspace.getByText(/Created by Test Member/)).toBeVisible();
   await expect(workspace.getByText('Draft · v14')).toBeVisible();
+  const draftExcerpt = workspace.getByTestId(
+    'workspace-draft-excerpt-wxpost-4f2c9a7bd861'
+  );
+  await expect(draftExcerpt).toHaveText(
+    'Members found belonging by making room for every voice.'
+  );
+  expect(
+    await draftExcerpt.evaluate((element) =>
+      getComputedStyle(element).getPropertyValue('-webkit-line-clamp')
+    )
+  ).toBe('2');
+  await expect(
+    workspace.getByTestId('workspace-publication-icon-wxpost-4f2c9a7bd861')
+  ).toHaveClass(/text-blue-600/);
   await expect(
     workspace.getByText('Public revision 3 · from Draft v14')
   ).toBeVisible();
   await expect(
     page
       .getByTestId('workspace-wxpost-newer-draft')
-      .getByText(
-        'Public revision 2 · from Draft v12 · Draft v15 ready to publish'
-      )
+      .getByText('Public revision 2 · from Draft v12')
   ).toBeVisible();
+  await expect(
+    page.getByTestId('workspace-publication-icon-wxpost-newer-draft')
+  ).toHaveClass(/text-amber-500/);
   await expect(
     workspace.getByRole('link', {
       name: 'Open public WxPost for Culture, belonging, and the courage to speak',
@@ -307,6 +327,29 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
   ).toHaveCount(0);
 
   await page.setViewportSize({ width: 320, height: 720 });
+  expect(
+    await draftExcerpt.evaluate((element) =>
+      getComputedStyle(element).getPropertyValue('-webkit-line-clamp')
+    )
+  ).toBe('4');
+  const navigationGroup = workspace.getByTestId(
+    'workspace-navigation-wxpost-4f2c9a7bd861'
+  );
+  const navigationBox = await navigationGroup.boundingBox();
+  const referenceBox = await workspace
+    .getByText('#462', { exact: true })
+    .boundingBox();
+  expect(navigationBox?.y).toBeGreaterThan(referenceBox?.y ?? 0);
+  const materialsY = (await continueWorkspace.boundingBox())?.y ?? 0;
+  const draftY = (await previewDraft.boundingBox())?.y ?? 0;
+  expect(Math.abs(materialsY - draftY)).toBeLessThan(1);
+  expect(
+    (
+      await workspace
+        .getByTestId('workspace-publication-icon-wxpost-4f2c9a7bd861')
+        .boundingBox()
+    )?.width
+  ).toBe(16);
   expect((await continueWorkspace.boundingBox())?.y).toBeLessThan(
     (
       await workspace
@@ -701,6 +744,7 @@ test('refreshes a cached empty list after creating an independent workspace', as
             (source) => source.included
           ).length,
           draftVersion: context.manifest.draft?.version ?? null,
+          draftExcerpt: context.draft?.document.excerpt ?? null,
           publication: {
             state: 'not-synced' as const,
             workspaceId: context.workspaceId,
