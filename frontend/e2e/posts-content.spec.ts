@@ -84,6 +84,10 @@ test('filters the shared Posts index and links WxPosts to their public route', a
   await expect(
     page.getByRole('heading', { name: 'How We Prepare a Speech' })
   ).toBeVisible();
+  const regularPostColumns = await page
+    .getByTestId('content-card-layout-post-post-1')
+    .evaluate((element) => getComputedStyle(element).gridTemplateColumns);
+  expect(regularPostColumns.trim().split(/\s+/)).toHaveLength(1);
   await expect(
     page.getByRole('heading', {
       name: 'The Courage to Try the Next Sentence',

@@ -288,7 +288,14 @@ export default function PostsPage() {
                   key={`${item.kind}-${item.id}`}
                   className='group overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md'
                 >
-                  <div className='grid sm:grid-cols-[minmax(0,1fr)_10rem]'>
+                  <div
+                    className={
+                      item.kind === 'wxpost' && item.cover_image_url
+                        ? 'grid sm:grid-cols-[minmax(0,1fr)_10rem]'
+                        : 'grid'
+                    }
+                    data-testid={`content-card-layout-${item.kind}-${item.id}`}
+                  >
                     <div className='relative p-5 sm:p-6'>
                       <div className='mb-2 flex flex-wrap items-center gap-2'>
                         <Link
@@ -364,7 +371,7 @@ export default function PostsPage() {
                       )}
                     </div>
 
-                    {item.cover_image_url && (
+                    {item.kind === 'wxpost' && item.cover_image_url && (
                       <Link
                         href={href}
                         className='order-first block min-h-40 overflow-hidden bg-gradient-to-br from-blue-100 via-slate-100 to-purple-100 sm:order-last'

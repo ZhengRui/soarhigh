@@ -77,6 +77,12 @@ export function useWxPostPublication({
         refetchType: 'none',
       });
       void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      if (next.slug) {
+        void queryClient.invalidateQueries({
+          queryKey: ['wxpost', next.slug],
+          refetchType: 'none',
+        });
+      }
       toast.success(
         status.state === 'not-synced'
           ? 'Public WxPost published successfully!'
