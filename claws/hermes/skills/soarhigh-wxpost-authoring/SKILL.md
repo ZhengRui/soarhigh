@@ -70,10 +70,11 @@ another workspace and never edit `source-manifest.json` or
   canonical Markdown and directives; never write directive fences, YAML,
   `{{media:M01}}`, or another placeholder yourself.
 - Use each included image or video at a meaningful point through a
-  media-bearing block. Do not append a generic gallery merely to consume unused
+  media-bearing block, except that one image may be used only as
+  `coverMediaId`. Do not append a generic gallery merely to consume unused
   media. A material ID is stable identity only: `M01` does not have to appear
   before `M02`; the controller derives canonical media order from first block
-  appearance.
+  appearance and places a cover-only image after body media.
 - A free-form introduction can be represented directly:
 
   ```json

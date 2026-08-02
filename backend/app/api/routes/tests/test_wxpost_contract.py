@@ -661,7 +661,7 @@ def test_included_media_must_use_a_supported_body_directive(
         "The room welcomed every voice.\n\n" "{{media:M01}}\n\n" "The placeholder above is not a supported directive."
     )
     article["media"] = [article["media"][0]]
-    article["coverMediaId"] = "M01"
+    article["coverMediaId"] = None
 
     response = client.post("/posts/wxposts/validate", json=article)
 
@@ -671,12 +671,28 @@ def test_included_media_must_use_a_supported_body_directive(
             "code": "included_media_not_referenced",
             "path": ["bodyMarkdown"],
             "message": (
-                "Included media 'M01' must appear in a supported image, gallery, " "video, or person directive."
+                "Included media 'M01' must appear in a supported image, gallery, "
+                "video, or person directive, or be the cover."
             ),
             "line": None,
             "directive": None,
         }
     ]
+
+
+def test_cover_image_does_not_need_a_body_directive(
+    client: TestClient,
+    complete_article: dict,
+) -> None:
+    article = copy.deepcopy(complete_article)
+    article["bodyMarkdown"] = "The cover image is intentionally not repeated in the article."
+    article["media"] = [article["media"][0]]
+    article["coverMediaId"] = "M01"
+
+    response = client.post("/posts/wxposts/validate", json=article)
+
+    assert response.status_code == 200
+    assert response.json()["document"]["coverMediaId"] == "M01"
 
 
 def test_media_manifest_and_cover_failures_are_structured(

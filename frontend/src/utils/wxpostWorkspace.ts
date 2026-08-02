@@ -208,8 +208,7 @@ export interface WorkspaceDeletePreflight {
   sourceId: string;
   manifestVersion: number;
   draftVersion: number;
-  referenced: boolean;
-  requiresConfirmation: boolean;
+  blockedByDraft: boolean;
   references: string[];
 }
 
@@ -234,7 +233,19 @@ export interface WorkspaceSummary {
   readySourceCount: number;
   includedSourceCount: number;
   draftVersion: number | null;
+  publication: WorkspacePublicationStatus;
 }
+
+export type WorkspacePublicationStatus = {
+  state: 'unavailable' | 'not-synced' | 'up-to-date' | 'update-available';
+  workspaceId: string;
+  slug: string | null;
+  publicRevision: number | null;
+  sourceDraftVersion: number | null;
+  currentDraftVersion: number | null;
+  publishedAt: string | null;
+  publicUrl: string | null;
+};
 
 export interface PaginatedWorkspaceSummaries {
   items: WorkspaceSummary[];
@@ -346,6 +357,30 @@ export function bootstrapWorkspace(
 
 export function getWorkspaceContext(workspaceId: string) {
   return requestJson<WorkspaceContext>(`${workspacePath(workspaceId)}/context`);
+}
+
+export function getWorkspacePublication(workspaceId: string) {
+  return requestJson<WorkspacePublicationStatus>(
+    `${workspacePath(workspaceId)}/publication`
+  );
+}
+
+export function syncWorkspacePublication(
+  workspaceId: string,
+  input: {
+    expectedManifestVersion: number;
+    expectedDraftVersion: number;
+    expectedPublicRevision: number | null;
+  }
+) {
+  return requestJson<WorkspacePublicationStatus>(
+    `${workspacePath(workspaceId)}/publication/sync`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }
+  );
 }
 
 export function getWorkspaceDraftSession(workspaceId: string) {
@@ -530,18 +565,14 @@ export function preflightWorkspaceSourceDelete(
 export function deleteWorkspaceSource(
   workspaceId: string,
   sourceId: string,
-  expectedManifestVersion: number,
-  confirmReferenced: boolean
+  expectedManifestVersion: number
 ) {
   return requestJson<WorkspaceManifest>(
     `${workspacePath(workspaceId)}/sources/${encodeURIComponent(sourceId)}`,
     {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expectedManifestVersion,
-        confirmReferenced,
-      }),
+      body: JSON.stringify({ expectedManifestVersion }),
     }
   );
 }

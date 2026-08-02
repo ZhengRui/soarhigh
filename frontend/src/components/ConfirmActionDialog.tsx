@@ -4,35 +4,26 @@ import { Loader2 } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-import {
-  PRIMARY_BUTTON_CLASS,
-  SECONDARY_BUTTON_CLASS,
-} from './authoringStyles';
-
-export function WorkspaceConflictDialog({
+export function ConfirmActionDialog({
   title,
   children,
   error,
   pending,
+  confirmLabel,
+  pendingLabel,
   testId,
-  keepLabel = 'Keep current edits',
-  loadLabel = 'Load latest',
-  pendingLabel = 'Loading…',
-  confirmClassName = PRIMARY_BUTTON_CLASS,
-  onKeepCurrent,
-  onLoadLatest,
+  onCancel,
+  onConfirm,
 }: {
   title: string;
   children: ReactNode;
   error: string | null;
   pending: boolean;
+  confirmLabel: string;
+  pendingLabel: string;
   testId: string;
-  keepLabel?: string;
-  loadLabel?: string;
-  pendingLabel?: string;
-  confirmClassName?: string;
-  onKeepCurrent: () => void;
-  onLoadLatest: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
 }) {
   const titleId = useId();
 
@@ -57,20 +48,22 @@ export function WorkspaceConflictDialog({
         <div className='mt-5 flex justify-end gap-2 max-[480px]:flex-col-reverse max-[480px]:[&_button]:w-full'>
           <button
             type='button'
-            className={SECONDARY_BUTTON_CLASS}
+            className='inline-flex min-h-11 items-center justify-center rounded-[11px] border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60'
             disabled={pending}
-            onClick={onKeepCurrent}
+            onClick={onCancel}
           >
-            {keepLabel}
+            Cancel
           </button>
           <button
             type='button'
-            className={confirmClassName}
+            className='inline-flex min-h-11 items-center justify-center gap-2 rounded-[11px] border border-red-700 bg-red-700 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60'
             disabled={pending}
-            onClick={onLoadLatest}
+            onClick={onConfirm}
           >
-            {pending && <Loader2 className='animate-spin' aria-hidden='true' />}
-            {pending ? pendingLabel : loadLabel}
+            {pending && (
+              <Loader2 className='h-4 w-4 animate-spin' aria-hidden='true' />
+            )}
+            {pending ? pendingLabel : confirmLabel}
           </button>
         </div>
       </div>

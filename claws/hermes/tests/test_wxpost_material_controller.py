@@ -11,9 +11,9 @@ from typing import Any
 import pytest
 
 from wxpost_controller.core import (
-    ConfirmationRequired,
     InvalidRequest,
     InvalidWorkspace,
+    SourceReferencedByDraft,
     UpstreamUnavailable,
     VersionConflict,
     WorkspaceAlreadyExists,
@@ -471,7 +471,6 @@ def test_stale_materials_save_conflicts_before_a_deleted_source_is_applied(
         "material-workspace",
         expected_manifest_version=uploaded["manifestVersion"],
         source_id=source_id,
-        confirm_referenced=False,
     )
 
     with pytest.raises(VersionConflict):
@@ -811,11 +810,10 @@ def test_delete_requires_confirmation_and_preserves_draft(
         "sourceId": "M01",
         "manifestVersion": 3,
         "draftVersion": 1,
-        "referenced": True,
-        "requiresConfirmation": True,
-        "references": ["media.0", "coverMediaId", "bodyMarkdown"],
+        "blockedByDraft": True,
+        "references": ["media.0", "coverMediaId"],
     }
-    with pytest.raises(ConfirmationRequired) as confirmation:
+    with pytest.raises(SourceReferencedByDraft) as confirmation:
         controller.delete_source(
             "material-workspace",
             expected_manifest_version=3,
@@ -823,17 +821,57 @@ def test_delete_requires_confirmation_and_preserves_draft(
         )
     assert confirmation.value.references == preflight["references"]
 
-    deleted = controller.delete_source(
-        "material-workspace",
-        expected_manifest_version=3,
-        source_id="M01",
-        confirm_referenced=True,
-    )
-    assert deleted["manifestVersion"] == 4
-    assert deleted["nextMaterialNumber"] == 2
-    assert deleted["sources"] == []
-    assert not (tmp_path / "inbox/material-workspace/sources/M01.jpg").exists()
+    with pytest.raises(SourceReferencedByDraft):
+        controller.delete_source(
+            "material-workspace",
+            expected_manifest_version=3,
+            source_id="M01",
+        )
+    assert (tmp_path / "inbox/material-workspace/sources/M01.jpg").exists()
     assert controller.get_context("material-workspace")["draft"] == saved
+
+
+def test_delete_ignores_material_id_used_as_plain_article_text(
+    tmp_path: Path,
+) -> None:
+    controller = _controller(tmp_path, [], {})
+    _bootstrap(controller)
+    manifest = controller.upload_source(
+        "material-workspace",
+        expected_manifest_version=1,
+        origin="web-upload",
+        filename="source.jpg",
+        mime_type="image/jpeg",
+        data=b"source",
+        description="A confirmed photo.",
+        description_source="user",
+        description_status="confirmed",
+    )
+    document = _draft("M01")
+    document["bodyMarkdown"] = "## Image sources\n\nM01 — public domain"
+    document["media"] = []
+    document["coverMediaId"] = None
+    controller.save_draft(
+        "material-workspace",
+        expected_manifest_version=manifest["manifestVersion"],
+        expected_draft_version=0,
+        document=document,
+    )
+
+    preflight = controller.delete_source_preflight(
+        "material-workspace",
+        expected_manifest_version=manifest["manifestVersion"],
+        source_id="M01",
+    )
+
+    assert preflight["blockedByDraft"] is False
+    assert preflight["references"] == []
+    controller.delete_source(
+        "material-workspace",
+        expected_manifest_version=manifest["manifestVersion"],
+        source_id="M01",
+    )
+    assert controller.get_context("material-workspace")["manifest"]["sources"] == []
 
 
 def test_meeting_source_delete_keeps_reference_and_can_reimport(

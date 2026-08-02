@@ -5,7 +5,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { WxPostRenderer } from '@/components/wxpost/WxPostRenderer';
-import { applyWxPostTextEdit } from '@/components/wxpost/renderer/editing';
+import {
+  applyWxPostDirectiveItemDelete,
+  applyWxPostMediaDelete,
+  applyWxPostTextEdit,
+  getWxPostDirectiveItemDeleteDetails,
+  WxPostEditValidationError,
+  type WxPostMediaDeleteTarget,
+} from '@/components/wxpost/renderer/editing';
 import type {
   WxPostArticleDocument,
   WxPostPresentation,
@@ -13,20 +20,21 @@ import type {
   WxPostRenderDocument,
 } from '@/components/wxpost/types';
 import {
-  getWorkspaceDraftSession,
   getWorkspaceContext,
   getWorkspaceSourceContent,
-  reviseWorkspaceDraft,
   saveWorkspaceDraft,
   validateWorkspaceDraft,
   WorkspaceApiError,
   type WorkspaceContext,
-  type WorkspaceDraftSession,
 } from '@/utils/wxpostWorkspace';
 
+import { WxPostDraftAssistant } from './WxPostDraftAssistant';
 import { type DraftMode, WxPostDraftControls } from './WxPostDraftControls';
-import { WxPostHermesPanel } from './WxPostHermesPanel';
-import { WorkspaceConflictDialog } from './WorkspaceConflictDialog';
+import { WxPostDraftDialogs } from './WxPostDraftDialogs';
+import { WxPostPublicationControls } from './WxPostPublicationControls';
+import { useWxPostCoverPicker } from './useWxPostCoverPicker';
+import { useWxPostDraftAssistant } from './useWxPostDraftAssistant';
+import { useWxPostPublication } from './useWxPostPublication';
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -65,8 +73,6 @@ export function WxPostDraftStage({
   context,
   contextLabel,
   onContextChange,
-  onRegenerate,
-  regeneratePending,
   initialMode = 'edit',
 }: {
   active: boolean;
@@ -74,8 +80,6 @@ export function WxPostDraftStage({
   context: WorkspaceContext;
   contextLabel?: string;
   onContextChange: (context: WorkspaceContext) => void;
-  onRegenerate: () => Promise<void>;
-  regeneratePending: boolean;
   initialMode?: DraftMode;
 }) {
   const savedDraft = context.draft;
@@ -84,20 +88,26 @@ export function WxPostDraftStage({
     useState<WxPostRenderDocument | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [selectedText, setSelectedText] = useState<string | null>(null);
-  const [session, setSession] = useState<WorkspaceDraftSession | null>(null);
-  const [sessionStatus, setSessionStatus] = useState<
-    'connecting' | 'online' | 'unavailable'
-  >('connecting');
   const [mode, setMode] = useState<DraftMode>(initialMode);
   const [previewSize, setPreviewSize] =
     useState<WxPostPreviewSize>('desktop-760');
   const [mobileHermesOpen, setMobileHermesOpen] = useState(false);
-  const [message, setMessage] = useState('');
+  const [portalReady, setPortalReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savePending, setSavePending] = useState(false);
-  const [chatPending, setChatPending] = useState(false);
+  const [discardConfirming, setDiscardConfirming] = useState(false);
+  const [mediaDeleteTarget, setMediaDeleteTarget] =
+    useState<WxPostMediaDeleteTarget | null>(null);
+  const [directiveItemDeleteTarget, setDirectiveItemDeleteTarget] = useState<{
+    key: string;
+    label: string;
+    removesBlock: boolean;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [versionConflict, setVersionConflict] = useState(false);
+  const [conflictKind, setConflictKind] = useState<'draft' | 'publication'>(
+    'draft'
+  );
   const [conflictRefreshPending, setConflictRefreshPending] = useState(false);
   const [conflictRefreshError, setConflictRefreshError] = useState<
     string | null
@@ -109,6 +119,7 @@ export function WxPostDraftStage({
     savedDraft?.document ?? null
   );
   const renderDocumentRef = useRef<WxPostRenderDocument | null>(null);
+  const savedRenderDocumentRef = useRef<WxPostRenderDocument | null>(null);
   const editBaseRef = useRef<{
     key: string;
     document: WxPostArticleDocument;
@@ -140,13 +151,17 @@ export function WxPostDraftStage({
     document !== null && JSON.stringify(document) !== savedDocumentJson;
 
   useEffect(() => {
+    setPortalReady(true);
+  }, []);
+
+  useEffect(() => {
     if (window.matchMedia('(max-width: 1023px)').matches) {
       setPreviewSize('mobile-390');
     }
   }, []);
 
   useEffect(() => {
-    if (mode === 'preview') {
+    if (!active || mode === 'preview') {
       if (renderDocumentRef.current) {
         setRenderDocument(renderDocumentRef.current);
       }
@@ -155,7 +170,7 @@ export function WxPostDraftStage({
       setSelectedText(null);
       setMobileHermesOpen(false);
     }
-  }, [mode]);
+  }, [active, mode]);
 
   const loadDocument = useCallback(
     async (nextDocument: WxPostArticleDocument) => {
@@ -176,6 +191,13 @@ export function WxPostDraftStage({
 
   useEffect(() => {
     if (!savedDraft) return;
+    if (
+      loadedDraftVersionRef.current === savedDraft.draftVersion &&
+      renderDocumentRef.current
+    ) {
+      setLoading(false);
+      return;
+    }
     let activeEffect = true;
     const versionChanged =
       loadedDraftVersionRef.current !== savedDraft.draftVersion;
@@ -195,6 +217,7 @@ export function WxPostDraftStage({
         objectUrlsRef.current = loaded.revoke;
         documentRef.current = loaded.nextDocument;
         renderDocumentRef.current = loaded.renderDocument;
+        savedRenderDocumentRef.current = loaded.renderDocument;
         setDocument(loaded.nextDocument);
         setRenderDocument(loaded.renderDocument);
         loadedDraftVersionRef.current = savedDraft.draftVersion;
@@ -218,19 +241,6 @@ export function WxPostDraftStage({
     },
     []
   );
-
-  useEffect(() => {
-    if (!active || session) return;
-    void getWorkspaceDraftSession(workspaceId)
-      .then((history) => {
-        setSession(history);
-        setSessionStatus('online');
-      })
-      .catch(() => {
-        setSession({ workspaceId, sessionId: null, messages: [] });
-        setSessionStatus('unavailable');
-      });
-  }, [active, session, workspaceId]);
 
   const selectText = useCallback((key: string) => {
     const currentDocument = documentRef.current;
@@ -257,16 +267,25 @@ export function WxPostDraftStage({
               renderDocument: renderDocumentRef.current,
             }
           : null;
-    if (!base) return;
-    const updated = applyWxPostTextEdit(
-      base.document,
-      base.renderDocument,
-      key,
-      value
-    );
-    documentRef.current = updated.document;
-    renderDocumentRef.current = updated.renderDocument;
-    setDocument(updated.document);
+    if (!base) return null;
+    try {
+      const updated = applyWxPostTextEdit(
+        base.document,
+        base.renderDocument,
+        key,
+        value
+      );
+      documentRef.current = updated.document;
+      renderDocumentRef.current = updated.renderDocument;
+      setDocument(updated.document);
+      return null;
+    } catch (caught) {
+      if (caught instanceof WxPostEditValidationError) {
+        toast.error(caught.message, { id: 'wxpost-required-field' });
+        return caught.message;
+      }
+      throw caught;
+    }
   }, []);
 
   const finishInlineEdit = useCallback(() => {
@@ -277,6 +296,67 @@ export function WxPostDraftStage({
     setActiveKey(null);
   }, []);
 
+  const confirmMediaDelete = useCallback(() => {
+    if (!mediaDeleteTarget) return;
+    const currentDocument = documentRef.current;
+    const currentRender = renderDocumentRef.current;
+    if (!currentDocument || !currentRender) return;
+    try {
+      const updated = applyWxPostMediaDelete(
+        currentDocument,
+        currentRender,
+        mediaDeleteTarget
+      );
+      documentRef.current = updated.document;
+      renderDocumentRef.current = updated.renderDocument;
+      editBaseRef.current = null;
+      setActiveKey(null);
+      setSelectedText(null);
+      setDocument(updated.document);
+      setRenderDocument(updated.renderDocument);
+      setMediaDeleteTarget(null);
+    } catch (caught) {
+      toast.error(errorMessage(caught, 'Unable to remove this media.'));
+    }
+  }, [mediaDeleteTarget]);
+
+  const requestDirectiveItemDelete = useCallback((key: string) => {
+    const currentRender = renderDocumentRef.current;
+    if (!currentRender) return;
+    try {
+      setDirectiveItemDeleteTarget({
+        key,
+        ...getWxPostDirectiveItemDeleteDetails(currentRender, key),
+      });
+    } catch (caught) {
+      toast.error(errorMessage(caught, 'Unable to select this item.'));
+    }
+  }, []);
+
+  const confirmDirectiveItemDelete = useCallback(() => {
+    if (!directiveItemDeleteTarget) return;
+    const currentDocument = documentRef.current;
+    const currentRender = renderDocumentRef.current;
+    if (!currentDocument || !currentRender) return;
+    try {
+      const updated = applyWxPostDirectiveItemDelete(
+        currentDocument,
+        currentRender,
+        directiveItemDeleteTarget.key
+      );
+      documentRef.current = updated.document;
+      renderDocumentRef.current = updated.renderDocument;
+      editBaseRef.current = null;
+      setActiveKey(null);
+      setSelectedText(null);
+      setDocument(updated.document);
+      setRenderDocument(updated.renderDocument);
+      setDirectiveItemDeleteTarget(null);
+    } catch (caught) {
+      toast.error(errorMessage(caught, 'Unable to delete this item.'));
+    }
+  }, [directiveItemDeleteTarget]);
+
   const updatePresentation = useCallback((presentation: WxPostPresentation) => {
     if (!documentRef.current) return;
     documentRef.current = {
@@ -286,11 +366,63 @@ export function WxPostDraftStage({
     setDocument(documentRef.current);
   }, []);
 
-  const showVersionConflict = useCallback(() => {
-    setError(null);
-    setConflictRefreshError(null);
-    setVersionConflict(true);
+  const showVersionConflict = useCallback(
+    (kind: 'draft' | 'publication' = 'draft') => {
+      setConflictKind(kind);
+      setError(null);
+      setConflictRefreshError(null);
+      setVersionConflict(true);
+    },
+    []
+  );
+
+  const applyCoverUpdate = useCallback(
+    (
+      nextDocument: WxPostArticleDocument,
+      nextRenderDocument: WxPostRenderDocument
+    ) => {
+      documentRef.current = nextDocument;
+      renderDocumentRef.current = nextRenderDocument;
+      editBaseRef.current = null;
+      setActiveKey(null);
+      setSelectedText(null);
+      setDocument(nextDocument);
+      setRenderDocument(nextRenderDocument);
+    },
+    []
+  );
+  const coverPicker = useWxPostCoverPicker({
+    workspaceId,
+    sources: context.manifest.sources,
+    document,
+    renderDocument,
+    onApply: applyCoverUpdate,
+  });
+  const publication = useWxPostPublication({
+    active,
+    workspaceId,
+    manifestVersion: context.manifest.manifestVersion,
+    savedDraft,
+    dirty,
+    onConflict: () => showVersionConflict('publication'),
+  });
+  const acceptAssistantDraft = useCallback(() => {
+    setSelectedText(null);
+    editBaseRef.current = null;
+    setActiveKey(null);
   }, []);
+  const assistant = useWxPostDraftAssistant({
+    active,
+    workspaceId,
+    manifestVersion: context.manifest.manifestVersion,
+    savedDraft,
+    dirty,
+    selectedText,
+    onContextChange,
+    onDraftAccepted: acceptAssistantDraft,
+    onConflict: () => showVersionConflict(),
+    onError: setError,
+  });
 
   const keepCurrentEdits = useCallback(() => {
     setVersionConflict(false);
@@ -310,6 +442,7 @@ export function WxPostDraftStage({
       objectUrlsRef.current = loaded.revoke;
       documentRef.current = loaded.nextDocument;
       renderDocumentRef.current = loaded.renderDocument;
+      savedRenderDocumentRef.current = loaded.renderDocument;
       loadedDraftVersionRef.current = latest.draft.draftVersion;
       editBaseRef.current = null;
       setActiveKey(null);
@@ -339,6 +472,13 @@ export function WxPostDraftStage({
         expectedDraftVersion: savedDraft.draftVersion,
         document: workingDocument,
       });
+      if (!updated.draft) {
+        throw new Error('The saved workspace did not return a Draft.');
+      }
+      loadedDraftVersionRef.current = updated.draft.draftVersion;
+      savedRenderDocumentRef.current = renderDocumentRef.current;
+      documentRef.current = updated.draft.document;
+      setDocument(updated.draft.document);
       onContextChange(updated);
       editBaseRef.current = null;
       setActiveKey(null);
@@ -366,103 +506,19 @@ export function WxPostDraftStage({
     workspaceId,
   ]);
 
-  const sendMessage = useCallback(async () => {
-    const request = message.trim();
-    if (!request || !savedDraft || dirty) return;
-    setChatPending(true);
+  const discardChanges = useCallback(() => {
+    const savedRenderDocument = savedRenderDocumentRef.current;
+    if (!savedDraft || !savedRenderDocument || !dirty) return;
     setError(null);
-    setSession((current) => ({
-      workspaceId,
-      sessionId: current?.sessionId ?? null,
-      messages: [...(current?.messages ?? []), { role: 'user', text: request }],
-    }));
-    setMessage('');
-    try {
-      const result = await reviseWorkspaceDraft(workspaceId, {
-        expectedManifestVersion: context.manifest.manifestVersion,
-        expectedDraftVersion: savedDraft.draftVersion,
-        message: request,
-        selectedText,
-      });
-      onContextChange(result.context);
-      setSessionStatus('online');
-      setSelectedText(null);
-      editBaseRef.current = null;
-      setActiveKey(null);
-      setSession((current) => ({
-        workspaceId,
-        sessionId: result.sessionId,
-        messages: [
-          ...(current?.messages ?? []),
-          { role: 'assistant', text: result.reply },
-        ],
-      }));
-    } catch (caught) {
-      if (
-        caught instanceof WorkspaceApiError &&
-        caught.code === 'version_conflict'
-      ) {
-        setMessage(request);
-        setSession((current) =>
-          current
-            ? { ...current, messages: current.messages.slice(0, -1) }
-            : current
-        );
-        showVersionConflict();
-        return;
-      }
-      if (
-        caught instanceof WorkspaceApiError &&
-        ['hermes_unavailable', 'hermes_turn_failed'].includes(caught.code ?? '')
-      ) {
-        setSessionStatus('unavailable');
-      }
-      const failure = errorMessage(
-        caught,
-        'Hermes could not revise the draft.'
-      );
-      setMessage(request);
-      setSession((current) =>
-        current
-          ? { ...current, messages: current.messages.slice(0, -1) }
-          : current
-      );
-      setError(failure);
-      toast.error(failure);
-    } finally {
-      setChatPending(false);
-    }
-  }, [
-    context.manifest.manifestVersion,
-    dirty,
-    message,
-    onContextChange,
-    savedDraft,
-    selectedText,
-    showVersionConflict,
-    workspaceId,
-  ]);
-
-  const regenerate = useCallback(async () => {
-    try {
-      await onRegenerate();
-    } catch (caught) {
-      if (
-        caught instanceof WorkspaceApiError &&
-        caught.code === 'version_conflict'
-      ) {
-        showVersionConflict();
-      }
-      return;
-    }
-    try {
-      setSession(await getWorkspaceDraftSession(workspaceId));
-      setSessionStatus('online');
-    } catch {
-      setSessionStatus('unavailable');
-      // The saved Draft remains authoritative if history refresh is unavailable.
-    }
-  }, [onRegenerate, showVersionConflict, workspaceId]);
+    documentRef.current = savedDraft.document;
+    renderDocumentRef.current = savedRenderDocument;
+    editBaseRef.current = null;
+    setActiveKey(null);
+    setSelectedText(null);
+    setDocument(savedDraft.document);
+    setRenderDocument(savedRenderDocument);
+    setDiscardConfirming(false);
+  }, [dirty, savedDraft]);
 
   if (!savedDraft || !document) return null;
   const savedVersionPending =
@@ -512,17 +568,28 @@ export function WxPostDraftStage({
         mode={mode}
         presentation={document.presentation}
         previewSize={previewSize}
-        mobileHermesOpen={mobileHermesOpen}
-        regeneratePending={regeneratePending}
-        chatPending={chatPending}
+        coverMediaId={document.coverMediaId ?? null}
+        chatPending={assistant.pending}
         savePending={savePending}
         onModeChange={setMode}
         onPresentationChange={updatePresentation}
         onPreviewSizeChange={setPreviewSize}
-        onOpenHermes={() => setMobileHermesOpen(true)}
-        onRegenerate={() => void regenerate()}
+        onOpenCoverPicker={coverPicker.show}
+        onDiscard={() => setDiscardConfirming(true)}
         onSave={() => void save()}
       />
+
+      <div className='-mt-4 rounded-b-xl border border-t-0 border-slate-200 bg-white px-3 pb-3 shadow-sm sm:px-4'>
+        <WxPostPublicationControls
+          status={publication.status}
+          loading={publication.loading}
+          loadError={publication.loadError}
+          dirty={dirty}
+          pending={publication.pending}
+          currentDraftVersion={savedDraft.draftVersion}
+          onSync={publication.sync}
+        />
+      </div>
 
       {error && (
         <p
@@ -533,20 +600,42 @@ export function WxPostDraftStage({
         </p>
       )}
 
-      {versionConflict && (
-        <WorkspaceConflictDialog
-          title='Load latest Draft?'
-          error={conflictRefreshError}
-          pending={conflictRefreshPending}
-          testId='draft-conflict-dialog'
-          onKeepCurrent={keepCurrentEdits}
-          onLoadLatest={() => void loadLatestDraft()}
-        >
-          This workspace changed since this page loaded. Loading the latest
-          version will discard your unsaved Draft changes. The Draft change you
-          just attempted was not applied.
-        </WorkspaceConflictDialog>
-      )}
+      <WxPostDraftDialogs
+        conflict={{
+          open: versionConflict,
+          kind: conflictKind,
+          error: conflictRefreshError,
+          pending: conflictRefreshPending,
+          onKeep: keepCurrentEdits,
+          onLoadLatest: () => void loadLatestDraft(),
+        }}
+        discard={{
+          open: discardConfirming,
+          onKeep: () => setDiscardConfirming(false),
+          onConfirm: discardChanges,
+        }}
+        coverPicker={{
+          open: coverPicker.open,
+          candidates: coverPicker.candidates,
+          currentCoverId: document.coverMediaId ?? null,
+          selectedCoverId: coverPicker.selectedCoverId,
+          loading: coverPicker.loading,
+          onSelect: coverPicker.select,
+          onClose: coverPicker.close,
+          onApply: coverPicker.apply,
+        }}
+        mediaDelete={{
+          target: mediaDeleteTarget,
+          coverMediaId: document.coverMediaId,
+          onCancel: () => setMediaDeleteTarget(null),
+          onConfirm: confirmMediaDelete,
+        }}
+        directiveDelete={{
+          target: directiveItemDeleteTarget,
+          onCancel: () => setDirectiveItemDeleteTarget(null),
+          onConfirm: confirmDirectiveItemDelete,
+        }}
+      />
 
       <div
         className={`grid items-start gap-4 ${
@@ -586,65 +675,31 @@ export function WxPostDraftStage({
                     onSelect: selectText,
                     onBlur: finishInlineEdit,
                     onChange: updateText,
+                    onDeleteMedia: setMediaDeleteTarget,
+                    onDeleteDirectiveItem: requestDirectiveItemDelete,
                   }
                 : undefined
             }
           />
         </div>
 
-        {mode === 'edit' && (
-          <aside
-            className='sticky top-24 hidden h-[calc(100dvh-7rem)] min-h-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:block'
-            data-testid='desktop-hermes-panel'
-          >
-            <WxPostHermesPanel
-              mobile={false}
-              session={session}
-              sessionStatus={sessionStatus}
-              chatPending={chatPending}
-              selectedText={selectedText}
-              message={message}
-              dirty={dirty}
-              onClose={() => setMobileHermesOpen(false)}
-              onClearSelection={() => setSelectedText(null)}
-              onMessageChange={setMessage}
-              onSend={() => void sendMessage()}
-            />
-          </aside>
-        )}
+        <WxPostDraftAssistant
+          active={active}
+          mode={mode}
+          portalReady={portalReady}
+          mobileOpen={mobileHermesOpen}
+          session={assistant.session}
+          sessionStatus={assistant.status}
+          chatPending={assistant.pending}
+          selectedText={selectedText}
+          message={assistant.message}
+          dirty={dirty}
+          onMobileOpenChange={setMobileHermesOpen}
+          onClearSelection={() => setSelectedText(null)}
+          onMessageChange={assistant.setMessage}
+          onSend={() => void assistant.send()}
+        />
       </div>
-
-      {mode === 'edit' && mobileHermesOpen && (
-        <div
-          className='fixed inset-0 z-50 lg:hidden'
-          role='dialog'
-          aria-modal='true'
-          aria-label='Draft Assistant'
-          data-testid='mobile-hermes-dialog'
-        >
-          <button
-            type='button'
-            className='absolute inset-0 bg-slate-950/35'
-            aria-label='Dismiss Draft Assistant'
-            onClick={() => setMobileHermesOpen(false)}
-          />
-          <div className='absolute inset-x-0 bottom-0 flex max-h-[78dvh] min-h-[32rem] flex-col overflow-hidden rounded-t-2xl border border-slate-200 bg-white shadow-[0_-16px_40px_rgba(15,23,42,0.18)]'>
-            <WxPostHermesPanel
-              mobile
-              session={session}
-              sessionStatus={sessionStatus}
-              chatPending={chatPending}
-              selectedText={selectedText}
-              message={message}
-              dirty={dirty}
-              onClose={() => setMobileHermesOpen(false)}
-              onClearSelection={() => setSelectedText(null)}
-              onMessageChange={setMessage}
-              onSend={() => void sendMessage()}
-            />
-          </div>
-        </div>
-      )}
     </section>
   );
 }

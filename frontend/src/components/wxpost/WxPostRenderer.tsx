@@ -11,6 +11,7 @@ import type {
   WxPostRenderContext,
   WxPostRenderDocument,
 } from './types';
+import type { WxPostMediaDeleteTarget } from './renderer/editing';
 
 interface WxPostRendererProps {
   article: WxPostRenderDocument;
@@ -22,7 +23,9 @@ interface WxPostRendererProps {
     activeKey: string | null;
     onSelect: (key: string) => void;
     onBlur: () => void;
-    onChange: (key: string, value: string) => void;
+    onChange: (key: string, value: string) => string | null;
+    onDeleteMedia: (target: WxPostMediaDeleteTarget) => void;
+    onDeleteDirectiveItem: (key: string) => void;
   };
 }
 
@@ -79,6 +82,7 @@ export function WxPostRenderer({
       'aria-label',
       `Edit ${target.dataset.wxpostEditLabel ?? 'draft text'}`
     );
+    target.dataset.wxpostLastValidText = target.textContent ?? '';
     target.style.outline = '2px solid #3b82f6';
     target.style.outlineOffset = '2px';
     target.focus({ preventScroll: true });
@@ -87,6 +91,7 @@ export function WxPostRenderer({
       target.removeAttribute('role');
       target.removeAttribute('aria-multiline');
       target.removeAttribute('aria-label');
+      delete target.dataset.wxpostLastValidText;
       target.style.outline = targetOutline;
       target.style.outlineOffset = targetOutlineOffset;
     };
@@ -97,11 +102,19 @@ export function WxPostRenderer({
       ref={rootRef}
       className={`mx-auto w-full ${
         previewSize === 'mobile-390' ? 'max-w-[390px]' : 'max-w-[760px]'
-      } [&_[data-wxpost-edit-key]]:cursor-text [&_[data-wxpost-edit-key]]:outline-offset-2 [&_[data-wxpost-edit-key]:hover]:outline [&_[data-wxpost-edit-key]:hover]:outline-1 [&_[data-wxpost-edit-key]:hover]:outline-blue-300 ${className}`}
+      } [&_[data-wxpost-edit-key]]:cursor-text [&_[data-wxpost-edit-key]]:outline-offset-2 [&_[data-wxpost-edit-key]:hover]:outline [&_[data-wxpost-edit-key]:hover]:outline-1 [&_[data-wxpost-edit-key]:hover]:outline-blue-300 [&_[data-wxpost-delete-media]]:pointer-events-none [&_[data-wxpost-delete-media]]:opacity-0 [&_[data-wxpost-delete-media]]:transition-opacity [&_[data-wxpost-media-frame]:focus-within_[data-wxpost-delete-media]]:pointer-events-auto [&_[data-wxpost-media-frame]:focus-within_[data-wxpost-delete-media]]:opacity-100 [&_[data-wxpost-media-frame]:hover_[data-wxpost-delete-media]]:pointer-events-auto [&_[data-wxpost-media-frame]:hover_[data-wxpost-delete-media]]:opacity-100 [&_[data-wxpost-delete-item]]:pointer-events-none [&_[data-wxpost-delete-item]]:opacity-0 [&_[data-wxpost-delete-item]]:transition-opacity [&_[data-wxpost-item-container]:focus-within_[data-wxpost-delete-item]]:pointer-events-auto [&_[data-wxpost-item-container]:focus-within_[data-wxpost-delete-item]]:opacity-100 [&_[data-wxpost-item-container]:hover_[data-wxpost-delete-item]]:pointer-events-auto [&_[data-wxpost-item-container]:hover_[data-wxpost-delete-item]]:opacity-100 ${className}`}
       data-testid='wxpost-stage'
       data-preview-size={previewSize}
       onMouseDown={(event) => {
         if (!editor) return;
+        if (
+          (event.target as Element).closest(
+            '[data-wxpost-delete-media],[data-wxpost-delete-item]'
+          )
+        ) {
+          event.preventDefault();
+          return;
+        }
         const target = (event.target as Element).closest<HTMLElement>(
           '[data-wxpost-edit-key]'
         );
@@ -123,6 +136,32 @@ export function WxPostRenderer({
       onClick={(event) => {
         if (!editor) return;
         const target = event.target as Element;
+        const deleteButton = target.closest<HTMLElement>(
+          '[data-wxpost-delete-media]'
+        );
+        if (
+          deleteButton?.dataset.wxpostDeleteMedia &&
+          deleteButton.dataset.wxpostDeleteKey
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          editor.onDeleteMedia({
+            mediaId: deleteButton.dataset.wxpostDeleteMedia,
+            key: deleteButton.dataset.wxpostDeleteKey,
+          });
+          return;
+        }
+        const deleteItemButton = target.closest<HTMLElement>(
+          '[data-wxpost-delete-item]'
+        );
+        if (deleteItemButton?.dataset.wxpostDeleteItem) {
+          event.preventDefault();
+          event.stopPropagation();
+          editor.onDeleteDirectiveItem(
+            deleteItemButton.dataset.wxpostDeleteItem
+          );
+          return;
+        }
         const editable = target.closest<HTMLElement>('[data-wxpost-edit-key]');
         if (editable?.dataset.wxpostEditKey) {
           editor.onSelect(editable.dataset.wxpostEditKey);
@@ -137,12 +176,24 @@ export function WxPostRenderer({
         const key = editable?.dataset.wxpostEditKey;
         if (!editable || !key) return;
         const editTarget = parseWxPostEditKey(key);
-        editor.onChange(
-          key,
+        const value =
           editTarget.kind === 'markdown'
             ? editableElementToMarkdown(editable)
-            : (editable.textContent ?? '')
-        );
+            : (editable.textContent ?? '');
+        const validationError = editor.onChange(key, value);
+        if (!validationError) {
+          editable.dataset.wxpostLastValidText = editable.textContent ?? '';
+          return;
+        }
+        editable.textContent = editable.dataset.wxpostLastValidText ?? '';
+        const selection = window.getSelection();
+        if (selection) {
+          const range = document.createRange();
+          range.selectNodeContents(editable);
+          range.collapse(false);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
       }}
       onKeyDown={(event) => {
         if (!editor || event.key !== 'Enter') return;

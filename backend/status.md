@@ -1,6 +1,6 @@
 # SoarHigh Toastmasters Club - Backend Status
 
-**Last updated:** 2026-07-31
+**Last updated:** 2026-08-01
 
 **WxPost checkpoint:** `d1c85a4` is the committed pre-Slice-6 base. The current
 working tree completes Slice 6 Draft session, save, generation, revision, and
@@ -14,8 +14,10 @@ submits typed proposal schema v2; the controller derives manifest-owned source
 identity and inclusion, records Hermes-authored captions as AI proposals, and
 deterministically serializes canonical ArticleDocument v1 directives before
 Backend validation. This removes model-authored YAML without adding repair
-heuristics or a second validator. Public/OSS synchronization and
-Feishu ingestion remain Slice 7, and WeChat Draft delivery remains Phase 3.
+heuristics or a second validator. Slice 7A now synchronizes one saved workspace
+Draft to one stable public WxPost with guarded Supabase revisions and
+content-addressed OSS assets. Feishu ingestion and image-description proposals
+remain Slice 7B, and WeChat Draft delivery remains Phase 3.
 
 ## Architecture Overview
 
@@ -96,6 +98,11 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
   protection
 - **/posts/wxposts/{slug}** - GET: Return a public render document
 - **/posts/wxposts/workspaces** - GET: List paginated shared workspaces
+- **/posts/wxposts/workspaces/{id}/publication** - GET: Derive publication
+  freshness from the current saved Draft and ready public revision
+- **/posts/wxposts/workspaces/{id}/publication/sync** - POST: Explicitly and
+  version-safely synchronize the saved Draft, included assets, and canonical
+  render to one stable public WxPost
 - **/posts/wxposts/workspaces/{id}** - PUT/PATCH/DELETE: Create, save, or
   delete a versioned workspace
 - **/posts/wxposts/workspaces/{id}/...** - Authenticated proxy for the
@@ -331,6 +338,36 @@ Model for blog posts:
     quotes, and inline key points without content-repair heuristics
   - Workspace-local `Voice & tone` editorial state without a legacy-manifest
     migration or compatibility branch
+  - One durable public WxPost per workspace with `source_workspace_id`, saved
+    Draft version, and normalized Draft/media bundle SHA-256 linkage
+  - First publication hidden until every public asset and canonical render are
+    ready; later updates preserve the previous ready revision until one guarded
+    final row swap succeeds
+  - Workspace-linked public rows reject the legacy direct-update endpoint, so
+    the saved workspace Draft remains the only editorial authority
+  - Idempotent content-addressed OSS asset reuse and explicit failed/pending
+    asset lifecycle without leaking workspace source URLs to public documents
+  - Post-finalization cleanup removes public OSS assets no longer referenced by
+    the new revision; authenticated public-page deletion hides the post first,
+    removes all of its OSS assets, and then removes the public database row
+  - Batched publication status enrichment for paginated workspace summaries
+    without one Supabase query per card; a temporary Supabase status failure
+    does not make private workspace listing unavailable
+
+The real Supabase/OSS publication lifecycle has an opt-in destructive smoke
+test at `app/services/tests/test_wxpost_publication_live.py`. It creates only a
+uniquely named temporary WxPost, verifies initial publication, idempotent retry,
+stale-asset cleanup, and final deletion, then cleans up in `finally`. It is
+excluded from normal test runs and requires all four guards below to match the
+loaded backend target exactly:
+
+```bash
+WXPOST_PUBLICATION_LIVE_TEST=1 \
+WXPOST_PUBLICATION_LIVE_ALLOW_MUTATION=yes \
+WXPOST_PUBLICATION_LIVE_SUPABASE_URL="$SUPABASE_URL" \
+WXPOST_PUBLICATION_LIVE_OSS_BUCKET="$ALICLOUD_OSS_BUCKET" \
+  pytest -m live app/services/tests/test_wxpost_publication_live.py
+```
 
 ### Current Implementation Details
 

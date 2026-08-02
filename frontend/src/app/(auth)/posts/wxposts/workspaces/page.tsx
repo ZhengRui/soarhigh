@@ -10,10 +10,11 @@ import {
   BookOpenText,
   CircleCheck,
   Clock3,
+  ExternalLink,
   FileText,
+  Globe2,
   Images,
   Loader2,
-  PencilLine,
   RefreshCw,
   Trash2,
 } from 'lucide-react';
@@ -72,6 +73,24 @@ function workspaceType(workspace: WorkspaceSummary) {
     return workspace.customArticleType;
   }
   return WORKSPACE_ARTICLE_TYPE_LABELS[workspace.articleType];
+}
+
+function workspacePublicationLabel(workspace: WorkspaceSummary) {
+  const publication = workspace.publication;
+  if (publication.state === 'unavailable') return 'Public status unavailable';
+  if (publication.state === 'not-synced') return 'Not published';
+  if (
+    publication.publicRevision === null ||
+    publication.sourceDraftVersion === null
+  ) {
+    return 'Public status unavailable';
+  }
+
+  const published = `Public revision ${publication.publicRevision} · from Draft v${publication.sourceDraftVersion}`;
+  return publication.state === 'update-available' &&
+    workspace.draftVersion !== null
+    ? `${published} · Draft v${workspace.draftVersion} ready to publish`
+    : published;
 }
 
 export default function WxPostWorkspacesPage() {
@@ -317,14 +336,25 @@ export default function WxPostWorkspacesPage() {
                             {reference}
                           </span>
                         )}
+                        <Link
+                          href={workspaceEditorPath(workspace.workspaceId)}
+                          className='rounded-full bg-indigo-50 p-1.5 transition hover:bg-indigo-100 hover:shadow-md'
+                          aria-label='Go to Materials'
+                          title='Go to Materials'
+                        >
+                          <Images
+                            className='h-4 w-4 text-indigo-500 hover:text-indigo-600'
+                            aria-hidden='true'
+                          />
+                        </Link>
                         {workspace.draftVersion !== null && (
                           <Link
                             href={workspaceDraftPreviewPath(
                               workspace.workspaceId
                             )}
                             className='rounded-full bg-indigo-50 p-1.5 transition hover:bg-indigo-100 hover:shadow-md'
-                            aria-label='Preview Draft'
-                            title='Preview Draft'
+                            aria-label='Go to Draft'
+                            title='Go to Draft'
                           >
                             <BookOpenText
                               className='h-4 w-4 text-indigo-500 hover:text-indigo-600'
@@ -332,17 +362,6 @@ export default function WxPostWorkspacesPage() {
                             />
                           </Link>
                         )}
-                        <Link
-                          href={workspaceEditorPath(workspace.workspaceId)}
-                          className='rounded-full bg-indigo-50 p-1.5 transition hover:bg-indigo-100 hover:shadow-md'
-                          aria-label='Continue workspace'
-                          title='Continue workspace'
-                        >
-                          <PencilLine
-                            className='h-4 w-4 text-indigo-500 hover:text-indigo-600'
-                            aria-hidden='true'
-                          />
-                        </Link>
                       </div>
                       <h2 className='mt-3 text-2xl font-bold text-slate-800'>
                         {subject}
@@ -378,7 +397,7 @@ export default function WxPostWorkspacesPage() {
                       </span>
                     </div>
 
-                    <div className='mt-5 border-t border-dashed border-slate-300 pt-4'>
+                    <div className='mt-5 grid gap-2 border-t border-dashed border-slate-300 pt-4 sm:flex sm:items-center sm:justify-between'>
                       <span
                         className={`inline-flex items-center gap-2 text-sm font-medium ${
                           workspace.draftVersion !== null
@@ -400,6 +419,32 @@ export default function WxPostWorkspacesPage() {
                         {workspace.draftVersion !== null
                           ? `Draft · v${workspace.draftVersion}`
                           : 'No draft yet'}
+                      </span>
+                      <span className='inline-flex items-center gap-2 text-sm font-medium text-slate-500'>
+                        <Globe2
+                          className={`h-4 w-4 ${
+                            workspace.publication.state === 'up-to-date'
+                              ? 'text-blue-600'
+                              : 'text-slate-400'
+                          }`}
+                          aria-hidden='true'
+                        />
+                        {workspacePublicationLabel(workspace)}
+                        {workspace.publication.publicUrl && (
+                          <a
+                            href={workspace.publication.publicUrl}
+                            target='_blank'
+                            rel='noreferrer'
+                            className='rounded-full p-1 text-blue-600 transition hover:bg-blue-50 hover:text-blue-700'
+                            aria-label={`Open public WxPost for ${subject}`}
+                            title='Open public WxPost'
+                          >
+                            <ExternalLink
+                              className='h-3.5 w-3.5'
+                              aria-hidden='true'
+                            />
+                          </a>
+                        )}
                       </span>
                     </div>
                   </article>
@@ -449,7 +494,9 @@ export default function WxPostWorkspacesPage() {
               Delete {workspaceSubject(deleteTarget, meetingsById)} workspace?
             </h2>
             <p className='mb-0 mt-3 text-sm leading-6 text-slate-600'>
-              This permanently removes its workspace files for every member.
+              This permanently removes its workspace files for every member. Any
+              already published WxPost and its public assets will remain
+              available.
             </p>
             {deleteError && (
               <p className='mb-0 mt-3 text-sm text-red-700' role='alert'>

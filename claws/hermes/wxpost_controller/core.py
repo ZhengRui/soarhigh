@@ -22,7 +22,6 @@ from pydantic import BaseModel, ValidationError
 
 from .contracts import (
     BootstrapWorkspaceRequest,
-    DeleteSourceRequest,
     DraftGalleryBlock,
     DraftEnvelope,
     DraftImageBlock,
@@ -108,15 +107,15 @@ class UpstreamUnavailable(WorkspaceError):
     code = "upstream_unavailable"
 
 
-class ConfirmationRequired(WorkspaceError):
-    """A destructive source operation needs explicit draft-reference consent."""
+class SourceReferencedByDraft(WorkspaceError):
+    """A source cannot be deleted while the saved Draft references it."""
 
-    code = "confirmation_required"
+    code = "source_referenced_by_draft"
 
     def __init__(self, source_id: str, references: list[str]):
         super().__init__(
-            f"source {source_id} is referenced by the saved draft; "
-            "explicit confirmation is required"
+            f"source {source_id} is referenced by the saved Draft; "
+            "remove it from the Draft before deleting the source"
         )
         self.source_id = source_id
         self.references = references
@@ -722,8 +721,7 @@ class WorkspaceController:
             "sourceId": request.source_id,
             "manifestVersion": manifest.manifest_version,
             "draftVersion": draft.draft_version if draft is not None else 0,
-            "referenced": bool(references),
-            "requiresConfirmation": bool(references),
+            "blockedByDraft": bool(references),
             "references": references,
         }
 
@@ -733,14 +731,12 @@ class WorkspaceController:
         *,
         expected_manifest_version: int,
         source_id: str,
-        confirm_referenced: bool = False,
     ) -> dict[str, Any]:
         request = self._validate_request(
-            DeleteSourceRequest,
+            SourceActionRequest,
             {
                 "expectedManifestVersion": expected_manifest_version,
                 "sourceId": source_id,
-                "confirmReferenced": confirm_referenced,
             },
             label="source delete",
         )
@@ -761,8 +757,8 @@ class WorkspaceController:
 
             draft = self._read_draft(workspace, manifest)
             references = self._draft_references(draft, request.source_id)
-            if references and not request.confirm_referenced:
-                raise ConfirmationRequired(request.source_id, references)
+            if references:
+                raise SourceReferencedByDraft(request.source_id, references)
 
             manifest_data = manifest.to_wire()
             source_data = self._find_source_data(
@@ -1475,12 +1471,6 @@ class WorkspaceController:
         ]
         if document.get("coverMediaId") == source_id:
             references.append("coverMediaId")
-        body = document.get("bodyMarkdown")
-        if isinstance(body, str) and re.search(
-            rf"(?<![A-Za-z0-9_-]){re.escape(source_id)}(?![A-Za-z0-9_-])",
-            body,
-        ):
-            references.append("bodyMarkdown")
         return references
 
     @staticmethod
@@ -1994,6 +1984,11 @@ class WorkspaceController:
             for source_id in references:
                 if source_id not in ordered:
                     ordered.append(source_id)
+        if (
+            proposal.cover_media_id is not None
+            and proposal.cover_media_id not in ordered
+        ):
+            ordered.append(proposal.cover_media_id)
         return ordered
 
     @staticmethod
@@ -2016,7 +2011,28 @@ class WorkspaceController:
                 for item in snapshot.get("media", [])
                 if isinstance(item, Mapping) and isinstance(item.get("id"), str)
             }
-            WorkspaceController._validate_media_snapshot(document, expected_media)
+            cover_id = document.get("coverMediaId")
+            if isinstance(cover_id, str) and cover_id not in expected_media:
+                cover_source = next(
+                    (
+                        source
+                        for source in manifest.sources
+                        if source.id == cover_id
+                        and source.workspace_ready
+                        and source.kind == SourceKind.IMAGE
+                    ),
+                    None,
+                )
+                if cover_source is None:
+                    raise InvalidRequest(
+                        "Draft cover must be a workspace-ready image source"
+                    )
+                expected_media[cover_id] = (SourceKind.IMAGE.value, True)
+            WorkspaceController._validate_media_snapshot(
+                document,
+                expected_media,
+                allow_removal=True,
+            )
             return
 
         expected_media = {
@@ -2042,6 +2058,8 @@ class WorkspaceController:
     def _validate_media_snapshot(
         document: Mapping[str, Any],
         expected_media: Mapping[str, tuple[Any, Any]],
+        *,
+        allow_removal: bool = False,
     ) -> None:
         media = document.get("media")
         if not isinstance(media, list):
@@ -2053,7 +2071,15 @@ class WorkspaceController:
                     f"ArticleDocument media.{index} must have a string id"
                 )
             actual_media[item["id"]] = (item.get("kind"), item.get("include"))
-        if actual_media != expected_media:
+        media_matches = (
+            all(
+                expected_media.get(media_id) == state
+                for media_id, state in actual_media.items()
+            )
+            if allow_removal
+            else actual_media == expected_media
+        )
+        if not media_matches:
             raise InvalidRequest(
                 "ArticleDocument media does not match its saved source snapshot"
             )

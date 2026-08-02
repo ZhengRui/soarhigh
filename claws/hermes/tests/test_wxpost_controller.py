@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -911,6 +912,104 @@ def test_draft_contains_every_included_manifest_media_source(
         )
 
 
+def test_direct_draft_edit_can_remove_media_from_its_saved_snapshot(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    saved = controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    edited = copy.deepcopy(saved["document"])
+    edited["bodyMarkdown"] = "The meeting began with a warm welcome."
+    edited["media"] = []
+    edited["coverMediaId"] = None
+
+    updated = controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=1,
+        document=edited,
+    )
+
+    assert updated["draftVersion"] == 2
+    assert updated["document"]["media"] == []
+    source = next(
+        item
+        for item in controller.get_context(workspace_id)["manifest"]["sources"]
+        if item["id"] == WEB_IMAGE_ID
+    )
+    assert source["included"] is True
+
+
+def test_direct_draft_edit_can_add_a_ready_image_as_cover_only(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    saved = controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    edited = copy.deepcopy(saved["document"])
+    edited["media"].append(
+        {
+            "id": SPEAKER_ID,
+            "kind": "image",
+            "sourceUrl": "https://workspace.invalid/M02.jpg",
+            "description": "A speaker addresses the room.",
+            "include": True,
+            "order": 3,
+            "descriptionSource": "user",
+            "descriptionStatus": "confirmed",
+        }
+    )
+    edited["coverMediaId"] = SPEAKER_ID
+
+    updated = controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=1,
+        document=edited,
+    )
+
+    assert updated["document"]["coverMediaId"] == SPEAKER_ID
+    assert updated["document"]["bodyMarkdown"] == saved["document"]["bodyMarkdown"]
+    assert [item["id"] for item in updated["document"]["media"]] == [
+        WEB_IMAGE_ID,
+        SPEAKER_ID,
+    ]
+
+
+def test_direct_draft_edit_cannot_add_media_outside_its_saved_snapshot(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    saved = controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    edited = copy.deepcopy(saved["document"])
+    edited["media"][0]["id"] = "M99"
+    edited["bodyMarkdown"] = edited["bodyMarkdown"].replace("M03", "M99")
+
+    with pytest.raises(InvalidRequest, match="saved source snapshot"):
+        controller.save_draft(
+            workspace_id,
+            expected_manifest_version=1,
+            expected_draft_version=1,
+            document=edited,
+        )
+
+
 def test_draft_proposal_is_assembled_from_manifest_in_editorial_media_order(
     seeded_workspace: tuple[Path, str],
 ) -> None:
@@ -1105,6 +1204,25 @@ def test_draft_proposal_preserves_member_selected_presentation(
 
     assert regenerated["document"]["title"] == "A Different Editorial Shape"
     assert regenerated["document"]["presentation"] == selected
+
+
+def test_draft_proposal_can_use_an_image_only_as_the_cover(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    proposal = _draft_proposal()
+    proposal["blocks"] = proposal["blocks"][:1]
+
+    saved = _controller(root).save_draft_proposal(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        proposal=proposal,
+    )
+
+    assert saved["document"]["coverMediaId"] == WEB_IMAGE_ID
+    assert [item["id"] for item in saved["document"]["media"]] == [WEB_IMAGE_ID]
+    assert WEB_IMAGE_ID not in saved["document"]["bodyMarkdown"]
 
 
 def test_draft_proposal_rejects_excluded_or_missing_media(
@@ -1884,7 +2002,7 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
                     headers={"X-Expected-Manifest-Version": "5"},
                 )
                 assert status == 200
-                assert preflight["referenced"] is False
+                assert preflight["blockedByDraft"] is False
                 assert preflight["manifestVersion"] == 5
 
                 deleted = _mcp_value(

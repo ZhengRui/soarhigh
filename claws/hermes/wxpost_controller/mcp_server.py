@@ -175,15 +175,13 @@ def wxpost_delete_source(
     workspace_id: str,
     expected_manifest_version: int,
     source_id: str,
-    confirm_referenced: bool = False,
 ) -> dict[str, Any]:
-    """Delete a source after explicit confirmation when the draft uses it."""
+    """Delete a source that is not referenced by the current saved Draft."""
     return _run(
         lambda: _controller().delete_source(
             workspace_id,
             expected_manifest_version=expected_manifest_version,
             source_id=source_id,
-            confirm_referenced=confirm_referenced,
         )
     )
 

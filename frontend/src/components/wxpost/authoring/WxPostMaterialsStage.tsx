@@ -128,6 +128,7 @@ export function WxPostMaterialsStage({
   onWorkingCopyChange,
   onGenerateDraft,
   draftGenerationPending,
+  onOpenDraft,
 }: {
   active: boolean;
   workspaceId: string;
@@ -142,6 +143,7 @@ export function WxPostMaterialsStage({
   ) => void;
   onGenerateDraft: () => Promise<void>;
   draftGenerationPending: boolean;
+  onOpenDraft: () => void;
 }) {
   const meetingId = context.manifest.meetingId;
   const meetingQuery = useMeeting(active && meetingId ? meetingId : undefined);
@@ -304,6 +306,12 @@ export function WxPostMaterialsStage({
             error.code === 'version_conflict'
           ) {
             showVersionConflict();
+          } else if (
+            error instanceof WorkspaceApiError &&
+            error.code === 'source_referenced_by_draft'
+          ) {
+            // The Draft began referencing this source after preflight. The
+            // material dialog refreshes its dependency state in-place.
           } else {
             setOperationError(
               error instanceof Error
@@ -505,14 +513,14 @@ export function WxPostMaterialsStage({
             deleteWorkspaceSource(
               workspaceId,
               sourceId,
-              preflight.manifestVersion,
-              preflight.requiresConfirmation
+              preflight.manifestVersion
             )
           );
           if (manifest.sources.some((source) => source.id === sourceId)) {
             updateSourceWorkingState(sourceId, { included: false });
           }
         }}
+        onOpenDraft={onOpenDraft}
       />
       <ArticleInputsPanel
         workspaceId={workspaceId}

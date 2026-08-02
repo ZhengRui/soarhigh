@@ -330,6 +330,7 @@ export function MaterialsPanel({
   onUpload,
   onDeletePreflight,
   onDelete,
+  onOpenDraft,
 }: {
   workspaceId: string;
   materials: WxPostMaterial[];
@@ -346,6 +347,7 @@ export function MaterialsPanel({
     sourceId: string,
     preflight: WorkspaceDeletePreflight
   ) => Promise<void>;
+  onOpenDraft: () => void;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [deleteTarget, setDeleteTarget] = useState<WxPostMaterial | null>(null);
@@ -473,14 +475,17 @@ export function MaterialsPanel({
                 <p className='m-0 text-red-700' role='alert'>
                   {deleteError}
                 </p>
-              ) : preflight?.referenced ? (
+              ) : preflight?.blockedByDraft ? (
                 <>
                   <p className='m-0 font-semibold text-amber-800'>
-                    This material is used by the saved draft.
+                    {preflight.references.includes('coverMediaId')
+                      ? `This material is the cover of Draft v${preflight.draftVersion}.`
+                      : `This material is used by Draft v${preflight.draftVersion}.`}
                   </p>
                   <p className='mb-0 mt-2'>
-                    Deleting it will leave the draft unchanged and its reference
-                    missing: {preflight.references.join(', ')}.
+                    {preflight.references.includes('coverMediaId')
+                      ? 'Change or remove the cover. If it also appears in the article, remove it there too. Save the Draft, then return to Materials to delete the file.'
+                      : 'Remove it from the Draft and save the Draft first. Then return to Materials to delete the file.'}
                   </p>
                 </>
               ) : (
@@ -500,22 +505,44 @@ export function MaterialsPanel({
               >
                 Cancel
               </button>
-              <button
-                type='button'
-                className='inline-flex min-h-11 items-center justify-center gap-2 rounded-[11px] border border-red-700 bg-red-700 px-4 py-[10px] text-sm font-bold text-white hover:bg-red-800 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-red-900 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-300'
-                disabled={busy || !preflight || Boolean(deleteError)}
-                onClick={() => {
-                  if (!preflight) return;
-                  void onDelete(deleteTarget.sourceId, preflight)
-                    .then(() => setDeleteTarget(null))
-                    .catch(() => setDeleteTarget(null));
-                }}
-              >
-                {deletingSourceId === deleteTarget.sourceId && (
-                  <Loader2 className='h-4 w-4 animate-spin' />
-                )}
-                Delete
-              </button>
+              {preflight?.blockedByDraft ? (
+                <button
+                  type='button'
+                  className='inline-flex min-h-11 items-center justify-center rounded-[11px] border border-blue-600 bg-blue-600 px-4 py-[10px] text-sm font-bold text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-800'
+                  onClick={() => {
+                    setDeleteTarget(null);
+                    onOpenDraft();
+                  }}
+                >
+                  Go to Draft
+                </button>
+              ) : (
+                <button
+                  type='button'
+                  className='inline-flex min-h-11 items-center justify-center gap-2 rounded-[11px] border border-red-700 bg-red-700 px-4 py-[10px] text-sm font-bold text-white hover:bg-red-800 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-red-900 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-300'
+                  disabled={busy || !preflight || Boolean(deleteError)}
+                  onClick={() => {
+                    if (!preflight) return;
+                    void onDelete(deleteTarget.sourceId, preflight)
+                      .then(() => setDeleteTarget(null))
+                      .catch((error) => {
+                        if (
+                          error instanceof WorkspaceApiError &&
+                          error.code === 'source_referenced_by_draft'
+                        ) {
+                          void openDeleteDialog(deleteTarget);
+                          return;
+                        }
+                        setDeleteTarget(null);
+                      });
+                  }}
+                >
+                  {deletingSourceId === deleteTarget.sourceId && (
+                    <Loader2 className='h-4 w-4 animate-spin' />
+                  )}
+                  Delete
+                </button>
+              )}
             </div>
           </div>
         </div>

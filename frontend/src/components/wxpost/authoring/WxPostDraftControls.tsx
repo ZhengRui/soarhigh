@@ -6,13 +6,13 @@ import {
   Check,
   ChevronDown,
   Eye,
+  ImageIcon,
   Loader2,
   Monitor,
   Pencil,
-  RefreshCw,
+  RotateCcw,
   Save,
   Smartphone,
-  Sparkles,
 } from 'lucide-react';
 
 import type {
@@ -161,15 +161,14 @@ export function WxPostDraftControls({
   mode,
   presentation,
   previewSize,
-  mobileHermesOpen,
-  regeneratePending,
+  coverMediaId,
   chatPending,
   savePending,
   onModeChange,
   onPresentationChange,
   onPreviewSizeChange,
-  onOpenHermes,
-  onRegenerate,
+  onOpenCoverPicker,
+  onDiscard,
   onSave,
 }: {
   draftVersion: number;
@@ -177,19 +176,18 @@ export function WxPostDraftControls({
   mode: DraftMode;
   presentation: WxPostPresentation;
   previewSize: WxPostPreviewSize;
-  mobileHermesOpen: boolean;
-  regeneratePending: boolean;
+  coverMediaId: string | null;
   chatPending: boolean;
   savePending: boolean;
   onModeChange: (mode: DraftMode) => void;
   onPresentationChange: (presentation: WxPostPresentation) => void;
   onPreviewSizeChange: (size: WxPostPreviewSize) => void;
-  onOpenHermes: () => void;
-  onRegenerate: () => void;
+  onOpenCoverPicker: () => void;
+  onDiscard: () => void;
   onSave: () => void;
 }) {
   return (
-    <header className='grid gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm sm:px-4'>
+    <header className='grid gap-3 rounded-t-xl border border-slate-200 bg-white px-3 py-3 shadow-sm sm:px-4'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div className='min-w-0'>
           <div className='flex flex-wrap items-center gap-2'>
@@ -212,7 +210,7 @@ export function WxPostDraftControls({
               : 'Clean preview of the current Draft working copy'}
           </p>
         </div>
-        <div className='flex items-center gap-2 max-[760px]:w-full'>
+        <div className='flex flex-wrap items-center gap-2 max-[900px]:w-full max-[480px]:gap-1'>
           <div
             className='flex h-10 rounded-lg bg-slate-100 p-1'
             aria-label='Draft mode'
@@ -229,7 +227,7 @@ export function WxPostDraftControls({
               data-testid='draft-mode-edit'
             >
               <Pencil className='h-3.5 w-3.5' />
-              <span className='max-[360px]:sr-only'>Edit</span>
+              <span className='max-[480px]:sr-only'>Edit</span>
             </button>
             <button
               type='button'
@@ -243,52 +241,55 @@ export function WxPostDraftControls({
               data-testid='draft-mode-preview'
             >
               <Eye className='h-3.5 w-3.5' />
-              <span className='max-[360px]:sr-only'>Preview</span>
+              <span className='max-[480px]:sr-only'>Preview</span>
             </button>
           </div>
-          <div className='ml-auto flex gap-2'>
-            {mode === 'edit' && !mobileHermesOpen && (
-              <button
-                type='button'
-                className={`${SECONDARY_BUTTON_CLASS} max-[760px]:min-h-10 max-[760px]:px-3 lg:hidden`}
-                aria-label='Ask the assistant'
-                onClick={onOpenHermes}
-                data-testid='open-mobile-hermes'
-              >
-                <Sparkles />
-                <span className='max-[760px]:sr-only'>Ask the assistant</span>
-              </button>
-            )}
+          <div className='ml-auto flex gap-2 max-[480px]:gap-1'>
             <button
               type='button'
-              className={`${SECONDARY_BUTTON_CLASS} max-[760px]:min-h-10 max-[760px]:px-3`}
-              disabled={
-                dirty || regeneratePending || chatPending || savePending
-              }
+              className={`${SECONDARY_BUTTON_CLASS} max-[900px]:h-10 max-[900px]:min-h-10 max-[900px]:w-10 max-[900px]:p-0`}
+              disabled={mode === 'preview' || savePending || chatPending}
               title={
-                dirty
-                  ? 'Save or discard local edits before regenerating.'
-                  : undefined
+                mode === 'preview'
+                  ? 'Switch to Edit to change the cover.'
+                  : coverMediaId
+                    ? `Current cover: ${coverMediaId}`
+                    : 'Choose a cover image.'
               }
-              onClick={onRegenerate}
-              data-testid='regenerate-draft'
+              onClick={onOpenCoverPicker}
+              data-testid='open-cover-picker'
             >
-              {regeneratePending ? (
-                <Loader2 className='animate-spin' />
-              ) : (
-                <RefreshCw />
-              )}
-              <span className='max-[760px]:sr-only'>Regenerate</span>
+              <ImageIcon />
+              <span className='max-[900px]:sr-only'>
+                {coverMediaId ? `Cover: ${coverMediaId}` : 'Choose cover'}
+              </span>
             </button>
             <button
               type='button'
-              className={`${PRIMARY_BUTTON_CLASS} max-[760px]:min-h-10 max-[760px]:px-3`}
-              disabled={!dirty || savePending || chatPending}
+              className={`${SECONDARY_BUTTON_CLASS} max-[900px]:h-10 max-[900px]:min-h-10 max-[900px]:w-10 max-[900px]:p-0`}
+              disabled={
+                mode === 'preview' || !dirty || chatPending || savePending
+              }
+              title={
+                !dirty ? 'There are no unsaved changes to discard.' : undefined
+              }
+              onClick={onDiscard}
+              data-testid='discard-draft-changes'
+            >
+              <RotateCcw />
+              <span className='max-[900px]:sr-only'>Discard changes</span>
+            </button>
+            <button
+              type='button'
+              className={`${PRIMARY_BUTTON_CLASS} max-[900px]:h-10 max-[900px]:min-h-10 max-[900px]:w-10 max-[900px]:p-0`}
+              disabled={
+                mode === 'preview' || !dirty || savePending || chatPending
+              }
               onClick={onSave}
               data-testid='save-draft'
             >
               {savePending ? <Loader2 className='animate-spin' /> : <Save />}
-              <span className='max-[760px]:sr-only'>Save Draft</span>
+              <span className='max-[900px]:sr-only'>Save Draft</span>
             </button>
           </div>
         </div>

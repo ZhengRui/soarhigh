@@ -28,6 +28,16 @@ function workspaceSummary(
     readySourceCount: 0,
     includedSourceCount: 0,
     draftVersion: null,
+    publication: {
+      state: 'not-synced',
+      workspaceId,
+      slug: null,
+      publicRevision: null,
+      sourceDraftVersion: null,
+      currentDraftVersion: null,
+      publishedAt: null,
+      publicUrl: null,
+    },
     ...overrides,
   };
 }
@@ -172,10 +182,37 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
                 readySourceCount: 1,
                 includedSourceCount: 1,
                 draftVersion: 14,
+                publication: {
+                  state: 'up-to-date',
+                  workspaceId: 'wxpost-4f2c9a7bd861',
+                  slug: 'culture-belonging',
+                  publicRevision: 3,
+                  sourceDraftVersion: 14,
+                  currentDraftVersion: 14,
+                  publishedAt: '2026-08-01T08:00:00Z',
+                  publicUrl:
+                    'http://localhost:3000/posts/wxposts/culture-belonging',
+                },
               }),
               workspaceSummary('wxpost-second', {
                 meetingId: 'meeting-461',
                 articleType: 'meeting-recap',
+              }),
+              workspaceSummary('wxpost-newer-draft', {
+                articleType: 'custom',
+                customArticleType: 'Field Guide',
+                draftVersion: 15,
+                publication: {
+                  state: 'update-available',
+                  workspaceId: 'wxpost-newer-draft',
+                  slug: 'newer-draft-ready',
+                  publicRevision: 2,
+                  sourceDraftVersion: 12,
+                  currentDraftVersion: 15,
+                  publishedAt: '2026-08-01T08:00:00Z',
+                  publicUrl:
+                    'http://localhost:3000/posts/wxposts/newer-draft-ready',
+                },
               }),
             ]
       ),
@@ -223,17 +260,35 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
   ).toHaveCount(0);
   await expect(workspace.getByText(/Created by Test Member/)).toBeVisible();
   await expect(workspace.getByText('Draft · v14')).toBeVisible();
+  await expect(
+    workspace.getByText('Public revision 3 · from Draft v14')
+  ).toBeVisible();
+  await expect(
+    page
+      .getByTestId('workspace-wxpost-newer-draft')
+      .getByText(
+        'Public revision 2 · from Draft v12 · Draft v15 ready to publish'
+      )
+  ).toBeVisible();
+  await expect(
+    workspace.getByRole('link', {
+      name: 'Open public WxPost for Culture, belonging, and the courage to speak',
+    })
+  ).toHaveAttribute(
+    'href',
+    'http://localhost:3000/posts/wxposts/culture-belonging'
+  );
   expect(meetingBatchRequests).toEqual([['meeting-462', 'meeting-461']]);
   expect(fullMeetingRequests).toEqual([]);
   const previewDraft = workspace.getByRole('link', {
-    name: 'Preview Draft',
+    name: 'Go to Draft',
   });
   await expect(previewDraft).toHaveAttribute(
     'href',
     '/posts/wxposts/edit/4f2c9a7bd861?view=preview'
   );
   const continueWorkspace = workspace.getByRole('link', {
-    name: 'Continue workspace',
+    name: 'Go to Materials',
   });
   await expect(continueWorkspace).toHaveAttribute(
     'href',
@@ -241,9 +296,14 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
   );
   await expect(continueWorkspace).toHaveCSS('border-radius', '9999px');
   await expect(
+    workspace.locator(
+      'a[aria-label="Go to Materials"] + a[aria-label="Go to Draft"]'
+    )
+  ).toHaveCount(1);
+  await expect(
     page
       .getByTestId('workspace-wxpost-second')
-      .getByRole('link', { name: 'Preview Draft' })
+      .getByRole('link', { name: 'Go to Draft' })
   ).toHaveCount(0);
 
   await page.setViewportSize({ width: 320, height: 720 });
@@ -269,6 +329,9 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
     .click();
   const dialog = page.getByTestId('delete-workspace-dialog');
   await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(
+    'Any already published WxPost and its public assets will remain available.'
+  );
   await dialog.getByRole('button', { name: 'Delete workspace' }).click();
   await refreshStarted;
 
@@ -333,7 +396,7 @@ test('keeps linked workspaces usable when meeting details fail', async ({
   const workspace = page.getByTestId('workspace-wxpost-linked');
   await expect(workspace.getByRole('heading')).toHaveText('Linked meeting');
   await expect(
-    workspace.getByRole('link', { name: 'Continue workspace' })
+    workspace.getByRole('link', { name: 'Go to Materials' })
   ).toHaveAttribute('href', '/posts/wxposts/edit/linked');
   await expect(
     workspace.getByRole('button', { name: /Delete Linked meeting/ })
@@ -638,6 +701,16 @@ test('refreshes a cached empty list after creating an independent workspace', as
             (source) => source.included
           ).length,
           draftVersion: context.manifest.draft?.version ?? null,
+          publication: {
+            state: 'not-synced' as const,
+            workspaceId: context.workspaceId,
+            slug: null,
+            publicRevision: null,
+            sourceDraftVersion: null,
+            currentDraftVersion: context.manifest.draft?.version ?? null,
+            publishedAt: null,
+            publicUrl: null,
+          },
         }))
       ),
     });
@@ -670,7 +743,7 @@ test('refreshes a cached empty list after creating an independent workspace', as
     window.scrollTo(0, 900);
   });
   expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-  await page.getByRole('link', { name: 'Continue workspace' }).click();
+  await page.getByRole('link', { name: 'Go to Materials' }).click();
   await expect(page.getByTestId('materials-stage')).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await page.getByTestId('wxpost-workspaces-link').click();

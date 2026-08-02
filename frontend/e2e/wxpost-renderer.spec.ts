@@ -74,11 +74,13 @@ test('renders the formal public page and every v1 directive', async ({
 
   await expect(page.getByText('WxPost', { exact: true })).toBeVisible();
   await expect(page.getByText('Revision 3', { exact: true })).toBeVisible();
+  await expect(page.getByText('Meeting 236', { exact: true })).toBeVisible();
   await expect(
     page.getByTestId('wxpost-article').getByText('Meeting 236', { exact: true })
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(page.getByText('meeting-236', { exact: true })).toHaveCount(0);
   await expect(page.getByText('WxPost Renderer Lab')).toHaveCount(0);
+  await expect(page.getByTestId('delete-public-wxpost')).toHaveCount(0);
 
   for (const directive of [
     'section',
@@ -113,6 +115,138 @@ test('renders the formal public page and every v1 directive', async ({
     'src',
     /interactive-examples\.mdn\.mozilla\.net/
   );
+});
+
+test('does not repeat the public article label in the Field Notes header', async ({
+  page,
+}) => {
+  const article = structuredClone(WXPOST_FIXTURES['meeting-recap']);
+  article.title = 'A Community Garden Begins with Attention';
+  article.articleType = 'custom';
+  article.customArticleType = 'Community Garden Field Guide';
+  article.presentation.layout = 'field-notes';
+
+  await page.route(/\/posts\/wxposts\/custom-field-note$/, async (route) => {
+    if (route.request().resourceType() === 'document') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      json: {
+        id: '00000000-0000-4000-8000-000000000002',
+        slug: 'custom-field-note',
+        is_public: true,
+        article_revision: 1,
+        context_label: 'Community Garden Field Guide',
+        created_at: '2026-08-01T12:00:00+00:00',
+        updated_at: '2026-08-01T12:00:00+00:00',
+        render_document: article,
+      },
+    });
+  });
+
+  await page.goto('/posts/wxposts/custom-field-note');
+  await expect(
+    page.getByRole('heading', { level: 1, name: article.title })
+  ).toBeVisible();
+
+  await expect(
+    page
+      .getByTestId('wxpost-article')
+      .getByText('Community Garden Field Guide', { exact: true })
+  ).toHaveCount(1);
+  await expect(
+    page.getByTestId('wxpost-article').locator('[data-wxpost-hero-mark]')
+  ).toHaveCount(0);
+});
+
+test('lets a signed-in member delete the public revision and its media', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    window.localStorage.setItem('token', 'member-token');
+  });
+  await page.route(/\/whoami$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        uid: 'member-123',
+        username: 'member',
+        full_name: 'Test Member',
+      },
+    });
+  });
+  let deletion: { id: string; revision: number } | null = null;
+  await page.route(
+    /\/posts\/wxposts\/([^/?]+)\/publication$/,
+    async (route) => {
+      const match = /\/posts\/wxposts\/([^/?]+)\/publication$/.exec(
+        new URL(route.request().url()).pathname
+      );
+      const body = route.request().postDataJSON() as {
+        expectedPublicRevision: number;
+      };
+      deletion = {
+        id: match?.[1] ?? '',
+        revision: body.expectedPublicRevision,
+      };
+      await route.fulfill({
+        status: 200,
+        json: { deleted: true, workspaceId: 'wxpost-meeting-recap' },
+      });
+    }
+  );
+
+  await openFixture(page);
+  const header = await page.getByTestId('public-wxpost-header').boundingBox();
+  const metadata = await page
+    .getByTestId('public-wxpost-metadata')
+    .boundingBox();
+  const deleteButton = await page
+    .getByTestId('delete-public-wxpost')
+    .boundingBox();
+  const contextLabel = await page
+    .getByTestId('public-wxpost-context')
+    .boundingBox();
+  const title = await page.getByTestId('public-wxpost-title').boundingBox();
+  expect(header).not.toBeNull();
+  expect(metadata).not.toBeNull();
+  expect(deleteButton).not.toBeNull();
+  expect(contextLabel).not.toBeNull();
+  expect(title).not.toBeNull();
+  expect(deleteButton!.x + deleteButton!.width).toBeCloseTo(
+    header!.x + header!.width,
+    0
+  );
+  expect(deleteButton!.y).toBeCloseTo(header!.y, 0);
+  expect(contextLabel!.x + contextLabel!.width).toBeLessThanOrEqual(
+    deleteButton!.x
+  );
+  expect(title!.x + title!.width).toBeLessThanOrEqual(deleteButton!.x);
+  expect(metadata!.y).toBeGreaterThan(deleteButton!.y);
+  await page.getByTestId('delete-public-wxpost').click();
+  const dialog = page.getByTestId('delete-public-wxpost-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(
+    'This removes the public revision and its public media. The private workspace and Draft will remain.'
+  );
+  // The app's Supabase client may reconcile its empty test session after the
+  // page has loaded. Restore the synthetic member token immediately before
+  // exercising the authenticated request.
+  await dialog
+    .getByRole('button', { name: 'Delete public WxPost' })
+    .evaluate((button) => {
+      window.localStorage.setItem('token', 'member-token');
+      (button as HTMLButtonElement).click();
+    });
+
+  await expect(page).toHaveURL(/\/posts$/);
+  expect(deletion).toEqual({
+    id: '00000000-0000-4000-8000-meeting-reca',
+    revision: 3,
+  });
 });
 
 test('renders a controlled placeholder for missing media', async ({ page }) => {
@@ -468,7 +602,7 @@ test('keeps three article shapes readable in every layout and preview size', asy
         if (layout === 'field-notes') {
           await expect(
             article.locator('[data-wxpost-hero-mark="true"]')
-          ).toBeVisible();
+          ).toHaveCount(0);
           if (geometry.sectionRoot) {
             expect(geometry.sectionRoot.borderTopWidth).toBeGreaterThanOrEqual(
               1

@@ -1,13 +1,16 @@
 import json
 from collections.abc import Iterator
+from uuid import UUID
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from postgrest.exceptions import APIError
 
 import app.api.routes.wxpost as wxpost_route
 from app.api.serv import app
 from app.models.users import User
+from app.models.wxpost import WxPostPublicationStatus
 
 
 @pytest.fixture
@@ -171,6 +174,204 @@ def test_authenticated_members_can_list_and_delete_all_workspaces(
     ]
     assert dict(captured[0].url.params) == {"page": "2", "page_size": "5"}
     assert captured[1].headers["X-Expected-Manifest-Version"] == "4"
+
+
+def test_workspace_list_is_enriched_with_batch_publication_status(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "workspaceId": "wxpost-abc",
+                        "draftVersion": 4,
+                    }
+                ],
+                "total": 1,
+                "page": 1,
+                "page_size": 10,
+                "pages": 1,
+            },
+        )
+
+    _configure_controller(monkeypatch, handler)
+    monkeypatch.setattr(
+        wxpost_route,
+        "get_wxposts_by_workspace_ids",
+        lambda workspace_ids: [
+            {
+                "slug": "public-note",
+                "status": "ready",
+                "is_public": True,
+                "article_revision": 2,
+                "source_workspace_id": "wxpost-abc",
+                "source_draft_version": 3,
+                "source_draft_sha256": "a" * 64,
+                "updated_at": "2026-08-01T08:00:00Z",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        wxpost_route,
+        "WXPOST_PUBLIC_BASE_URL",
+        "https://soarhigh.example",
+    )
+
+    response = client.get("/posts/wxposts/workspaces")
+
+    assert response.status_code == 200
+    status = response.json()["items"][0]["publication"]
+    assert status["state"] == "update-available"
+    assert status["publicRevision"] == 2
+    assert status["currentDraftVersion"] == 4
+
+
+def test_workspace_list_survives_unavailable_publication_status(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "items": [{"workspaceId": "wxpost-abc", "draftVersion": 4}],
+                "total": 1,
+                "page": 1,
+                "page_size": 10,
+                "pages": 1,
+            },
+        )
+
+    _configure_controller(monkeypatch, handler)
+    monkeypatch.setattr(
+        wxpost_route,
+        "get_wxposts_by_workspace_ids",
+        lambda workspace_ids: (_ for _ in ()).throw(
+            APIError(
+                {
+                    "message": "database unavailable",
+                    "code": "503",
+                    "hint": "",
+                    "details": "",
+                }
+            )
+        ),
+    )
+
+    response = client.get("/posts/wxposts/workspaces")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["publication"] == {
+        "state": "unavailable",
+        "workspaceId": "wxpost-abc",
+        "slug": None,
+        "publicRevision": None,
+        "sourceDraftVersion": None,
+        "currentDraftVersion": 4,
+        "publishedAt": None,
+        "publicUrl": None,
+    }
+
+
+def test_member_can_read_and_sync_workspace_publication(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = {
+        "workspaceId": "wxpost-abc",
+        "manifest": {"manifestVersion": 5, "sources": []},
+        "draft": {"draftVersion": 3, "document": {}},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=context)
+
+    _configure_controller(monkeypatch, handler)
+    monkeypatch.setattr(
+        wxpost_route,
+        "get_wxpost_by_workspace_id",
+        lambda workspace_id: None,
+    )
+    calls: list[dict] = []
+
+    async def sync(workspace_id, request, **kwargs):
+        calls.append(
+            {
+                "workspace_id": workspace_id,
+                "request": request.model_dump(by_alias=True),
+            }
+        )
+        return WxPostPublicationStatus(
+            state="up-to-date",
+            workspaceId=workspace_id,
+            slug="public-note",
+            publicRevision=1,
+            sourceDraftVersion=3,
+            currentDraftVersion=3,
+            publishedAt="2026-08-01T08:00:00Z",
+            publicUrl="https://soarhigh.example/posts/wxposts/public-note",
+        )
+
+    monkeypatch.setattr(
+        wxpost_route,
+        "synchronize_workspace_publication",
+        sync,
+    )
+
+    status_response = client.get("/posts/wxposts/workspaces/wxpost-abc/publication")
+    sync_response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/sync",
+        json={
+            "expectedManifestVersion": 5,
+            "expectedDraftVersion": 3,
+            "expectedPublicRevision": None,
+        },
+    )
+
+    assert status_response.status_code == 200
+    assert status_response.json()["state"] == "not-synced"
+    assert sync_response.status_code == 200
+    assert sync_response.json()["state"] == "up-to-date"
+    assert calls == [
+        {
+            "workspace_id": "wxpost-abc",
+            "request": {
+                "expectedManifestVersion": 5,
+                "expectedDraftVersion": 3,
+                "expectedPublicRevision": None,
+            },
+        }
+    ]
+
+
+def test_member_can_delete_a_public_wxpost_revision(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[UUID, int]] = []
+
+    async def delete(wxpost_id: UUID, *, expected_revision: int) -> str:
+        calls.append((wxpost_id, expected_revision))
+        return "wxpost-abc"
+
+    monkeypatch.setattr(wxpost_route, "delete_public_wxpost", delete)
+    wxpost_id = UUID("00000000-0000-4000-8000-000000000777")
+
+    response = client.request(
+        "DELETE",
+        f"/posts/wxposts/{wxpost_id}/publication",
+        json={"expectedPublicRevision": 3},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "deleted": True,
+        "workspaceId": "wxpost-abc",
+    }
+    assert calls == [(wxpost_id, 3)]
 
 
 def test_voice_tone_suggestion_uses_workspace_context_and_existing_token(

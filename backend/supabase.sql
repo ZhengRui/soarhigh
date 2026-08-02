@@ -114,6 +114,9 @@ CREATE TABLE wxposts (
         ),
     custom_article_type TEXT,
     source_meeting_id UUID REFERENCES meetings(id) ON DELETE SET NULL,
+    source_workspace_id TEXT,
+    source_draft_version INTEGER,
+    source_draft_sha256 TEXT,
     excerpt TEXT,
     byline TEXT,
     media_manifest JSONB NOT NULL DEFAULT '[]'::jsonb
@@ -167,6 +170,27 @@ CREATE TABLE wxposts (
     CONSTRAINT wxposts_finalize_hash_valid CHECK (
         finalize_request_hash IS NULL
         OR finalize_request_hash ~ '^[0-9a-f]{64}$'
+    ),
+    CONSTRAINT wxposts_source_workspace_not_blank CHECK (
+        source_workspace_id IS NULL
+        OR source_workspace_id ~ '[^[:space:]]'
+    ),
+    CONSTRAINT wxposts_source_draft_version_positive CHECK (
+        source_draft_version IS NULL
+        OR source_draft_version >= 1
+    ),
+    CONSTRAINT wxposts_source_draft_sha256_valid CHECK (
+        source_draft_sha256 IS NULL
+        OR source_draft_sha256 ~ '^[0-9a-f]{64}$'
+    ),
+    CONSTRAINT wxposts_source_draft_fields_complete CHECK (
+        (source_workspace_id IS NULL
+         AND source_draft_version IS NULL
+         AND source_draft_sha256 IS NULL)
+        OR
+        (source_workspace_id IS NOT NULL
+         AND source_draft_version IS NOT NULL
+         AND source_draft_sha256 IS NOT NULL)
     )
 );
 
@@ -397,6 +421,10 @@ CREATE UNIQUE INDEX wxposts_prepare_idempotency_key_hash_idx
 
 CREATE INDEX wxpost_assets_wxpost_id_idx
     ON wxpost_assets (wxpost_id);
+
+CREATE UNIQUE INDEX wxposts_source_workspace_id_idx
+    ON wxposts (source_workspace_id)
+    WHERE source_workspace_id IS NOT NULL;
 
 -- Ensures meeting_id, category, and name are unique
 CREATE UNIQUE INDEX unique_meeting_category_name ON votes(meeting_id, category, name);

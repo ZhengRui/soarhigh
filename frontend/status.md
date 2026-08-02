@@ -1,6 +1,6 @@
 # SoarHigh Toastmasters Club - Frontend Status
 
-**Last updated:** 2026-07-31
+**Last updated:** 2026-08-01
 
 **WxPost checkpoint:** `d1c85a4` is the committed pre-Slice-6 base. The current
 working tree completes Slice 6: one workspace-scoped Hermes session and formal
@@ -18,9 +18,10 @@ complete WxPost browser suite, and full Backend/controller suites cover the
 deterministic behavior. Real Hermes generation succeeded for six linked
 meeting/event workspaces plus one independent workspace, and signed-in Chrome
 verified the complete rich-block and presentation matrix at desktop and 390 px.
-Public sync, WeChat delivery,
-Feishu ingestion, and selected-image description generation remain in their
-already planned later boundaries.
+Slice 7A now adds explicit saved-Draft-to-public synchronization, one stable
+public WxPost per workspace, revision/freshness status in Draft and Workspaces,
+and atomic Supabase/OSS publication. Feishu ingestion and selected-image
+description generation remain Slice 7B; WeChat delivery remains Phase 3.
 
 ## Application Overview
 
@@ -206,9 +207,21 @@ All routes in the (auth) group are protected by authentication middleware which 
   of a broken private URL
 - Regenerate replaces the current canonical Draft and advances its version;
   retained version history and rollback are not part of Slice 6
-- Feishu active-workspace selection, Feishu attachment ingestion, selected-image
-  description generation, and explicit public-preview synchronization are not
-  part of that Draft-workbench slice
+- Feishu active-workspace selection, Feishu attachment ingestion, and
+  selected-image description generation are not part of the Draft workbench or
+  Slice 7A
+- Explicit public sync always reads the saved Draft again on Backend; unsaved
+  Draft edits disable synchronization and are never published accidentally
+- First sync creates public revision 1 behind a confirmation dialog. A later
+  saved Draft becomes `update available`; explicit update keeps the stable slug
+  and advances the public revision
+- Public synchronization fingerprints the normalized saved Draft plus ordered
+  referenced media content hashes. Ready public assets are reused, retries are
+  idempotent, and a failed or conflicting update preserves the previous ready
+  public revision
+- Workspace deletion does not retract an already public WxPost or delete its
+  public assets. A signed-in member can separately delete the public revision
+  and its public media from the public preview page
 
 #### Draft and presentation contract
 
@@ -220,9 +233,9 @@ All routes in the (auth) group are protected by authentication middleware which 
   changing one makes the Draft dirty and explicit `Save Draft` persists it
 - Desktop/Mobile is browser view state only. It is never written to the Draft
   and does not make the Draft dirty
-- A future public-delivery stage should be named for its distinct responsibility
-  (`Publish` or `Sync`) and own public revisions, OSS synchronization, and the
-  public URL; a generic Preview stage should not be retained for that work
+- Public delivery is an explicit `Sync Public WxPost` action inside Draft. It
+  owns public revisions, OSS synchronization, and the stable public URL; a
+  generic standalone Preview stage is not retained for that work
 
 #### Content-template contract
 
@@ -463,18 +476,69 @@ Acceptance:
   aspect ratio, remains centered, and has no arbitrary maximum height or crop
 - multi-image galleries use horizontal touch/trackpad scrolling and snapping
   without previous/next arrow controls
+- Draft Edit provides a responsive cover picker over all workspace-ready
+  images. A cover may remain outside the article body; cover changes stay local
+  until Save Draft, and Materials deletion remains blocked while the saved
+  Draft still references the image as its cover or body media
 - renderer fixture tests cover all supported nodes, themes, missing media, and
   sanitization, followed by real signed-in desktop and mobile browser smoke
 
-#### Slice 7 - Feishu ingestion, image descriptions, and public sync
+#### Slice 7A complete - saved Draft to public WxPost synchronization
+
+The saved workspace Draft remains the editorial authority. Supabase and OSS
+are a public projection, not another editor: Backend reloads and version-checks
+the saved Draft, resolves every included workspace material, uploads or reuses
+content-addressed public assets, runs the canonical trusted renderer, and only
+then swaps the complete public row with one guarded update.
+
+Implemented contract:
+
+- `source_workspace_id` enforces one public WxPost per workspace;
+  `source_draft_version` and `source_draft_sha256` identify the exact published
+  bundle
+- first publication remains hidden in `assembling` until every asset and the
+  canonical render are ready; updates leave the previous `ready` revision
+  public until finalization
+- status is derived as `not-synced`, `up-to-date`, or `update-available`; the
+  Draft and Workspaces UI display the same Backend result, while an unavailable
+  Supabase status does not block private workspace listing
+- member confirmation is required for first sync and update, version conflicts
+  reuse the existing load-latest dialog, and ordinary failures use the existing
+  toast pattern
+- public content contains only public OSS URLs; after a new revision becomes
+  ready, public assets it no longer references are removed from OSS and the
+  asset table. Private workspace poster URLs are never exposed
+- public reads require both `status = ready` and `is_public = true`; the stable
+  route remains anonymously accessible
+- workspace-linked public rows cannot be edited through the older direct WxPost
+  update endpoint; changes must return to the saved Draft and explicit sync
+- deleting the private workspace leaves its durable public WxPost and assets
+  unchanged; signed-in members can separately delete that public revision from
+  its public page without deleting the workspace or saved Draft
+
+Acceptance completed with backend service/DB/route tests, Draft and Workspaces
+browser tests, TypeScript/Ruff/mypy checks, a dry-run plus applied Supabase
+migration, and real signed-in/anonymous Chrome smoke. The real public-media
+run synchronized workspace `wxpost-a086a9e56a7e` Draft v5 to revision 1 at one
+stable slug, copied all three included images to `public/wxposts/...` OSS keys,
+rendered those public assets in Chrome, and exposed no private workspace URLs.
+Repeating the same synchronization kept revision 1 and exactly three ready
+asset rows. A separate revision run exercised two-tab conflict handling,
+failed-network retry, and the previous-ready-revision guarantee through Draft
+v18/public revision 5. Workspaces and Draft were also checked in real Chrome
+at desktop, 820 px, and 390 px with no horizontal document overflow; the
+private test workspace `wxpost-31a400fcfce7` was then permanently deleted and
+the public `/posts/wxposts/regenerate-conflict-source-v14` remained available
+at revision 5.
+
+#### Slice 7B - Feishu ingestion and image descriptions
 
 Complete the cross-surface workflow without rebuilding the Materials editor
 inside Feishu cards. Feishu selects or creates the active workspace, collects
 attachments and concise instructions, reports status, and links to the web
 workspace for full editing. Selected-image description generation uses Hermes
-and writes through the same versioned controller. Public sync materializes OSS
-assets and a public SoarHigh revision from the saved Draft and canonical
-renderer output.
+and writes through the same versioned controller. It reuses the completed
+Slice 7A publication status and does not add another rendering path.
 
 Acceptance:
 
@@ -485,10 +549,6 @@ Acceptance:
   Materials page with correct provenance
 - image-description generation is explicit, scoped to selected images, and
   produces editable suggestions rather than silently overwriting descriptions
-- public sync validates cover, title, author, excerpt/summary, visibility, asset
-  readiness, and revision conflicts before writing Supabase or public assets
-- retrying a failed public sync is idempotent and cannot expose a partially
-  synchronized revision
 - generation and public-sync status can be queried from Feishu, while complex
   editing remains in the web UI
 - one real Feishu-to-web-to-Hermes-to-public-WxPost smoke proves the complete
@@ -696,14 +756,18 @@ The meeting management workflow is now fully implemented:
      opens Hermes in a bottom sheet on mobile
    - Supports local title/block edits, selected-text context, and explicit Save
      Draft
+   - Supports structural media removal in Draft Edit without changing
+     Materials; Materials deletion is blocked until every saved Draft reference
+     is removed and the Draft is saved
    - Keeps authoring and review in Draft-local Edit/Preview modes with shared
      layout, palette, appearance, typeface, and Desktop/Mobile controls
    - Persists presentation choices with Save Draft while keeping Desktop/Mobile
      canvas selection browser-local
    - Preserves the saved Draft on generation/chat failure or version conflict;
      stale direct edits remain local for the member to recover
-   - Leaves Feishu workspace/attachment integration, selected-image
-     descriptions, and public-preview synchronization for the following slice
+   - Leaves Feishu workspace/attachment integration and selected-image
+     descriptions for the following slice; explicit public synchronization is
+     complete in Slice 7A
 
 9. **Voting System**
 

@@ -73,6 +73,7 @@ test('adds explicit source keys only to authoring output', () => {
 
   expect(published).not.toContain('data-wxpost-edit-key');
   expect(published).not.toContain('data-wxpost-edit-label');
+  expect(published).not.toContain('data-wxpost-delete-item');
   for (const label of [
     'draft title',
     'draft excerpt',
@@ -104,6 +105,9 @@ test('adds explicit source keys only to authoring output', () => {
     expect(authoring).toContain(`data-wxpost-edit-label="${label}"`);
   }
   expect(authoring).toContain('data-wxpost-decoration="true"');
+  expect(authoring).toContain('data-wxpost-delete-item');
+  expect(authoring).toContain('aria-label="Delete info item"');
+  expect(authoring).toContain('aria-label="Delete timeline item"');
 });
 
 test('omits an absent public date instead of inventing header metadata', () => {

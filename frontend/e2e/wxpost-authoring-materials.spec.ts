@@ -519,13 +519,24 @@ test('runs immediate import, upload, and delete operations without UI regression
     .getByRole('button', { name: 'Delete web-photo.png from workspace' })
     .click();
   await expect(page.getByTestId('delete-material-dialog')).toContainText(
-    'used by the saved draft'
+    'used by Draft v0'
   );
+  await expect(
+    page
+      .getByTestId('delete-material-dialog')
+      .getByRole('button', { name: 'Delete' })
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByTestId('delete-material-dialog')
+      .getByRole('button', { name: 'Go to Draft' })
+  ).toBeVisible();
   await page
     .getByTestId('delete-material-dialog')
-    .getByRole('button', { name: 'Delete' })
+    .getByRole('button', { name: 'Cancel' })
     .click();
-  await expect(page.getByTestId('material-M04')).toHaveCount(0);
+  await expect(page.getByTestId('material-M04')).toBeVisible();
+  workspace.referencedSourceIds.delete('M04');
 
   await description.fill('Do not lose this local text on conflict.');
   context.manifest.sources[0].description = 'Latest saved description.';
@@ -581,7 +592,6 @@ test('runs immediate import, upload, and delete operations without UI regression
       'DELETE /sources/M01',
       'POST /uploads',
       'GET /sources/M04/delete-preflight',
-      'DELETE /sources/M04',
       'POST /sources/M02/import',
       'POST /sources/M02/import',
       'GET /context',

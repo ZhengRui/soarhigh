@@ -305,7 +305,12 @@ def validate_and_parse(document: ArticleDocument) -> ParsedArticle:
     _validate_document_shape(document, errors)
     parsed = _parse_markdown(document.body_markdown, errors)
     _validate_section_structure(parsed.body, errors)
-    _validate_directive_media(parsed.directives, document.media, errors)
+    _validate_directive_media(
+        parsed.directives,
+        document.media,
+        document.cover_media_id,
+        errors,
+    )
 
     if errors:
         raise ArticleDocumentValidationError(errors)
@@ -631,6 +636,7 @@ def _find_unsafe_html(value: Any, path: tuple[str | int, ...] = ()) -> list[str 
 def _validate_directive_media(
     directives: Iterable[ParsedDirective],
     media: list[MediaAsset],
+    cover_media_id: str | None,
     errors: list[ValidationIssue],
 ) -> None:
     by_id = {asset.id: asset for asset in media}
@@ -708,14 +714,14 @@ def _validate_directive_media(
                 )
 
     for asset in media:
-        if asset.include and asset.id not in referenced_ids:
+        if asset.include and asset.id not in referenced_ids and asset.id != cover_media_id:
             errors.append(
                 ValidationIssue(
                     code="included_media_not_referenced",
                     path=["bodyMarkdown"],
                     message=(
                         f"Included media {asset.id!r} must appear in a supported "
-                        "image, gallery, video, or person directive."
+                        "image, gallery, video, or person directive, or be the cover."
                     ),
                 )
             )

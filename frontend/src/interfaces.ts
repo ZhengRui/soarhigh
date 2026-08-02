@@ -93,6 +93,7 @@ export interface ContentListItemIF {
   };
   is_public: boolean;
   cover_image_url?: string | null;
+  article_revision?: number | null;
   created_at: string;
 }
 

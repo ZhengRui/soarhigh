@@ -84,6 +84,44 @@ function directiveEditAttributes(
   );
 }
 
+function directiveItemDeleteButton(
+  editable: boolean,
+  nodeIndex: number,
+  itemIndex: number,
+  label: string
+) {
+  if (!editable) return '';
+  const key = wxPostEditKey({
+    kind: 'directive',
+    nodeIndex,
+    path: ['items', itemIndex],
+  });
+  return `<button type="button" data-wxpost-delete-item="${escapeAttribute(
+    key
+  )}" aria-label="Delete ${escapeAttribute(label)}" title="Delete item" ${styleAttribute(
+    [
+      ['position', 'absolute'],
+      ['top', '0'],
+      ['right', '0'],
+      ['display', 'flex'],
+      ['width', '28px'],
+      ['height', '28px'],
+      ['align-items', 'center'],
+      ['justify-content', 'center'],
+      ['border', '0'],
+      ['border-radius', '999px'],
+      ['background', 'rgba(254,242,242,0.92)'],
+      ['color', '#b91c1c'],
+      ['cursor', 'pointer'],
+      ['font-family', 'ui-sans-serif,system-ui,sans-serif'],
+      ['font-size', '18px'],
+      ['font-weight', '600'],
+      ['line-height', '1'],
+      ['padding', '0'],
+    ]
+  )}>&times;</button>`;
+}
+
 function mediaEditAttributes(
   editable: boolean,
   mediaId: string,
@@ -275,6 +313,55 @@ function imageMarkup(
   ])}>`;
 }
 
+function mediaDeleteButton(
+  editable: boolean,
+  mediaId: string,
+  deleteKey: string,
+  label: string
+) {
+  if (!editable) return '';
+  return `<button type="button" data-wxpost-delete-media="${escapeAttribute(
+    mediaId
+  )}" data-wxpost-delete-key="${escapeAttribute(
+    deleteKey
+  )}" class="bg-red-400/75 transition-colors hover:bg-red-500" aria-label="${escapeAttribute(label)}" title="${escapeAttribute(
+    label
+  )}" contenteditable="false" ${styleAttribute([
+    ['position', 'absolute'],
+    ['top', '10px'],
+    ['right', '10px'],
+    ['z-index', '2'],
+    ['display', 'grid'],
+    ['width', '32px'],
+    ['height', '32px'],
+    ['place-items', 'center'],
+    ['padding', '0'],
+    ['border', '1px solid rgba(255,255,255,0.35)'],
+    ['border-radius', '9999px'],
+    ['box-shadow', '0 2px 8px rgba(15,23,42,0.22)'],
+    ['color', '#ffffff'],
+    ['cursor', 'pointer'],
+  ])}><svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16" ${styleAttribute(
+    [['display', 'block']]
+  )}><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>`;
+}
+
+function editableMediaFrame(
+  body: string,
+  editable: boolean,
+  mediaId: string,
+  deleteKey: string,
+  label: string
+) {
+  return `<div data-wxpost-media-frame="${escapeAttribute(
+    mediaId
+  )}"${editable ? ' tabindex="0"' : ''} ${styleAttribute([
+    ['position', 'relative'],
+    ['min-width', '0'],
+    ['outline', 'none'],
+  ])}>${body}${mediaDeleteButton(editable, mediaId, deleteKey, label)}</div>`;
+}
+
 function moduleShell(
   name: string,
   line: number,
@@ -312,11 +399,17 @@ function renderImage(
   return moduleShell(
     'image',
     node.line,
-    `<figure ${styleAttribute([['margin', '0']])}>${imageMarkup(
-      media,
-      context,
-      tokens,
-      `Missing image ${node.payload.media}`
+    `<figure ${styleAttribute([['margin', '0']])}>${editableMediaFrame(
+      imageMarkup(
+        media,
+        context,
+        tokens,
+        `Missing image ${node.payload.media}`
+      ),
+      editable,
+      node.payload.media,
+      wxPostEditKey({ kind: 'directive', nodeIndex, path: ['media'] }),
+      `Remove ${node.payload.media} from Draft`
     )}${
       figureCaption ? caption(figureCaption, tokens, captionAttributes) : ''
     }</figure>`,
@@ -332,9 +425,10 @@ function renderGallery(
   editable: boolean,
   nodeIndex: number
 ) {
-  const items = node.payload.items
-    .map((id) => mediaById.get(id))
-    .filter((media): media is WxPostMediaAsset => Boolean(media));
+  const items = node.payload.items.flatMap((id, itemIndex) => {
+    const media = mediaById.get(id);
+    return media ? [{ media, itemIndex }] : [];
+  });
   const heading = node.payload.caption
     ? `<div ${styleAttribute([['margin-bottom', '14px']])}>${moduleLabel(
         'Gallery',
@@ -352,17 +446,22 @@ function renderGallery(
     : moduleLabel('Gallery', tokens);
   const figures = items
     .map(
-      (media) =>
+      ({ media, itemIndex }) =>
         `<figure ${styleAttribute([
           ['flex', '0 0 100%'],
           ['min-width', '0'],
           ['margin', '0'],
           ['scroll-snap-align', 'start'],
-        ])}>${imageMarkup(
-          media,
-          context,
-          tokens,
-          `Missing image ${media.id}`
+        ])}>${editableMediaFrame(
+          imageMarkup(media, context, tokens, `Missing image ${media.id}`),
+          editable,
+          media.id,
+          wxPostEditKey({
+            kind: 'directive',
+            nodeIndex,
+            path: ['items', itemIndex],
+          }),
+          `Remove ${media.id} from Draft`
         )}${caption(
           media.description,
           tokens,
@@ -447,7 +546,13 @@ function renderDirective(
         node.line,
         `<div ${styleAttribute([
           ['margin-bottom', '14px'],
-        ])}>${heading}</div>${video}${
+        ])}>${heading}</div>${editableMediaFrame(
+          video,
+          editable,
+          node.payload.media,
+          wxPostEditKey({ kind: 'directive', nodeIndex, path: ['media'] }),
+          `Remove ${node.payload.media} from Draft`
+        )}${
           media
             ? caption(
                 media.description,
@@ -567,7 +672,17 @@ function renderDirective(
             ? `<div ${styleAttribute([
                 ['flex', '1 1 180px'],
                 ['min-width', '0'],
-              ])}>${portrait}</div>`
+              ])}>${editableMediaFrame(
+                portrait,
+                editable,
+                node.payload.media!,
+                wxPostEditKey({
+                  kind: 'directive',
+                  nodeIndex,
+                  path: ['media'],
+                }),
+                `Remove ${node.payload.media} from Draft`
+              )}</div>`
             : ''
         }<div ${styleAttribute([
           ['flex', '2 1 260px'],
@@ -581,9 +696,11 @@ function renderDirective(
         .map(
           (item, index) =>
             `<div ${styleAttribute([
+              ['position', 'relative'],
               ['flex', '1 1 140px'],
               ['min-width', '0'],
-            ])}><span ${styleAttribute([
+              ['padding-right', editable ? '34px' : false],
+            ])} data-wxpost-item-container><span ${styleAttribute([
               ['display', 'block'],
               ['color', tokens.muted],
               ['font-size', '16px'],
@@ -601,7 +718,12 @@ function renderDirective(
             )} ${styleAttribute([
               ['color', tokens.text],
               ['font-weight', '600'],
-            ])}>${escapeHtml(item.value)}</strong></div>`
+            ])}>${escapeHtml(item.value)}</strong>${directiveItemDeleteButton(
+              editable,
+              nodeIndex,
+              index,
+              'info item'
+            )}</div>`
         )
         .join('');
       return moduleShell(
@@ -638,12 +760,14 @@ function renderDirective(
         .map(
           (item, index) =>
             `<div ${styleAttribute([
+              ['position', 'relative'],
               ['display', 'flex'],
               ['flex-wrap', 'wrap'],
               ['gap', '8px 16px'],
               ['padding', '14px 0'],
+              ['padding-right', editable ? '34px' : false],
               ['border-top', index > 0 ? `1px solid ${tokens.border}` : false],
-            ])}><strong ${styleAttribute([
+            ])} data-wxpost-item-container><strong ${styleAttribute([
               ['flex', '0 1 80px'],
               ['color', tokens.muted],
               ['font-size', '16px'],
@@ -678,7 +802,12 @@ function renderDirective(
                     ['color', tokens.text],
                   ])}>${escapeHtml(item.description)}</p>`
                 : ''
-            }</div></div>`
+            }</div>${directiveItemDeleteButton(
+              editable,
+              nodeIndex,
+              index,
+              'timeline item'
+            )}</div>`
         )
         .join('');
       return moduleShell(

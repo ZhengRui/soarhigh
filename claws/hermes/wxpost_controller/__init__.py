@@ -1,9 +1,9 @@
 """Deterministic WxPost workspace operations shared by HTTP and MCP."""
 
 from .core import (
-    ConfirmationRequired,
     InvalidRequest,
     InvalidWorkspace,
+    SourceReferencedByDraft,
     UpstreamUnavailable,
     ValidationUnavailable,
     VersionConflict,
@@ -14,9 +14,9 @@ from .core import (
 )
 
 __all__ = [
-    "ConfirmationRequired",
     "InvalidRequest",
     "InvalidWorkspace",
+    "SourceReferencedByDraft",
     "UpstreamUnavailable",
     "ValidationUnavailable",
     "VersionConflict",

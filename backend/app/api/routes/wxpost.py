@@ -11,6 +11,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from postgrest.exceptions import APIError
 from pydantic import BaseModel, StringConstraints, ValidationError
 
 from ...config import (
@@ -26,6 +27,8 @@ from ...db.wxpost import (
     create_wxpost,
     get_public_wxpost_by_slug,
     get_wxpost_by_id,
+    get_wxpost_by_workspace_id,
+    get_wxposts_by_workspace_ids,
     update_wxpost,
 )
 from ...models.users import User
@@ -34,6 +37,10 @@ from ...models.wxpost import (
     WxPostCapabilities,
     WxPostCreateRequest,
     WxPostMutationResult,
+    WxPostPublicationDeleteRequest,
+    WxPostPublicationDeleteResult,
+    WxPostPublicationStatus,
+    WxPostPublicationSyncRequest,
     WxPostPublicDetail,
     WxPostUpdateRequest,
     WxPostValidationFailure,
@@ -49,6 +56,12 @@ from ...services.wxpost_hermes import (
     HermesResponseError,
     HermesUnavailableError,
     suggest_voice_tone_instruction,
+)
+from ...services.wxpost_publication import (
+    PublicationError,
+    delete_public_wxpost,
+    publication_status,
+    synchronize_workspace_publication,
 )
 from .auth import get_current_user
 
@@ -189,6 +202,35 @@ async def _proxy_workspace_controller(
     expected_manifest_version: str | None = None,
     timeout: int = 30,
 ) -> Response:
+    upstream = await _request_workspace_controller(
+        method,
+        path,
+        body=body,
+        content_type=content_type,
+        expected_manifest_version=expected_manifest_version,
+        timeout=timeout,
+    )
+    response_headers = {}
+    if upstream_content_type := upstream.headers.get("Content-Type"):
+        response_headers["Content-Type"] = upstream_content_type
+    if cache_control := upstream.headers.get("Cache-Control"):
+        response_headers["Cache-Control"] = cache_control
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=response_headers,
+    )
+
+
+async def _request_workspace_controller(
+    method: str,
+    path: str,
+    *,
+    body: bytes | None = None,
+    content_type: str | None = None,
+    expected_manifest_version: str | None = None,
+    timeout: int = 30,
+) -> httpx.Response:
     if not WXPOST_CONTROLLER_URL or not WXPOST_SERVICE_TOKEN:
         raise HTTPException(
             status_code=503,
@@ -212,15 +254,64 @@ async def _proxy_workspace_controller(
             status_code=503,
             detail="WxPost workspace controller is unavailable.",
         ) from error
-    response_headers = {}
-    if upstream_content_type := upstream.headers.get("Content-Type"):
-        response_headers["Content-Type"] = upstream_content_type
-    if cache_control := upstream.headers.get("Cache-Control"):
-        response_headers["Cache-Control"] = cache_control
-    return Response(
-        content=upstream.content,
-        status_code=upstream.status_code,
-        headers=response_headers,
+    return upstream
+
+
+def _upstream_error(upstream: httpx.Response) -> HTTPException:
+    message = "WxPost workspace request failed."
+    try:
+        payload = upstream.json()
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict) and isinstance(error.get("message"), str):
+                message = error["message"]
+            elif isinstance(payload.get("detail"), str):
+                message = payload["detail"]
+    except ValueError:
+        pass
+    return HTTPException(status_code=upstream.status_code, detail=message)
+
+
+async def _load_workspace_context(workspace_id: str) -> dict[str, Any]:
+    upstream = await _request_workspace_controller(
+        "GET",
+        f"/workspaces/{quote(workspace_id, safe='')}/context",
+    )
+    if upstream.status_code != 200:
+        raise _upstream_error(upstream)
+    try:
+        payload = upstream.json()
+    except ValueError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="WxPost workspace controller returned invalid context.",
+        ) from error
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="WxPost workspace controller returned invalid context.",
+        )
+    return payload
+
+
+async def _load_workspace_source(
+    workspace_id: str,
+    source_id: str,
+) -> tuple[bytes, str]:
+    upstream = await _request_workspace_controller(
+        "GET",
+        (f"/workspaces/{quote(workspace_id, safe='')}/sources/" f"{quote(source_id, safe='')}/content"),
+    )
+    if upstream.status_code != 200:
+        raise _upstream_error(upstream)
+    mime_type = upstream.headers.get("Content-Type", "application/octet-stream")
+    return upstream.content, mime_type.split(";", 1)[0].strip()
+
+
+def _publication_error(error: PublicationError) -> JSONResponse:
+    return JSONResponse(
+        status_code=error.status,
+        content={"error": {"code": error.code, "message": str(error)}},
     )
 
 
@@ -348,6 +439,11 @@ async def r_update_wxpost(
     current = get_wxpost_by_id(wxpost_id)
     if current is None:
         raise HTTPException(status_code=404, detail="WxPost not found.")
+    if current.get("source_workspace_id") is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Workspace-linked WxPosts must be updated through publication sync.",
+        )
 
     document_payload = request.document.model_dump(by_alias=True, mode="json")
     if request.document.presentation is None:
@@ -369,6 +465,26 @@ async def r_update_wxpost(
             detail="WxPost changed since the requested revision.",
         ) from error
     return _mutation_result(row)
+
+
+@r.delete(
+    "/posts/wxposts/{wxpost_id}/publication",
+    response_model=WxPostPublicationDeleteResult,
+)
+async def r_delete_public_wxpost(
+    request: WxPostPublicationDeleteRequest,
+    wxpost_id: UUID = Path(..., description="The public WxPost UUID to delete"),
+    user: User = Depends(get_current_user),
+) -> WxPostPublicationDeleteResult | JSONResponse:
+    del user
+    try:
+        workspace_id = await delete_public_wxpost(
+            wxpost_id,
+            expected_revision=request.expected_public_revision,
+        )
+    except PublicationError as error:
+        return _publication_error(error)
+    return WxPostPublicationDeleteResult(workspace_id=workspace_id)
 
 
 @r.put(
@@ -427,10 +543,45 @@ async def r_list_wxpost_workspaces(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
 ) -> Response:
-    return await _proxy_workspace_controller(
+    upstream = await _request_workspace_controller(
         "GET",
         f"/workspaces?page={page}&page_size={page_size}",
     )
+    if upstream.status_code != 200:
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            headers={"Content-Type": upstream.headers.get("Content-Type", "application/json")},
+        )
+    try:
+        payload = upstream.json()
+        items = payload["items"]
+        try:
+            rows = get_wxposts_by_workspace_ids([item["workspaceId"] for item in items])
+        except (APIError, httpx.HTTPError):
+            rows = None
+        by_workspace = {row["source_workspace_id"]: row for row in rows} if rows is not None else {}
+        for item in items:
+            status = (
+                publication_status(
+                    item["workspaceId"],
+                    current_draft_version=item.get("draftVersion"),
+                    row=by_workspace.get(item["workspaceId"]),
+                )
+                if rows is not None
+                else WxPostPublicationStatus(
+                    state="unavailable",
+                    workspace_id=item["workspaceId"],
+                    current_draft_version=item.get("draftVersion"),
+                )
+            )
+            item["publication"] = status.model_dump(by_alias=True, mode="json")
+    except (KeyError, TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=503,
+            detail="WxPost workspace controller returned an invalid list.",
+        ) from error
+    return JSONResponse(content=payload)
 
 
 @r.delete(
@@ -446,6 +597,47 @@ async def r_delete_wxpost_workspace(
         f"/workspaces/{quote(workspace_id, safe='')}",
         expected_manifest_version=request.headers.get("X-Expected-Manifest-Version"),
     )
+
+
+@r.get(
+    "/posts/wxposts/workspaces/{workspace_id}/publication",
+    response_model=WxPostPublicationStatus,
+)
+async def r_get_wxpost_workspace_publication(
+    workspace_id: str = Path(..., min_length=1),
+    user: User = Depends(get_current_user),
+) -> WxPostPublicationStatus:
+    del user
+    context = await _load_workspace_context(workspace_id)
+    draft = context.get("draft")
+    current_draft_version = draft.get("draftVersion") if isinstance(draft, dict) else None
+    return publication_status(
+        workspace_id,
+        current_draft_version=current_draft_version,
+        row=get_wxpost_by_workspace_id(workspace_id),
+    )
+
+
+@r.post(
+    "/posts/wxposts/workspaces/{workspace_id}/publication/sync",
+    response_model=WxPostPublicationStatus,
+)
+async def r_sync_wxpost_workspace_publication(
+    request: WxPostPublicationSyncRequest,
+    workspace_id: str = Path(..., min_length=1),
+    user: User = Depends(get_current_user),
+) -> WxPostPublicationStatus | JSONResponse:
+    del user
+    try:
+        return await synchronize_workspace_publication(
+            workspace_id,
+            request,
+            load_context=_load_workspace_context,
+            load_source=_load_workspace_source,
+            compile_render=_compile_trusted_render,
+        )
+    except PublicationError as error:
+        return _publication_error(error)
 
 
 @r.post(

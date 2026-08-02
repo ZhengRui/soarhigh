@@ -176,7 +176,9 @@ operation inputs. A complete manifest example lives at
 - generated `ArticleDocument.media` keeps the same material IDs so its body and
   cover references point back to the corresponding manifest sources. Proposal
   media order expresses intended article order; `M01`, `M02`, and so on are
-  stable identities and do not determine where media appears in the article;
+  stable identities and do not determine where media appears in the article.
+  One workspace-ready image may be retained as cover-only media without a body
+  directive;
 - meeting-library sources may remain references with
   `workspaceReady=false, included=false`;
 - workspace bootstrap is create-only and registers the meeting media visible at
@@ -491,18 +493,27 @@ The upload route accepts the source bytes as its body, the MIME type in
 `Content-Type`, and the compare-and-swap version in
 `X-Expected-Manifest-Version`.
 
+Source deletion is dependency-safe. The preflight reports
+`blockedByDraft: true` when the saved Draft still references the source, and
+the delete route rejects the same condition even if it changes after
+preflight. A member must remove the media block in Draft Edit, save the new
+Draft version, and then delete the Materials file.
+
 The HTTP controller is connected to the authoring page's Materials and Draft
 stages. Draft contains both Edit and Preview modes; Generate and Chat resume a
 workspace-scoped `hermes serve` session, and the mounted formal Skill requires
 one version-checked MCP draft save. The deterministic workspace core remains
 the only writer.
 
-The remaining implementation order preserves the existing plan:
+The remaining implementation order preserves the existing plan. Phase 2 Slice
+7A public synchronization is complete: Backend projects one saved Draft into
+one stable public WxPost, uploads or reuses public OSS assets idempotently, and
+exposes derived publication status to Draft and Workspaces.
 
-1. **Phase 2, Slice 7 - cross-surface completion:** connect Feishu workspace
-   selection and deduplicated attachments, selected-image description
-   suggestions, and idempotent SoarHigh public synchronization. Complex editing
-   remains in the web workspace.
+1. **Phase 2, Slice 7B - cross-surface completion:** connect Feishu workspace
+   selection and deduplicated attachments plus selected-image description
+   suggestions. Feishu may query the completed public-sync status, while
+   complex editing remains in the web workspace.
 2. **Phase 3 - WeChat Draft integration:** upload WeChat media, replace URLs,
    submit the same canonical inline HTML, create/update the Draft idempotently,
    and verify platform readback plus mobile preview.

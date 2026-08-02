@@ -15,6 +15,7 @@ class FakeQuery:
         self.data = data or []
         self.filters: list[tuple[str, object]] = []
         self.updated: dict | None = None
+        self.deleted = False
 
     def update(self, values: dict):
         self.updated = values
@@ -23,7 +24,19 @@ class FakeQuery:
     def select(self, *args, **kwargs):
         return self
 
+    def delete(self):
+        self.deleted = True
+        return self
+
     def eq(self, field: str, value: object):
+        self.filters.append((field, value))
+        return self
+
+    def in_(self, field: str, value: object):
+        self.filters.append((field, value))
+        return self
+
+    def is_(self, field: str, value: object):
         self.filters.append((field, value))
         return self
 
@@ -37,6 +50,12 @@ class FakeSupabase:
 
     def table(self, name: str):
         assert name == "wxposts"
+        return self.queries.pop(0)
+
+
+class FakeAnyTableSupabase(FakeSupabase):
+    def table(self, name: str):
+        assert name in {"wxposts", "wxpost_assets"}
         return self.queries.pop(0)
 
 
@@ -144,6 +163,7 @@ def test_update_is_a_single_compare_and_swap_write(
     assert query.filters == [
         ("id", str(WXPOST_ID)),
         ("article_revision", 4),
+        ("source_workspace_id", "null"),
     ]
     assert query.updated is not None
     assert query.updated["article_revision"] == 5
@@ -172,6 +192,148 @@ def test_zero_row_update_distinguishes_missing_from_stale(
         pass
     else:
         raise AssertionError("Expected a stale revision conflict.")
+
+
+def test_finalize_publication_is_one_guarded_visibility_swap(monkeypatch) -> None:
+    updated = {
+        "id": str(WXPOST_ID),
+        "slug": "the-courage-to-try",
+        "article_revision": 4,
+        "status": "ready",
+        "is_public": True,
+    }
+    query = FakeQuery(data=[updated])
+    monkeypatch.setattr(wxpost_db, "supabase", FakeSupabase([query]))
+
+    result = wxpost_db.finalize_workspace_publication(
+        WXPOST_ID,
+        workspace_id="wxpost-abc",
+        expected_revision=3,
+        expected_status="ready",
+        next_revision=4,
+        draft_version=6,
+        draft_sha256="a" * 64,
+        document=_document(),
+    )
+
+    assert result == updated
+    assert query.filters == [
+        ("id", str(WXPOST_ID)),
+        ("source_workspace_id", "wxpost-abc"),
+        ("article_revision", 3),
+        ("status", "ready"),
+    ]
+    assert query.updated is not None
+    assert query.updated["article_revision"] == 4
+    assert query.updated["source_draft_version"] == 6
+    assert query.updated["source_draft_sha256"] == "a" * 64
+    assert query.updated["status"] == "ready"
+    assert query.updated["is_public"] is True
+
+
+def test_abandoned_public_assets_are_detected_for_cleanup_retry(monkeypatch) -> None:
+    query = FakeQuery(data=[{"id": "asset-old"}])
+    monkeypatch.setattr(wxpost_db, "supabase", FakeAnyTableSupabase([query]))
+
+    assert wxpost_db.has_abandoned_wxpost_assets(WXPOST_ID) is True
+    assert query.filters == [
+        ("wxpost_id", str(WXPOST_ID)),
+        ("status", "abandoned"),
+    ]
+
+
+def test_publication_deletion_hides_then_deletes_one_guarded_row(monkeypatch) -> None:
+    hidden = {
+        "id": str(WXPOST_ID),
+        "article_revision": 4,
+        "status": "assembling",
+        "is_public": False,
+    }
+    hide_query = FakeQuery(data=[hidden])
+    delete_query = FakeQuery(data=[hidden])
+    monkeypatch.setattr(
+        wxpost_db,
+        "supabase",
+        FakeSupabase([hide_query, delete_query]),
+    )
+
+    result = wxpost_db.begin_wxpost_deletion(
+        WXPOST_ID,
+        expected_revision=4,
+    )
+    wxpost_db.delete_hidden_wxpost(
+        WXPOST_ID,
+        expected_revision=4,
+    )
+
+    assert result == hidden
+    assert hide_query.filters == [
+        ("id", str(WXPOST_ID)),
+        ("article_revision", 4),
+        ("status", "ready"),
+    ]
+    assert hide_query.updated is not None
+    assert hide_query.updated["status"] == "assembling"
+    assert hide_query.updated["is_public"] is False
+    assert delete_query.deleted is True
+    assert delete_query.filters == [
+        ("id", str(WXPOST_ID)),
+        ("article_revision", 4),
+        ("status", "assembling"),
+    ]
+
+
+def test_unreferenced_ready_assets_are_abandoned_and_deletable(monkeypatch) -> None:
+    select_query = FakeQuery(
+        data=[
+            {
+                "id": "asset-current",
+                "content_sha256": "current",
+                "status": "ready",
+                "object_key": "current.jpg",
+                "poster_object_key": None,
+            },
+            {
+                "id": "asset-old",
+                "content_sha256": "old",
+                "status": "ready",
+                "object_key": "old.jpg",
+                "poster_object_key": None,
+            },
+        ]
+    )
+    abandon_query = FakeQuery(data=[])
+    delete_query = FakeQuery(data=[{"id": "asset-old"}])
+    monkeypatch.setattr(
+        wxpost_db,
+        "supabase",
+        FakeAnyTableSupabase([select_query, abandon_query, delete_query]),
+    )
+
+    stale = wxpost_db.abandon_unreferenced_wxpost_assets(
+        WXPOST_ID,
+        keep_content_sha256={"current"},
+    )
+    wxpost_db.delete_wxpost_assets(["asset-old"])
+
+    assert [asset["id"] for asset in stale] == ["asset-old"]
+    assert ("status", ["pending", "ready", "failed", "abandoned"]) in select_query.filters
+    assert abandon_query.updated is not None
+    assert abandon_query.updated["status"] == "abandoned"
+    assert abandon_query.filters == [("id", ["asset-old"])]
+    assert delete_query.deleted is True
+    assert delete_query.filters == [("id", ["asset-old"])]
+
+
+def test_batch_publication_lookup_uses_one_query(monkeypatch) -> None:
+    rows = [{"source_workspace_id": "wxpost-a"}]
+    query = FakeQuery(data=rows)
+    monkeypatch.setattr(wxpost_db, "supabase", FakeSupabase([query]))
+
+    result = wxpost_db.get_wxposts_by_workspace_ids(["wxpost-a", "wxpost-b"])
+
+    assert result == rows
+    assert query.filters == [("source_workspace_id", ["wxpost-a", "wxpost-b"])]
 
 
 def test_combined_content_is_sorted_before_final_pagination(monkeypatch) -> None:

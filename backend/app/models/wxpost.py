@@ -257,3 +257,29 @@ class WxPostPublicDetail(WxPostPersistenceModel):
     created_at: datetime
     updated_at: datetime
     render_document: WxPostRenderDocument
+
+
+class WxPostPublicationSyncRequest(WireModel):
+    expected_manifest_version: int = Field(ge=1, strict=True)
+    expected_draft_version: int = Field(ge=1, strict=True)
+    expected_public_revision: int | None = Field(default=None, ge=1, strict=True)
+
+
+class WxPostPublicationDeleteRequest(WireModel):
+    expected_public_revision: int = Field(ge=1, strict=True)
+
+
+class WxPostPublicationDeleteResult(WireModel):
+    deleted: Literal[True] = True
+    workspace_id: TrimmedText | None = None
+
+
+class WxPostPublicationStatus(WireModel):
+    state: Literal["unavailable", "not-synced", "up-to-date", "update-available"]
+    workspace_id: TrimmedText
+    slug: str | None = None
+    public_revision: int | None = Field(default=None, ge=1)
+    source_draft_version: int | None = Field(default=None, ge=1)
+    current_draft_version: int | None = Field(default=None, ge=1)
+    published_at: datetime | None = None
+    public_url: str | None = None

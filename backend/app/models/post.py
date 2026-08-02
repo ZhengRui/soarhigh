@@ -39,6 +39,7 @@ class ContentListItem(BaseModel):
     author: ContentAuthor
     is_public: bool
     cover_image_url: Optional[str] = None
+    article_revision: Optional[int] = None
     created_at: str
 
 

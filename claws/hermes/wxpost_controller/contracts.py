@@ -507,10 +507,13 @@ class DraftProposal(ContractModel):
                 "draft blocks reference media missing from proposal: "
                 + ", ".join(unexpected)
             )
-        missing = sorted(set(media_ids) - set(referenced_ids))
+        permitted_ids = set(referenced_ids)
+        if self.cover_media_id is not None:
+            permitted_ids.add(self.cover_media_id)
+        missing = sorted(set(media_ids) - permitted_ids)
         if missing:
             raise ValueError(
-                "draft proposal media is not referenced by a block: "
+                "draft proposal media is not referenced by a block or cover: "
                 + ", ".join(missing)
             )
         return self
@@ -620,10 +623,6 @@ class UploadSourceRequest(ContractModel):
             self.description_status,
         )
         return self
-
-
-class DeleteSourceRequest(SourceActionRequest):
-    confirm_referenced: bool = Field(default=False, strict=True)
 
 
 class MeetingMediaReference(ContractModel):

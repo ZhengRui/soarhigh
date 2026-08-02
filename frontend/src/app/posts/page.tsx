@@ -12,13 +12,22 @@ import {
   PanelsTopLeft,
   Plus,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
 
+import { ConfirmActionDialog } from '@/components/ConfirmActionDialog';
 import { useAuth } from '@/hooks/useAuth';
 import { usePosts } from '@/hooks/usePosts';
-import type { ContentKind } from '@/interfaces';
+import type {
+  ContentKind,
+  ContentListItemIF,
+  PaginatedContentItems,
+} from '@/interfaces';
+import { deletePublicWxPost } from '@/utils/wxposts';
 
 const FILTERS = [
   { value: 'all', label: 'All', icon: Files },
@@ -70,7 +79,7 @@ function NewPostMenu() {
     >
       <button
         type='button'
-        className='inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-gradient-to-r from-blue-600 to-purple-600 px-3 py-1.5 text-sm text-white shadow-sm transition hover:from-blue-700 hover:to-purple-700 hover:shadow-md'
+        className='inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md bg-gradient-to-r from-blue-600 to-purple-600 px-3 text-sm text-white shadow-sm transition hover:from-blue-700 hover:to-purple-700 hover:shadow-md'
         aria-expanded={open}
         aria-haspopup='menu'
         data-testid='new-post-menu-trigger'
@@ -111,7 +120,13 @@ function NewPostMenu() {
 
 export default function PostsPage() {
   const { data: user } = useAuth();
+  const queryClient = useQueryClient();
   const [kind, setKind] = useState<ContentKind>('all');
+  const [deleteTarget, setDeleteTarget] = useState<ContentListItemIF | null>(
+    null
+  );
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const {
     data: content,
     isPending,
@@ -122,6 +137,56 @@ export default function PostsPage() {
     kind,
   });
   const items = content?.items ?? [];
+
+  async function confirmDelete() {
+    if (!deleteTarget || deleteTarget.kind !== 'wxpost') return;
+
+    setDeletePending(true);
+    setDeleteError(null);
+    try {
+      if (!deleteTarget.article_revision) {
+        throw new Error('The public revision could not be identified.');
+      }
+      await deletePublicWxPost(deleteTarget.id, deleteTarget.article_revision);
+
+      queryClient.setQueryData<PaginatedContentItems>(
+        ['posts', { page: 1, pageSize: 10, kind }],
+        (current) => {
+          if (!current) return current;
+          const total = Math.max(0, current.total - 1);
+          return {
+            ...current,
+            items: current.items.filter(
+              (item) =>
+                item.kind !== deleteTarget.kind || item.id !== deleteTarget.id
+            ),
+            total,
+            pages: total ? Math.ceil(total / current.page_size) : 0,
+          };
+        }
+      );
+      void queryClient.invalidateQueries({
+        queryKey: ['posts'],
+        refetchType: 'none',
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ['wxpost-workspaces'],
+        refetchType: 'none',
+      });
+      toast.success('Public WxPost deleted successfully!');
+      setDeleteTarget(null);
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : typeof error === 'string'
+            ? error
+            : 'This content could not be deleted.'
+      );
+    } finally {
+      setDeletePending(false);
+    }
+  }
 
   return (
     <div className='min-h-screen bg-slate-50 py-12'>
@@ -221,12 +286,15 @@ export default function PostsPage() {
               return (
                 <article
                   key={`${item.kind}-${item.id}`}
-                  className='overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md'
+                  className='group overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md'
                 >
                   <div className='grid sm:grid-cols-[minmax(0,1fr)_10rem]'>
-                    <div className='p-5 sm:p-6'>
-                      <Link href={href} className='block'>
-                        <div className='mb-2 flex flex-wrap items-center gap-2'>
+                    <div className='relative p-5 sm:p-6'>
+                      <div className='mb-2 flex flex-wrap items-center gap-2'>
+                        <Link
+                          href={href}
+                          className='flex min-w-0 flex-wrap items-center gap-2'
+                        >
                           {item.kind === 'wxpost' && (
                             <span
                               className='rounded-full bg-gradient-to-r from-blue-600 to-purple-600 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-white'
@@ -238,7 +306,9 @@ export default function PostsPage() {
                           <h2 className='text-xl font-semibold text-slate-950'>
                             {item.title}
                           </h2>
-                        </div>
+                        </Link>
+                      </div>
+                      <Link href={href} className='block'>
                         {item.excerpt && (
                           <p className='mt-2 line-clamp-2 text-sm leading-6 text-slate-600'>
                             {item.excerpt}
@@ -246,7 +316,11 @@ export default function PostsPage() {
                         )}
                       </Link>
 
-                      <div className='mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500'>
+                      <div
+                        className={`mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500 ${
+                          user && item.kind === 'wxpost' ? 'pr-10' : ''
+                        }`}
+                      >
                         <span className='flex items-center gap-1'>
                           <CalendarDays className='h-3.5 w-3.5' />
                           {formatDate(item.created_at)}
@@ -273,6 +347,21 @@ export default function PostsPage() {
                           </Link>
                         )}
                       </div>
+                      {user && item.kind === 'wxpost' && (
+                        <button
+                          type='button'
+                          className='absolute bottom-3 right-3 inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-300/70 bg-white/90 text-red-400 opacity-60 shadow-sm backdrop-blur-sm transition hover:!border-red-300 hover:!bg-red-50 hover:!text-red-700 hover:!opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200 sm:pointer-events-none sm:opacity-0 sm:group-hover:pointer-events-auto sm:group-hover:opacity-60'
+                          aria-label={`Delete WxPost ${item.title}`}
+                          title='Delete WxPost'
+                          data-testid={`delete-content-wxpost-${item.id}`}
+                          onClick={() => {
+                            setDeleteError(null);
+                            setDeleteTarget(item);
+                          }}
+                        >
+                          <Trash2 className='h-4 w-4' aria-hidden='true' />
+                        </button>
+                      )}
                     </div>
 
                     {item.cover_image_url && (
@@ -297,6 +386,22 @@ export default function PostsPage() {
           </div>
         )}
       </div>
+
+      {deleteTarget && (
+        <ConfirmActionDialog
+          title='Delete public WxPost?'
+          error={deleteError}
+          pending={deletePending}
+          confirmLabel='Delete public WxPost'
+          pendingLabel='Deleting…'
+          testId='delete-content-dialog'
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => void confirmDelete()}
+        >
+          This removes the public revision and its public media. The private
+          workspace and Draft will remain.
+        </ConfirmActionDialog>
+      )}
     </div>
   );
 }

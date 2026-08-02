@@ -12,9 +12,9 @@ from urllib.parse import parse_qs, urlsplit
 
 from .core import (
     MAX_SOURCE_BYTES,
-    ConfirmationRequired,
     InvalidRequest,
     InvalidWorkspace,
+    SourceReferencedByDraft,
     UpstreamUnavailable,
     ValidationUnavailable,
     VersionConflict,
@@ -459,7 +459,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         payload = self._read_json_body()
         if payload is None or not self._accept_fields(
             payload,
-            {"expectedManifestVersion", "confirmReferenced"},
+            {"expectedManifestVersion"},
             "source delete",
         ):
             return
@@ -471,10 +471,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     payload.get("expectedManifestVersion"),
                 ),
                 source_id=match.group(2),
-                confirm_referenced=cast(
-                    bool,
-                    payload.get("confirmReferenced", False),
-                ),
             )
         )
 
@@ -577,7 +573,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 exc,
                 (
                     VersionConflict,
-                    ConfirmationRequired,
+                    SourceReferencedByDraft,
                     WorkspaceAlreadyExists,
                 ),
             ):

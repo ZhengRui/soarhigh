@@ -538,6 +538,7 @@ export function WxPostAuthoringWorkspace({
                 }
                 onGenerateDraft={handleGenerateDraft}
                 draftGenerationPending={draftGenerationPending}
+                onOpenDraft={() => setStage('draft')}
               />
             )
           )}
@@ -558,8 +559,6 @@ export function WxPostAuthoringWorkspace({
                   : undefined
               }
               onContextChange={applyChangedWorkspaceContext}
-              onRegenerate={handleGenerateDraft}
-              regeneratePending={draftGenerationPending}
               initialMode={draftInitialMode}
             />
           </div>

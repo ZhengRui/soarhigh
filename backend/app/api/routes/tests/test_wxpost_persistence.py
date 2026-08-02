@@ -30,12 +30,18 @@ def article() -> dict:
     return payload
 
 
-def _row(article: dict, *, revision: int = 1) -> dict:
+def _row(
+    article: dict,
+    *,
+    revision: int = 1,
+    workspace_id: str | None = None,
+) -> dict:
     return {
         "id": str(WXPOST_ID),
         "slug": "the-courage-to-try-the-next-sentence",
         "article_revision": revision,
         "default_presentation": article["presentation"],
+        "source_workspace_id": workspace_id,
     }
 
 
@@ -164,6 +170,27 @@ def test_update_maps_a_stale_revision_to_conflict(
     )
 
     assert response.status_code == 409
+
+
+def test_update_rejects_a_workspace_managed_public_projection(
+    client: TestClient,
+    article: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        wxpost_route,
+        "get_wxpost_by_id",
+        lambda wxpost_id: _row(article, revision=5, workspace_id="wxpost-abc"),
+    )
+
+    response = client.patch(
+        f"/posts/wxposts/{WXPOST_ID}",
+        headers=_authorize(monkeypatch),
+        json={"expected_revision": 5, "document": article},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == ("Workspace-linked WxPosts must be updated through publication sync.")
 
 
 def test_public_read_returns_the_backend_render_document(

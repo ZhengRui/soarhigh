@@ -68,6 +68,7 @@ def _wxpost_rows(*, limit: int) -> tuple[list[dict], int]:
     count = (
         supabase.table("wxposts")
         .select("id", count="exact")  # type: ignore
+        .eq("status", "ready")
         .eq("is_public", True)
         .execute()
         .count
@@ -75,7 +76,8 @@ def _wxpost_rows(*, limit: int) -> tuple[list[dict], int]:
     )
     rows = (
         supabase.table("wxposts")
-        .select("id,title,slug,excerpt,content,is_public,media_manifest," "cover_media_id,created_at")
+        .select("id,title,slug,excerpt,content,is_public,media_manifest," "cover_media_id,article_revision,created_at")
+        .eq("status", "ready")
         .eq("is_public", True)
         .order("created_at", desc=True)
         .limit(limit)
@@ -93,6 +95,7 @@ def _wxpost_rows(*, limit: int) -> tuple[list[dict], int]:
             "author": {"member_id": None, "name": WXPOST_PUBLISHER_NAME},
             "is_public": True,
             "cover_image_url": _cover_url(row),
+            "article_revision": row["article_revision"],
             "created_at": row["created_at"],
         }
         for row in rows

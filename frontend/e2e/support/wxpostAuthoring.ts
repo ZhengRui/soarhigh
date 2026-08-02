@@ -5,6 +5,7 @@ import type {
   WxPostArticleDocument,
   WxPostBodyNode,
 } from '../../src/components/wxpost/types';
+import type { WorkspacePublicationStatus } from '../../src/utils/wxpostWorkspace';
 import {
   MEETING_462,
   MEETING_461,
@@ -106,17 +107,30 @@ export type WorkspaceMock = {
   failDraftValidation: boolean;
   failSourceContent: boolean;
   failNextDraftChat: boolean;
+  conflictNextPublication: boolean;
+  failNextPublication: boolean;
+  publicationStatusUnavailable: boolean;
   draftSessionUnavailable: boolean;
   contextDelayMs: number;
+  draftSaveDelayMs: number;
+  publicationStatusDelayMs: number;
   nextGeneratedDocument: DraftDocument | null;
   referencedSourceIds: Set<string>;
   draftMessages: Map<
     string,
     Array<{ role: 'user' | 'assistant'; text: string }>
   >;
+  publications: Map<string, WorkspacePublicationStatus>;
 };
 
 export type DraftDocument = WxPostArticleDocument;
+
+function syncDraftMediaReferences(
+  mock: WorkspaceMock,
+  document: DraftDocument
+) {
+  mock.referencedSourceIds = new Set(document.media.map((media) => media.id));
+}
 
 function renderBody(bodyMarkdown: string): WxPostBodyNode[] {
   const lines = bodyMarkdown.split('\n');
@@ -216,11 +230,17 @@ export async function mockWxPostWorkspaceApi(
     failDraftValidation: false,
     failSourceContent: false,
     failNextDraftChat: false,
+    conflictNextPublication: false,
+    failNextPublication: false,
+    publicationStatusUnavailable: false,
     draftSessionUnavailable: false,
     contextDelayMs: 0,
+    draftSaveDelayMs: 0,
+    publicationStatusDelayMs: 0,
     nextGeneratedDocument: null,
     referencedSourceIds: new Set(),
     draftMessages: new Map(),
+    publications: new Map(),
   };
 
   await page.route(/\/posts\/wxposts\/validate$/, async (route) => {
@@ -340,6 +360,100 @@ export async function mockWxPostWorkspaceApi(
         await route.fulfill({ status: 200, json: context });
         return;
       }
+      if (parts[0] === 'publication') {
+        const currentDraftVersion = context.draft?.draftVersion ?? null;
+        const existing = mock.publications.get(workspaceId);
+        if (method === 'GET' && parts.length === 1) {
+          if (mock.publicationStatusDelayMs > 0) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, mock.publicationStatusDelayMs)
+            );
+          }
+          if (mock.publicationStatusUnavailable) {
+            await route.fulfill({
+              status: 503,
+              json: { detail: 'Public status temporarily unavailable' },
+            });
+            return;
+          }
+          await route.fulfill({
+            status: 200,
+            json: existing
+              ? {
+                  ...existing,
+                  state:
+                    existing.sourceDraftVersion === currentDraftVersion
+                      ? 'up-to-date'
+                      : 'update-available',
+                  currentDraftVersion,
+                }
+              : ({
+                  state: 'not-synced',
+                  workspaceId,
+                  slug: null,
+                  publicRevision: null,
+                  sourceDraftVersion: null,
+                  currentDraftVersion,
+                  publishedAt: null,
+                  publicUrl: null,
+                } satisfies WorkspacePublicationStatus),
+          });
+          return;
+        }
+        if (method === 'POST' && parts[1] === 'sync') {
+          const input = request.postDataJSON() as {
+            expectedManifestVersion: number;
+            expectedDraftVersion: number;
+            expectedPublicRevision: number | null;
+          };
+          if (mock.failNextPublication) {
+            mock.failNextPublication = false;
+            await route.fulfill({
+              status: 503,
+              json: {
+                error: {
+                  code: 'asset_upload_failed',
+                  message: 'Public asset upload failed',
+                },
+              },
+            });
+            return;
+          }
+          if (
+            mock.conflictNextPublication ||
+            input.expectedManifestVersion !==
+              context.manifest.manifestVersion ||
+            input.expectedDraftVersion !== currentDraftVersion ||
+            input.expectedPublicRevision !== (existing?.publicRevision ?? null)
+          ) {
+            mock.conflictNextPublication = false;
+            await route.fulfill({
+              status: 409,
+              json: {
+                error: {
+                  code: 'version_conflict',
+                  message: 'The public WxPost changed elsewhere.',
+                },
+              },
+            });
+            return;
+          }
+          const publicRevision = (existing?.publicRevision ?? 0) + 1;
+          const next = {
+            state: 'up-to-date',
+            workspaceId,
+            slug: existing?.slug ?? `public-${workspaceId}`,
+            publicRevision,
+            sourceDraftVersion: currentDraftVersion,
+            currentDraftVersion,
+            publishedAt: '2026-08-01T08:00:00Z',
+            publicUrl: `http://localhost:3000/posts/wxposts/public-${workspaceId}`,
+          } satisfies WorkspacePublicationStatus;
+          mock.publications.set(workspaceId, next);
+          await route.fulfill({ status: 200, json: next });
+          return;
+        }
+      }
       if (method === 'GET' && parts[0] === 'draft' && parts[1] === 'session') {
         if (mock.draftSessionUnavailable) {
           await route.fulfill({
@@ -394,11 +508,17 @@ export async function mockWxPostWorkspaceApi(
           draftVersion: nextVersion,
           document: input.document,
         };
+        syncDraftMediaReferences(mock, input.document);
         context.manifest.draft = {
           version: nextVersion,
           sourceManifestVersion: context.manifest.manifestVersion,
           sha256: `draft-${nextVersion}`,
         };
+        if (mock.draftSaveDelayMs > 0) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, mock.draftSaveDelayMs)
+          );
+        }
         await route.fulfill({ status: 200, json: context });
         return;
       }
@@ -452,6 +572,7 @@ export async function mockWxPostWorkspaceApi(
           draftVersion: nextVersion,
           document: generatedDocument,
         };
+        syncDraftMediaReferences(mock, generatedDocument);
         context.manifest.draft = {
           version: nextVersion,
           sourceManifestVersion: context.manifest.manifestVersion,
@@ -513,6 +634,7 @@ export async function mockWxPostWorkspaceApi(
           draftVersion: nextVersion,
           document: nextDocument,
         };
+        syncDraftMediaReferences(mock, nextDocument);
         context.manifest.draft = {
           version: nextVersion,
           sourceManifestVersion: context.manifest.manifestVersion,
@@ -592,15 +714,27 @@ export async function mockWxPostWorkspaceApi(
           return;
         }
         const referenced = mock.referencedSourceIds.has(parts[1]);
+        const mediaIndex = (context.draft?.document.media ?? []).findIndex(
+          (media) => media.id === parts[1]
+        );
+        const references = referenced
+          ? [
+              ...(mediaIndex !== undefined && mediaIndex >= 0
+                ? [`media.${mediaIndex}`]
+                : []),
+              ...(context.draft?.document.coverMediaId === parts[1]
+                ? ['coverMediaId']
+                : []),
+            ]
+          : [];
         await route.fulfill({
           status: 200,
           json: {
             sourceId: parts[1],
             manifestVersion: context.manifest.manifestVersion,
-            draftVersion: 0,
-            referenced,
-            requiresConfirmation: referenced,
-            references: referenced ? ['media.0', 'coverMediaId'] : [],
+            draftVersion: context.draft?.draftVersion ?? 0,
+            blockedByDraft: referenced,
+            references,
           },
         });
         return;
@@ -714,14 +848,10 @@ export async function mockWxPostWorkspaceApi(
         });
         manifest.nextMaterialNumber += 1;
       } else if (method === 'DELETE' && parts[0] === 'sources') {
-        const input = request.postDataJSON() as { confirmReferenced: boolean };
-        if (
-          mock.referencedSourceIds.has(parts[1]) &&
-          !input.confirmReferenced
-        ) {
+        if (mock.referencedSourceIds.has(parts[1])) {
           await route.fulfill({
             status: 409,
-            json: { error: { code: 'confirmation_required' } },
+            json: { error: { code: 'source_referenced_by_draft' } },
           });
           return;
         }
