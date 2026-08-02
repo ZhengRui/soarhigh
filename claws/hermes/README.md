@@ -510,10 +510,13 @@ The remaining implementation order preserves the existing plan. Phase 2 Slice
 one stable public WxPost, uploads or reuses public OSS assets idempotently, and
 exposes derived publication status to Draft and Workspaces.
 
-1. **Phase 2, Slice 7B - cross-surface completion:** connect Feishu workspace
-   selection and deduplicated attachments plus selected-image description
-   suggestions. Feishu may query the completed public-sync status, while
-   complex editing remains in the web workspace.
+1. **Phase 2, Slice 7B - cross-surface completion:** the web Materials stage
+   can now ask Hermes for a selected image's English description, using the
+   image and any current description as factual authority and linked meeting
+   theme, introduction, and agenda as supporting context. The suggestion stays
+   local until `Save Materials`. Remaining work is Feishu workspace selection
+   and deduplicated attachments; Feishu may query the completed public-sync
+   status, while complex editing remains in the web workspace.
 2. **Phase 3 - WeChat Draft integration:** upload WeChat media, replace URLs,
    submit the same canonical inline HTML, create/update the Draft idempotently,
    and verify platform readback plus mobile preview.

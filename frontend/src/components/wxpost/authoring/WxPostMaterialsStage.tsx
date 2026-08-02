@@ -15,6 +15,7 @@ import {
   importWorkspaceSource,
   preflightWorkspaceSourceDelete,
   saveWorkspaceMaterials,
+  suggestWorkspaceSourceDescription,
   uploadWorkspaceSource,
   type WorkspaceContext,
   type WorkspaceDeletePreflight,
@@ -83,23 +84,18 @@ function materialsSourceUpdates(
     const workingSource = workingCopy.sources[source.id];
     if (!workingSource) return [];
 
-    const descriptionChanged = workingSource.description !== source.description;
     const hasDescription = workingSource.description.trim().length > 0;
     return [
       {
         sourceId: source.id,
         included: workingSource.included,
         description: hasDescription ? workingSource.description : '',
-        descriptionSource: descriptionChanged
-          ? hasDescription
-            ? 'user'
-            : null
-          : source.descriptionSource,
-        descriptionStatus: descriptionChanged
-          ? hasDescription
-            ? 'confirmed'
-            : 'missing'
-          : source.descriptionStatus,
+        descriptionSource: hasDescription
+          ? workingSource.descriptionSource
+          : null,
+        descriptionStatus: hasDescription
+          ? workingSource.descriptionStatus
+          : 'missing',
       },
     ];
   });
@@ -114,7 +110,9 @@ function materialSourcesMatch(
     return (
       workingSource &&
       workingSource.included === source.included &&
-      workingSource.description === source.description
+      workingSource.description === source.description &&
+      workingSource.descriptionSource === source.descriptionSource &&
+      workingSource.descriptionStatus === source.descriptionStatus
     );
   });
 }
@@ -163,6 +161,9 @@ export function WxPostMaterialsStage({
   const [pendingOperation, setPendingOperation] =
     useState<PendingOperation | null>(null);
   const [materialsSavePending, setMaterialsSavePending] = useState(false);
+  const [describingSourceId, setDescribingSourceId] = useState<string | null>(
+    null
+  );
   const [versionConflict, setVersionConflict] = useState(false);
   const [conflictRefreshPending, setConflictRefreshPending] = useState(false);
   const [conflictRefreshError, setConflictRefreshError] = useState<
@@ -170,6 +171,7 @@ export function WxPostMaterialsStage({
   >(null);
   const busy =
     pendingOperation !== null || materialsSavePending || versionConflict;
+  const descriptionPending = describingSourceId !== null;
   const [operationError, setOperationError] = useState<string | null>(null);
   const meetingPreviewsLoading =
     active &&
@@ -249,6 +251,8 @@ export function WxPostMaterialsStage({
         const currentSource = current.sources[sourceId] ?? {
           included: source?.included ?? false,
           description: source?.description ?? '',
+          descriptionSource: source?.descriptionSource ?? null,
+          descriptionStatus: source?.descriptionStatus ?? 'missing',
         };
         return {
           ...current,
@@ -413,6 +417,54 @@ export function WxPostMaterialsStage({
     }
   }, [onGenerateDraft, showVersionConflict]);
 
+  const generateDescription = useCallback(
+    async (sourceId: string) => {
+      const source = contextRef.current.manifest.sources.find(
+        (item) => item.id === sourceId
+      );
+      if (!source || source.kind !== 'image' || !source.workspaceReady) return;
+
+      const currentDescription =
+        workingCopy.sources[sourceId]?.description ?? source.description;
+      setDescribingSourceId(sourceId);
+      setOperationError(null);
+      try {
+        const suggestion = await suggestWorkspaceSourceDescription(
+          workspaceId,
+          sourceId,
+          contextRef.current.manifest.manifestVersion,
+          currentDescription
+        );
+        updateSourceWorkingState(sourceId, {
+          description: suggestion.description,
+          descriptionSource: 'ai',
+          descriptionStatus: 'needs_confirmation',
+        });
+      } catch (error) {
+        if (
+          error instanceof WorkspaceApiError &&
+          error.code === 'version_conflict'
+        ) {
+          showVersionConflict();
+        } else {
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : 'The image description could not be generated.'
+          );
+        }
+      } finally {
+        setDescribingSourceId(null);
+      }
+    },
+    [
+      showVersionConflict,
+      updateSourceWorkingState,
+      workingCopy.sources,
+      workspaceId,
+    ]
+  );
+
   return (
     <div className='grid gap-5 max-[480px]:gap-3' data-testid='materials-stage'>
       <ArticleTypePanel
@@ -464,6 +516,7 @@ export function WxPostMaterialsStage({
         deletingSourceId={
           pendingOperation?.kind === 'delete' ? pendingOperation.sourceId : null
         }
+        describingSourceId={describingSourceId}
         onImport={async (sourceId) => {
           await runMutation({ kind: 'import', sourceId }, (version) =>
             importWorkspaceSource(workspaceId, sourceId, version)
@@ -481,8 +534,13 @@ export function WxPostMaterialsStage({
           updateSourceWorkingState(sourceId, { included });
         }}
         onDescriptionChange={(sourceId, description) =>
-          updateSourceWorkingState(sourceId, { description })
+          updateSourceWorkingState(sourceId, {
+            description,
+            descriptionSource: description.trim() ? 'user' : null,
+            descriptionStatus: description.trim() ? 'confirmed' : 'missing',
+          })
         }
+        onGenerateDescription={generateDescription}
         onUpload={async (file) => {
           await runMutation({ kind: 'upload', sourceId: null }, (version) =>
             uploadWorkspaceSource(workspaceId, version, file)
@@ -564,7 +622,12 @@ export function WxPostMaterialsStage({
         <button
           type='button'
           className={PRIMARY_BUTTON_CLASS}
-          disabled={materialsDirty || busy || draftGenerationPending}
+          disabled={
+            materialsDirty ||
+            busy ||
+            descriptionPending ||
+            draftGenerationPending
+          }
           title={
             materialsDirty
               ? 'Save Materials before generating the draft.'
@@ -597,8 +660,8 @@ export function WxPostMaterialsStage({
           onLoadLatest={() => void loadLatestMaterials()}
         >
           This workspace changed since this page loaded. Loading the latest
-          version will discard your unsaved changes on this page. The material
-          change you just attempted was not applied.
+          version will discard your unsaved changes on this page. The action you
+          just attempted was not applied.
         </WorkspaceConflictDialog>
       )}
     </div>

@@ -74,6 +74,8 @@ function createMaterialsWorkingCopy(
         {
           included: source.included,
           description: source.description,
+          descriptionSource: source.descriptionSource,
+          descriptionStatus: source.descriptionStatus,
         },
       ])
     ),
@@ -95,6 +97,8 @@ function reconcileMaterialsWorkingCopy(
         current.sources[source.id] ?? {
           included: source.included,
           description: source.description,
+          descriptionSource: source.descriptionSource,
+          descriptionStatus: source.descriptionStatus,
         },
       ])
     ),

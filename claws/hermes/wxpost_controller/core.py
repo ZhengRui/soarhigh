@@ -482,9 +482,7 @@ class WorkspaceController:
                 raise InvalidRequest(
                     f"source is not available in the workspace: {source.id}"
                 )
-            source_path = self._source_path(workspace / "sources", source)
-            if source_path.is_symlink() or not source_path.is_file():
-                raise InvalidWorkspace(f"source file is missing: {source.id}")
+            source_path = self._ready_source_path(workspace, source)
             try:
                 data = source_path.read_bytes()
             except OSError as exc:
@@ -494,6 +492,91 @@ class WorkspaceController:
             if len(data) != source.size_bytes:
                 raise InvalidWorkspace(f"source file size is invalid: {source.id}")
         return data, source.mime_type
+
+    def get_source_description_context(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        source_id: str,
+    ) -> dict[str, Any]:
+        request = self._validate_request(
+            SourceActionRequest,
+            {
+                "expectedManifestVersion": expected_manifest_version,
+                "sourceId": source_id,
+            },
+            label="source description",
+        )
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(
+                manifest,
+                request.expected_manifest_version,
+            )
+            source = self._find_source(manifest, request.source_id)
+            if source.kind != SourceKind.IMAGE:
+                raise InvalidRequest("descriptions can only be generated for images")
+            if not source.workspace_ready:
+                raise InvalidRequest(
+                    f"source is not available in the workspace: {source.id}"
+                )
+            source_path = self._ready_source_path(workspace, source)
+            source_context = {
+                "id": source.id,
+                "filename": source.filename,
+                "mimeType": source.mime_type,
+                "path": str(source_path.relative_to(workspace)),
+            }
+            source_revision = self._source_description_revision(source)
+            meeting_id = manifest.meeting_id
+
+        return {
+            "workspaceId": workspace_id,
+            "manifestVersion": manifest.manifest_version,
+            "source": source_context,
+            "sourceRevision": source_revision,
+            "meetingContext": (
+                self._load_meeting_context(meeting_id)
+                if meeting_id is not None
+                else None
+            ),
+        }
+
+    def assert_source_description_target(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        source_id: str,
+        expected_source_revision: str,
+    ) -> None:
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            source = next(
+                (item for item in manifest.sources if item.id == source_id),
+                None,
+            )
+            if (
+                source is None
+                or source.kind != SourceKind.IMAGE
+                or not source.workspace_ready
+            ):
+                raise VersionConflict(
+                    resource="manifest",
+                    expected=expected_manifest_version,
+                    actual=manifest.manifest_version,
+                )
+            self._ready_source_path(workspace, source)
+            current_revision = self._source_description_revision(source)
+            if current_revision != expected_source_revision:
+                raise VersionConflict(
+                    resource="manifest",
+                    expected=expected_manifest_version,
+                    actual=manifest.manifest_version,
+                )
 
     def import_source(
         self,
@@ -1501,6 +1584,27 @@ class WorkspaceController:
         source: SourceRecord,
     ) -> Path:
         return sources_root / f"{source.id}{Path(source.filename).suffix}"
+
+    def _ready_source_path(
+        self,
+        workspace: Path,
+        source: SourceRecord,
+    ) -> Path:
+        source_path = self._source_path(workspace / "sources", source)
+        if source_path.is_symlink() or not source_path.is_file():
+            raise InvalidWorkspace(f"source file is missing: {source.id}")
+        resolved = source_path.resolve()
+        if not resolved.is_relative_to((workspace / "sources").resolve()):
+            raise InvalidWorkspace(f"source file escapes sources/: {source.id}")
+        return source_path
+
+    @staticmethod
+    def _source_description_revision(
+        source: SourceRecord,
+    ) -> str:
+        source_data = source.to_wire()
+        source_data.pop("included")
+        return WorkspaceController._document_sha256(source_data)
 
     def _ensure_sources_directory(self, workspace: Path) -> Path:
         sources_root = workspace / "sources"

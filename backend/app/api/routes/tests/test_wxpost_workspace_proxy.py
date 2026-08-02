@@ -120,6 +120,51 @@ def test_authenticated_workspace_update_is_proxied_in_place(
     assert json.loads(request.content) == payload
 
 
+def test_image_description_suggestion_uses_the_long_running_controller_proxy(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[httpx.Request] = []
+    real_client = httpx.AsyncClient
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "workspaceId": "wxpost-abc",
+                "sourceId": "M01",
+                "description": "Members gather around a meeting table.",
+            },
+        )
+
+    transport = httpx.MockTransport(handle_request)
+
+    def client_factory(*, timeout: int, trust_env: bool) -> httpx.AsyncClient:
+        assert timeout == 330
+        assert trust_env is False
+        return real_client(transport=transport)
+
+    monkeypatch.setattr(wxpost_route, "WXPOST_CONTROLLER_URL", "http://controller")
+    monkeypatch.setattr(wxpost_route, "WXPOST_SERVICE_TOKEN", "controller-secret")
+    monkeypatch.setattr(wxpost_route.httpx, "AsyncClient", client_factory)
+
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/sources/M01/description-suggestion",
+        headers={"Authorization": "Bearer member-token"},
+        json={
+            "expectedManifestVersion": 7,
+            "currentDescription": "会员们围坐交流。",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["sourceId"] == "M01"
+    assert len(captured) == 1
+    assert captured[0].headers["Authorization"] == "Bearer controller-secret"
+    assert captured[0].url.path == ("/workspaces/wxpost-abc/sources/M01/description-suggestion")
+
+
 def test_authenticated_members_can_list_and_delete_all_workspaces(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

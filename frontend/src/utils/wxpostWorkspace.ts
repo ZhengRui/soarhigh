@@ -220,6 +220,12 @@ export interface WorkspaceSourceUpdate {
   descriptionStatus?: WorkspaceSource['descriptionStatus'];
 }
 
+export interface WorkspaceSourceDescriptionSuggestion {
+  workspaceId: string;
+  sourceId: string;
+  description: string;
+}
+
 export interface WorkspaceSummary {
   workspaceId: string;
   createdBy: WorkspaceCreator;
@@ -525,6 +531,25 @@ export function importWorkspaceSource(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         expectedManifestVersion,
+      }),
+    }
+  );
+}
+
+export function suggestWorkspaceSourceDescription(
+  workspaceId: string,
+  sourceId: string,
+  expectedManifestVersion: number,
+  currentDescription: string
+) {
+  return requestJson<WorkspaceSourceDescriptionSuggestion>(
+    `${workspacePath(workspaceId)}/sources/${encodeURIComponent(sourceId)}/description-suggestion`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expectedManifestVersion,
+        currentDescription,
       }),
     }
   );

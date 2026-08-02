@@ -69,7 +69,7 @@ wxpost_router = r = APIRouter()
 service_bearer = HTTPBearer(auto_error=False)
 WXPOST_MAX_SOURCE_BYTES = 50 * 1024 * 1024
 workspace_source_route = re.compile(
-    r"^sources/M(?:0[1-9]|[1-9][0-9]+)" r"(?:/(?:import|inclusion|content|delete-preflight))?$"
+    r"^sources/M(?:0[1-9]|[1-9][0-9]+)" r"(?:/(?:import|inclusion|content|delete-preflight|description-suggestion))?$"
 )
 workspace_draft_routes = {
     ("GET", "draft/session"),
@@ -327,6 +327,7 @@ def _workspace_route_allowed(method: str, path: str) -> bool:
     leaf = path.rsplit("/", 1)[-1]
     return (method, leaf) in {
         ("POST", "import"),
+        ("POST", "description-suggestion"),
         ("PUT", "inclusion"),
         ("GET", "content"),
         ("GET", "delete-preflight"),
@@ -348,7 +349,12 @@ async def _proxy_workspace_request(
         body=body,
         content_type=request.headers.get("Content-Type"),
         expected_manifest_version=request.headers.get("X-Expected-Manifest-Version"),
-        timeout=330 if controller_path in {"draft/generate", "draft/chat"} else 30,
+        timeout=(
+            330
+            if controller_path in {"draft/generate", "draft/chat"}
+            or controller_path.endswith("/description-suggestion")
+            else 30
+        ),
     )
 
 

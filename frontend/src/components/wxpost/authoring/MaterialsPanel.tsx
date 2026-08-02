@@ -49,6 +49,10 @@ function MaterialImage({
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [loadedSourceUrl, setLoadedSourceUrl] = useState<string | null>(null);
   const [failedSourceUrl, setFailedSourceUrl] = useState<string | null>(null);
+  const [imageDimensions, setImageDimensions] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
   const contentQuery = useQuery({
     queryKey: ['wxpost-source-content', workspaceId, material.sourceId],
     queryFn: () => getWorkspaceSourceContent(workspaceId, material.sourceId),
@@ -116,9 +120,13 @@ function MaterialImage({
               imageLoaded ? 'opacity-100' : 'opacity-0'
             }`}
             unoptimized
-            onLoad={() => {
+            onLoad={(event) => {
               setLoadedSourceUrl(sourceUrl);
               setFailedSourceUrl(null);
+              setImageDimensions({
+                width: event.currentTarget.naturalWidth,
+                height: event.currentTarget.naturalHeight,
+              });
             }}
             onError={() => {
               setFailedSourceUrl(sourceUrl);
@@ -147,7 +155,12 @@ function MaterialImage({
           aria-label={`Preview ${material.filename}`}
           data-testid='material-lightbox'
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setOpen(false);
+            if (
+              !(event.target instanceof Element) ||
+              !event.target.closest('[data-lightbox-image]')
+            ) {
+              setOpen(false);
+            }
           }}
         >
           <button
@@ -158,16 +171,18 @@ function MaterialImage({
           >
             <X aria-hidden='true' />
           </button>
-          <div className='relative h-[min(72vh,780px)] w-[min(1100px,90vw)]'>
+          {imageDimensions && (
             <Image
               src={sourceUrl}
               alt={description || material.filename}
-              fill
+              width={imageDimensions.width}
+              height={imageDimensions.height}
               sizes='90vw'
-              className='object-contain'
+              className='block h-auto max-h-[72vh] w-auto max-w-[90vw] object-contain'
               unoptimized
+              data-lightbox-image
             />
-          </div>
+          )}
           <div className='absolute bottom-6 left-8 right-8 flex items-baseline justify-center gap-3 text-center text-sm text-white max-[480px]:bottom-[18px] max-[480px]:left-[18px] max-[480px]:right-[18px] max-[480px]:flex-col max-[480px]:items-center max-[480px]:gap-1'>
             <strong>{material.filename}</strong>
             {description && (
@@ -184,19 +199,25 @@ function MaterialCard({
   workspaceId,
   material,
   busy,
+  descriptionPending,
   importing,
+  describing,
   onImport,
   onToggleIncluded,
   onDescriptionChange,
+  onGenerateDescription,
   onDeleteRequest,
 }: {
   workspaceId: string;
   material: WxPostMaterial;
   busy: boolean;
+  descriptionPending: boolean;
   importing: boolean;
+  describing: boolean;
   onImport: () => Promise<void>;
   onToggleIncluded: () => Promise<void>;
   onDescriptionChange: (description: string) => void;
+  onGenerateDescription: () => Promise<void>;
   onDeleteRequest: () => void;
 }) {
   return (
@@ -252,7 +273,7 @@ function MaterialCard({
               ? 'Delete from workspace'
               : 'Import into workspace'
           }
-          disabled={busy}
+          disabled={busy || describing}
           onClick={() => {
             if (material.workspaceReady) {
               onDeleteRequest();
@@ -278,6 +299,7 @@ function MaterialCard({
           <ResizableTextarea
             rows={1}
             value={material.description}
+            disabled={describing}
             onChange={(event) => onDescriptionChange(event.target.value)}
             placeholder='Add a description'
             className='block min-h-[92px] w-full rounded-[10px] border border-[#cad5e4] bg-white pb-12 pl-3 pr-[54px] pt-[11px] text-[15px] font-normal leading-[1.55] text-[#172033] outline-none placeholder:font-normal placeholder:text-[#93a0b2] hover:border-[#9fb1c8] focus:border-blue-600 max-[480px]:min-h-[84px] max-[480px]:pt-2.5 max-[480px]:text-sm'
@@ -286,13 +308,29 @@ function MaterialCard({
           />
           <button
             type='button'
-            className='absolute bottom-3 right-3 z-[1] grid h-[30px] w-[30px] place-items-center rounded-full border border-[#d5deea] bg-slate-50 text-[#52627a] disabled:cursor-not-allowed disabled:opacity-80 [&_svg]:h-4 [&_svg]:w-4'
+            className='absolute bottom-3 right-3 z-[1] grid h-[30px] w-[30px] place-items-center rounded-full border border-[#d5deea] bg-slate-50 text-[#52627a] hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4'
             aria-label='Generate description'
-            title='Generate description'
-            disabled
+            title={
+              material.kind !== 'image'
+                ? 'Descriptions can only be generated for images.'
+                : !material.workspaceReady
+                  ? 'Import this image before generating a description.'
+                  : 'Generate an English description'
+            }
+            disabled={
+              busy ||
+              descriptionPending ||
+              material.kind !== 'image' ||
+              !material.workspaceReady
+            }
+            onClick={() => void onGenerateDescription()}
             data-testid={`generate-description-${material.sourceId}`}
           >
-            <WandSparkles aria-hidden='true' />
+            {describing ? (
+              <Loader2 className='animate-spin' aria-hidden='true' />
+            ) : (
+              <WandSparkles aria-hidden='true' />
+            )}
           </button>
         </span>
       </label>
@@ -324,9 +362,11 @@ export function MaterialsPanel({
   importingSourceId,
   uploading,
   deletingSourceId,
+  describingSourceId,
   onImport,
   onToggleIncluded,
   onDescriptionChange,
+  onGenerateDescription,
   onUpload,
   onDeletePreflight,
   onDelete,
@@ -338,9 +378,11 @@ export function MaterialsPanel({
   importingSourceId: string | null;
   uploading: boolean;
   deletingSourceId: string | null;
+  describingSourceId: string | null;
   onImport: (sourceId: string) => Promise<void>;
   onToggleIncluded: (sourceId: string, included: boolean) => Promise<void>;
   onDescriptionChange: (sourceId: string, description: string) => void;
+  onGenerateDescription: (sourceId: string) => Promise<void>;
   onUpload: (file: File) => Promise<void>;
   onDeletePreflight: (sourceId: string) => Promise<WorkspaceDeletePreflight>;
   onDelete: (
@@ -426,13 +468,18 @@ export function MaterialsPanel({
                   workspaceId={workspaceId}
                   material={material}
                   busy={busy}
+                  descriptionPending={describingSourceId !== null}
                   importing={importingSourceId === material.sourceId}
+                  describing={describingSourceId === material.sourceId}
                   onImport={() => onImport(material.sourceId)}
                   onToggleIncluded={() =>
                     onToggleIncluded(material.sourceId, !material.included)
                   }
                   onDescriptionChange={(description) =>
                     onDescriptionChange(material.sourceId, description)
+                  }
+                  onGenerateDescription={() =>
+                    onGenerateDescription(material.sourceId)
                   }
                   onDeleteRequest={() => void openDeleteDialog(material)}
                 />

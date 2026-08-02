@@ -25,6 +25,7 @@ from .core import (
     error_response,
 )
 from .hermes_session import (
+    HermesDescriptionService,
     HermesDraftService,
     HermesSessionClient,
     HermesTurnFailed,
@@ -41,6 +42,9 @@ SOURCE_DELETE_PREFLIGHT_PATH = re.compile(
     r"^/workspaces/([^/]+)/sources/([^/]+)/delete-preflight$"
 )
 SOURCE_CONTENT_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)/content$")
+SOURCE_DESCRIPTION_PATH = re.compile(
+    r"^/workspaces/([^/]+)/sources/([^/]+)/description-suggestion$"
+)
 SOURCE_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)$")
 UPLOADS_PATH = re.compile(r"^/workspaces/([^/]+)/uploads$")
 DRAFT_SESSION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/session$")
@@ -52,6 +56,7 @@ MAX_REQUEST_BYTES = 1_000_000
 
 class ControllerHTTPServer(ThreadingHTTPServer):
     controller: WorkspaceController
+    description_service: HermesDescriptionService
     draft_service: HermesDraftService
     bearer_token: str
 
@@ -274,6 +279,31 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         parsed = urlsplit(self.path)
+        description_match = SOURCE_DESCRIPTION_PATH.fullmatch(parsed.path)
+        if description_match is not None:
+            payload = self._read_json_body()
+            if payload is None or not self._accept_fields(
+                payload,
+                {"expectedManifestVersion", "currentDescription"},
+                "source description suggestion",
+            ):
+                return
+            self._run_controller(
+                lambda: self.server.description_service.suggest(
+                    description_match.group(1),
+                    expected_manifest_version=cast(
+                        int,
+                        payload.get("expectedManifestVersion"),
+                    ),
+                    source_id=description_match.group(2),
+                    current_description=cast(
+                        str,
+                        payload.get("currentDescription"),
+                    ),
+                )
+            )
+            return
+
         draft_save_match = DRAFT_SAVE_PATH.fullmatch(parsed.path)
         if draft_save_match is not None:
             payload = self._read_json_body()
@@ -657,12 +687,17 @@ def build_server(
         raise ValueError("controller bearer token must not be empty")
     server = ControllerHTTPServer((host, port), ControllerRequestHandler)
     server.controller = WorkspaceController(workspace_root)
+    session_client = HermesSessionClient(
+        serve_url=hermes_serve_url,
+        token=bearer_token,
+    )
+    server.description_service = HermesDescriptionService(
+        controller=server.controller,
+        session_client=session_client,
+    )
     server.draft_service = HermesDraftService(
         controller=server.controller,
-        session_client=HermesSessionClient(
-            serve_url=hermes_serve_url,
-            token=bearer_token,
-        ),
+        session_client=session_client,
     )
     server.bearer_token = bearer_token
     return server

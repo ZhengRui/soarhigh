@@ -76,8 +76,8 @@ export type WorkspaceManifest = {
     workspaceReady: boolean;
     included: boolean;
     description: string;
-    descriptionSource: 'user' | null;
-    descriptionStatus: 'confirmed' | 'missing';
+    descriptionSource: 'user' | 'ai' | null;
+    descriptionStatus: 'confirmed' | 'needs_confirmation' | 'missing';
   }>;
 };
 
@@ -107,6 +107,7 @@ export type WorkspaceMock = {
   failDraftValidation: boolean;
   failSourceContent: boolean;
   failNextDraftChat: boolean;
+  failNextDescriptionSuggestion: boolean;
   conflictNextPublication: boolean;
   failNextPublication: boolean;
   publicationStatusUnavailable: boolean;
@@ -114,6 +115,12 @@ export type WorkspaceMock = {
   contextDelayMs: number;
   draftSaveDelayMs: number;
   publicationStatusDelayMs: number;
+  descriptionSuggestionDelayMs: number;
+  nextDescriptionSuggestion: string;
+  descriptionSuggestionInputs: Array<{
+    sourceId: string;
+    currentDescription: string;
+  }>;
   nextGeneratedDocument: DraftDocument | null;
   referencedSourceIds: Set<string>;
   draftMessages: Map<
@@ -230,6 +237,7 @@ export async function mockWxPostWorkspaceApi(
     failDraftValidation: false,
     failSourceContent: false,
     failNextDraftChat: false,
+    failNextDescriptionSuggestion: false,
     conflictNextPublication: false,
     failNextPublication: false,
     publicationStatusUnavailable: false,
@@ -237,6 +245,10 @@ export async function mockWxPostWorkspaceApi(
     contextDelayMs: 0,
     draftSaveDelayMs: 0,
     publicationStatusDelayMs: 0,
+    descriptionSuggestionDelayMs: 0,
+    nextDescriptionSuggestion:
+      'Members gather in a bright meeting room before the program begins.',
+    descriptionSuggestionInputs: [],
     nextGeneratedDocument: null,
     referencedSourceIds: new Set(),
     draftMessages: new Map(),
@@ -672,6 +684,61 @@ export async function mockWxPostWorkspaceApi(
         });
         return;
       }
+      if (
+        method === 'POST' &&
+        parts[0] === 'sources' &&
+        parts[2] === 'description-suggestion'
+      ) {
+        const input = request.postDataJSON() as {
+          expectedManifestVersion: number;
+          currentDescription: string;
+        };
+        mock.descriptionSuggestionInputs.push({
+          sourceId: parts[1],
+          currentDescription: input.currentDescription,
+        });
+        if (
+          input.expectedManifestVersion !== context.manifest.manifestVersion
+        ) {
+          await route.fulfill({
+            status: 409,
+            json: {
+              error: {
+                code: 'version_conflict',
+                message: 'manifest changed',
+              },
+            },
+          });
+          return;
+        }
+        if (mock.failNextDescriptionSuggestion) {
+          mock.failNextDescriptionSuggestion = false;
+          await route.fulfill({
+            status: 503,
+            json: {
+              error: {
+                code: 'hermes_unavailable',
+                message: 'Hermes is temporarily unavailable',
+              },
+            },
+          });
+          return;
+        }
+        if (mock.descriptionSuggestionDelayMs > 0) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, mock.descriptionSuggestionDelayMs)
+          );
+        }
+        await route.fulfill({
+          status: 200,
+          json: {
+            workspaceId,
+            sourceId: parts[1],
+            description: mock.nextDescriptionSuggestion,
+          },
+        });
+        return;
+      }
       if (method === 'GET' && parts[2] === 'content') {
         if (mock.failSourceContent) {
           await route.fulfill({
@@ -766,8 +833,8 @@ export async function mockWxPostWorkspaceApi(
             sourceId: string;
             included?: boolean;
             description?: string;
-            descriptionSource?: 'user' | null;
-            descriptionStatus?: 'confirmed' | 'missing';
+            descriptionSource?: 'user' | 'ai' | null;
+            descriptionStatus?: 'confirmed' | 'needs_confirmation' | 'missing';
           }>;
         };
         if (input.expectedManifestVersion !== manifest.manifestVersion) {

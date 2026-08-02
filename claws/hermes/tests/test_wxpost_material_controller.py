@@ -603,6 +603,94 @@ def test_import_and_include_materialize_exactly_once(
     assert source_path.exists()
 
 
+def test_source_description_context_exposes_one_ready_image_and_meeting_facts(
+    tmp_path: Path,
+) -> None:
+    photo = b"photo"
+    controller = WorkspaceController(
+        tmp_path,
+        article_validator=lambda document: document,
+        meeting_media_loader=lambda meeting_id: [
+            _media(
+                "meetings/462/photo.jpg",
+                "photo.jpg",
+                size=len(photo),
+                uploaded_at="2026-07-20T09:00:00Z",
+            )
+        ],
+        meeting_context_loader=lambda meeting_id: {
+            "id": meeting_id,
+            "theme": "Culture in Every Voice",
+            "introduction": "A meeting about belonging.",
+            "segments": [
+                {
+                    "type": "Table Topics",
+                    "start_time": "20:00",
+                    "end_time": "20:30",
+                    "title": "Speak from experience",
+                    "content": "",
+                }
+            ],
+        },
+        source_loader=lambda url: photo,
+    )
+    _bootstrap(controller)
+
+    with pytest.raises(InvalidRequest, match="not available"):
+        controller.get_source_description_context(
+            "material-workspace",
+            expected_manifest_version=1,
+            source_id="M01",
+        )
+
+    controller.import_source(
+        "material-workspace",
+        expected_manifest_version=1,
+        source_id="M01",
+    )
+    result = controller.get_source_description_context(
+        "material-workspace",
+        expected_manifest_version=2,
+        source_id="M01",
+    )
+
+    assert result["source"] == {
+        "id": "M01",
+        "filename": "photo.jpg",
+        "mimeType": "image/jpeg",
+        "path": "sources/M01.jpg",
+    }
+    assert result["meetingContext"]["theme"] == "Culture in Every Voice"
+    assert result["meetingContext"]["introduction"] == ("A meeting about belonging.")
+    assert result["meetingContext"]["agenda"][0]["title"] == ("Speak from experience")
+    controller.assert_source_description_target(
+        "material-workspace",
+        expected_manifest_version=2,
+        source_id="M01",
+        expected_source_revision=result["sourceRevision"],
+    )
+
+    controller.update_sources(
+        "material-workspace",
+        expected_manifest_version=2,
+        updates=[
+            {
+                "sourceId": "M01",
+                "description": "Changed elsewhere.",
+                "descriptionSource": "user",
+                "descriptionStatus": "confirmed",
+            }
+        ],
+    )
+    with pytest.raises(VersionConflict, match="current manifest version is 3"):
+        controller.assert_source_description_target(
+            "material-workspace",
+            expected_manifest_version=2,
+            source_id="M01",
+            expected_source_revision=result["sourceRevision"],
+        )
+
+
 def test_real_media_transport_scopes_service_token_to_the_backend(
     tmp_path: Path,
     meeting_api: str,

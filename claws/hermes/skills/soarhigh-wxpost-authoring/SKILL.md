@@ -1,6 +1,6 @@
 ---
 name: soarhigh-wxpost-authoring
-description: Generate and revise one canonical SoarHigh WxPost draft from a controller-owned workspace. Use for web Draft generation, Regenerate, and focused Hermes revisions.
+description: Generate selected-image descriptions and author one canonical SoarHigh WxPost draft from a controller-owned workspace. Use for web Materials descriptions, Draft generation, Regenerate, and focused Hermes revisions.
 ---
 
 # SoarHigh WxPost authoring
@@ -9,6 +9,22 @@ Use the `soarhigh-wxpost` MCP tools for every canonical read and write. The
 workspace ID in the request is authoritative. Never search the filesystem for
 another workspace and never edit `source-manifest.json` or
 `draft/article.json` directly.
+
+## Materials image-description workflow
+
+For a selected-image description request, inspect only the image path named in
+the request. Write one short, natural English sentence that captures the main
+human moment and its visible mood. This is an editorial caption, not an
+inventory of everything visible: omit incidental furniture, refreshments,
+signage, clothing, and background objects unless they are essential to the
+moment. If the current description contains text in any language, preserve its
+supported meaning while translating, compressing, and polishing it into the
+same concise style. The image and current description are authoritative; use
+linked meeting theme, introduction, and agenda only as supporting context.
+Convey warmth or energy only when the image or supplied context supports it,
+and never infer or invent a person, role, award, quotation, reaction, or event.
+Return the strict JSON response requested by the operation and never update
+Materials or the Draft during this workflow.
 
 ## Web Draft workflow
 

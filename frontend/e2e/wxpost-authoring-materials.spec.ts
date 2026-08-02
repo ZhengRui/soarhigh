@@ -292,6 +292,72 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
   expect(context.draft).toBe(savedDraft);
 });
 
+test('generates an English image description locally and saves its provenance', async ({
+  page,
+}) => {
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  const context = Array.from(workspace.contexts.values())[0];
+
+  await page.getByTestId('workspace-M01').click();
+  await page
+    .getByTestId('description-M01')
+    .fill('会员们在会议开始前围坐交流。');
+
+  workspace.descriptionSuggestionDelayMs = 250;
+  workspace.nextDescriptionSuggestion =
+    'Members exchange ideas around a table before the meeting begins.';
+  await page.getByTestId('generate-description-M01').click();
+
+  await expect(
+    page.getByTestId('generate-description-M01').locator('.animate-spin')
+  ).toHaveCount(1);
+  await expect(
+    page.getByTestId('generate-description-M02').locator('.animate-spin')
+  ).toHaveCount(0);
+  await expect(page.getByTestId('workspace-M01')).toBeDisabled();
+  await expect(page.getByTestId('workspace-M02')).toBeEnabled();
+  await page.getByTestId('workspace-M02').click();
+  await expect(page.getByTestId('workspace-M02')).toBeEnabled();
+  expect(context.manifest.sources[1].workspaceReady).toBe(true);
+  await expect(page.getByTestId('description-M01')).toHaveValue(
+    'Members exchange ideas around a table before the meeting begins.'
+  );
+  expect(workspace.descriptionSuggestionInputs).toEqual([
+    {
+      sourceId: 'M01',
+      currentDescription: '会员们在会议开始前围坐交流。',
+    },
+  ]);
+  expect(context.manifest.sources[0]).toMatchObject({
+    description: '',
+    descriptionSource: null,
+    descriptionStatus: 'missing',
+  });
+
+  await page.getByTestId('save-materials').click();
+  await expect(
+    page.getByText('Materials saved successfully!', { exact: true })
+  ).toBeVisible();
+  expect(context.manifest.sources[0]).toMatchObject({
+    description:
+      'Members exchange ideas around a table before the meeting begins.',
+    descriptionSource: 'ai',
+    descriptionStatus: 'needs_confirmation',
+  });
+
+  await page
+    .getByTestId('description-M01')
+    .fill('Members share ideas around a table before the meeting.');
+  await page.getByTestId('save-materials').click();
+  await expect(page.getByTestId('save-materials')).toBeDisabled();
+  expect(context.manifest.sources[0]).toMatchObject({
+    description: 'Members share ideas around a table before the meeting.',
+    descriptionSource: 'user',
+    descriptionStatus: 'confirmed',
+  });
+});
+
 test('confirms before a stale Materials save replaces local edits', async ({
   page,
 }) => {
@@ -474,9 +540,14 @@ test('runs immediate import, upload, and delete operations without UI regression
 
   await description.fill('Visible in the image lightbox.');
   await page.getByRole('button', { name: 'Preview meeting-room.jpg' }).click();
-  await expect(page.getByTestId('material-lightbox')).toContainText(
-    'Visible in the image lightbox.'
-  );
+  const lightbox = page.getByTestId('material-lightbox');
+  await expect(lightbox).toContainText('Visible in the image lightbox.');
+  await lightbox.locator('[data-lightbox-image]').click();
+  await expect(lightbox).toBeVisible();
+  await lightbox.click({ position: { x: 8, y: 8 } });
+  await expect(lightbox).toBeHidden();
+
+  await page.getByRole('button', { name: 'Preview meeting-room.jpg' }).click();
   await page.keyboard.press('Escape');
 
   await page.getByTestId(`workspace-${FIRST_SOURCE_KEY}`).click();
@@ -552,7 +623,7 @@ test('runs immediate import, upload, and delete operations without UI regression
     'Loading the latest version will discard your unsaved changes'
   );
   await expect(conflictDialog).toContainText(
-    'The material change you just attempted was not applied.'
+    'The action you just attempted was not applied.'
   );
   await expect(description).toHaveValue(
     'Do not lose this local text on conflict.'

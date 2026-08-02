@@ -7,6 +7,7 @@ import pytest
 
 from wxpost_controller.core import InvalidRequest, VersionConflict
 from wxpost_controller.hermes_session import (
+    HermesDescriptionService,
     HermesDraftService,
     HermesSessionClient,
     HermesSessionHistory,
@@ -18,6 +19,7 @@ from wxpost_controller.hermes_session import (
 class _Controller:
     def __init__(self, root: Path) -> None:
         self.inbox_root = root / "inbox"
+        self.source_revision = "source-revision-1"
         self.context: dict[str, Any] = {
             "workspaceId": "wxpost-test",
             "manifest": {"manifestVersion": 4},
@@ -27,6 +29,56 @@ class _Controller:
     def get_context(self, workspace_id: str) -> dict[str, Any]:
         assert workspace_id == "wxpost-test"
         return self.context
+
+    def get_source_description_context(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        source_id: str,
+    ) -> dict[str, Any]:
+        assert workspace_id == "wxpost-test"
+        actual_version = self.context["manifest"]["manifestVersion"]
+        if expected_manifest_version != actual_version:
+            raise VersionConflict(
+                resource="manifest",
+                expected=expected_manifest_version,
+                actual=actual_version,
+            )
+        return {
+            "workspaceId": workspace_id,
+            "manifestVersion": actual_version,
+            "source": {
+                "id": source_id,
+                "filename": "meeting-room.jpg",
+                "mimeType": "image/jpeg",
+                "path": f"sources/{source_id}.jpg",
+            },
+            "sourceRevision": self.source_revision,
+            "meetingContext": {
+                "theme": "Culture in Every Voice",
+                "introduction": "A meeting about belonging.",
+                "agenda": [{"title": "Table Topics"}],
+                "internalNote": "This must not enter the image prompt.",
+            },
+        }
+
+    def assert_source_description_target(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        source_id: str,
+        expected_source_revision: str,
+    ) -> None:
+        assert workspace_id == "wxpost-test"
+        assert source_id == "M01"
+        if expected_source_revision != self.source_revision:
+            raise VersionConflict(
+                resource="manifest",
+                expected=expected_manifest_version,
+                actual=self.context["manifest"]["manifestVersion"],
+            )
 
 
 class _SessionClient:
@@ -247,3 +299,191 @@ def test_visible_history_accepts_serve_text_messages_and_hides_tools() -> None:
         {"role": "user", "text": "Tighten it."},
         {"role": "assistant", "text": "Draft tightened."},
     ]
+
+
+def test_description_service_polishes_any_language_into_local_english_suggestion(
+    tmp_path: Path,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+    session.turn = (
+        lambda **kwargs: (  # type: ignore[method-assign]
+            session.prompts.append(kwargs)
+            or HermesTurn(
+                session_id="description-session",
+                reply=(
+                    '{"description":"Members exchange ideas around a table '
+                    'before the meeting begins."}'
+                ),
+            )
+        )
+    )
+    service = HermesDescriptionService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=session,  # type: ignore[arg-type]
+    )
+
+    result = service.suggest(
+        "wxpost-test",
+        expected_manifest_version=4,
+        source_id="M01",
+        current_description="会员们在会议开始前围坐交流。",
+    )
+
+    assert result == {
+        "workspaceId": "wxpost-test",
+        "sourceId": "M01",
+        "description": (
+            "Members exchange ideas around a table before the meeting begins."
+        ),
+    }
+    prompt = session.prompts[0]["prompt"]
+    assert "sources/M01.jpg" in prompt
+    assert "translating, compressing, and polishing" in prompt
+    assert "editorial caption" in prompt
+    assert "not an inventory of objects" in prompt
+    assert "visible mood" in prompt
+    assert "Culture in Every Voice" in prompt
+    assert "internalNote" not in prompt
+    assert "会员们在会议开始前围坐交流。" in prompt
+    assert "Do not save or update the workspace" in prompt
+
+
+def test_description_service_uses_image_first_generation_for_empty_text(
+    tmp_path: Path,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+    session.turn = lambda **kwargs: (  # type: ignore[method-assign]
+        session.prompts.append(kwargs)
+        or HermesTurn(
+            session_id="description-session",
+            reply='{"description":"A speaker addresses seated members."}',
+        )
+    )
+    service = HermesDescriptionService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=session,  # type: ignore[arg-type]
+    )
+
+    service.suggest(
+        "wxpost-test",
+        expected_manifest_version=4,
+        source_id="M01",
+        current_description="",
+    )
+
+    prompt = session.prompts[0]["prompt"]
+    assert "No current description was provided" in prompt
+    assert "Create the caption from the image and supporting context" in prompt
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "A plain sentence without the response contract.",
+        '{"description":""}',
+        '{"description":"Useful","extra":true}',
+    ],
+)
+def test_description_service_rejects_non_contract_replies(
+    tmp_path: Path,
+    reply: str,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+    session.turn = lambda **kwargs: HermesTurn(  # type: ignore[method-assign]
+        session_id="description-session",
+        reply=reply,
+    )
+    service = HermesDescriptionService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=session,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(HermesTurnFailed, match="invalid image description"):
+        service.suggest(
+            "wxpost-test",
+            expected_manifest_version=4,
+            source_id="M01",
+            current_description="",
+        )
+
+
+def test_description_service_keeps_a_snapshot_suggestion_when_manifest_changes(
+    tmp_path: Path,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+
+    def changed_turn(**kwargs: str) -> HermesTurn:
+        controller.context["manifest"]["manifestVersion"] = 5
+        return HermesTurn(
+            session_id="description-session",
+            reply='{"description":"A meeting room."}',
+        )
+
+    session.turn = changed_turn  # type: ignore[method-assign]
+    service = HermesDescriptionService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=session,  # type: ignore[arg-type]
+    )
+
+    suggestion = service.suggest(
+        "wxpost-test",
+        expected_manifest_version=4,
+        source_id="M01",
+        current_description="",
+    )
+
+    assert suggestion["description"] == "A meeting room."
+
+
+def test_description_service_rejects_a_suggestion_when_its_source_changes(
+    tmp_path: Path,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+
+    def changed_turn(**kwargs: str) -> HermesTurn:
+        controller.context["manifest"]["manifestVersion"] = 5
+        controller.source_revision = "source-revision-2"
+        return HermesTurn(
+            session_id="description-session",
+            reply='{"description":"A meeting room."}',
+        )
+
+    session.turn = changed_turn  # type: ignore[method-assign]
+    service = HermesDescriptionService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=session,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(VersionConflict, match="current manifest version is 5"):
+        service.suggest(
+            "wxpost-test",
+            expected_manifest_version=4,
+            source_id="M01",
+            current_description="",
+        )
+
+
+def test_description_service_serializes_only_turns_for_the_same_source(
+    tmp_path: Path,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+    service = HermesDescriptionService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=session,  # type: ignore[arg-type]
+    )
+
+    assert service._turn_lock("workspace-a", "M01") is service._turn_lock(
+        "workspace-a", "M01"
+    )
+    assert service._turn_lock("workspace-a", "M01") is not service._turn_lock(
+        "workspace-a", "M02"
+    )
+    assert service._turn_lock("workspace-a", "M01") is not service._turn_lock(
+        "workspace-b", "M01"
+    )

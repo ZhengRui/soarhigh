@@ -22,6 +22,8 @@ export interface WxPostMaterial {
 export interface WxPostMaterialWorkingState {
   included: boolean;
   description: string;
+  descriptionSource: 'user' | 'ai' | null;
+  descriptionStatus: 'confirmed' | 'needs_confirmation' | 'missing';
 }
 
 export interface WxPostMaterialsWorkingCopy {
