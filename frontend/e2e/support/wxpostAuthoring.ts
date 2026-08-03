@@ -768,11 +768,14 @@ export async function mockWxPostWorkspaceApi(
               stage: 'activity_started',
               activityId: 'save-1',
               label: `Saving Draft v${nextVersion}`,
+              toolName: 'wxpost_edit_draft',
             },
             {
               stage: 'activity_completed',
               activityId: 'save-1',
-              label: `Saving Draft v${nextVersion}`,
+              label: 'Updating the Draft title',
+              toolName: 'wxpost_edit_draft',
+              operationNames: ['replaceMetadata'],
             },
             {
               stage: 'activity_started',

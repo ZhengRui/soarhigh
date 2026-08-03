@@ -249,11 +249,12 @@ operation inputs. A complete manifest example lives at
 - draft saves use the backend-owned `/posts/wxposts/validate` endpoint instead
   of maintaining a second ArticleDocument validator in the controller; the
   normalized document returned by that endpoint is the one stored on disk;
-- draft saves require both expected manifest and draft versions. MCP accepts
-  only proposal schema v2, rejects missing, duplicate, unimported, and unknown
-  material IDs, and never asks Hermes to reproduce controller-owned media
-  fields. Generate/Regenerate require every Materials-included medium; focused
-  revisions preserve current Draft media unless an explicit delta changes it;
+- draft saves require both expected manifest and draft versions. Complete
+  article saves accept only proposal schema v2; fine-grained revisions accept
+  only the typed edit union. Both reject invalid material references and never
+  ask Hermes to reproduce controller-owned media fields. Generate/Regenerate
+  require every Materials-included medium; whole-article revisions preserve
+  current Draft media unless an explicit delta changes it;
 - ordinary article prose remains free-form Markdown inside typed `markdown` and
   `section.body` blocks. Hermes selects typed semantic blocks and never writes
   fenced YAML. The controller deterministically serializes those blocks into
@@ -288,10 +289,21 @@ one another.
 Draft Assistant chat uses the same session but does not force every message
 through a save. A general question may be answered without reading the
 workspace; a question about the article reads `wxpost_get_context` and answers
-without saving; an editorial request reads context and saves one new Draft
-version. The controller reports whether the Draft changed and accepts only an
-unchanged version or one operation-ID-matched increment. A chat failure does
-not make the Hermes connection unavailable.
+without saving. A small editorial request uses `wxpost_edit_draft` with typed,
+version-bound node, directive, media, description, or cover edits; a genuine
+whole-article restructure or rewrite still uses `wxpost_save_draft`. The
+controller reports whether the Draft changed and accepts only an unchanged
+version or one operation-ID-matched increment. A chat failure does not make the
+Hermes connection unavailable.
+
+`wxpost_get_context` exposes a Draft-only `editContext.body` to Hermes. Its
+ordered node indexes belong to the returned Draft version and are never stored
+in browser state or matched heuristically by text. Backend applies the typed
+operations against that exact canonical document, re-derives the media
+dependency snapshot from body references plus `coverMediaId`, validates the
+result, and only then lets the controller perform the version-checked atomic
+save. Materials `included` state is not changed by Draft edits. Any imported
+workspace-ready image may be a cover without appearing in the body.
 
 If the first save is rejected before persistence solely by the formal proposal
 or ArticleDocument validator, Hermes may correct the typed proposal once from
@@ -300,11 +312,11 @@ It never parses or repairs YAML, guesses media IDs, retries version conflicts,
 or retries runtime failures. The versioned session title prevents a breaking
 proposal revision from reusing an older protocol conversation.
 
-The authoring session protocol is version 6. Its save call includes the
-turn-specific operation ID and an explicit choice between current Materials
-and a focused revision. Revisions also declare media additions, removals, and
-cover preserve/set/clear intent. The editorial proposal itself remains schema
-v2.
+The authoring session protocol is version 7. Its mutation calls include the
+turn-specific operation ID. Fine-grained revisions use the typed edit contract;
+whole-article revisions retain the proposal-v2 media delta contract. Generate
+and Regenerate still select their source snapshot from current Materials. The
+editorial proposal itself remains schema v2.
 The strict proposal deliberately omits `presentation`. The controller applies
 the agreed default for the first Draft and preserves the saved/current
 presentation on Generate, Regenerate, and normal editorial revisions.
@@ -484,9 +496,10 @@ docker exec \
 
 The `${...}` values above are references, not copied secrets. Hermes resolves
 them from the Gateway environment when it starts the filtered MCP subprocess.
-Both references are required for `wxpost_save_draft`: the controller assembles
-the canonical `ArticleDocument` from the strict proposal and the operation's
-declared source snapshot, then validates it through Backend before writing it.
+Both references are required for `wxpost_save_draft` and `wxpost_edit_draft`:
+the controller either assembles a complete canonical `ArticleDocument` from a
+strict proposal or asks Backend to apply typed operations, then validates the
+result before writing it.
 
 Then verify discovery:
 
@@ -564,6 +577,17 @@ message is sent; refreshing before that message keeps the new conversation
 empty. Draft, Materials, and workspace files are unaffected. Session pointers
 also record the Draft protocol version so a future protocol bump retires an
 incompatible conversation instead of resuming it by stored ID.
+
+Hermes and the Controller own separate persistent databases. Hermes keeps the
+conversation itself in the dedicated profile's `state.db`. The Controller
+keeps only workspace-to-session pointers, retryable session deletions, and the
+web UI's exact completed-step metadata in
+`/workspace/.wxpost-controller/controller.sqlite3`. Completed steps are keyed
+by the existing turn-specific Draft operation ID, not matched by reply text.
+The Controller database uses WAL transactions and never copies chat messages
+or Draft content. On first startup after this change it transactionally imports
+the former `draft-sessions.json`, reconciles its legacy completed steps when
+that Hermes history is next opened, then removes the JSON file.
 
 The remaining implementation order preserves the existing plan. Phase 2 Slice
 7A public synchronization is complete: Backend projects one saved Draft into

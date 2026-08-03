@@ -8,7 +8,7 @@ from typing import Any, Literal
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
-from .contracts import DraftMediaChanges, DraftProposal
+from .contracts import DraftEditOperation, DraftMediaChanges, DraftProposal
 from .core import (
     WorkspaceController,
     WorkspaceError,
@@ -206,6 +206,26 @@ def wxpost_save_draft(
             operation_id=operation_id,
             refresh_from_materials=refresh_from_materials,
             media_changes=media_changes,
+        )
+    )
+
+
+@mcp.tool()
+def wxpost_edit_draft(
+    workspace_id: str,
+    expected_manifest_version: int,
+    expected_draft_version: int,
+    operation_id: str,
+    edits: list[DraftEditOperation],
+) -> dict[str, Any]:
+    """Apply small, typed edits to the current saved Draft."""
+    return _run(
+        lambda: _controller().edit_draft(
+            workspace_id,
+            expected_manifest_version=expected_manifest_version,
+            expected_draft_version=expected_draft_version,
+            operation_id=operation_id,
+            edits=[edit.to_wire() for edit in edits],
         )
     )
 

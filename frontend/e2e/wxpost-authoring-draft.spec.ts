@@ -51,6 +51,16 @@ test('keeps loaded Draft media stable when the assistant saves a revision', asyn
   await expect(
     page.getByText('Preparing Draft preview and media…')
   ).toHaveCount(0);
+  const completedSteps = page.getByText('4 steps completed', { exact: true });
+  await completedSteps.click();
+  const history = page.getByTestId('draft-chat-history');
+  await expect(history).toContainText('Updating the Draft title');
+  await expect(
+    history.getByText('replaceMetadata', { exact: true })
+  ).toBeVisible();
+  await expect(
+    history.getByText('wxpost_edit_draft', { exact: true })
+  ).toBeVisible();
 });
 
 test('shows only milestones delivered by the live Draft chat stream', async ({

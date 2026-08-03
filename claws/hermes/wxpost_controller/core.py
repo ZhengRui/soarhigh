@@ -9,7 +9,7 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +31,7 @@ from .contracts import (
     DraftProposal,
     DraftSectionBlock,
     DraftVideoBlock,
+    EditDraftRequest,
     MANIFEST_SCHEMA_VERSION,
     MeetingLibraryOrigin,
     MeetingMediaReference,
@@ -50,6 +51,10 @@ from .contracts import (
 WORKSPACE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 MAX_SOURCE_BYTES = 50 * 1024 * 1024
 ArticleValidator = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+ArticleEditor = Callable[
+    [Mapping[str, Any], Sequence[Mapping[str, Any]], Sequence[Mapping[str, Any]]],
+    Mapping[str, Any],
+]
 MeetingMediaLoader = Callable[[str], list[Mapping[str, Any]]]
 MeetingContextLoader = Callable[[str], Mapping[str, Any]]
 SourceLoader = Callable[[str], bytes]
@@ -193,6 +198,7 @@ class WorkspaceController:
         workspace_root: str | Path,
         *,
         article_validator: ArticleValidator | None = None,
+        article_editor: ArticleEditor | None = None,
         soarhigh_api_base_url: str | None = None,
         soarhigh_service_token: str | None = None,
         meeting_media_loader: MeetingMediaLoader | None = None,
@@ -206,6 +212,7 @@ class WorkspaceController:
             raise InvalidWorkspace("workspace inbox must not be a symlink")
         self._resolved_inbox = self.inbox_root.resolve()
         self._article_validator = article_validator
+        self._article_editor = article_editor
         self._soarhigh_api_base_url = (
             soarhigh_api_base_url
             if soarhigh_api_base_url is not None
@@ -457,6 +464,10 @@ class WorkspaceController:
             manifest = self._read_manifest(workspace, workspace_id)
             draft = self._read_draft(workspace, manifest)
         context = self._context_response(workspace_id, manifest, draft)
+        if draft is not None:
+            render_body = self._article_render_body(draft.document)
+            if render_body is not None:
+                context["draft"]["editContext"] = {"body": render_body}
         context["meetingContext"] = (
             self._load_meeting_context(manifest.meeting_id)
             if manifest.meeting_id is not None
@@ -1061,11 +1072,11 @@ class WorkspaceController:
         )
         if refresh_from_materials and validated_media_changes is not None:
             raise InvalidRequest(
-                "mediaChanges is only valid for a focused Draft revision"
+                "mediaChanges is only valid for a whole-article Draft revision"
             )
         if not refresh_from_materials and validated_media_changes is None:
             raise InvalidRequest(
-                "a focused Draft revision requires explicit mediaChanges"
+                "a whole-article Draft revision requires explicit mediaChanges"
             )
         workspace = self._resolve_workspace(workspace_id)
         with self._workspace_lock(workspace):
@@ -1101,6 +1112,105 @@ class WorkspaceController:
             operation_id=operation_id,
             refresh_source_snapshot=refresh_from_materials,
         )
+
+    def edit_draft(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        expected_draft_version: int,
+        operation_id: str,
+        edits: list[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Apply typed, version-bound edits without resubmitting the whole article."""
+
+        request = self._validate_request(
+            EditDraftRequest,
+            {
+                "expectedManifestVersion": expected_manifest_version,
+                "expectedDraftVersion": expected_draft_version,
+                "operationId": operation_id,
+                "edits": edits,
+            },
+            label="Draft edit",
+        )
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            current = self._read_draft(workspace, manifest)
+            if current is None:
+                raise InvalidRequest("a Draft edit requires an existing saved Draft")
+            if (
+                manifest.draft is not None
+                and manifest.draft.operation_id == request.operation_id
+                and current.draft_version == request.expected_draft_version + 1
+            ):
+                return current.to_wire()
+            self._check_manifest_version(manifest, request.expected_manifest_version)
+            if current.draft_version != request.expected_draft_version:
+                raise VersionConflict(
+                    resource="draft",
+                    expected=request.expected_draft_version,
+                    actual=current.draft_version,
+                )
+            document = dict(current.document)
+            available_media = self._workspace_ready_media(workspace_id, manifest)
+
+        edited_document = self._edit_article_document(
+            document,
+            available_media,
+            [edit.to_wire() for edit in request.edits],
+        )
+        return self.save_draft(
+            workspace_id,
+            expected_manifest_version=request.expected_manifest_version,
+            expected_draft_version=request.expected_draft_version,
+            document=edited_document,
+            operation_id=request.operation_id,
+            refresh_source_snapshot=False,
+        )
+
+    @staticmethod
+    def _workspace_ready_media(
+        workspace_id: str,
+        manifest: SourceManifest,
+    ) -> list[dict[str, Any]]:
+        media: list[dict[str, Any]] = []
+        for order, source in enumerate(
+            item
+            for item in manifest.sources
+            if item.workspace_ready
+            and item.kind in {SourceKind.IMAGE, SourceKind.VIDEO}
+        ):
+            has_description = bool(source.description.strip())
+            media.append(
+                {
+                    "id": source.id,
+                    "kind": source.kind.value,
+                    "sourceUrl": (
+                        "https://workspace.invalid/"
+                        f"{quote(workspace_id, safe='')}/materials/{source.id}"
+                    ),
+                    "description": (
+                        source.description if has_description else source.filename
+                    ),
+                    "credit": None,
+                    "people": [],
+                    "include": True,
+                    "order": order,
+                    "descriptionSource": (
+                        source.description_source.value
+                        if has_description and source.description_source is not None
+                        else "user"
+                    ),
+                    "descriptionStatus": (
+                        source.description_status.value
+                        if has_description
+                        else "confirmed"
+                    ),
+                }
+            )
+        return media
 
     @staticmethod
     def _context_response(
@@ -1906,13 +2016,78 @@ class WorkspaceController:
         self,
         document: Mapping[str, Any],
     ) -> dict[str, Any]:
+        payload = self._request_article_backend(
+            "/posts/wxposts/validate",
+            document,
+        )
+        normalized = payload.get("document")
+        if not isinstance(normalized, dict):
+            raise ValidationUnavailable(
+                "SoarHigh ArticleDocument validator omitted the normalized document"
+            )
+        return normalized
+
+    def _edit_article_document(
+        self,
+        document: Mapping[str, Any],
+        available_media: Sequence[Mapping[str, Any]],
+        edits: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        if self._article_editor is not None:
+            try:
+                edited = self._article_editor(document, available_media, edits)
+            except WorkspaceError:
+                raise
+            except Exception as exc:
+                raise InvalidRequest(f"Draft edit is invalid: {exc}") from exc
+            if not isinstance(edited, Mapping):
+                raise ValidationUnavailable(
+                    "ArticleDocument editor did not return a normalized document"
+                )
+            return dict(edited)
+        payload = self._request_article_backend(
+            "/posts/wxposts/edit",
+            {
+                "document": document,
+                "availableMedia": list(available_media),
+                "edits": list(edits),
+            },
+        )
+        normalized = payload.get("document")
+        if not isinstance(normalized, dict):
+            raise ValidationUnavailable(
+                "SoarHigh ArticleDocument editor omitted the normalized document"
+            )
+        return normalized
+
+    def _article_render_body(
+        self,
+        document: Mapping[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        if self._article_validator is not None:
+            return None
+        payload = self._request_article_backend(
+            "/posts/wxposts/validate",
+            document,
+        )
+        render_document = payload.get("renderDocument")
+        body = (
+            render_document.get("body") if isinstance(render_document, dict) else None
+        )
+        return body if isinstance(body, list) else None
+
+    def _request_article_backend(
+        self,
+        path: str,
+        payload_data: Mapping[str, Any],
+    ) -> dict[str, Any]:
         if not self._soarhigh_api_base_url:
             raise ValidationUnavailable(
                 "SOARHIGH_API_BASE_URL is required to validate ArticleDocument"
             )
         request = Request(
-            f"{self._soarhigh_api_base_url}/posts/wxposts/validate",
-            data=json.dumps(document, ensure_ascii=False).encode("utf-8"),
+            f"{self._soarhigh_api_base_url}{path}",
+            data=json.dumps(payload_data, ensure_ascii=False).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -1943,12 +2118,7 @@ class WorkspaceController:
             raise ValidationUnavailable(
                 "SoarHigh ArticleDocument validator returned an invalid response"
             )
-        normalized = payload.get("document")
-        if not isinstance(normalized, dict):
-            raise ValidationUnavailable(
-                "SoarHigh ArticleDocument validator omitted the normalized document"
-            )
-        return normalized
+        return payload
 
     @staticmethod
     def _validation_failure_message(payload: Any) -> str:

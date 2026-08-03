@@ -9,20 +9,11 @@ import {
   resetWorkspaceDraftSession,
   WorkspaceApiError,
   type WorkspaceContext,
+  type WorkspaceDraftProgressActivity,
   type WorkspaceDraftSession,
 } from '@/utils/wxpostWorkspace';
 
-export type DraftProgressActivity = {
-  activityId: string;
-  label: string;
-  completed: boolean;
-  failed: boolean;
-};
-
-export type CompletedDraftProgress = {
-  assistantMessageIndex: number;
-  steps: DraftProgressActivity[];
-};
+export type DraftProgressActivity = WorkspaceDraftProgressActivity;
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -57,9 +48,6 @@ export function useWxPostDraftAssistant({
   const [pending, setPending] = useState(false);
   const [resetPending, setResetPending] = useState(false);
   const [progress, setProgress] = useState<DraftProgressActivity[]>([]);
-  const [completedProgress, setCompletedProgress] = useState<
-    CompletedDraftProgress[]
-  >([]);
   const progressRef = useRef<DraftProgressActivity[]>([]);
   const requestControllerRef = useRef<AbortController | null>(null);
   const historyRequestIdRef = useRef(0);
@@ -96,7 +84,6 @@ export function useWxPostDraftAssistant({
     const request = message.trim();
     if (!request || !savedDraft || dirty) return;
     const requestController = new AbortController();
-    const assistantMessageIndex = (session?.messages.length ?? 0) + 1;
     requestControllerRef.current = requestController;
     setPending(true);
     setProgress([]);
@@ -135,6 +122,8 @@ export function useWxPostDraftAssistant({
                 {
                   activityId,
                   label,
+                  toolName: next.toolName,
+                  operationNames: next.operationNames,
                   completed: next.stage === 'activity_completed',
                   failed: next.stage === 'activity_failed',
                 },
@@ -145,6 +134,9 @@ export function useWxPostDraftAssistant({
                   ? {
                       ...item,
                       label,
+                      toolName: next.toolName ?? item.toolName,
+                      operationNames:
+                        next.operationNames ?? item.operationNames,
                       completed: next.stage === 'activity_completed',
                       failed: next.stage === 'activity_failed',
                     }
@@ -168,26 +160,21 @@ export function useWxPostDraftAssistant({
           toast.error(failure);
         }
       }
+      const completedSteps = progressRef.current.filter(
+        (step) => step.completed
+      );
       setSession((current) => ({
         workspaceId,
         sessionId: result.sessionId,
         messages: [
           ...(current?.messages ?? []),
-          { role: 'assistant', text: result.reply },
+          {
+            role: 'assistant',
+            text: result.reply,
+            ...(completedSteps.length > 0 ? { steps: completedSteps } : {}),
+          },
         ],
       }));
-      const completedSteps = progressRef.current.filter(
-        (step) => step.completed
-      );
-      if (completedSteps.length > 0) {
-        setCompletedProgress((current) => [
-          ...current,
-          {
-            assistantMessageIndex,
-            steps: completedSteps,
-          },
-        ]);
-      }
     } catch (caught) {
       setMessage(request);
       setSession((current) =>
@@ -231,7 +218,6 @@ export function useWxPostDraftAssistant({
     onError,
     savedDraft,
     selectedText,
-    session?.messages.length,
     workspaceId,
   ]);
 
@@ -246,7 +232,6 @@ export function useWxPostDraftAssistant({
       setMessage('');
       setProgress([]);
       progressRef.current = [];
-      setCompletedProgress([]);
       setStatus('online');
       toast.success('Started a new Draft Assistant conversation.');
       return true;
@@ -270,7 +255,6 @@ export function useWxPostDraftAssistant({
     pending,
     resetPending,
     progress,
-    completedProgress,
     setMessage,
     send,
     reset,

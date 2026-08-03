@@ -188,7 +188,20 @@ export interface WorkspaceContext {
 export interface WorkspaceDraftSession {
   workspaceId: string;
   sessionId: string | null;
-  messages: Array<{ role: 'user' | 'assistant'; text: string }>;
+  messages: Array<{
+    role: 'user' | 'assistant';
+    text: string;
+    steps?: WorkspaceDraftProgressActivity[];
+  }>;
+}
+
+export interface WorkspaceDraftProgressActivity {
+  activityId: string;
+  label: string;
+  toolName?: string;
+  operationNames?: string[];
+  completed: boolean;
+  failed: boolean;
 }
 
 export interface WorkspaceDraftTurn {
@@ -209,6 +222,8 @@ export interface WorkspaceDraftProgress {
   stage: WorkspaceDraftProgressStage;
   activityId?: string;
   label?: string;
+  toolName?: string;
+  operationNames?: string[];
 }
 
 function isWorkspaceDraftProgress(
@@ -219,6 +234,12 @@ function isWorkspaceDraftProgress(
   }
   const stage = payload.stage;
   if (stage === 'request_started') return true;
+  const toolNameValid =
+    !('toolName' in payload) || typeof payload.toolName === 'string';
+  const operationNamesValid =
+    !('operationNames' in payload) ||
+    (Array.isArray(payload.operationNames) &&
+      payload.operationNames.every((name) => typeof name === 'string'));
   return (
     (stage === 'activity_started' ||
       stage === 'activity_completed' ||
@@ -226,7 +247,9 @@ function isWorkspaceDraftProgress(
     'activityId' in payload &&
     typeof payload.activityId === 'string' &&
     'label' in payload &&
-    typeof payload.label === 'string'
+    typeof payload.label === 'string' &&
+    toolNameValid &&
+    operationNamesValid
   );
 }
 

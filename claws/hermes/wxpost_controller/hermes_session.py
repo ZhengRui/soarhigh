@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
-import threading
-from dataclasses import dataclass
 from collections.abc import Callable
-from pathlib import Path
+from dataclasses import dataclass
+import logging
+import threading
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
@@ -19,10 +18,17 @@ from .core import (
     InvalidRequest,
     VersionConflict,
     WorkspaceController,
-    WorkspaceError,
+)
+from .draft_session_store import (
+    HERMES_DRAFT_PROTOCOL_VERSION,
+    HermesDraftSessionStore,
+)
+from .errors import (
+    DraftSessionStoreUnavailable,
+    HermesTurnFailed,
+    HermesUnavailable,
 )
 
-HERMES_DRAFT_PROTOCOL_VERSION = 6
 HERMES_DESCRIPTION_PROTOCOL_VERSION = 2
 HERMES_DRAFT_IDENTITY = (
     "You are SoarHigh Club's AI Assistant "
@@ -39,6 +45,81 @@ HermesEventCallback = Callable[[str, dict[str, Any]], None]
 DraftProgressCallback = Callable[[dict[str, Any]], None]
 SessionCleanupCallback = Callable[[Callable[[], None]], None]
 
+_WXPOST_MCP_PREFIX = "mcp__soarhigh_wxpost__"
+logger = logging.getLogger(__name__)
+
+
+def _normalized_tool_name(tool_name: str) -> str:
+    if tool_name.startswith(_WXPOST_MCP_PREFIX):
+        return tool_name.removeprefix(_WXPOST_MCP_PREFIX)
+    return tool_name
+
+
+def _draft_edit_activity(
+    arguments: object,
+) -> tuple[str, list[str]] | None:
+    if not isinstance(arguments, dict):
+        return None
+    edits = arguments.get("edits")
+    if not isinstance(edits, list):
+        return None
+    typed_edits = [
+        edit
+        for edit in edits
+        if isinstance(edit, dict) and isinstance(edit.get("type"), str)
+    ]
+    if not typed_edits:
+        return None
+
+    operation_names = list(dict.fromkeys(str(edit["type"]) for edit in typed_edits))
+    if len(typed_edits) > 1:
+        return f"Applying {len(typed_edits)} focused Draft edits", operation_names
+
+    edit = typed_edits[0]
+    operation_name = str(edit["type"])
+    source_id = str(edit.get("sourceId") or "").strip()
+    metadata_labels = {
+        "title": "Updating the Draft title",
+        "excerpt": "Updating the Draft excerpt",
+        "byline": "Updating the Draft byline",
+    }
+    labels = {
+        "replaceBodyNode": "Updating a Draft section",
+        "insertBodyNode": "Adding a Draft section",
+        "deleteBodyNode": "Removing a Draft section",
+        "replaceDirectiveField": "Updating structured Draft content",
+        "deleteDirectiveItem": "Removing a structured Draft item",
+        "setCover": f"Setting cover to {source_id}"
+        if source_id
+        else "Setting the Draft cover",
+        "clearCover": "Clearing the Draft cover",
+        "insertImage": f"Adding {source_id} to the Draft"
+        if source_id
+        else "Adding an image to the Draft",
+        "deleteMediaOccurrence": (
+            f"Removing one {source_id} placement"
+            if source_id
+            else "Removing one image placement"
+        ),
+        "removeMediaFromBody": (
+            f"Removing {source_id} from the Draft"
+            if source_id
+            else "Removing an image from the Draft"
+        ),
+        "replaceMediaDescription": (
+            f"Updating the {source_id} description"
+            if source_id
+            else "Updating an image description"
+        ),
+    }
+    if operation_name == "replaceMetadata":
+        label = metadata_labels.get(
+            str(edit.get("field") or ""), "Updating Draft metadata"
+        )
+    else:
+        label = labels.get(operation_name, "Applying a focused Draft edit")
+    return label, operation_names
+
 
 def _dispatch_session_cleanup(callback: Callable[[], None]) -> None:
     threading.Thread(
@@ -48,151 +129,16 @@ def _dispatch_session_cleanup(callback: Callable[[], None]) -> None:
     ).start()
 
 
-class HermesUnavailable(WorkspaceError):
-    code = "hermes_unavailable"
-
-
-class HermesTurnFailed(WorkspaceError):
-    code = "hermes_turn_failed"
-
-
 @dataclass(frozen=True)
 class HermesSessionHistory:
     session_id: str | None
-    messages: list[dict[str, str]]
+    messages: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
 class HermesTurn:
     session_id: str
     reply: str
-
-
-class HermesDraftSessionRegistry:
-    """Durable workspace-to-Hermes-session pointers owned by the controller."""
-
-    def __init__(self, workspace_root: Path) -> None:
-        self._directory = workspace_root / ".wxpost-controller"
-        self._path = self._directory / "draft-sessions.json"
-        self._lock = threading.Lock()
-
-    def get(self, workspace_id: str) -> str | None:
-        with self._lock:
-            sessions, _ = self._read()
-            return sessions.get(workspace_id)
-
-    def set_session(self, workspace_id: str, session_id: str) -> None:
-        if not session_id:
-            raise HermesTurnFailed("Hermes session identifier must not be empty")
-        with self._lock:
-            sessions, pending_deletions = self._read()
-            sessions[workspace_id] = session_id
-            self._write(sessions, pending_deletions)
-
-    def replace_and_schedule_cleanup(
-        self,
-        workspace_id: str,
-        session_id: str,
-        *,
-        previous_session_id: str | None = None,
-    ) -> None:
-        if not session_id:
-            raise HermesTurnFailed("Hermes session identifier must not be empty")
-        with self._lock:
-            sessions, pending_deletions = self._read()
-            previous = previous_session_id or sessions.get(workspace_id)
-            sessions[workspace_id] = session_id
-            if previous and previous != session_id:
-                pending_deletions.add(previous)
-            self._write(sessions, pending_deletions)
-
-    def remove_and_schedule_cleanup(
-        self,
-        workspace_id: str,
-        *,
-        fallback_session_id: str | None = None,
-    ) -> None:
-        with self._lock:
-            sessions, pending_deletions = self._read()
-            previous = sessions.pop(workspace_id, None) or fallback_session_id
-            if previous:
-                pending_deletions.add(previous)
-            self._write(sessions, pending_deletions)
-
-    def pending_deletions(self) -> list[str]:
-        with self._lock:
-            _, pending_deletions = self._read()
-            return sorted(pending_deletions)
-
-    def mark_deleted(self, session_id: str) -> None:
-        with self._lock:
-            sessions, pending_deletions = self._read()
-            pending_deletions.discard(session_id)
-            self._write(sessions, pending_deletions)
-
-    def _read(self) -> tuple[dict[str, str], set[str]]:
-        if not self._path.exists():
-            return {}, set()
-        if self._path.is_symlink():
-            raise HermesTurnFailed("Draft session registry must not be a symlink")
-        try:
-            payload = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise HermesTurnFailed("Draft session registry is invalid") from error
-        if not isinstance(payload, dict) or payload.get("version") != 1:
-            raise HermesTurnFailed("Draft session registry is invalid")
-        raw_sessions = payload.get("sessions")
-        if not isinstance(raw_sessions, dict):
-            raise HermesTurnFailed("Draft session registry is invalid")
-        raw_pending_deletions = payload.get("pendingDeletions", [])
-        if not isinstance(raw_pending_deletions, list) or not all(
-            isinstance(value, str) and value for value in raw_pending_deletions
-        ):
-            raise HermesTurnFailed("Draft session registry is invalid")
-        sessions: dict[str, str] = {}
-        for workspace_id, session_id in raw_sessions.items():
-            if not isinstance(workspace_id, str) or not isinstance(session_id, str):
-                raise HermesTurnFailed("Draft session registry is invalid")
-            if not workspace_id or not session_id:
-                raise HermesTurnFailed("Draft session registry is invalid")
-            sessions[workspace_id] = session_id
-        pending_deletions = set(raw_pending_deletions)
-        stored_protocol_version = payload.get(
-            "draftProtocolVersion",
-            HERMES_DRAFT_PROTOCOL_VERSION,
-        )
-        if stored_protocol_version != HERMES_DRAFT_PROTOCOL_VERSION:
-            pending_deletions.update(sessions.values())
-            sessions = {}
-            self._write(sessions, pending_deletions)
-        return sessions, pending_deletions
-
-    def _write(
-        self,
-        sessions: dict[str, str],
-        pending_deletions: set[str],
-    ) -> None:
-        self._directory.mkdir(parents=True, exist_ok=True)
-        if self._directory.is_symlink():
-            raise HermesTurnFailed("Draft session registry directory is unsafe")
-        temporary_path = self._directory / f".{self._path.name}.{uuid4().hex}.tmp"
-        try:
-            temporary_path.write_text(
-                json.dumps(
-                    {
-                        "version": 1,
-                        "draftProtocolVersion": HERMES_DRAFT_PROTOCOL_VERSION,
-                        "sessions": sessions,
-                        "pendingDeletions": sorted(pending_deletions),
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                encoding="utf-8",
-            )
-            os.replace(temporary_path, self._path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
 
 
 class HermesSessionClient:
@@ -403,6 +349,11 @@ class HermesSessionClient:
                     safe_payload["context"] = payload.get("context")
                 else:
                     safe_payload["error"] = bool(payload.get("error"))
+                    arguments = payload.get("args")
+                    if _normalized_tool_name(
+                        str(payload.get("name") or "")
+                    ) == "wxpost_edit_draft" and isinstance(arguments, dict):
+                        safe_payload["arguments"] = arguments
                 on_event(str(event_type), safe_payload)
             if event_type == "error":
                 raise HermesTurnFailed(
@@ -436,25 +387,106 @@ class HermesSessionClient:
         return value
 
     @classmethod
-    def _visible_messages(cls, payload: Any) -> list[dict[str, str]]:
+    def _visible_messages(cls, payload: Any) -> list[dict[str, Any]]:
         if not isinstance(payload, list):
             return []
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
+        pending_steps: list[dict[str, Any]] = []
+        pending_turn_id: str | None = None
         for item in payload:
             if not isinstance(item, dict):
                 continue
             role = item.get("role")
+            if role == "tool":
+                step = cls._history_progress_step(
+                    item,
+                    message_index=len(messages),
+                    step_index=len(pending_steps),
+                )
+                if step is not None:
+                    pending_steps.append(step)
+                continue
             if role not in {"user", "assistant"}:
                 continue
             text = cls._message_text(item.get("text", item.get("content")))
             if not text:
                 continue
             if role == "user":
+                pending_steps = []
+                pending_turn_id = cls._draft_operation_id(text)
                 text = cls._member_message(text)
                 if not text:
+                    pending_turn_id = None
                     continue
-            messages.append({"role": role, "text": text})
+            message: dict[str, Any] = {"role": role, "text": text}
+            if role == "assistant" and pending_turn_id:
+                message["turnId"] = pending_turn_id
+            if role == "assistant" and pending_steps:
+                if any(
+                    step.get("toolName") in {"wxpost_edit_draft", "wxpost_save_draft"}
+                    for step in pending_steps
+                ):
+                    pending_steps.append(
+                        {
+                            "activityId": f"history-{len(messages)}-verify",
+                            "label": "Verifying the saved Draft",
+                            "completed": True,
+                            "failed": False,
+                        }
+                    )
+                message["steps"] = pending_steps
+                pending_steps = []
+            messages.append(message)
+            if role == "assistant":
+                pending_turn_id = None
         return messages
+
+    @staticmethod
+    def _history_progress_step(
+        item: dict[str, Any],
+        message_index: int,
+        step_index: int,
+    ) -> dict[str, Any] | None:
+        raw_tool_name = str(item.get("name") or "")
+        tool_name = _normalized_tool_name(raw_tool_name)
+        labels = {
+            "skill_view": "Loading the writing guidance",
+            "view_skill": "Loading the writing guidance",
+            "wxpost_get_context": "Reading the saved Draft and media",
+            "wxpost_edit_draft": "Updating the Draft",
+            "wxpost_save_draft": "Saving the Draft",
+            "web_search": "Searching the web",
+            "web_extract": "Reading web sources",
+            "browser_navigate": "Opening a webpage",
+            "browser_snapshot": "Reading the current webpage",
+            "browser_vision": "Examining the current webpage",
+            "vision_analyze": "Examining an image",
+        }
+        label = labels.get(tool_name)
+        if label is None:
+            return None
+        context = item.get("context")
+        if (
+            tool_name
+            in {
+                "web_search",
+                "web_extract",
+                "browser_navigate",
+                "browser_snapshot",
+                "browser_vision",
+                "vision_analyze",
+            }
+            and isinstance(context, str)
+            and context.strip()
+        ):
+            label = context.strip()
+        return {
+            "activityId": f"history-{message_index}-{step_index}",
+            "label": label,
+            "toolName": tool_name,
+            "completed": True,
+            "failed": False,
+        }
 
     @staticmethod
     def _message_text(content: Any) -> str:
@@ -482,6 +514,16 @@ class HermesSessionClient:
             return ""
         return value if isinstance(value, str) else ""
 
+    @staticmethod
+    def _draft_operation_id(prompt: str) -> str | None:
+        marker = "Draft operation ID:"
+        for line in prompt.splitlines():
+            if not line.startswith(marker):
+                continue
+            operation_id = line.removeprefix(marker).strip()
+            return operation_id or None
+        return None
+
 
 class HermesDraftService:
     """Coordinates a focused Hermes session with versioned controller saves."""
@@ -491,12 +533,12 @@ class HermesDraftService:
         *,
         controller: WorkspaceController,
         session_client: HermesSessionClient,
-        session_registry: HermesDraftSessionRegistry | None = None,
+        session_store: HermesDraftSessionStore | None = None,
         cleanup_dispatch: SessionCleanupCallback = _dispatch_session_cleanup,
     ) -> None:
         self._controller = controller
         self._session_client = session_client
-        self._session_registry = session_registry or HermesDraftSessionRegistry(
+        self._session_store = session_store or HermesDraftSessionStore(
             controller.workspace_root
         )
         self._turn_locks: WeakValueDictionary[str, threading.Lock] = (
@@ -510,18 +552,22 @@ class HermesDraftService:
     def history(self, workspace_id: str) -> dict[str, Any]:
         self._controller.get_context(workspace_id)
         with self._turn_lock(workspace_id):
-            session_id = self._session_registry.get(workspace_id)
+            session_id = self._session_store.get(workspace_id)
             self._schedule_session_cleanup()
             history = self._session_client.history(
                 title=self._session_title(workspace_id),
                 session_id=session_id,
             )
             if session_id is None and history.session_id is not None:
-                self._session_registry.set_session(workspace_id, history.session_id)
+                self._session_store.set_session(workspace_id, history.session_id)
+            messages = self._session_store.restore_completed_progress(
+                history.session_id,
+                history.messages,
+            )
         return {
             "workspaceId": workspace_id,
             "sessionId": history.session_id,
-            "messages": history.messages,
+            "messages": messages,
         }
 
     def reset(self, workspace_id: str) -> dict[str, Any]:
@@ -529,14 +575,14 @@ class HermesDraftService:
 
         self._controller.get_context(workspace_id)
         with self._turn_lock(workspace_id):
-            old_session_id = self._session_registry.get(
+            old_session_id = self._session_store.get(
                 workspace_id
             ) or self._session_title(workspace_id)
             new_session_locator = self._new_session_title(workspace_id)
             # Hermes does not persist a session until its first message. Store
             # a unique future title now; the next turn creates and replaces it
             # with Hermes' persisted identifier.
-            self._session_registry.replace_and_schedule_cleanup(
+            self._session_store.replace_and_schedule_cleanup(
                 workspace_id,
                 new_session_locator,
                 previous_session_id=old_session_id,
@@ -561,7 +607,7 @@ class HermesDraftService:
                 workspace_id,
                 expected_manifest_version=expected_manifest_version,
             )
-            self._session_registry.remove_and_schedule_cleanup(
+            self._session_store.remove_and_schedule_cleanup(
                 workspace_id,
                 fallback_session_id=self._session_title(workspace_id),
             )
@@ -667,18 +713,21 @@ class HermesDraftService:
                 "wxpost_get_context and answer without saving. Do not load a Skill.",
                 "3. Only when the member explicitly asks to create or revise Draft",
                 "content, media, or cover, load the soarhigh-wxpost-authoring Skill,",
-                "read the context, and save one complete revision through",
-                "wxpost_save_draft.",
+                "read the context, then choose the narrowest save tool. Use",
+                "wxpost_edit_draft for a local title, metadata, body node, directive,",
+                "media occurrence, description, or cover change. Use",
+                "wxpost_save_draft only for whole-article restructuring or rewriting.",
                 "In Draft Assistant turns, 素材库, 候选素材, media library, candidate",
                 "media, and available media all mean imported workspaceReady images",
                 "and videos only. Never count workspaceReady=false meeting-library",
                 "entries; they are Materials-stage import options, not Draft media.",
-                "For a save, use the exact expected versions and operation ID above,",
+                "For either save tool, use the exact expected versions and operation ID above,",
                 f'pass operation_id="{operation_id}",',
-                "set refresh_from_materials=false, and include media_changes.",
-                "Declare added_media_ids and removed_media_ids explicitly. Set the",
-                "cover action to preserve unless the member explicitly asks to set",
-                "or clear it. The Draft media pool is every imported workspace-ready",
+                "For wxpost_edit_draft, submit only explicit typed edits whose body",
+                "node indexes come from draft.editContext. Do not resubmit the article.",
+                "For a whole-article wxpost_save_draft revision, set",
+                "refresh_from_materials=false and include media_changes.",
+                "The Draft media pool is every imported workspace-ready",
                 "image or video; Materials inclusion is only for Generate/Regenerate.",
                 "Preserve unrelated article content, media, cover, and metadata.",
                 "Never call a Materials mutation or public synchronization tool.",
@@ -720,11 +769,19 @@ class HermesDraftService:
             save_started = False
             save_failed = False
             visible_activities: dict[str, tuple[str, str]] = {}
+            completed_steps: list[dict[str, Any]] = []
 
             def emit(stage: str, **details: Any) -> None:
-                if on_progress is None:
-                    return
-                on_progress({"stage": stage, **details})
+                if stage == "activity_completed":
+                    completed_steps.append(
+                        {
+                            **details,
+                            "completed": True,
+                            "failed": False,
+                        }
+                    )
+                if on_progress is not None:
+                    on_progress({"stage": stage, **details})
 
             def activity_label(tool_name: str, payload: dict[str, Any]) -> str | None:
                 if tool_name in {
@@ -737,6 +794,8 @@ class HermesDraftService:
                 if tool_name in {
                     "wxpost_save_draft",
                     "mcp__soarhigh_wxpost__wxpost_save_draft",
+                    "wxpost_edit_draft",
+                    "mcp__soarhigh_wxpost__wxpost_edit_draft",
                 }:
                     return f"Saving Draft v{expected_draft_version + 1}"
                 if tool_name not in {
@@ -771,6 +830,8 @@ class HermesDraftService:
                 is_save_tool = tool_name in {
                     "wxpost_save_draft",
                     "mcp__soarhigh_wxpost__wxpost_save_draft",
+                    "wxpost_edit_draft",
+                    "mcp__soarhigh_wxpost__wxpost_edit_draft",
                 }
                 if is_save_tool:
                     save_started = True
@@ -788,6 +849,7 @@ class HermesDraftService:
                         "activity_started",
                         activityId=tool_id,
                         label=label,
+                        toolName=_normalized_tool_name(tool_name),
                     )
                     return
                 activity = visible_activities.pop(tool_id, None)
@@ -797,15 +859,32 @@ class HermesDraftService:
                     if activity_failed and started_tool_name in {
                         "wxpost_save_draft",
                         "mcp__soarhigh_wxpost__wxpost_save_draft",
+                        "wxpost_edit_draft",
+                        "mcp__soarhigh_wxpost__wxpost_edit_draft",
                     }:
                         save_failed = True
+                    operation_names: list[str] | None = None
+                    if (
+                        not activity_failed
+                        and _normalized_tool_name(started_tool_name)
+                        == "wxpost_edit_draft"
+                    ):
+                        edit_activity = _draft_edit_activity(payload.get("arguments"))
+                        if edit_activity is not None:
+                            label, operation_names = edit_activity
+                    details: dict[str, Any] = {
+                        "activityId": tool_id,
+                        "label": label,
+                        "toolName": _normalized_tool_name(started_tool_name),
+                    }
+                    if operation_names:
+                        details["operationNames"] = operation_names
                     emit(
                         "activity_failed" if activity_failed else "activity_completed",
-                        activityId=tool_id,
-                        label=label,
+                        **details,
                     )
 
-            session_locator = self._session_registry.get(workspace_id)
+            session_locator = self._session_store.get(workspace_id)
             session_title = self._session_title(workspace_id)
             if session_locator and self._is_new_session_title(
                 workspace_id, session_locator
@@ -820,7 +899,15 @@ class HermesDraftService:
             if on_progress is not None:
                 turn_kwargs["on_event"] = handle_hermes_event
             turn = self._session_client.turn(**turn_kwargs)
-            self._session_registry.set_session(workspace_id, turn.session_id)
+            session_store_available = True
+            try:
+                self._session_store.set_session(workspace_id, turn.session_id)
+            except DraftSessionStoreUnavailable:
+                session_store_available = False
+                logger.warning(
+                    "Hermes turn completed, but session metadata could not be stored",
+                    exc_info=True,
+                )
             if save_started and not save_failed:
                 verification_id = f"verify-{operation_id}"
                 emit(
@@ -884,6 +971,19 @@ class HermesDraftService:
                         if reply
                         else version_transition
                     )
+            if session_store_available:
+                try:
+                    self._session_store.append_completed_progress(
+                        turn.session_id,
+                        turn_id=operation_id,
+                        steps=completed_steps,
+                    )
+                except DraftSessionStoreUnavailable:
+                    logger.warning(
+                        "Draft v%s saved, but progress metadata could not be stored",
+                        actual_draft_version,
+                        exc_info=True,
+                    )
             return {
                 "workspaceId": workspace_id,
                 "sessionId": turn.session_id,
@@ -916,12 +1016,12 @@ class HermesDraftService:
                 self._schedule_session_cleanup()
 
     def _drain_session_cleanup(self) -> None:
-        for session_id in self._session_registry.pending_deletions():
+        for session_id in self._session_store.pending_deletions():
             try:
                 self._session_client.delete(session_id=session_id)
             except (HermesTurnFailed, HermesUnavailable):
                 continue
-            self._session_registry.mark_deleted(session_id)
+            self._session_store.mark_deleted(session_id)
 
     def _turn_lock(self, workspace_id: str) -> threading.Lock:
         with self._turn_locks_guard:

@@ -43,22 +43,29 @@ Materials or the Draft during this workflow.
    from the saved editorial brief, the selected content recipe, live linked
    meeting facts when present, and saved included materials.
 5. For a question about the saved article, answer from the context without
-   saving. For a revision, change only what the member requested and save one
-   complete proposal. Preserve unrelated article content, media, cover, and
-   metadata. Presentation is not part of the proposal and is preserved by the
-   controller.
-6. Call `wxpost_save_draft` with the request's expected `manifestVersion`,
+   saving. For a small revision, change only what the member requested through
+   `wxpost_edit_draft`. Its body node indexes must come from the current
+   `draft.editContext`; never guess or relocate a target by matching text. Use
+   `wxpost_save_draft` only for whole-article restructuring or rewriting.
+   Presentation is preserved by the controller.
+6. For `wxpost_edit_draft`, pass the request's expected `manifestVersion`,
+   expected `draftVersion`, exact `operation_id`, and the smallest explicit
+   typed edit list. A title, excerpt, byline, body node, directive field or
+   item, media occurrence, media description, or cover change is a fine-grained
+   edit. `setCover` may directly select any imported workspace-ready image; it
+   does not insert that image into the body or change Materials inclusion.
+7. Call `wxpost_save_draft` with the request's expected `manifestVersion`,
    expected `draftVersion` (zero when absent), `operation_id`,
    `refresh_from_materials`, and the complete `proposal`. Generate and
    Regenerate use the six top-level arguments:
    `workspace_id`, `expected_manifest_version`, `expected_draft_version`,
    `operation_id`, `refresh_from_materials`, and `proposal`. Use `true` for
    Generate or Regenerate so the new Draft adopts current Materials. A focused
-   revision also includes `media_changes` and uses
+   whole-article revision also includes `media_changes` and uses
    `refresh_from_materials=false`. Copy the operation ID exactly from the
    request; it identifies this turn's successful save and is not article
    content. Never call a Materials mutation tool during a Draft Assistant turn.
-7. Report success only after one save succeeds. If the first call is rejected
+8. Report success only after one save succeeds. If the first call is rejected
    before saving solely by the proposal schema or ArticleDocument validation,
    correct the proposal from that formal validation error and make one
    replacement call with the same expected versions. Never parse or repair
@@ -176,6 +183,22 @@ Materials or the Draft during this workflow.
 - Generate a complete article, not an outline or commentary about the article.
 
 ## Focused revision media changes
+
+Prefer `wxpost_edit_draft` for a focused media or cover change:
+
+- `setCover` selects any imported workspace-ready image. The controller derives
+  the cover-only dependency; the image does not need to appear in the body or
+  have Materials `included: true`.
+- `clearCover` removes only the cover relationship. A body occurrence remains.
+- `insertImage` inserts an imported image at one explicit body index without
+  changing Materials inclusion.
+- `deleteMediaOccurrence` removes the occurrence at one explicit body node.
+  `removeMediaFromBody` removes the canonical body occurrence by source ID
+  without requiring its node index. Neither operation clears the cover.
+- Never delete a workspace source or mutate Materials during Draft editing.
+
+The complete `media_changes` contract below applies only when a whole-article
+focused revision genuinely requires `wxpost_save_draft`:
 
 Every focused revision save includes `media_changes` alongside the proposal:
 

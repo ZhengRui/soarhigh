@@ -41,7 +41,11 @@ from wxpost_controller.core import (  # noqa: E402
 )
 from wxpost_controller.http_server import build_server  # noqa: E402
 
-from app.models.wxpost import ArticleDocument  # noqa: E402
+from app.models.wxpost import (  # noqa: E402
+    ArticleDocument,
+    WxPostDraftEditRequest,
+)
+from app.services.wxpost_editing import apply_draft_edits  # noqa: E402
 from app.services.wxpost_document import (  # noqa: E402
     ArticleDocumentValidationError,
     pydantic_validation_issues,
@@ -161,6 +165,21 @@ def _backend_validate(document: Mapping[str, Any]) -> dict[str, Any]:
     return parsed.model_dump(by_alias=True, mode="json")
 
 
+def _backend_edit(
+    document: Mapping[str, Any],
+    available_media: list[Mapping[str, Any]],
+    edits: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    request = WxPostDraftEditRequest.model_validate(
+        {
+            "document": document,
+            "availableMedia": available_media,
+            "edits": edits,
+        }
+    )
+    return apply_draft_edits(request).model_dump(by_alias=True, mode="json")
+
+
 def _canonical_document(document: Mapping[str, Any]) -> dict[str, Any]:
     return ArticleDocument.model_validate(document).model_dump(
         by_alias=True,
@@ -169,7 +188,11 @@ def _canonical_document(document: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _controller(root: Path) -> WorkspaceController:
-    return WorkspaceController(root, article_validator=_backend_validate)
+    return WorkspaceController(
+        root,
+        article_validator=_backend_validate,
+        article_editor=_backend_edit,
+    )
 
 
 @pytest.fixture
@@ -203,14 +226,18 @@ class _ValidationHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
-        if self.path != "/posts/wxposts/validate":
+        if self.path not in {"/posts/wxposts/validate", "/posts/wxposts/edit"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         length = int(self.headers.get("Content-Length", "0"))
-        document = json.loads(self.rfile.read(length))
+        request_payload = json.loads(self.rfile.read(length))
         try:
-            parsed = ArticleDocument.model_validate(document)
-            validate_and_parse(parsed)
+            if self.path == "/posts/wxposts/edit":
+                edit_request = WxPostDraftEditRequest.model_validate(request_payload)
+                parsed = apply_draft_edits(edit_request)
+            else:
+                parsed = ArticleDocument.model_validate(request_payload)
+            parsed_article = validate_and_parse(parsed)
         except ValidationError as exc:
             errors = [
                 issue.model_dump(by_alias=True, mode="json")
@@ -232,6 +259,10 @@ class _ValidationHandler(BaseHTTPRequestHandler):
                 {
                     "valid": True,
                     "document": parsed.model_dump(by_alias=True, mode="json"),
+                    "renderDocument": parsed_article.render_document(parsed).model_dump(
+                        by_alias=True,
+                        mode="json",
+                    ),
                 },
             )
 
@@ -608,6 +639,207 @@ async def test_mcp_save_draft_exposes_only_strict_proposal_fields(
 
 
 @pytest.mark.asyncio
+async def test_mcp_edit_draft_exposes_only_typed_edits(
+    tmp_path: Path,
+    validation_url: str,
+) -> None:
+    async with stdio_client(_mcp_parameters(tmp_path, validation_url)) as (
+        read,
+        write,
+    ):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+
+    schema = next(
+        tool.inputSchema for tool in tools.tools if tool.name == "wxpost_edit_draft"
+    )
+    assert set(schema["properties"]) == {
+        "workspace_id",
+        "expected_manifest_version",
+        "expected_draft_version",
+        "operation_id",
+        "edits",
+    }
+    assert set(schema["required"]) == set(schema["properties"])
+    assert "document" not in schema["properties"]
+    edit_types = {
+        definition["properties"]["type"]["const"]
+        for definition in schema["$defs"].values()
+        if isinstance(definition, dict)
+        and isinstance(definition.get("properties"), dict)
+        and isinstance(definition["properties"].get("type"), dict)
+        and "const" in definition["properties"]["type"]
+    }
+    assert {
+        "replaceMetadata",
+        "replaceDirectiveField",
+        "setCover",
+        "insertImage",
+    } <= edit_types
+
+
+@pytest.mark.asyncio
+async def test_mcp_edit_draft_applies_one_version_bound_transaction(
+    seeded_workspace: tuple[Path, str],
+    validation_url: str,
+) -> None:
+    root, workspace_id = seeded_workspace
+    _controller(root).save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+
+    async with stdio_client(_mcp_parameters(root, validation_url)) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = _mcp_value(
+                await session.call_tool(
+                    "wxpost_edit_draft",
+                    {
+                        "workspace_id": workspace_id,
+                        "expected_manifest_version": 1,
+                        "expected_draft_version": 1,
+                        "operation_id": "draft-mcp-fine-edit",
+                        "edits": [
+                            {
+                                "type": "replaceMetadata",
+                                "field": "title",
+                                "value": "Edited Through MCP",
+                            },
+                            {"type": "setCover", "sourceId": SPEAKER_ID},
+                        ],
+                    },
+                )
+            )
+
+    assert result["draftVersion"] == 2
+    assert result["document"]["title"] == "Edited Through MCP"
+    assert result["document"]["coverMediaId"] == SPEAKER_ID
+    persisted = _controller(root).get_context(workspace_id)
+    assert persisted["manifest"]["draft"]["operationId"] == "draft-mcp-fine-edit"
+
+
+def test_fine_grained_edit_sets_excluded_imported_cover_without_changing_materials(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    saved = controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+
+    edited = controller.edit_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=saved["draftVersion"],
+        operation_id="draft-fine-cover",
+        edits=[
+            {
+                "type": "replaceMetadata",
+                "field": "title",
+                "value": "A Smaller Change",
+            },
+            {"type": "setCover", "sourceId": SPEAKER_ID},
+        ],
+    )
+
+    assert edited["draftVersion"] == 2
+    assert edited["document"]["title"] == "A Smaller Change"
+    assert edited["document"]["coverMediaId"] == SPEAKER_ID
+    assert SPEAKER_ID not in edited["document"]["bodyMarkdown"]
+    assert {item["id"] for item in edited["document"]["media"]} == {
+        SPEAKER_ID,
+        WEB_IMAGE_ID,
+    }
+    context = controller.get_context(workspace_id)
+    speaker = next(
+        source
+        for source in context["manifest"]["sources"]
+        if source["id"] == SPEAKER_ID
+    )
+    assert speaker["included"] is False
+    assert context["manifest"]["draft"]["operationId"] == "draft-fine-cover"
+
+
+def test_fine_grained_edit_rejects_a_stale_draft_version_without_writing(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    first = controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    second_document = copy.deepcopy(first["document"])
+    second_document["title"] = "Newer Saved Version"
+    controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=1,
+        document=second_document,
+    )
+
+    with pytest.raises(VersionConflict, match="expected draft version 1"):
+        controller.edit_draft(
+            workspace_id,
+            expected_manifest_version=1,
+            expected_draft_version=1,
+            operation_id="draft-stale-edit",
+            edits=[
+                {
+                    "type": "replaceMetadata",
+                    "field": "title",
+                    "value": "Must Not Be Written",
+                }
+            ],
+        )
+
+    context = controller.get_context(workspace_id)
+    assert context["draft"]["draftVersion"] == 2
+    assert context["draft"]["document"]["title"] == "Newer Saved Version"
+
+
+def test_fine_grained_edit_retries_are_idempotent(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = _controller(root)
+    controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+    request = {
+        "expected_manifest_version": 1,
+        "expected_draft_version": 1,
+        "operation_id": "draft-idempotent-edit",
+        "edits": [
+            {
+                "type": "replaceMetadata",
+                "field": "title",
+                "value": "Saved Once",
+            }
+        ],
+    }
+
+    first = controller.edit_draft(workspace_id, **request)
+    retried = controller.edit_draft(workspace_id, **request)
+
+    assert first == retried
+    assert retried["draftVersion"] == 2
+    assert controller.get_context(workspace_id)["draft"]["draftVersion"] == 2
+
+
+@pytest.mark.asyncio
 async def test_mcp_rejects_manifest_media_fields_in_a_draft_proposal(
     seeded_workspace: tuple[Path, str],
     validation_url: str,
@@ -715,6 +947,38 @@ def test_agent_context_adds_normalized_live_meeting_facts_without_persisting_the
         (root / "inbox" / workspace_id / "source-manifest.json").read_text()
     )
     assert "meetingContext" not in persisted
+
+
+def test_agent_context_exposes_version_bound_body_nodes_for_typed_edits(
+    seeded_workspace: tuple[Path, str],
+    validation_url: str,
+) -> None:
+    root, workspace_id = seeded_workspace
+    controller = WorkspaceController(root, soarhigh_api_base_url=validation_url)
+    controller.save_draft(
+        workspace_id,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+        document=_article_document(),
+    )
+
+    agent_context = controller.get_agent_context(workspace_id)
+
+    assert agent_context["draft"]["draftVersion"] == 1
+    assert agent_context["draft"]["editContext"]["body"] == [
+        {
+            "kind": "markdown",
+            "source": "The meeting began with a warm welcome.\n",
+            "line": 1,
+        },
+        {
+            "kind": "directive",
+            "name": "image",
+            "payload": {"media": "M03"},
+            "line": 3,
+        },
+    ]
+    assert "editContext" not in controller.get_context(workspace_id)["draft"]
 
 
 def test_manifest_and_draft_versions_advance_independently(

@@ -20,32 +20,52 @@ import {
 
 import type { WorkspaceDraftSession } from '@/utils/wxpostWorkspace';
 
-import type {
-  CompletedDraftProgress,
-  DraftProgressActivity,
-} from './useWxPostDraftAssistant';
+import type { DraftProgressActivity } from './useWxPostDraftAssistant';
+
+function ActivityDetails({ step }: { step: DraftProgressActivity }) {
+  if (!step.toolName && !step.operationNames?.length) return null;
+  return (
+    <span className='ml-1.5 inline-flex flex-wrap items-center gap-1 align-middle'>
+      {step.operationNames?.map((operationName) => (
+        <code
+          key={operationName}
+          className='rounded bg-blue-50 px-1.5 py-0.5 font-mono text-[10px] text-blue-700'
+        >
+          {operationName}
+        </code>
+      ))}
+      {step.toolName && (
+        <code className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500'>
+          {step.toolName}
+        </code>
+      )}
+    </span>
+  );
+}
 
 function CompletedProgressDisclosure({
-  completed,
+  steps,
 }: {
-  completed: CompletedDraftProgress;
+  steps: DraftProgressActivity[];
 }) {
   return (
     <details className='group text-xs text-slate-500'>
       <summary className='flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-slate-100'>
         <Check className='h-3.5 w-3.5 text-emerald-600' />
-        {completed.steps.length}{' '}
-        {completed.steps.length === 1 ? 'step' : 'steps'} completed
+        {steps.length} {steps.length === 1 ? 'step' : 'steps'} completed
         <ChevronDown className='h-3.5 w-3.5 transition group-open:rotate-180' />
       </summary>
       <div className='mt-1 grid gap-1 pl-2'>
-        {completed.steps.map((step) => (
+        {steps.map((step) => (
           <p
             key={step.activityId}
             className='m-0 flex items-start gap-2 leading-5'
           >
             <Check className='mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600' />
-            <span>{step.label}</span>
+            <span className='min-w-0'>
+              {step.label}
+              <ActivityDetails step={step} />
+            </span>
           </p>
         ))}
       </div>
@@ -59,7 +79,6 @@ export function WxPostHermesPanel({
   sessionStatus,
   chatPending,
   progress,
-  completedProgress,
   selectedText,
   message,
   dirty,
@@ -74,7 +93,6 @@ export function WxPostHermesPanel({
   sessionStatus: 'connecting' | 'online' | 'unavailable';
   chatPending: boolean;
   progress: DraftProgressActivity[];
-  completedProgress: CompletedDraftProgress[];
   selectedText: string | null;
   message: string;
   dirty: boolean;
@@ -94,8 +112,8 @@ export function WxPostHermesPanel({
   const messages = session?.messages ?? [];
   const progressState = progress
     .map(
-      ({ activityId, label, completed, failed }) =>
-        `${activityId}:${label}:${failed ? 'failed' : completed ? 'done' : 'active'}`
+      ({ activityId, label, toolName, operationNames, completed, failed }) =>
+        `${activityId}:${label}:${toolName ?? ''}:${operationNames?.join(',') ?? ''}:${failed ? 'failed' : completed ? 'done' : 'active'}`
     )
     .join('|');
 
@@ -103,7 +121,7 @@ export function WxPostHermesPanel({
     const history = historyRef.current;
     if (!history) return;
     if (autoScrollRef.current) history.scrollTop = history.scrollHeight;
-  }, [chatPending, completedProgress.length, messages.length, progressState]);
+  }, [chatPending, messages.length, progressState]);
 
   useEffect(() => {
     const history = historyRef.current;
@@ -225,17 +243,14 @@ export function WxPostHermesPanel({
           </div>
         ) : (
           messages.map((item, index) => {
-            const completed = completedProgress.find(
-              (run) => run.assistantMessageIndex === index
-            );
             const isPendingMessage =
               chatPending &&
               item.role === 'user' &&
               index === messages.length - 1;
             return (
               <Fragment key={`${item.role}-${index}`}>
-                {completed && (
-                  <CompletedProgressDisclosure completed={completed} />
+                {item.role === 'assistant' && Boolean(item.steps?.length) && (
+                  <CompletedProgressDisclosure steps={item.steps ?? []} />
                 )}
                 <p
                   className={`m-0 max-w-[92%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-sm leading-6 ${
@@ -248,7 +263,7 @@ export function WxPostHermesPanel({
                 </p>
                 {isPendingMessage && (
                   <div
-                    className='grid gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500'
+                    className='grid gap-1 px-2 py-1 text-xs text-slate-500'
                     data-testid='draft-assistant-progress'
                   >
                     {progress.map((activity) => {
@@ -267,7 +282,10 @@ export function WxPostHermesPanel({
                           ) : (
                             <Loader2 className='mt-0.5 h-4 w-4 shrink-0 animate-spin' />
                           )}
-                          <span>{activity.label}</span>
+                          <span className='min-w-0'>
+                            {activity.label}
+                            <ActivityDetails step={activity} />
+                          </span>
                         </p>
                       );
                     })}

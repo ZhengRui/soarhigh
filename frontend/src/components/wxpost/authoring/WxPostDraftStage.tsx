@@ -723,7 +723,6 @@ export function WxPostDraftStage({
           chatPending={assistant.pending}
           resetPending={assistant.resetPending}
           progress={assistant.progress}
-          completedProgress={assistant.completedProgress}
           selectedText={selectedText}
           message={assistant.message}
           dirty={dirty}

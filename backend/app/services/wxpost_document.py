@@ -141,6 +141,17 @@ def validate_and_parse(document: ArticleDocument) -> ParsedArticle:
     return parsed
 
 
+def parse_body_markdown(body_markdown: str) -> ParsedArticle:
+    """Parse only canonical body structure before media dependencies are rebuilt."""
+
+    errors: list[ValidationIssue] = []
+    parsed = _parse_markdown(body_markdown, errors)
+    _validate_section_structure(parsed.body, errors)
+    if errors:
+        raise ArticleDocumentValidationError(errors)
+    return parsed
+
+
 def _validate_document_shape(document: ArticleDocument, errors: list[ValidationIssue]) -> None:
     if document.article_type != ArticleType.CUSTOM and document.custom_article_type is not None:
         errors.append(

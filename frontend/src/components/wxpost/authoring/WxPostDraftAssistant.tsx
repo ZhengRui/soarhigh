@@ -8,10 +8,7 @@ import type { WorkspaceDraftSession } from '@/utils/wxpostWorkspace';
 
 import type { DraftMode } from './WxPostDraftControls';
 import { WxPostHermesPanel } from './WxPostHermesPanel';
-import type {
-  CompletedDraftProgress,
-  DraftProgressActivity,
-} from './useWxPostDraftAssistant';
+import type { DraftProgressActivity } from './useWxPostDraftAssistant';
 import { WorkspaceConflictDialog } from './WorkspaceConflictDialog';
 
 type AssistantProps = {
@@ -24,7 +21,6 @@ type AssistantProps = {
   chatPending: boolean;
   resetPending: boolean;
   progress: DraftProgressActivity[];
-  completedProgress: CompletedDraftProgress[];
   selectedText: string | null;
   message: string;
   dirty: boolean;
@@ -43,7 +39,6 @@ export function WxPostDraftAssistant(props: AssistantProps) {
     sessionStatus: props.sessionStatus,
     chatPending: props.chatPending,
     progress: props.progress,
-    completedProgress: props.completedProgress,
     selectedText: props.selectedText,
     message: props.message,
     dirty: props.dirty,

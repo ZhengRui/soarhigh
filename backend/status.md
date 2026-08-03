@@ -1,6 +1,6 @@
 # SoarHigh Toastmasters Club - Backend Status
 
-**Last updated:** 2026-08-01
+**Last updated:** 2026-08-03
 
 **WxPost checkpoint:** `d1c85a4` is the committed pre-Slice-6 base. The current
 working tree completes Slice 6 Draft session, save, generation, revision, and
@@ -16,8 +16,14 @@ deterministically serializes canonical ArticleDocument v1 directives before
 Backend validation. This removes model-authored YAML without adding repair
 heuristics or a second validator. Slice 7A now synchronizes one saved workspace
 Draft to one stable public WxPost with guarded Supabase revisions and
-content-addressed OSS assets. Feishu ingestion and image-description proposals
-remain Slice 7B, and WeChat Draft delivery remains Phase 3.
+content-addressed OSS assets, and Slice 7B image-description proposals are also
+complete. Feishu ingestion is next; WeChat Draft delivery remains Phase 3.
+Draft Assistant small edits now use a typed, version-bound edit endpoint instead
+of resubmitting the complete article. Backend applies exact body-node,
+directive, media, description, and cover operations, derives the
+body-plus-cover media dependency snapshot, validates the complete result, and
+returns it to the controller for the existing atomic compare-and-swap save.
+Materials inclusion remains independent from Draft body and cover state.
 
 ## Architecture Overview
 

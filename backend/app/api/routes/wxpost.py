@@ -37,6 +37,7 @@ from ...models.wxpost import (
     ArticleDocument,
     WxPostCapabilities,
     WxPostCreateRequest,
+    WxPostDraftEditRequest,
     WxPostMutationResult,
     WxPostPublicationDeleteRequest,
     WxPostPublicationDeleteResult,
@@ -53,6 +54,7 @@ from ...services.wxpost_document import (
     pydantic_validation_issues,
     validate_and_parse,
 )
+from ...services.wxpost_editing import apply_draft_edits
 from ...services.wxpost_hermes import (
     HermesResponseError,
     HermesUnavailableError,
@@ -475,6 +477,42 @@ async def r_validate_wxpost(payload: Any = Body(...)) -> WxPostValidationSuccess
 
     render_document = parsed.render_document(document)
     await _compile_trusted_render(render_document.model_dump(by_alias=True, mode="json"))
+    return WxPostValidationSuccess(
+        document=document,
+        article_type=document.article_type,
+        custom_article_type=document.custom_article_type,
+        directives=parsed.directive_summaries(),
+        inline_extensions=parsed.inline_summaries(),
+        render_document=render_document,
+    )
+
+
+@r.post(
+    "/posts/wxposts/edit",
+    response_model=WxPostValidationSuccess,
+    responses={422: {"model": WxPostValidationFailure}},
+)
+def r_edit_wxpost(payload: Any = Body(...)) -> WxPostValidationSuccess | JSONResponse:
+    """Apply deterministic typed edits to an ArticleDocument without storing it."""
+
+    try:
+        request = WxPostDraftEditRequest.model_validate(payload)
+        document = apply_draft_edits(request)
+        parsed = validate_and_parse(document)
+    except ValidationError as error:
+        failure = WxPostValidationFailure(errors=pydantic_validation_issues(error))
+        return JSONResponse(
+            status_code=422,
+            content=failure.model_dump(by_alias=True, mode="json"),
+        )
+    except ArticleDocumentValidationError as error:
+        failure = WxPostValidationFailure(errors=error.errors)
+        return JSONResponse(
+            status_code=422,
+            content=failure.model_dump(by_alias=True, mode="json"),
+        )
+
+    render_document = parsed.render_document(document)
     return WxPostValidationSuccess(
         document=document,
         article_type=document.article_type,

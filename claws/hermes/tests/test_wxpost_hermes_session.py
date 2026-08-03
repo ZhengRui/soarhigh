@@ -8,16 +8,22 @@ from typing import Any
 import pytest
 
 from wxpost_controller.core import InvalidRequest, VersionConflict
+from wxpost_controller.draft_session_store import (
+    HERMES_DRAFT_PROTOCOL_VERSION,
+    HermesDraftSessionStore,
+)
+from wxpost_controller.errors import (
+    DraftSessionStoreUnavailable,
+    HermesTurnFailed,
+)
 from wxpost_controller.hermes_session import (
     HERMES_DRAFT_IDENTITY,
-    HERMES_DRAFT_PROTOCOL_VERSION,
     HermesDescriptionService,
     HermesDraftService,
-    HermesDraftSessionRegistry,
     HermesSessionClient,
     HermesSessionHistory,
     HermesTurn,
-    HermesTurnFailed,
+    _draft_edit_activity,
 )
 
 
@@ -113,13 +119,17 @@ class _SessionClient:
         title: str,
         session_id: str | None = None,
     ) -> HermesSessionHistory:
-        assert title == "SoarHigh WxPost authoring v6 · wxpost-test"
+        assert title == "SoarHigh WxPost authoring v7 · wxpost-test"
         self.history_session_ids.append(session_id)
         return HermesSessionHistory(
             session_id=session_id or "stored-session",
             messages=[
                 {"role": "user", "text": "Tighten the opening."},
-                {"role": "assistant", "text": "Opening tightened."},
+                {
+                    "role": "assistant",
+                    "text": "Opening tightened.",
+                    "turnId": "draft-history",
+                },
             ],
         )
 
@@ -180,14 +190,18 @@ def test_draft_service_resumes_history_and_runs_one_versioned_turn(
         "sessionId": "stored-session",
         "messages": [
             {"role": "user", "text": "Tighten the opening."},
-            {"role": "assistant", "text": "Opening tightened."},
+            {
+                "role": "assistant",
+                "text": "Opening tightened.",
+                "turnId": "draft-history",
+            },
         ],
     }
     assert result["context"]["draft"]["draftVersion"] == 3
     assert result["reply"] == ("Draft regenerated.\n\nDraft version: v2 → v3")
     assert result["draftChanged"] is True
     assert len(session.prompts) == 1
-    assert session.prompts[0]["title"] == "SoarHigh WxPost authoring v6 · wxpost-test"
+    assert session.prompts[0]["title"] == "SoarHigh WxPost authoring v7 · wxpost-test"
     assert session.prompts[0]["cwd"].endswith("/inbox/wxpost-test")
     assert "Expected manifest version: 4" in session.prompts[0]["prompt"]
     assert "Expected draft version: 2" in session.prompts[0]["prompt"]
@@ -211,7 +225,48 @@ def test_draft_service_resumes_history_and_runs_one_versioned_turn(
     assert session.turn_session_ids == ["stored-session"]
 
 
-def test_draft_session_registry_survives_service_recreation(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("failing_method", "expected_log"),
+    [
+        ("set_session", "session metadata could not be stored"),
+        ("append_completed_progress", "progress metadata could not be stored"),
+    ],
+)
+def test_saved_draft_succeeds_when_session_metadata_cannot_be_persisted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failing_method: str,
+    expected_log: str,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+    store = HermesDraftSessionStore(tmp_path)
+    service = HermesDraftService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=session,  # type: ignore[arg-type]
+        session_store=store,
+        cleanup_dispatch=lambda callback: callback(),
+    )
+
+    def fail_metadata_write(*_args: object, **_kwargs: object) -> None:
+        raise DraftSessionStoreUnavailable("session db unavailable")
+
+    monkeypatch.setattr(store, failing_method, fail_metadata_write)
+
+    result = service.generate(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+    )
+
+    assert result["draftChanged"] is True
+    assert result["context"]["draft"]["draftVersion"] == 3
+    assert result["reply"].endswith("Draft version: v2 → v3")
+    assert expected_log in caplog.text
+
+
+def test_draft_session_store_survives_service_recreation(tmp_path: Path) -> None:
     controller = _Controller(tmp_path)
     first_session = _SessionClient(controller)
     first_service = HermesDraftService(
@@ -234,7 +289,38 @@ def test_draft_session_registry_survives_service_recreation(tmp_path: Path) -> N
     assert second_session.history_session_ids == ["stored-session"]
 
 
-def test_draft_session_registry_retires_an_older_protocol_session(
+def test_draft_service_history_returns_restored_progress(tmp_path: Path) -> None:
+    store = HermesDraftSessionStore(tmp_path)
+    store.set_session("wxpost-test", "stored-session")
+    store.append_completed_progress(
+        "stored-session",
+        turn_id="draft-history",
+        steps=[
+            {
+                "activityId": "context-1",
+                "label": "Reading the saved Draft and media",
+                "toolName": "wxpost_get_context",
+                "completed": True,
+                "failed": False,
+            }
+        ],
+    )
+    service, _ = _service(tmp_path)
+
+    history = service.history("wxpost-test")
+
+    assert history["messages"][1]["steps"] == [
+        {
+            "activityId": "context-1",
+            "label": "Reading the saved Draft and media",
+            "toolName": "wxpost_get_context",
+            "completed": True,
+            "failed": False,
+        }
+    ]
+
+
+def test_draft_session_store_retires_an_older_protocol_session(
     tmp_path: Path,
 ) -> None:
     registry_directory = tmp_path / ".wxpost-controller"
@@ -257,9 +343,9 @@ def test_draft_session_registry_retires_an_older_protocol_session(
     assert session.deleted_session_ids == ["protocol-5-session"]
     assert session.history_session_ids == [None]
     assert history["sessionId"] == "stored-session"
-    registry = HermesDraftSessionRegistry(tmp_path)
-    assert registry.get("wxpost-test") == "stored-session"
-    assert registry.pending_deletions() == []
+    store = HermesDraftSessionStore(tmp_path)
+    assert store.get("wxpost-test") == "stored-session"
+    assert store.pending_deletions() == []
 
 
 def test_history_schedules_session_cleanup_without_blocking_the_request(
@@ -296,7 +382,7 @@ def test_history_schedules_session_cleanup_without_blocking_the_request(
     scheduled.pop()()
 
     assert session.deleted_session_ids == ["stale-session"]
-    assert HermesDraftSessionRegistry(tmp_path).pending_deletions() == []
+    assert HermesDraftSessionStore(tmp_path).pending_deletions() == []
 
 
 def test_cleanup_dispatch_failure_does_not_fail_history(tmp_path: Path) -> None:
@@ -322,6 +408,20 @@ def test_reset_replaces_only_the_active_draft_conversation(tmp_path: Path) -> No
     before = json.loads(json.dumps(session.controller.context))
 
     service.history("wxpost-test")
+    store = HermesDraftSessionStore(tmp_path)
+    store.append_completed_progress(
+        "stored-session",
+        turn_id="draft-history",
+        steps=[
+            {
+                "activityId": "context-1",
+                "label": "Reading the saved Draft and media",
+                "toolName": "wxpost_get_context",
+                "completed": True,
+                "failed": False,
+            }
+        ],
+    )
     result = service.reset("wxpost-test")
 
     assert result == {
@@ -331,6 +431,19 @@ def test_reset_replaces_only_the_active_draft_conversation(tmp_path: Path) -> No
     }
     assert session.deleted_session_ids == ["stored-session"]
     assert session.controller.context == before
+    assert (
+        "steps"
+        not in store.restore_completed_progress(
+            "stored-session",
+            [
+                {
+                    "role": "assistant",
+                    "text": "Opening tightened.",
+                    "turnId": "draft-history",
+                }
+            ],
+        )[0]
+    )
     service.history("wxpost-test")
     assert "conversation-" in (session.history_session_ids[-1] or "")
 
@@ -345,32 +458,32 @@ def test_reset_keeps_fresh_pointer_when_old_session_cleanup_fails(
             raise HermesTurnFailed("cleanup failed")
 
     session = CleanupFailureSession(controller)
-    registry = HermesDraftSessionRegistry(tmp_path)
+    store = HermesDraftSessionStore(tmp_path)
     service = HermesDraftService(
         controller=controller,  # type: ignore[arg-type]
         session_client=session,  # type: ignore[arg-type]
-        session_registry=registry,
+        session_store=store,
         cleanup_dispatch=lambda callback: callback(),
     )
 
     result = service.reset("wxpost-test")
 
     assert result["sessionId"] is None
-    assert "conversation-" in (registry.get("wxpost-test") or "")
-    legacy_title = "SoarHigh WxPost authoring v6 · wxpost-test"
-    assert registry.pending_deletions() == [legacy_title]
+    assert "conversation-" in (store.get("wxpost-test") or "")
+    legacy_title = "SoarHigh WxPost authoring v7 · wxpost-test"
+    assert store.pending_deletions() == [legacy_title]
 
     retry_session = _SessionClient(controller)
     retry_service = HermesDraftService(
         controller=controller,  # type: ignore[arg-type]
         session_client=retry_session,  # type: ignore[arg-type]
-        session_registry=registry,
+        session_store=store,
         cleanup_dispatch=lambda callback: callback(),
     )
     retry_service.history("wxpost-test")
 
     assert retry_session.deleted_session_ids == [legacy_title]
-    assert registry.pending_deletions() == []
+    assert store.pending_deletions() == []
 
 
 def test_workspace_delete_retires_its_persisted_draft_session(
@@ -387,9 +500,9 @@ def test_workspace_delete_retires_its_persisted_draft_session(
     assert result == {"workspaceId": "wxpost-test", "deleted": True}
     assert session.controller.deleted_workspace_ids == ["wxpost-test"]
     assert session.deleted_session_ids == ["stored-session"]
-    registry = HermesDraftSessionRegistry(tmp_path)
-    assert registry.get("wxpost-test") is None
-    assert registry.pending_deletions() == []
+    store = HermesDraftSessionStore(tmp_path)
+    assert store.get("wxpost-test") is None
+    assert store.pending_deletions() == []
 
 
 def test_workspace_delete_retires_a_legacy_title_only_session(
@@ -403,10 +516,10 @@ def test_workspace_delete_retires_a_legacy_title_only_session(
     )
 
     assert result == {"workspaceId": "wxpost-test", "deleted": True}
-    assert session.deleted_session_ids == ["SoarHigh WxPost authoring v6 · wxpost-test"]
-    registry = HermesDraftSessionRegistry(tmp_path)
-    assert registry.get("wxpost-test") is None
-    assert registry.pending_deletions() == []
+    assert session.deleted_session_ids == ["SoarHigh WxPost authoring v7 · wxpost-test"]
+    store = HermesDraftSessionStore(tmp_path)
+    assert store.get("wxpost-test") is None
+    assert store.pending_deletions() == []
 
 
 def test_draft_service_rejects_a_stale_editorial_save_after_calling_hermes(
@@ -588,6 +701,9 @@ def test_chat_can_answer_a_read_only_draft_question_without_saving(
     assert "Never count workspaceReady=false" in prompt
     assert "Only when the member explicitly asks" in prompt
     assert "create or revise Draft" in prompt
+    assert "wxpost_edit_draft for a local title" in prompt
+    assert "node indexes come from draft.editContext" in prompt
+    assert "wxpost_save_draft only for whole-article restructuring" in prompt
 
 
 def test_chat_maps_only_genuine_hermes_events_to_product_progress(
@@ -651,14 +767,23 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
             "tool.start",
             {
                 "toolId": "save-1",
-                "name": "mcp__soarhigh_wxpost__wxpost_save_draft",
+                "name": "mcp__soarhigh_wxpost__wxpost_edit_draft",
             },
         )
         on_event(
             "tool.complete",
             {
                 "toolId": "save-1",
-                "name": "mcp__soarhigh_wxpost__wxpost_save_draft",
+                "name": "mcp__soarhigh_wxpost__wxpost_edit_draft",
+                "arguments": {
+                    "edits": [
+                        {
+                            "type": "replaceMetadata",
+                            "field": "title",
+                            "value": "A tighter title",
+                        }
+                    ]
+                },
             },
         )
         on_event("message.delta", {"text": "Saved."})
@@ -686,51 +811,62 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
             "stage": "activity_started",
             "activityId": "context-1",
             "label": "Reading the saved Draft and media",
+            "toolName": "wxpost_get_context",
         },
         {
             "stage": "activity_completed",
             "activityId": "context-1",
             "label": "Reading the saved Draft and media",
+            "toolName": "wxpost_get_context",
         },
         {
             "stage": "activity_started",
             "activityId": "skill-1",
             "label": "Loading the writing guidance",
+            "toolName": "skill_view",
         },
         {
             "stage": "activity_completed",
             "activityId": "skill-1",
             "label": "Loading the writing guidance",
+            "toolName": "skill_view",
         },
         {
             "stage": "activity_started",
             "activityId": "search-1",
             "label": "Searching the web for current club news",
+            "toolName": "web_search",
         },
         {
             "stage": "activity_completed",
             "activityId": "search-1",
             "label": "Searching the web for current club news",
+            "toolName": "web_search",
         },
         {
             "stage": "activity_started",
             "activityId": "search-2",
             "label": "Searching the web for Toastmasters guidance",
+            "toolName": "web_search",
         },
         {
             "stage": "activity_failed",
             "activityId": "search-2",
             "label": "Searching the web for Toastmasters guidance",
+            "toolName": "web_search",
         },
         {
             "stage": "activity_started",
             "activityId": "save-1",
             "label": "Saving Draft v3",
+            "toolName": "wxpost_edit_draft",
         },
         {
             "stage": "activity_completed",
             "activityId": "save-1",
-            "label": "Saving Draft v3",
+            "label": "Updating the Draft title",
+            "toolName": "wxpost_edit_draft",
+            "operationNames": ["replaceMetadata"],
         },
     ]
     assert progress[-2]["stage"] == "activity_started"
@@ -742,6 +878,34 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
         "label": "Verifying the saved Draft",
     }
     assert result["draftChanged"] is True
+    restored = HermesDraftSessionStore(tmp_path).restore_completed_progress(
+        "stored-session",
+        [
+            {
+                "role": "assistant",
+                "text": "Saved.",
+                "turnId": session.prompts[-1]["prompt"]
+                .split("Draft operation ID: ", 1)[1]
+                .splitlines()[0],
+            }
+        ],
+    )
+    assert restored[0]["steps"][-2:] == [
+        {
+            "activityId": "save-1",
+            "label": "Updating the Draft title",
+            "toolName": "wxpost_edit_draft",
+            "operationNames": ["replaceMetadata"],
+            "completed": True,
+            "failed": False,
+        },
+        {
+            "activityId": progress[-1]["activityId"],
+            "label": "Verifying the saved Draft",
+            "completed": True,
+            "failed": False,
+        },
+    ]
 
 
 def test_failed_draft_save_does_not_report_verification_success(
@@ -792,11 +956,13 @@ def test_failed_draft_save_does_not_report_verification_success(
             "stage": "activity_started",
             "activityId": "save-1",
             "label": "Saving Draft v3",
+            "toolName": "wxpost_save_draft",
         },
         {
             "stage": "activity_failed",
             "activityId": "save-1",
             "label": "Saving Draft v3",
+            "toolName": "wxpost_save_draft",
         },
     ]
     assert result["reply"] == "Unable to save."
@@ -955,14 +1121,30 @@ def test_visible_history_accepts_serve_text_messages_and_hides_tools() -> None:
         [
             {
                 "role": "user",
-                "text": 'hidden prompt\nMEMBER_REQUEST_JSON:"Tighten it."',
+                "text": (
+                    "hidden prompt\nDraft operation ID: draft-visible\n"
+                    'MEMBER_REQUEST_JSON:"Tighten it."'
+                ),
             },
             {"role": "tool", "name": "wxpost_get_context"},
             {"role": "assistant", "text": "Draft tightened."},
         ]
     ) == [
         {"role": "user", "text": "Tighten it."},
-        {"role": "assistant", "text": "Draft tightened."},
+        {
+            "role": "assistant",
+            "text": "Draft tightened.",
+            "turnId": "draft-visible",
+            "steps": [
+                {
+                    "activityId": "history-1-0",
+                    "label": "Reading the saved Draft and media",
+                    "toolName": "wxpost_get_context",
+                    "completed": True,
+                    "failed": False,
+                }
+            ],
+        },
     ]
 
 
@@ -1000,6 +1182,27 @@ def test_session_client_forwards_only_safe_lifecycle_events() -> None:
                             "tool_id": "tool-1",
                             "name": "wxpost_get_context",
                             "error": False,
+                            "args": {"private": "context arguments"},
+                            "summary": "private result",
+                        },
+                    },
+                },
+                {
+                    "method": "event",
+                    "params": {
+                        "session_id": "live-session",
+                        "type": "tool.complete",
+                        "payload": {
+                            "tool_id": "tool-2",
+                            "name": "mcp__soarhigh_wxpost__wxpost_edit_draft",
+                            "error": False,
+                            "args": {
+                                "edits": [
+                                    {
+                                        "type": "clearCover",
+                                    }
+                                ]
+                            },
                             "summary": "private result",
                         },
                     },
@@ -1044,7 +1247,43 @@ def test_session_client_forwards_only_safe_lifecycle_events() -> None:
             "tool.complete",
             {"toolId": "tool-1", "name": "wxpost_get_context", "error": False},
         ),
+        (
+            "tool.complete",
+            {
+                "toolId": "tool-2",
+                "name": "mcp__soarhigh_wxpost__wxpost_edit_draft",
+                "error": False,
+                "arguments": {"edits": [{"type": "clearCover"}]},
+            },
+        ),
     ]
+
+
+@pytest.mark.parametrize(
+    ("edit", "expected_label"),
+    [
+        (
+            {"type": "replaceMetadata", "field": "title", "value": "New"},
+            "Updating the Draft title",
+        ),
+        (
+            {"type": "insertImage", "sourceId": "M03", "index": 2},
+            "Adding M03 to the Draft",
+        ),
+        (
+            {"type": "removeMediaFromBody", "sourceId": "M02"},
+            "Removing M02 from the Draft",
+        ),
+        ({"type": "clearCover"}, "Clearing the Draft cover"),
+    ],
+)
+def test_draft_edit_activity_uses_typed_operation_details(
+    edit: dict[str, Any],
+    expected_label: str,
+) -> None:
+    result = _draft_edit_activity({"edits": [edit]})
+
+    assert result == (expected_label, [edit["type"]])
 
 
 def test_description_service_polishes_any_language_into_local_english_suggestion(
@@ -1052,16 +1291,14 @@ def test_description_service_polishes_any_language_into_local_english_suggestion
 ) -> None:
     controller = _Controller(tmp_path)
     session = _SessionClient(controller)
-    session.turn = (
-        lambda **kwargs: (  # type: ignore[method-assign]
-            session.prompts.append(kwargs)
-            or HermesTurn(
-                session_id="description-session",
-                reply=(
-                    '{"description":"Members exchange ideas around a table '
-                    'before the meeting begins."}'
-                ),
-            )
+    session.turn = lambda **kwargs: (  # type: ignore[method-assign]
+        session.prompts.append(kwargs)
+        or HermesTurn(
+            session_id="description-session",
+            reply=(
+                '{"description":"Members exchange ideas around a table '
+                'before the meeting begins."}'
+            ),
         )
     )
     service = HermesDescriptionService(

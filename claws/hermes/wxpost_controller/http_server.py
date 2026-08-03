@@ -28,9 +28,8 @@ from .hermes_session import (
     HermesDescriptionService,
     HermesDraftService,
     HermesSessionClient,
-    HermesTurnFailed,
-    HermesUnavailable,
 )
+from .errors import HermesTurnFailed, HermesUnavailable
 
 WORKSPACE_PATH = re.compile(r"^/workspaces/([^/]+)$")
 WORKSPACES_PATH = "/workspaces"

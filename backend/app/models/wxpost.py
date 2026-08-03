@@ -195,6 +195,115 @@ class WxPostValidationFailure(WireModel):
     errors: list[ValidationIssue]
 
 
+class DraftMarkdownNodeInput(WireModel):
+    kind: Literal["markdown"]
+    source: TrimmedText
+
+
+class DraftDirectiveNodeInput(WireModel):
+    kind: Literal["directive"]
+    name: TrimmedText
+    payload: dict[str, Any]
+
+
+DraftBodyNodeInput = Annotated[
+    DraftMarkdownNodeInput | DraftDirectiveNodeInput,
+    Field(discriminator="kind"),
+]
+
+
+class ReplaceMetadataEdit(WireModel):
+    type: Literal["replaceMetadata"]
+    field: Literal["title", "excerpt", "byline"]
+    value: str | None
+
+
+class ReplaceBodyNodeEdit(WireModel):
+    type: Literal["replaceBodyNode"]
+    node_index: int = Field(ge=0, strict=True)
+    node: DraftBodyNodeInput
+
+
+class InsertBodyNodeEdit(WireModel):
+    type: Literal["insertBodyNode"]
+    body_index: int = Field(ge=0, strict=True)
+    node: DraftBodyNodeInput
+
+
+class DeleteBodyNodeEdit(WireModel):
+    type: Literal["deleteBodyNode"]
+    node_index: int = Field(ge=0, strict=True)
+
+
+class ReplaceDirectiveFieldEdit(WireModel):
+    type: Literal["replaceDirectiveField"]
+    node_index: int = Field(ge=0, strict=True)
+    path: list[str | int] = Field(min_length=1)
+    value: str | None
+
+
+class DeleteDirectiveItemEdit(WireModel):
+    type: Literal["deleteDirectiveItem"]
+    node_index: int = Field(ge=0, strict=True)
+    item_index: int = Field(ge=0, strict=True)
+
+
+class SetCoverEdit(WireModel):
+    type: Literal["setCover"]
+    source_id: TrimmedText
+
+
+class ClearCoverEdit(WireModel):
+    type: Literal["clearCover"]
+
+
+class InsertImageEdit(WireModel):
+    type: Literal["insertImage"]
+    source_id: TrimmedText
+    body_index: int = Field(ge=0, strict=True)
+    caption: TrimmedText | None = None
+
+
+class DeleteMediaOccurrenceEdit(WireModel):
+    type: Literal["deleteMediaOccurrence"]
+    node_index: int = Field(ge=0, strict=True)
+    source_id: TrimmedText
+
+
+class RemoveMediaFromBodyEdit(WireModel):
+    type: Literal["removeMediaFromBody"]
+    source_id: TrimmedText
+
+
+class ReplaceMediaDescriptionEdit(WireModel):
+    type: Literal["replaceMediaDescription"]
+    source_id: TrimmedText
+    value: TrimmedText
+
+
+DraftEditOperation = Annotated[
+    ReplaceMetadataEdit
+    | ReplaceBodyNodeEdit
+    | InsertBodyNodeEdit
+    | DeleteBodyNodeEdit
+    | ReplaceDirectiveFieldEdit
+    | DeleteDirectiveItemEdit
+    | SetCoverEdit
+    | ClearCoverEdit
+    | InsertImageEdit
+    | DeleteMediaOccurrenceEdit
+    | RemoveMediaFromBodyEdit
+    | ReplaceMediaDescriptionEdit,
+    Field(discriminator="type"),
+]
+
+
+class WxPostDraftEditRequest(WireModel):
+    document: ArticleDocument
+    available_media: list[MediaAsset]
+    edits: list[DraftEditOperation] = Field(min_length=1)
+
+
 class PresentationCapabilities(WireModel):
     layouts: list[str]
     palettes: list[str]

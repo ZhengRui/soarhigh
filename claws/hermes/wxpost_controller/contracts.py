@@ -554,6 +554,116 @@ class DraftMediaChanges(ContractModel):
         return self
 
 
+class DraftMarkdownNodeInput(ContractModel):
+    kind: Literal["markdown"]
+    source: TrimmedText
+
+
+class DraftDirectiveNodeInput(ContractModel):
+    kind: Literal["directive"]
+    name: TrimmedText
+    payload: dict[str, Any]
+
+
+DraftBodyNodeInput = Annotated[
+    DraftMarkdownNodeInput | DraftDirectiveNodeInput,
+    Field(discriminator="kind"),
+]
+
+
+class ReplaceMetadataEdit(ContractModel):
+    type: Literal["replaceMetadata"]
+    field: Literal["title", "excerpt", "byline"]
+    value: str | None
+
+
+class ReplaceBodyNodeEdit(ContractModel):
+    type: Literal["replaceBodyNode"]
+    node_index: int = Field(ge=0, strict=True)
+    node: DraftBodyNodeInput
+
+
+class InsertBodyNodeEdit(ContractModel):
+    type: Literal["insertBodyNode"]
+    body_index: int = Field(ge=0, strict=True)
+    node: DraftBodyNodeInput
+
+
+class DeleteBodyNodeEdit(ContractModel):
+    type: Literal["deleteBodyNode"]
+    node_index: int = Field(ge=0, strict=True)
+
+
+class ReplaceDirectiveFieldEdit(ContractModel):
+    type: Literal["replaceDirectiveField"]
+    node_index: int = Field(ge=0, strict=True)
+    path: list[str | int] = Field(min_length=1)
+    value: str | None
+
+
+class DeleteDirectiveItemEdit(ContractModel):
+    type: Literal["deleteDirectiveItem"]
+    node_index: int = Field(ge=0, strict=True)
+    item_index: int = Field(ge=0, strict=True)
+
+
+class SetCoverEdit(ContractModel):
+    type: Literal["setCover"]
+    source_id: SourceId
+
+
+class ClearCoverEdit(ContractModel):
+    type: Literal["clearCover"]
+
+
+class InsertImageEdit(ContractModel):
+    type: Literal["insertImage"]
+    source_id: SourceId
+    body_index: int = Field(ge=0, strict=True)
+    caption: TrimmedText | None = None
+
+
+class DeleteMediaOccurrenceEdit(ContractModel):
+    type: Literal["deleteMediaOccurrence"]
+    node_index: int = Field(ge=0, strict=True)
+    source_id: SourceId
+
+
+class RemoveMediaFromBodyEdit(ContractModel):
+    type: Literal["removeMediaFromBody"]
+    source_id: SourceId
+
+
+class ReplaceMediaDescriptionEdit(ContractModel):
+    type: Literal["replaceMediaDescription"]
+    source_id: SourceId
+    value: TrimmedText
+
+
+DraftEditOperation = Annotated[
+    ReplaceMetadataEdit
+    | ReplaceBodyNodeEdit
+    | InsertBodyNodeEdit
+    | DeleteBodyNodeEdit
+    | ReplaceDirectiveFieldEdit
+    | DeleteDirectiveItemEdit
+    | SetCoverEdit
+    | ClearCoverEdit
+    | InsertImageEdit
+    | DeleteMediaOccurrenceEdit
+    | RemoveMediaFromBodyEdit
+    | ReplaceMediaDescriptionEdit,
+    Field(discriminator="type"),
+]
+
+
+class EditDraftRequest(ContractModel):
+    expected_manifest_version: int = Field(ge=1, strict=True)
+    expected_draft_version: int = Field(ge=1, strict=True)
+    operation_id: TrimmedText
+    edits: list[DraftEditOperation] = Field(min_length=1)
+
+
 class SourceUpdate(ContractModel):
     source_id: SourceId
     included: bool | None = Field(default=None, strict=True)

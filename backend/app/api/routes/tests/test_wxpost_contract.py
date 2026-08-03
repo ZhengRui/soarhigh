@@ -224,6 +224,7 @@ def test_complete_english_article_validates_end_to_end(
         mode="json",
     )
     assert render_document["renderVersion"] == 1
+
     assert render_document["title"] == complete_article["title"]
     assert render_document["sourceMeetingId"] == "meeting-236"
     assert render_document["presentation"] == complete_article["presentation"]
@@ -274,6 +275,48 @@ def test_complete_english_article_validates_end_to_end(
         },
         "line": 5,
     }
+
+
+def test_typed_draft_edit_can_set_an_available_cover_without_inserting_it(
+    client: TestClient,
+) -> None:
+    document = _plain_article()
+    available_media = [
+        {
+            "id": "M01",
+            "kind": "image",
+            "sourceUrl": "https://assets.example/m01.jpg",
+            "description": "Members gather before the meeting.",
+            "include": True,
+            "order": 0,
+            "descriptionSource": "user",
+            "descriptionStatus": "confirmed",
+        }
+    ]
+
+    response = client.post(
+        "/posts/wxposts/edit",
+        json={
+            "document": document,
+            "availableMedia": available_media,
+            "edits": [
+                {
+                    "type": "replaceMetadata",
+                    "field": "title",
+                    "value": "A Precise Edit",
+                },
+                {"type": "setCover", "sourceId": "M01"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    edited = response.json()["document"]
+    assert edited["title"] == "A Precise Edit"
+    assert edited["coverMediaId"] == "M01"
+    assert [item["id"] for item in edited["media"]] == ["M01"]
+    assert edited["media"][0]["description"] == available_media[0]["description"]
+    assert "M01" not in edited["bodyMarkdown"]
 
 
 def test_custom_article_accepts_plain_markdown_without_directives(client: TestClient) -> None:
