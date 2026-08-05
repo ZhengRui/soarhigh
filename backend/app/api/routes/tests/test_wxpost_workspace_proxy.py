@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterator
+from pathlib import Path
 from uuid import UUID
 
 import httpx
@@ -8,9 +9,12 @@ from fastapi.testclient import TestClient
 from postgrest.exceptions import APIError
 
 import app.api.routes.wxpost as wxpost_route
+import app.services.wxpost_publication as wxpost_publication
 from app.api.serv import app
 from app.models.users import User
 from app.models.wxpost import WxPostPublicationStatus
+
+WXPOST_FIXTURE = Path(__file__).parent / "fixtures" / "wxpost-meeting-recap-v1.json"
 
 
 @pytest.fixture
@@ -43,7 +47,129 @@ def _configure_controller(
     monkeypatch.setattr(wxpost_route.httpx, "AsyncClient", client_factory)
 
 
-def test_authenticated_workspace_bootstrap_hides_controller_credential(
+def test_service_can_issue_and_read_a_version_bound_private_draft_preview(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = json.loads(WXPOST_FIXTURE.read_text())
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/context"):
+            return httpx.Response(
+                200,
+                json={
+                    "workspaceId": "wxpost-abc",
+                    "manifest": {"manifestVersion": 7},
+                    "draft": {"draftVersion": 4, "document": article},
+                },
+            )
+        if request.url.path.endswith("/sources/M01/content"):
+            return httpx.Response(
+                200,
+                content=b"draft-image",
+                headers={"Content-Type": "image/jpeg"},
+            )
+        return httpx.Response(404)
+
+    _configure_controller(monkeypatch, handler)
+    monkeypatch.setattr(wxpost_route, "WXPOST_PUBLIC_BASE_URL", "https://soarhigh.example")
+    monkeypatch.setattr(wxpost_route.time, "time", lambda: 1_800_000_000)
+
+    issued = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/draft-preview?draft_version=4",
+        headers={"Authorization": "Bearer controller-secret"},
+    )
+
+    assert issued.status_code == 200
+    payload = issued.json()
+    assert payload["draftVersion"] == 4
+    assert payload["expiresAt"] == 1_800_086_400
+    assert payload["previewUrl"].startswith("https://soarhigh.example/posts/wxposts/draft-preview/")
+    assert payload["editorUrl"] == ("https://soarhigh.example/posts/wxposts/edit/abc?view=edit")
+    token = payload["previewUrl"].rsplit("/", 1)[-1]
+
+    preview = client.get(f"/posts/wxposts/draft-previews/{token}")
+
+    assert preview.status_code == 200
+    render_document = preview.json()["renderDocument"]
+    assert preview.json()["draftVersion"] == 4
+    assert render_document["title"] == article["title"]
+    assert render_document["media"][0]["sourceUrl"].endswith(f"/draft-previews/{token}/media/M01")
+
+    media = client.get(f"/posts/wxposts/draft-previews/{token}/media/M01")
+    assert media.status_code == 200
+    assert media.content == b"draft-image"
+    assert media.headers["content-type"] == "image/jpeg"
+    assert all(request.headers["Authorization"] == "Bearer controller-secret" for request in requests)
+
+
+def test_service_can_get_authenticated_workspace_editor_links(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/workspaces/wxpost-abc/context")
+        return httpx.Response(
+            200,
+            json={
+                "workspaceId": "wxpost-abc",
+                "manifest": {"manifestVersion": 1},
+                "draft": None,
+            },
+        )
+
+    _configure_controller(monkeypatch, handler)
+    monkeypatch.setattr(wxpost_route, "WXPOST_PUBLIC_BASE_URL", "https://soarhigh.example")
+
+    response = client.get(
+        "/posts/wxposts/workspaces/wxpost-abc/editor-links",
+        headers={"Authorization": "Bearer controller-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "workspaceId": "wxpost-abc",
+        "materialsUrl": "https://soarhigh.example/posts/wxposts/edit/abc",
+        "draftUrl": "https://soarhigh.example/posts/wxposts/edit/abc?view=edit",
+    }
+
+
+def test_private_draft_preview_rejects_stale_versions_and_unreferenced_media(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = json.loads(WXPOST_FIXTURE.read_text())
+    current_version = 4
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "workspaceId": "wxpost-abc",
+                "manifest": {"manifestVersion": 7},
+                "draft": {
+                    "draftVersion": current_version,
+                    "document": article,
+                },
+            },
+        )
+
+    _configure_controller(monkeypatch, handler)
+    monkeypatch.setattr(wxpost_route.time, "time", lambda: 1_800_000_000)
+    token = wxpost_route._encode_draft_preview_token("wxpost-abc", 4, 1_800_086_400)
+
+    missing = client.get(f"/posts/wxposts/draft-previews/{token}/media/M99")
+    assert missing.status_code == 404
+
+    current_version = 5
+    stale = client.get(f"/posts/wxposts/draft-previews/{token}")
+    assert stale.status_code == 410
+    assert "no longer current" in stale.json()["detail"]
+
+
+def test_authenticated_workspace_creation_hides_controller_credential(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -57,18 +183,22 @@ def test_authenticated_workspace_bootstrap_hides_controller_credential(
         )
 
     _configure_controller(monkeypatch, handler)
-    response = client.put(
-        "/posts/wxposts/workspaces/wxpost-abc",
+    response = client.post(
+        "/posts/wxposts/workspaces",
         headers={"Authorization": "Bearer member-token"},
-        json={"meetingId": None, "editorial": {"articleType": "meeting-recap"}},
+        json={
+            "meetingId": None,
+            "editorial": {"articleType": "meeting-recap"},
+            "createdBy": {"id": "spoofed", "name": "Spoofed member"},
+        },
     )
 
     assert response.status_code == 200
     assert response.json()["workspaceId"] == "wxpost-abc"
     assert len(captured) == 1
     request = captured[0]
-    assert request.method == "PUT"
-    assert str(request.url) == "http://controller/workspaces/wxpost-abc"
+    assert request.method == "POST"
+    assert str(request.url) == "http://controller/workspaces"
     assert request.headers["Authorization"] == "Bearer controller-secret"
     assert json.loads(request.content) == {
         "meetingId": None,
@@ -260,7 +390,7 @@ def test_workspace_list_is_enriched_with_batch_publication_status(
         ],
     )
     monkeypatch.setattr(
-        wxpost_route,
+        wxpost_publication,
         "WXPOST_PUBLIC_BASE_URL",
         "https://soarhigh.example",
     )
@@ -390,6 +520,55 @@ def test_member_can_read_and_sync_workspace_publication(
             },
         }
     ]
+
+
+def test_controller_service_can_read_publication_without_a_callback(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(wxpost_route, "WXPOST_SERVICE_TOKEN", "service-secret")
+    monkeypatch.setattr(
+        wxpost_route,
+        "get_wxpost_by_workspace_id",
+        lambda workspace_id: {
+            "slug": "public-note",
+            "status": "ready",
+            "is_public": True,
+            "article_revision": 3,
+            "source_workspace_id": workspace_id,
+            "source_draft_version": 4,
+            "source_draft_sha256": "a" * 64,
+            "updated_at": "2026-08-01T08:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        wxpost_publication,
+        "WXPOST_PUBLIC_BASE_URL",
+        "https://soarhigh.example",
+    )
+
+    unauthorized = client.get(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/service",
+        params={"current_draft_version": 5},
+    )
+    authorized = client.get(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/service",
+        params={"current_draft_version": 5},
+        headers={"Authorization": "Bearer service-secret"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    assert authorized.json() == {
+        "state": "update-available",
+        "workspaceId": "wxpost-abc",
+        "slug": "public-note",
+        "publicRevision": 3,
+        "sourceDraftVersion": 4,
+        "currentDraftVersion": 5,
+        "publishedAt": "2026-08-01T08:00:00Z",
+        "publicUrl": "https://soarhigh.example/posts/wxposts/public-note",
+    }
 
 
 def test_member_can_delete_a_public_wxpost_revision(

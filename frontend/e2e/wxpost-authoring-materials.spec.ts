@@ -16,6 +16,7 @@ test('saves up to three preset and custom Voice & tone profiles', async ({
 }) => {
   const workspace = await openAuthoringPage(page);
   await page.getByTestId('create-workspace').click();
+  await expect(page.getByTestId('materials-stage')).toBeVisible();
   const context = Array.from(workspace.contexts.values())[0];
   const saveMaterials = page.getByTestId('save-materials');
 
@@ -102,6 +103,8 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   const workspace = await openAuthoringPage(page);
+  await page.getByTestId('article-type-custom').click();
+  await page.getByTestId('custom-article-type').fill('Member interview');
   const materialsStage = page.getByTestId('materials-stage');
   await expect(async () => {
     if (await materialsStage.isVisible()) return;
@@ -135,8 +138,6 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
   await expect(page.getByRole('button', { name: 'Change setup' })).toHaveCount(
     0
   );
-  await page.getByTestId('article-type-custom').click();
-  await page.getByTestId('custom-article-type').fill('Member interview');
   await page
     .getByTestId(`description-${FIRST_SOURCE_KEY}`)
     .fill('Members arrive early and make space for one another.');
@@ -190,7 +191,6 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
 
   await page.getByRole('button', { name: /Setup/ }).click();
   await expect(page.getByTestId('source-locked-message')).toBeVisible();
-  await page.getByRole('button', { name: /Materials/ }).click();
   await expect(page.getByTestId('article-type-custom')).toHaveAttribute(
     'aria-pressed',
     'true'
@@ -198,6 +198,8 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
   await expect(page.getByTestId('custom-article-type')).toHaveValue(
     'Member interview'
   );
+  await expect(page.getByTestId('article-type-custom')).toBeDisabled();
+  await page.getByRole('button', { name: /Materials/ }).click();
   await expect(page.getByTestId('meeting-transcript')).toHaveValue(
     'Local transcript'
   );
@@ -211,8 +213,8 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
   await expect(saveMaterials).toBeEnabled();
 
   expect(context.manifest.editorial).toMatchObject({
-    articleType: 'meeting-recap',
-    customArticleType: null,
+    articleType: 'custom',
+    customArticleType: 'Member interview',
     writingApproach: 'chronological',
     transcript: '',
     extraNotes: '',
@@ -265,13 +267,6 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
 
   await page.reload();
   await expect(page.getByTestId('materials-stage')).toBeVisible();
-  await expect(page.getByTestId('article-type-custom')).toHaveAttribute(
-    'aria-pressed',
-    'true'
-  );
-  await expect(page.getByTestId('custom-article-type')).toHaveValue(
-    'Member interview'
-  );
   await expect(page.getByTestId(`description-${FIRST_SOURCE_KEY}`)).toHaveValue(
     'Description edited while another import is pending.'
   );
@@ -292,7 +287,7 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
   expect(context.draft).toBe(savedDraft);
 });
 
-test('generates an English image description locally and saves its provenance', async ({
+test('generates image descriptions per source and saves their provenance', async ({
   page,
 }) => {
   const workspace = await openAuthoringPage(page);
@@ -304,7 +299,7 @@ test('generates an English image description locally and saves its provenance', 
     .getByTestId('description-M01')
     .fill('会员们在会议开始前围坐交流。');
 
-  workspace.descriptionSuggestionDelayMs = 250;
+  workspace.descriptionSuggestionDelayMs = 1_500;
   workspace.nextDescriptionSuggestion =
     'Members exchange ideas around a table before the meeting begins.';
   await page.getByTestId('generate-description-M01').click();
@@ -320,13 +315,31 @@ test('generates an English image description locally and saves its provenance', 
   await page.getByTestId('workspace-M02').click();
   await expect(page.getByTestId('workspace-M02')).toBeEnabled();
   expect(context.manifest.sources[1].workspaceReady).toBe(true);
+  await expect(page.getByTestId('generate-description-M02')).toBeEnabled();
+  await page.getByTestId('generate-description-M02').click();
+  await expect(
+    page.getByTestId('generate-description-M01').locator('.animate-spin')
+  ).toHaveCount(1);
+  await expect(
+    page.getByTestId('generate-description-M02').locator('.animate-spin')
+  ).toHaveCount(1);
+  await expect(page.getByTestId('generate-description-M01')).toBeDisabled();
+  await expect(page.getByTestId('generate-description-M02')).toBeDisabled();
+  await expect(page.getByTestId('generate-draft')).toBeDisabled();
   await expect(page.getByTestId('description-M01')).toHaveValue(
+    'Members exchange ideas around a table before the meeting begins.'
+  );
+  await expect(page.getByTestId('description-M02')).toHaveValue(
     'Members exchange ideas around a table before the meeting begins.'
   );
   expect(workspace.descriptionSuggestionInputs).toEqual([
     {
       sourceId: 'M01',
       currentDescription: '会员们在会议开始前围坐交流。',
+    },
+    {
+      sourceId: 'M02',
+      currentDescription: '',
     },
   ]);
   expect(context.manifest.sources[0]).toMatchObject({
@@ -343,7 +356,7 @@ test('generates an English image description locally and saves its provenance', 
     description:
       'Members exchange ideas around a table before the meeting begins.',
     descriptionSource: 'ai',
-    descriptionStatus: 'needs_confirmation',
+    descriptionStatus: 'confirmed',
   });
 
   await page
@@ -356,6 +369,57 @@ test('generates an English image description locally and saves its provenance', 
     descriptionSource: 'user',
     descriptionStatus: 'confirmed',
   });
+});
+
+test('keeps the local description when AI description generation fails', async ({
+  page,
+}) => {
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  await page.getByTestId('workspace-M01').click();
+  await page
+    .getByTestId('description-M01')
+    .fill('Keep this local description.');
+
+  workspace.failNextDescriptionSuggestion = true;
+  await page.getByTestId('generate-description-M01').click();
+
+  await expect(
+    page.getByText('Hermes is temporarily unavailable')
+  ).toBeVisible();
+  await expect(page.getByTestId('description-M01')).toHaveValue(
+    'Keep this local description.'
+  );
+  await expect(
+    page.getByTestId('generate-description-M01').locator('.animate-spin')
+  ).toHaveCount(0);
+});
+
+test('Save Materials confirms a persisted pending AI description', async ({
+  page,
+}) => {
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  await page.getByTestId('workspace-M01').click();
+  const context = Array.from(workspace.contexts.values())[0];
+  const source = context.manifest.sources[0];
+  source.description = 'Members welcome one another before the meeting.';
+  source.descriptionSource = 'ai';
+  source.descriptionStatus = 'needs_confirmation';
+
+  await page.reload();
+
+  await expect(page.getByTestId('save-materials')).toBeEnabled();
+  await page.getByTestId('save-materials').click();
+  await expect(
+    page.getByText('Materials saved successfully!', { exact: true })
+  ).toBeVisible();
+  expect(source).toMatchObject({
+    description: 'Members welcome one another before the meeting.',
+    descriptionSource: 'ai',
+    descriptionStatus: 'confirmed',
+  });
+  await expect(page.getByTestId('save-materials')).toBeDisabled();
 });
 
 test('confirms before a stale Materials save replaces local edits', async ({
@@ -657,7 +721,7 @@ test('runs immediate import, upload, and delete operations without UI regression
 
   expect(workspace.requests).toEqual(
     expect.arrayContaining([
-      'PUT /',
+      'POST /',
       'POST /sources/M01/import',
       'GET /sources/M01/delete-preflight',
       'DELETE /sources/M01',
@@ -854,7 +918,7 @@ test('retries the meeting options request without reloading the page', async ({
   );
 });
 
-test('keeps Setup and Materials single-column on narrow phones', async ({
+test('keeps Setup choices and Materials single-column on narrow phones', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -882,7 +946,6 @@ test('keeps Setup and Materials single-column on narrow phones', async ({
     '44px'
   );
 
-  await page.getByTestId('create-workspace').click();
   const articleTypes = page.locator('button[data-testid^="article-type-"]');
   await expect(articleTypes).toHaveCount(6);
   const geometry = await page.evaluate(() => {
@@ -919,6 +982,12 @@ test('keeps Setup and Materials single-column on narrow phones', async ({
   expect(geometry.second.y - geometry.first.y).toBe(50);
   expect(geometry.third.x).toBe(geometry.first.x);
   expect(geometry.third.y).toBeGreaterThan(geometry.second.y);
+
+  await page.getByTestId('create-workspace').click();
+  await expect(page.getByTestId('materials-stage')).toBeVisible();
+  await expect(
+    page.getByTestId('materials-stage').getByTestId('article-type-panel')
+  ).toHaveCount(0);
 });
 
 test('keeps the full Materials workflow readable on a 390px viewport', async ({

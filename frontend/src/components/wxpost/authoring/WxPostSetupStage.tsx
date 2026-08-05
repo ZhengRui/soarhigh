@@ -21,6 +21,9 @@ import {
 } from './authoringStyles';
 import { formatMeetingType } from './meetingLabels';
 import type { MeetingOptionIF } from '@/interfaces';
+import type { WorkspaceArticleType } from '@/utils/wxpostWorkspace';
+
+import { ArticleTypePanel } from './ArticleTypePanel';
 
 export type LinkedMeetingOption = MeetingOptionIF;
 
@@ -268,6 +271,10 @@ export function WxPostSetupStage({
   isCreating,
   createError,
   sourceLocked,
+  articleType,
+  onArticleTypeChange,
+  customArticleType,
+  onCustomArticleTypeChange,
 }: {
   linked: boolean;
   onLinkedChange: (linked: boolean) => void;
@@ -284,6 +291,10 @@ export function WxPostSetupStage({
   isCreating: boolean;
   createError: string | null;
   sourceLocked: boolean;
+  articleType: WorkspaceArticleType;
+  onArticleTypeChange: (value: WorkspaceArticleType) => void;
+  customArticleType: string;
+  onCustomArticleTypeChange: (value: string) => void;
 }) {
   return (
     <div
@@ -347,6 +358,14 @@ export function WxPostSetupStage({
           )}
         </div>
       </section>
+
+      <ArticleTypePanel
+        value={articleType}
+        onChange={onArticleTypeChange}
+        customArticleType={customArticleType}
+        onCustomArticleTypeChange={onCustomArticleTypeChange}
+        disabled={sourceLocked}
+      />
 
       {createError && (
         <p

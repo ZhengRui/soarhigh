@@ -1,10 +1,10 @@
 import pytest
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 
 import app.api.routes.meeting as meeting_route
 import app.db.core as meeting_db
 from app.api.serv import app
-from app.models.users import User
 
 
 class _QueryResult:
@@ -67,7 +67,7 @@ def client() -> TestClient:
 @pytest.fixture(autouse=True)
 def clear_auth_override():
     yield
-    app.dependency_overrides.pop(meeting_route.get_optional_user, None)
+    app.dependency_overrides.pop(meeting_route.get_meeting_reader_user_id, None)
 
 
 def test_meeting_options_returns_only_selector_fields_for_an_authenticated_user(
@@ -96,11 +96,7 @@ def test_meeting_options_returns_only_selector_fields_for_an_authenticated_user(
         }
 
     monkeypatch.setattr(meeting_route, "get_meeting_options", get_options)
-    app.dependency_overrides[meeting_route.get_optional_user] = lambda: User(
-        uid="member-1",
-        username="member",
-        full_name="SoarHigh Member",
-    )
+    app.dependency_overrides[meeting_route.get_meeting_reader_user_id] = lambda: "member-1"
 
     response = client.get("/meetings/options?page=2&page_size=10&status=draft")
 
@@ -145,7 +141,7 @@ def test_meeting_options_uses_the_anonymous_visibility_scope(
         }
 
     monkeypatch.setattr(meeting_route, "get_meeting_options", get_options)
-    app.dependency_overrides[meeting_route.get_optional_user] = lambda: None
+    app.dependency_overrides[meeting_route.get_meeting_reader_user_id] = lambda: None
 
     response = client.get("/meetings/options")
 
@@ -218,11 +214,7 @@ def test_meeting_options_batch_returns_requested_records_in_request_order(
         ]
 
     monkeypatch.setattr(meeting_route, "get_meeting_options_by_ids", get_options)
-    app.dependency_overrides[meeting_route.get_optional_user] = lambda: User(
-        uid="member-1",
-        username="member",
-        full_name="SoarHigh Member",
-    )
+    app.dependency_overrides[meeting_route.get_meeting_reader_user_id] = lambda: "member-1"
 
     response = client.post(
         "/meetings/options/batch",
@@ -256,6 +248,19 @@ def test_meeting_options_batch_rejects_more_than_one_hundred_ids(
     )
 
     assert response.status_code == 422
+
+
+def test_meeting_reader_accepts_only_the_scoped_wxpost_service_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(meeting_route, "WXPOST_SERVICE_TOKEN", "service-secret")
+
+    assert (
+        meeting_route.get_meeting_reader_user_id(
+            HTTPAuthorizationCredentials(scheme="Bearer", credentials="service-secret")
+        )
+        == "wxpost-service"
+    )
 
 
 def test_meeting_options_batch_query_is_compact_and_deduplicated(

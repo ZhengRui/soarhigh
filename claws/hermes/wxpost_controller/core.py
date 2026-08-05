@@ -9,19 +9,21 @@ import os
 import re
 import shutil
 import tempfile
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ValidationError
 
 from .contracts import (
     BootstrapWorkspaceRequest,
+    DirectUploadOrigin,
     DraftGalleryBlock,
     DraftEnvelope,
     DraftImageBlock,
@@ -46,6 +48,7 @@ from .contracts import (
     UploadSourceRequest,
     UpdateSourcesRequest,
     UpdateWorkspaceRequest,
+    WorkspaceReport,
 )
 
 WORKSPACE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -226,6 +229,15 @@ class WorkspaceController:
         self._meeting_media_loader = meeting_media_loader
         self._meeting_context_loader = meeting_context_loader
         self._source_loader = source_loader
+        configured_upload_roots = os.environ.get(
+            "WXPOST_UPLOAD_CACHE_ROOTS",
+            "",
+        )
+        self._upload_roots = tuple(
+            Path(value).expanduser().resolve()
+            for value in configured_upload_roots.split(os.pathsep)
+            if value.strip()
+        )
 
     def bootstrap_workspace(
         self,
@@ -286,6 +298,28 @@ class WorkspaceController:
             draft = self._read_draft(workspace, manifest)
         return self._context_response(workspace_id, manifest, draft)
 
+    def create_workspace(
+        self,
+        *,
+        meeting_id: str | None,
+        editorial: Mapping[str, Any],
+        created_by: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Create a workspace with a controller-owned opaque identifier."""
+
+        for _ in range(8):
+            workspace_id = f"wxpost-{uuid.uuid4().hex[:12]}"
+            try:
+                return self.bootstrap_workspace(
+                    workspace_id,
+                    meeting_id=meeting_id,
+                    editorial=editorial,
+                    created_by=created_by,
+                )
+            except WorkspaceAlreadyExists:
+                continue
+        raise InvalidWorkspace("cannot allocate a unique workspace identifier")
+
     def update_workspace(
         self,
         workspace_id: str,
@@ -313,70 +347,31 @@ class WorkspaceController:
                 manifest,
                 request.expected_manifest_version,
             )
-            meeting_changed = manifest.meeting_id != request.meeting_id
-            if meeting_changed and request.source_updates:
-                raise InvalidRequest(
-                    "sourceUpdates cannot be combined with a meetingId change"
-                )
-            meeting_media = (
-                self._load_meeting_media(request.meeting_id)
-                if meeting_changed and request.meeting_id is not None
-                else []
-            )
+            if manifest.meeting_id != request.meeting_id:
+                raise InvalidRequest("workspace meeting/source is fixed at creation")
+            if (
+                manifest.editorial.article_type != request.editorial.article_type
+                or manifest.editorial.custom_article_type
+                != request.editorial.custom_article_type
+            ):
+                raise InvalidRequest("workspace article type is fixed at creation")
             editorial_changed = manifest.editorial != request.editorial
             draft = self._read_draft(workspace, manifest)
 
             manifest_data = manifest.to_wire()
-            removed_sources: list[SourceRecord] = []
-            if meeting_changed:
-                removed_sources = [
-                    source
-                    for source in manifest.sources
-                    if isinstance(source.origin, MeetingLibraryOrigin)
-                ]
-                manifest_data["sources"] = [
-                    source.to_wire()
-                    for source in manifest.sources
-                    if not isinstance(source.origin, MeetingLibraryOrigin)
-                ]
-                manifest_data["meetingId"] = request.meeting_id
-                for media in meeting_media:
-                    source = self._meeting_source_record(
-                        manifest_data["nextMaterialNumber"],
-                        media,
-                    )
-                    manifest_data["sources"].append(source.to_wire())
-                    manifest_data["nextMaterialNumber"] += 1
             manifest_data["editorial"] = request.editorial.to_wire()
             sources_changed = self._apply_source_updates(
                 manifest_data["sources"],
                 request.source_updates,
             )
-            if not meeting_changed and not editorial_changed and not sources_changed:
+            if not editorial_changed and not sources_changed:
                 return self._context_response(workspace_id, manifest, draft)
-
-            if meeting_changed:
-                manifest_data["draft"] = None
-                updated_manifest = self._write_workspace_update(
-                    workspace,
-                    manifest_data,
-                    manifest,
-                    draft,
-                )
-                updated_draft = None
-            else:
-                updated_manifest = self._write_changed_manifest(
-                    workspace,
-                    manifest_data,
-                    manifest.manifest_version,
-                )
-                updated_draft = draft
-            for source in removed_sources:
-                if source.workspace_ready:
-                    self._remove_regular_file(
-                        self._source_path(workspace / "sources", source),
-                        tolerate_failure=True,
-                    )
+            updated_manifest = self._write_changed_manifest(
+                workspace,
+                manifest_data,
+                manifest.manifest_version,
+            )
+            updated_draft = draft
 
         return self._context_response(
             workspace_id,
@@ -474,6 +469,226 @@ class WorkspaceController:
             else None
         )
         return context
+
+    def get_workspace_report(self, workspace_id: str) -> dict[str, Any]:
+        """Return one deterministic, read-only workspace configuration report."""
+
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            draft = self._read_draft(workspace, manifest)
+
+        draft_media_ids = self._draft_media_ids(draft)
+        cover_media_id = (
+            draft.document.get("coverMediaId") if draft is not None else None
+        )
+        materials = [
+            {
+                "id": source.id,
+                "kind": source.kind.value,
+                "filename": source.filename,
+                "originType": source.origin.type,
+                "candidate": not source.workspace_ready,
+                "imported": source.workspace_ready,
+                "included": source.included,
+                "description": source.description,
+                "descriptionSource": (
+                    source.description_source.value
+                    if source.description_source is not None
+                    else None
+                ),
+                "descriptionStatus": source.description_status.value,
+                "usedInDraft": source.id in draft_media_ids,
+                "usedAsCover": source.id == cover_media_id,
+            }
+            for source in manifest.sources
+        ]
+        current_draft_version = draft.draft_version if draft is not None else None
+        meeting_context = (
+            self._load_meeting_context(manifest.meeting_id)
+            if manifest.meeting_id is not None
+            else None
+        )
+        meeting_number = (
+            meeting_context.get("no") if isinstance(meeting_context, Mapping) else None
+        )
+        source_kind = (
+            "independent"
+            if manifest.meeting_id is None
+            else "event"
+            if isinstance(meeting_number, int) and meeting_number >= 10000
+            else "meeting"
+        )
+        report = WorkspaceReport.model_validate(
+            {
+                "workspaceId": workspace_id,
+                "manifestVersion": manifest.manifest_version,
+                "source": {
+                    "kind": source_kind,
+                    "meetingId": manifest.meeting_id,
+                    "meeting": meeting_context,
+                },
+                "editorial": manifest.editorial.to_wire(),
+                "counts": {
+                    "total": len(materials),
+                    "candidates": sum(item["candidate"] for item in materials),
+                    "imported": sum(item["imported"] for item in materials),
+                    "included": sum(item["included"] for item in materials),
+                    "draftMedia": len(draft_media_ids),
+                },
+                "materials": materials,
+                "draft": (
+                    {
+                        "version": draft.draft_version,
+                        "mediaIds": sorted(
+                            draft_media_ids, key=lambda value: int(value[1:])
+                        ),
+                        "coverMediaId": cover_media_id,
+                    }
+                    if draft is not None
+                    else None
+                ),
+                "publication": self._load_publication_status(
+                    workspace_id,
+                    current_draft_version=current_draft_version,
+                ),
+            }
+        )
+        return report.to_wire()
+
+    @staticmethod
+    def _draft_media_ids(draft: DraftEnvelope | None) -> set[str]:
+        if draft is None:
+            return set()
+        media = draft.document.get("media")
+        if not isinstance(media, list):
+            return set()
+        return {
+            item["id"]
+            for item in media
+            if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+        }
+
+    def _load_publication_status(
+        self,
+        workspace_id: str,
+        *,
+        current_draft_version: int | None,
+    ) -> dict[str, Any]:
+        unavailable = {
+            "state": "unavailable",
+            "publicRevision": None,
+            "sourceDraftVersion": None,
+            "publicUrl": None,
+        }
+        if not self._soarhigh_api_base_url or not self._soarhigh_service_token:
+            return unavailable
+        query = (
+            urlencode({"current_draft_version": current_draft_version})
+            if current_draft_version is not None
+            else ""
+        )
+        url = (
+            f"{self._soarhigh_api_base_url}/posts/wxposts/workspaces/"
+            f"{quote(workspace_id, safe='')}/publication/service"
+            f"{f'?{query}' if query else ''}"
+        )
+        request = Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {self._soarhigh_service_token}",
+            },
+            method="GET",
+        )
+        try:
+            with urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read())
+        except (
+            HTTPError,
+            OSError,
+            URLError,
+            TimeoutError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as exc:
+            logger.warning(
+                "Cannot read public WxPost status for %s: %s",
+                workspace_id,
+                exc,
+            )
+            return unavailable
+        if not isinstance(payload, Mapping):
+            return unavailable
+        return {
+            "state": payload.get("state", "unavailable"),
+            "publicRevision": payload.get("publicRevision"),
+            "sourceDraftVersion": payload.get("sourceDraftVersion"),
+            "publicUrl": payload.get("publicUrl"),
+        }
+
+    def read_materials_for_display(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read every material using one linked-meeting metadata snapshot."""
+
+        workspace = self._resolve_workspace(workspace_id)
+        items: list[dict[str, Any]] = []
+        candidates: list[SourceRecord] = []
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            if expected_manifest_version is not None:
+                self._check_manifest_version(manifest, expected_manifest_version)
+            for source in manifest.sources:
+                if source.workspace_ready:
+                    source_path = self._ready_source_path(workspace, source)
+                    try:
+                        data = source_path.read_bytes()
+                    except OSError as exc:
+                        raise InvalidWorkspace(
+                            f"cannot read source file {source.id}: {exc}"
+                        ) from exc
+                    items.append(
+                        {
+                            "source": source.to_wire(),
+                            "data": data,
+                            "mimeType": source.mime_type,
+                            "filename": source.filename,
+                        }
+                    )
+                else:
+                    candidates.append(source)
+            meeting_id = manifest.meeting_id
+
+        if candidates:
+            if meeting_id is None:
+                raise InvalidWorkspace("candidate materials require a linked meeting")
+            meeting_media = {
+                media.file_key: media for media in self._load_meeting_media(meeting_id)
+            }
+            for source in candidates:
+                if not isinstance(source.origin, MeetingLibraryOrigin):
+                    raise InvalidWorkspace(
+                        f"candidate has an invalid origin: {source.id}"
+                    )
+                media = meeting_media.get(source.origin.file_key)
+                if media is None:
+                    raise InvalidRequest(
+                        "candidate is no longer available from the linked meeting: "
+                        f"{source.id}"
+                    )
+                items.append(
+                    {
+                        "source": source.to_wire(),
+                        "data": self._download_source(media),
+                        "mimeType": media.mime_type,
+                        "filename": media.filename,
+                    }
+                )
+
+        return sorted(items, key=lambda item: int(item["source"]["id"][1:]))
 
     def read_source(
         self,
@@ -754,19 +969,113 @@ class WorkspaceController:
                 raise
         return manifest.to_wire()
 
-    def upload_source_from_path(
+    def upload_sources_from_paths(
         self,
         workspace_id: str,
         *,
         expected_manifest_version: int,
-        source_path: str,
-        origin: str,
-        filename: str | None = None,
-        mime_type: str | None = None,
-        description: str = "",
-        description_source: str | None = None,
-        description_status: str = "missing",
+        message_id: str,
+        attachments: Sequence[Mapping[str, Any]],
+        include: bool = False,
     ) -> dict[str, Any]:
+        """Collect one Feishu message's attachments in one manifest update."""
+
+        if not attachments:
+            raise InvalidRequest("at least one Feishu attachment is required")
+        message_id = message_id.strip()
+        if not message_id:
+            raise InvalidRequest("Feishu messageId is required")
+        prepared: list[tuple[str, str, bytes, str]] = []
+        seen_hashes: set[str] = set()
+        for attachment in attachments:
+            source_path = attachment.get("sourcePath")
+            if not isinstance(source_path, str):
+                raise InvalidRequest("each attachment requires sourcePath")
+            resolved, data = self._read_upload_path(source_path)
+            filename = attachment.get("filename") or resolved.name
+            if not isinstance(filename, str):
+                raise InvalidRequest("attachment filename must be text")
+            mime_type = attachment.get("mimeType") or mimetypes.guess_type(filename)[0]
+            if not isinstance(mime_type, str) or not mime_type:
+                mime_type = "application/octet-stream"
+            digest = hashlib.sha256(data).hexdigest()
+            if digest in seen_hashes:
+                continue
+            seen_hashes.add(digest)
+            prepared.append((filename, mime_type, data, digest))
+
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            self._check_manifest_version(manifest, expected_manifest_version)
+            manifest_data = manifest.to_wire()
+            sources_root = self._ensure_sources_directory(workspace)
+            created: list[SourceRecord] = []
+            created_paths: list[Path] = []
+            existing_ids = [
+                source.id
+                for source in manifest.sources
+                if isinstance(source.origin, DirectUploadOrigin)
+                and source.origin.type == "feishu-upload"
+                and source.origin.message_id == message_id
+                and source.origin.content_sha256 in seen_hashes
+            ]
+            existing_hashes = {
+                source.origin.content_sha256
+                for source in manifest.sources
+                if isinstance(source.origin, DirectUploadOrigin)
+                and source.origin.type == "feishu-upload"
+                and source.origin.message_id == message_id
+                and source.origin.content_sha256 is not None
+            }
+            try:
+                for filename, mime_type, data, digest in prepared:
+                    if digest in existing_hashes:
+                        continue
+                    source = SourceRecord.model_validate(
+                        {
+                            "id": self._material_id(
+                                int(manifest_data["nextMaterialNumber"])
+                            ),
+                            "kind": self._source_kind(mime_type),
+                            "origin": {
+                                "type": "feishu-upload",
+                                "messageId": message_id,
+                                "contentSha256": digest,
+                            },
+                            "filename": filename,
+                            "mimeType": mime_type,
+                            "sizeBytes": len(data),
+                            "workspaceReady": True,
+                            "included": include,
+                            "description": "",
+                            "descriptionSource": None,
+                            "descriptionStatus": "missing",
+                        }
+                    )
+                    destination = self._source_path(sources_root, source)
+                    self._atomic_write_bytes(destination, data)
+                    created.append(source)
+                    created_paths.append(destination)
+                    manifest_data["sources"].append(source.to_wire())
+                    manifest_data["nextMaterialNumber"] += 1
+                if created:
+                    manifest = self._write_changed_manifest(
+                        workspace,
+                        manifest_data,
+                        manifest.manifest_version,
+                    )
+            except Exception:
+                for source, path in zip(created, created_paths, strict=True):
+                    self._remove_source_file_unless_claimed(workspace, source, path)
+                raise
+        return {
+            "manifest": manifest.to_wire(),
+            "sourceIds": [source.id for source in created],
+            "existingSourceIds": existing_ids,
+        }
+
+    def _read_upload_path(self, source_path: str) -> tuple[Path, bytes]:
         path = Path(source_path).expanduser()
         if path.is_symlink() or not path.is_file():
             raise InvalidRequest("sourcePath must be a regular file")
@@ -774,8 +1083,8 @@ class WorkspaceController:
             resolved = path.resolve(strict=True)
         except OSError as exc:
             raise InvalidRequest(f"cannot resolve sourcePath: {exc}") from exc
-        if not resolved.is_relative_to(self.workspace_root):
-            raise InvalidRequest("sourcePath must be below WXPOST_WORKSPACE_ROOT")
+        if not any(resolved.is_relative_to(root) for root in self._upload_roots):
+            raise InvalidRequest("sourcePath is outside the configured upload cache")
         try:
             size = resolved.stat().st_size
             if size <= 0:
@@ -784,26 +1093,9 @@ class WorkspaceController:
                 raise InvalidRequest(
                     f"uploaded source exceeds {MAX_SOURCE_BYTES} bytes"
                 )
-            data = resolved.read_bytes()
+            return resolved, resolved.read_bytes()
         except OSError as exc:
             raise InvalidRequest(f"cannot read sourcePath: {exc}") from exc
-        effective_filename = filename or resolved.name
-        effective_mime = (
-            mime_type
-            or mimetypes.guess_type(effective_filename)[0]
-            or "application/octet-stream"
-        )
-        return self.upload_source(
-            workspace_id,
-            expected_manifest_version=expected_manifest_version,
-            origin=origin,
-            filename=effective_filename,
-            mime_type=effective_mime,
-            data=data,
-            description=description,
-            description_source=description_source,
-            description_status=description_status,
-        )
 
     def delete_source_preflight(
         self,

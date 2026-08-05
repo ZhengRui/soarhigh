@@ -320,12 +320,19 @@ export interface PaginatedWorkspaceSummaries {
 export class WorkspaceApiError extends Error {
   status: number;
   code: string | null;
+  versionKind: string | null;
 
-  constructor(status: number, message: string, code: string | null = null) {
+  constructor(
+    status: number,
+    message: string,
+    code: string | null = null,
+    versionKind: string | null = null
+  ) {
     super(message);
     this.name = 'WorkspaceApiError';
     this.status = status;
     this.code = code;
+    this.versionKind = versionKind;
   }
 }
 
@@ -350,13 +357,16 @@ async function errorFromResponse(response: Response) {
   if (payload && typeof payload === 'object') {
     const value = payload as {
       detail?: unknown;
-      error?: { code?: unknown; message?: unknown };
+      error?: { code?: unknown; message?: unknown; versionKind?: unknown };
     };
     if (value.error && typeof value.error.message === 'string') {
       return new WorkspaceApiError(
         response.status,
         value.error.message,
-        typeof value.error.code === 'string' ? value.error.code : null
+        typeof value.error.code === 'string' ? value.error.code : null,
+        typeof value.error.versionKind === 'string'
+          ? value.error.versionKind
+          : null
       );
     }
     if (typeof value.detail === 'string') {
@@ -403,15 +413,12 @@ function workspacePath(workspaceId: string) {
   return `/posts/wxposts/workspaces/${encodeURIComponent(workspaceId)}`;
 }
 
-export function bootstrapWorkspace(
-  workspaceId: string,
-  input: {
-    meetingId: string | null;
-    editorial: WorkspaceEditorial;
-  }
-) {
-  return requestJson<WorkspaceContext>(workspacePath(workspaceId), {
-    method: 'PUT',
+export function createWorkspace(input: {
+  meetingId: string | null;
+  editorial: WorkspaceEditorial;
+}) {
+  return requestJson<WorkspaceContext>('/posts/wxposts/workspaces', {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
@@ -579,13 +586,18 @@ async function requestDraftChatStream(
       return;
     }
     if (event === 'error') {
-      const error = payload as { code?: unknown; message?: unknown };
+      const error = payload as {
+        code?: unknown;
+        message?: unknown;
+        versionKind?: unknown;
+      };
       throw new WorkspaceApiError(
         error.code === 'version_conflict' ? 409 : 502,
         typeof error.message === 'string'
           ? error.message
           : 'The Draft Assistant could not complete the request.',
-        typeof error.code === 'string' ? error.code : null
+        typeof error.code === 'string' ? error.code : null,
+        typeof error.versionKind === 'string' ? error.versionKind : null
       );
     }
     if (event === 'complete') completed = payload as WorkspaceDraftTurn;

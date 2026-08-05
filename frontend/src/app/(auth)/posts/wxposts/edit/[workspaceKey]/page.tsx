@@ -14,7 +14,9 @@ export default async function EditWxPostPage({
   return (
     <WxPostAuthoringWorkspace
       initialWorkspaceId={workspaceIdFromEditorKey(workspaceKey)}
-      initialDraftMode={view === 'preview' ? 'preview' : undefined}
+      initialDraftMode={
+        view === 'preview' ? 'preview' : view === 'edit' ? 'edit' : undefined
+      }
     />
   );
 }

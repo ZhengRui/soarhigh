@@ -115,6 +115,35 @@ class MeetingLibraryOrigin(ContractModel):
 
 class DirectUploadOrigin(ContractModel):
     type: Literal["web-upload", "feishu-upload"]
+    message_id: TrimmedText | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    content_sha256: (
+        Annotated[
+            str,
+            StringConstraints(pattern=r"^[0-9a-f]{64}$"),
+        ]
+        | None
+    ) = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def _validate_feishu_identity(self) -> DirectUploadOrigin:
+        identity_fields = (self.message_id, self.content_sha256)
+        if self.type == "web-upload" and any(identity_fields):
+            raise ValueError("web uploads cannot carry Feishu identity")
+        if (
+            self.type == "feishu-upload"
+            and any(identity_fields)
+            and not all(identity_fields)
+        ):
+            raise ValueError(
+                "Feishu messageId and contentSha256 must be provided together"
+            )
+        return self
 
 
 SourceOrigin = Annotated[
@@ -299,6 +328,53 @@ class DraftEnvelope(ContractModel):
 
     draft_version: int = Field(ge=1, strict=True)
     document: dict[str, Any]
+
+
+class WorkspaceReportMaterial(ContractModel):
+    id: SourceId
+    kind: SourceKind
+    filename: TrimmedText
+    origin_type: Literal["meeting-library", "web-upload", "feishu-upload"]
+    candidate: bool = Field(strict=True)
+    imported: bool = Field(strict=True)
+    included: bool = Field(strict=True)
+    description: str
+    description_source: DescriptionSource | None = None
+    description_status: DescriptionStatus
+    used_in_draft: bool = Field(strict=True)
+    used_as_cover: bool = Field(strict=True)
+
+
+class WorkspaceReportCounts(ContractModel):
+    total: int = Field(ge=0, strict=True)
+    candidates: int = Field(ge=0, strict=True)
+    imported: int = Field(ge=0, strict=True)
+    included: int = Field(ge=0, strict=True)
+    draft_media: int = Field(ge=0, strict=True)
+
+
+class WorkspaceReportDraft(ContractModel):
+    version: int = Field(ge=1, strict=True)
+    media_ids: list[SourceId]
+    cover_media_id: SourceId | None = None
+
+
+class WorkspaceReportPublication(ContractModel):
+    state: Literal["unavailable", "not-synced", "up-to-date", "update-available"]
+    public_revision: int | None = Field(default=None, ge=1, strict=True)
+    source_draft_version: int | None = Field(default=None, ge=1, strict=True)
+    public_url: str | None = None
+
+
+class WorkspaceReport(ContractModel):
+    workspace_id: TrimmedText
+    manifest_version: int = Field(ge=1, strict=True)
+    source: dict[str, Any]
+    editorial: EditorialSettings
+    counts: WorkspaceReportCounts
+    materials: list[WorkspaceReportMaterial]
+    draft: WorkspaceReportDraft | None = None
+    publication: WorkspaceReportPublication
 
 
 class DraftMediaProposal(ContractModel):

@@ -4,10 +4,14 @@ import yaml
 
 from wxpost_profile.configure import (
     BASE_TOOLSETS,
+    CURRENT_TOOLSET_NAME,
     DISABLED_TOOLSETS,
+    FULL_MCP_SERVER_NAME,
     LEGACY_MCP_SERVER_NAME,
     LEGACY_PLUGIN_NAME,
     LEGACY_SKILL_NAME,
+    NAVIGATION_PLUGIN_NAME,
+    NAVIGATION_TOOLSET_NAME,
     _enabled_toolsets,
     configure_profile,
 )
@@ -24,6 +28,17 @@ def test_configure_profile_keeps_only_wxpost_capabilities(
         yaml.safe_dump(
             {
                 "model": {"provider": "example", "default": "model"},
+                "auxiliary": {
+                    "vision": {
+                        "provider": "old-provider",
+                        "model": "old-model",
+                        "base_url": "https://old.example/v1",
+                        "api_key": "old-key",
+                        "api_mode": "chat_completions",
+                        "timeout": 120,
+                        "download_timeout": 30,
+                    }
+                },
                 "toolsets": ["hermes-cli"],
                 "agent": {"disabled_toolsets": ["existing"]},
                 "memory": {
@@ -54,6 +69,12 @@ def test_configure_profile_keeps_only_wxpost_capabilities(
     (source_skill / "SKILL.md").write_text("# WxPost\n", encoding="utf-8")
     source_soul = tmp_path / "SOUL.md"
     source_soul.write_text("SoarHigh Club's AI Assistant\n", encoding="utf-8")
+    source_plugin = tmp_path / "navigation-plugin"
+    source_plugin.mkdir()
+    (source_plugin / "plugin.yaml").write_text(
+        f"name: {NAVIGATION_PLUGIN_NAME}\n", encoding="utf-8"
+    )
+    (source_plugin / "__init__.py").write_text("plugin = True\n", encoding="utf-8")
     legacy_plugin = root_home / "plugins" / LEGACY_PLUGIN_NAME
     legacy_plugin.mkdir(parents=True)
     (legacy_plugin / "plugin.yaml").write_text("name: stale\n", encoding="utf-8")
@@ -65,6 +86,7 @@ def test_configure_profile_keeps_only_wxpost_capabilities(
         root_home=root_home,
         source_skill=source_skill,
         source_soul=source_soul,
+        source_plugin=source_plugin,
     )
 
     config = yaml.safe_load((profile_home / "config.yaml").read_text())
@@ -75,6 +97,15 @@ def test_configure_profile_keeps_only_wxpost_capabilities(
     assert "web" not in config
     assert config["agent"]["disabled_toolsets"] == DISABLED_TOOLSETS
     assert config["agent"]["service_tier"] == "fast"
+    assert config["agent"]["image_input_mode"] == "text"
+    assert config["auxiliary"]["vision"] == {
+        "provider": "example",
+        "model": "model",
+        "base_url": "",
+        "api_key": "",
+        "timeout": 120,
+        "download_timeout": 30,
+    }
     assert config["skills"]["always_load"] == []
     assert config["memory"] == {
         "memory_enabled": False,
@@ -82,14 +113,37 @@ def test_configure_profile_keeps_only_wxpost_capabilities(
     }
     assert config["curator"]["enabled"] is False
     assert config["delegation"]["orchestrator_enabled"] is False
-    assert config["plugins"] == {"enabled": [], "disabled": [], "entries": {}}
-    assert list(config["mcp_servers"]) == ["soarhigh-wxpost"]
+    assert config["approvals"]["destructive_slash_confirm"] is True
+    assert config["plugins"] == {
+        "enabled": [NAVIGATION_PLUGIN_NAME],
+        "disabled": [],
+        "entries": {},
+    }
+    assert list(config["mcp_servers"]) == [FULL_MCP_SERVER_NAME]
+    assert config["platform_toolsets"] == {
+        "api_server": [*BASE_TOOLSETS, "no_mcp", CURRENT_TOOLSET_NAME],
+        "feishu": [
+            *BASE_TOOLSETS,
+            FULL_MCP_SERVER_NAME,
+            NAVIGATION_TOOLSET_NAME,
+        ],
+    }
+    assert config["known_plugin_toolsets"] == {
+        "api_server": [CURRENT_TOOLSET_NAME, NAVIGATION_TOOLSET_NAME],
+        "feishu": [CURRENT_TOOLSET_NAME, NAVIGATION_TOOLSET_NAME],
+    }
+    for server in config["mcp_servers"].values():
+        assert server["env"]["WXPOST_UPLOAD_CACHE_ROOTS"] == (
+            "/opt/data/cache:/opt/data/profiles/wxpost/cache"
+        )
     assert (profile_home / ".env").resolve() == root_home / ".env"
     assert (profile_home / "SOUL.md").read_text() == source_soul.read_text()
     assert (
         profile_home / "skills" / "soarhigh-wxpost-authoring" / "SKILL.md"
     ).read_text() == "# WxPost\n"
-    assert not (profile_home / "plugins").exists()
+    assert (
+        profile_home / "plugins" / NAVIGATION_PLUGIN_NAME / "__init__.py"
+    ).read_text() == "plugin = True\n"
 
     default_config = yaml.safe_load((root_home / "config.yaml").read_text())
     assert default_config["mcp_servers"] == {"unrelated": {"enabled": True}}
@@ -120,6 +174,12 @@ def test_configure_profile_replaces_stale_managed_content(tmp_path: Path) -> Non
     (source_skill / "SKILL.md").write_text("current\n", encoding="utf-8")
     source_soul = tmp_path / "SOUL.md"
     source_soul.write_text("current identity\n", encoding="utf-8")
+    source_plugin = tmp_path / "navigation-plugin"
+    source_plugin.mkdir()
+    (source_plugin / "plugin.yaml").write_text(
+        f"name: {NAVIGATION_PLUGIN_NAME}\n", encoding="utf-8"
+    )
+    (source_plugin / "__init__.py").write_text("current plugin\n", encoding="utf-8")
     profile_home = root_home / "profiles" / "wxpost"
     stale_skill = profile_home / "skills" / "soarhigh-wxpost-authoring"
     stale_skill.mkdir(parents=True)
@@ -134,8 +194,12 @@ def test_configure_profile_replaces_stale_managed_content(tmp_path: Path) -> Non
         root_home=root_home,
         source_skill=source_skill,
         source_soul=source_soul,
+        source_plugin=source_plugin,
     )
 
     assert (stale_skill / "SKILL.md").read_text() == "current\n"
     assert not unrelated_skill.exists()
-    assert not (profile_home / "plugins").exists()
+    assert not stale_plugin.exists()
+    assert (
+        profile_home / "plugins" / NAVIGATION_PLUGIN_NAME / "__init__.py"
+    ).read_text() == "current plugin\n"

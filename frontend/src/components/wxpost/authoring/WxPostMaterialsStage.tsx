@@ -25,7 +25,6 @@ import {
 } from '@/utils/wxpostWorkspace';
 
 import { ArticleInputsPanel } from './ArticleInputsPanel';
-import { ArticleTypePanel } from './ArticleTypePanel';
 import { MeetingContextPanel } from './MeetingContextPanel';
 import { MaterialsPanel } from './MaterialsPanel';
 import type { WxPostMaterial, WxPostMaterialsWorkingCopy } from './types';
@@ -94,7 +93,9 @@ function materialsSourceUpdates(
           ? workingSource.descriptionSource
           : null,
         descriptionStatus: hasDescription
-          ? workingSource.descriptionStatus
+          ? workingSource.descriptionStatus === 'needs_confirmation'
+            ? 'confirmed'
+            : workingSource.descriptionStatus
           : 'missing',
       },
     ];
@@ -107,12 +108,17 @@ function materialSourcesMatch(
 ) {
   return context.manifest.sources.every((source) => {
     const workingSource = workingCopy.sources[source.id];
+    const savedDescriptionStatus =
+      workingSource?.description.trim() &&
+      workingSource.descriptionStatus === 'needs_confirmation'
+        ? 'confirmed'
+        : workingSource?.descriptionStatus;
     return (
       workingSource &&
       workingSource.included === source.included &&
       workingSource.description === source.description &&
       workingSource.descriptionSource === source.descriptionSource &&
-      workingSource.descriptionStatus === source.descriptionStatus
+      savedDescriptionStatus === source.descriptionStatus
     );
   });
 }
@@ -161,9 +167,9 @@ export function WxPostMaterialsStage({
   const [pendingOperation, setPendingOperation] =
     useState<PendingOperation | null>(null);
   const [materialsSavePending, setMaterialsSavePending] = useState(false);
-  const [describingSourceId, setDescribingSourceId] = useState<string | null>(
-    null
-  );
+  const [describingSourceIds, setDescribingSourceIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [versionConflict, setVersionConflict] = useState(false);
   const [conflictRefreshPending, setConflictRefreshPending] = useState(false);
   const [conflictRefreshError, setConflictRefreshError] = useState<
@@ -171,7 +177,7 @@ export function WxPostMaterialsStage({
   >(null);
   const busy =
     pendingOperation !== null || materialsSavePending || versionConflict;
-  const descriptionPending = describingSourceId !== null;
+  const descriptionPending = describingSourceIds.size > 0;
   const [operationError, setOperationError] = useState<string | null>(null);
   const meetingPreviewsLoading =
     active &&
@@ -384,7 +390,7 @@ export function WxPostMaterialsStage({
         sourceUpdates: pendingSourceUpdates,
       });
       contextRef.current = updated;
-      onContextChange(updated);
+      onContextChange(updated, { resetWorkingCopy: true });
       toast.success('Materials saved successfully!');
     } catch (error) {
       if (
@@ -419,6 +425,8 @@ export function WxPostMaterialsStage({
 
   const generateDescription = useCallback(
     async (sourceId: string) => {
+      if (describingSourceIds.has(sourceId)) return;
+
       const source = contextRef.current.manifest.sources.find(
         (item) => item.id === sourceId
       );
@@ -426,7 +434,7 @@ export function WxPostMaterialsStage({
 
       const currentDescription =
         workingCopy.sources[sourceId]?.description ?? source.description;
-      setDescribingSourceId(sourceId);
+      setDescribingSourceIds((current) => new Set(current).add(sourceId));
       setOperationError(null);
       try {
         const suggestion = await suggestWorkspaceSourceDescription(
@@ -454,10 +462,15 @@ export function WxPostMaterialsStage({
           );
         }
       } finally {
-        setDescribingSourceId(null);
+        setDescribingSourceIds((current) => {
+          const next = new Set(current);
+          next.delete(sourceId);
+          return next;
+        });
       }
     },
     [
+      describingSourceIds,
       showVersionConflict,
       updateSourceWorkingState,
       workingCopy.sources,
@@ -467,14 +480,6 @@ export function WxPostMaterialsStage({
 
   return (
     <div className='grid gap-5 max-[480px]:gap-3' data-testid='materials-stage'>
-      <ArticleTypePanel
-        value={workingCopy.articleType}
-        onChange={(articleType) => updateWorkingCopy({ articleType })}
-        customArticleType={workingCopy.customArticleType}
-        onCustomArticleTypeChange={(customArticleType) =>
-          updateWorkingCopy({ customArticleType })
-        }
-      />
       {meeting && <MeetingContextPanel meeting={meeting} />}
       {(meetingQuery.isError || mediaQuery.isError) && (
         <div className='flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900'>
@@ -516,7 +521,7 @@ export function WxPostMaterialsStage({
         deletingSourceId={
           pendingOperation?.kind === 'delete' ? pendingOperation.sourceId : null
         }
-        describingSourceId={describingSourceId}
+        describingSourceIds={describingSourceIds}
         onImport={async (sourceId) => {
           await runMutation({ kind: 'import', sourceId }, (version) =>
             importWorkspaceSource(workspaceId, sourceId, version)

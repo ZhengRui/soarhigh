@@ -50,6 +50,7 @@ DRAFT_SESSION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/session$")
 DRAFT_SAVE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/save$")
 DRAFT_GENERATE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/generate$")
 DRAFT_CHAT_PATH = re.compile(r"^/workspaces/([^/]+)/draft/chat$")
+SESSION_RETIRE_PATH = "/sessions/retire"
 MAX_REQUEST_BYTES = 1_000_000
 
 
@@ -226,31 +227,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         path = urlsplit(self.path).path
-        workspace_match = WORKSPACE_PATH.fullmatch(path)
-        if workspace_match is not None:
-            payload = self._read_json_body()
-            if payload is None or not self._accept_fields(
-                payload,
-                {"meetingId", "editorial", "createdBy"},
-                "workspace bootstrap",
-            ):
-                return
-            self._run_controller(
-                lambda: self.server.controller.bootstrap_workspace(
-                    workspace_match.group(1),
-                    meeting_id=cast(str | None, payload.get("meetingId")),
-                    editorial=cast(
-                        dict[str, Any],
-                        payload.get("editorial"),
-                    ),
-                    created_by=cast(
-                        dict[str, Any],
-                        payload.get("createdBy"),
-                    ),
-                )
-            )
-            return
-
         inclusion_match = SOURCE_INCLUSION_PATH.fullmatch(path)
         if inclusion_match is not None:
             payload = self._read_json_body()
@@ -278,6 +254,42 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         parsed = urlsplit(self.path)
+        if parsed.path == SESSION_RETIRE_PATH:
+            payload = self._read_json_body()
+            if payload is None or not self._accept_fields(
+                payload,
+                {"sessionId"},
+                "session retirement",
+            ):
+                return
+            session_id = payload.get("sessionId")
+            if not isinstance(session_id, str) or not session_id.strip():
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_request",
+                    "sessionId must be a non-empty string",
+                )
+                return
+            self._run_controller(
+                lambda: self.server.draft_service.retire_session(session_id.strip())
+            )
+            return
+        if parsed.path == WORKSPACES_PATH:
+            payload = self._read_json_body()
+            if payload is None or not self._accept_fields(
+                payload,
+                {"meetingId", "editorial", "createdBy"},
+                "workspace creation",
+            ):
+                return
+            self._run_controller(
+                lambda: self.server.controller.create_workspace(
+                    meeting_id=cast(str | None, payload.get("meetingId")),
+                    editorial=cast(dict[str, Any], payload.get("editorial")),
+                    created_by=cast(dict[str, Any], payload.get("createdBy")),
+                )
+            )
+            return
         description_match = SOURCE_DESCRIPTION_PATH.fullmatch(parsed.path)
         if description_match is not None:
             payload = self._read_json_body()
@@ -735,13 +747,14 @@ def build_server(
         serve_url=hermes_serve_url,
         token=bearer_token,
     )
-    server.description_service = HermesDescriptionService(
-        controller=server.controller,
-        session_client=session_client,
-    )
     server.draft_service = HermesDraftService(
         controller=server.controller,
         session_client=session_client,
+    )
+    server.description_service = HermesDescriptionService(
+        controller=server.controller,
+        session_client=session_client,
+        retire_session=server.draft_service.retire_session,
     )
     server.bearer_token = bearer_token
     return server

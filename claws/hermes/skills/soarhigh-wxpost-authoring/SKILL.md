@@ -1,30 +1,153 @@
 ---
 name: soarhigh-wxpost-authoring
-description: Generate selected-image descriptions and author or revise one canonical Draft from a controller-owned workspace. Use for web Materials descriptions, Draft generation, Regenerate, and explicit Draft Assistant writing revisions.
+description: Navigate Feishu WxPost workspaces, manage their Materials, generate selected-image descriptions, and author or revise one canonical Draft. Use for Feishu workspace operations, web Materials descriptions, Draft generation, Regenerate, and explicit Draft Assistant writing revisions.
 ---
 
 # SoarHigh WxPost authoring
 
-Use the `soarhigh-wxpost` MCP tools for every canonical read and write. The
+Use only the WxPost MCP tools exposed for the current platform for every
+canonical read and write. Feishu receives the complete Materials-and-Draft
+surface; the web Draft Assistant receives only read and Draft tools. The
 workspace ID in the request is authoritative. Never search the filesystem for
 another workspace and never edit `source-manifest.json` or
 `draft/article.json` directly.
 
+## Feishu conversational workflow
+
+The `wxpost_navigation` tools are available only in Feishu. The plugin derives
+the current member, message, and conversation scope from the Hermes gateway;
+never ask the member for a chat ID, user ID, thread ID, or message ID and never
+invent one.
+
+### Feishu interaction modes
+
+Every Feishu conversation starts in `readonly` mode. The selected workspace
+remains available as context, so the assistant may read its configuration,
+Materials, and saved Draft; answer workspace or general questions; search the
+web; and deliver preview links or screenshots. It must not create, update, or
+delete workspace, Materials, or Draft data in this mode. The plugin enforces
+this boundary before every write tool, including raw MCP tools.
+
+- `/editing` requests editing mode. The first message only explains the risk
+  and stages the request. The same member must send `/editing` again in a later
+  message to confirm it.
+- `/readonly` immediately restores read-only mode.
+- `/new`, selecting another workspace, and completing workspace creation all
+  restore read-only mode.
+- If a member requests a write while read-only, do not keep retrying tools.
+  Explain that nothing changed and ask them to send `/editing` and confirm it.
+- Files sent while read-only remain ordinary conversational inputs: inspect and
+  discuss them normally without importing them. Only an explicit request to add
+  those files to Materials requires editing mode and a later resend.
+- Read-only mode is not a separate workspace or Hermes session. It preserves
+  current conversation context while preventing canonical writes.
+- For any factual question about the selected Workspace, Materials, or Draft,
+  read `wxpost_get_active_workspace_report` before answering. Never reuse a
+  version, title, media list, or other workspace fact from earlier chat
+  history. General conversation does not require a workspace read.
+
+1. Use `wxpost_list_workspaces` for global discovery and
+   `wxpost_get_active_workspace` to resolve the workspace selected for this
+   Feishu conversation. Use `wxpost_select_workspace` before any workspace
+   operation when the member chooses a different one. A Hermes `/new` command
+   clears conversation history but intentionally preserves this selection and
+   restores read-only mode. Selecting a workspace also restores read-only mode.
+2. Workspace creation requires editing mode. Before creation, collect the fixed
+   Source, linked meeting/event when
+   applicable, Article type, and optional custom Article type. Use
+   `wxpost_search_meetings` to present real choices. Restate those choices and
+   call `wxpost_create_workspace` with `confirmed=false` to register the exact
+   pending proposal before asking for explicit confirmation. Only a later
+   member message may call the same proposal with `confirmed=true`. Source,
+   linked meeting/event, Article type, and custom Article type cannot be
+   changed after creation.
+3. Workspace deletion requires editing mode and always targets the workspace
+   selected for the current Feishu conversation. Before deletion, name the exact
+   selected workspace and ask for explicit
+   confirmation, and call `wxpost_delete_workspace` with `confirmed=false` to
+   register that exact pending deletion. Only a later member message may call
+   the same deletion with `confirmed=true`.
+4. Materials imports and updates require editing mode. A linked meeting/event
+   may expose unimported meeting-library options in the
+   Materials stage. Call `wxpost_import_source` to import a selected option.
+   After import, call it imported media. The media library is the complete
+   catalog, so distinguish unimported candidates from imported media whenever
+   listing or counting it.
+5. When the current Feishu message contains files and an active workspace is
+   selected, call `wxpost_import_feishu_attachments` with the exact cache paths
+   shown in the message. New attachments are workspace-ready and excluded from
+   generation by default unless the member explicitly asks to include them.
+   Never repeat or expose those private cache paths in the member-facing reply.
+   If no workspace is selected, ask the member to select or create one and then
+   resend the files; do not queue file paths across turns.
+6. In editing mode, pass the selected workspace ID explicitly to the normal
+   authoring tools for
+   Materials and Draft operations. Feishu may update Materials, generate a
+   Draft, answer questions about the saved Draft, and make typed Draft edits.
+   It must not create, update, or delete a public WxPost revision.
+7. When the member asks for the workspace configuration, call
+   `wxpost_get_active_workspace_report`. When the member asks to view the media
+   library, call `wxpost_show_material_library`; it sends the complete catalog
+   as native Feishu media and labels candidates separately from imported media.
+8. When the member asks for an AI description for an imported image, call
+   `wxpost_describe_material` with `confirmed=false`. Present its exact English
+   suggestion and ask whether to save it. This first call does not change
+   Materials. Only after the same member explicitly confirms in a later message
+   call the tool for the same source with `confirmed=true`; that saves the
+   staged suggestion as an AI-authored, confirmed Materials description. Do not
+   call `wxpost_update_sources` for this workflow and never describe an
+   unimported candidate directly.
+9. After Generate, Regenerate, or any successful Draft save/edit, call
+   `wxpost_get_draft_preview` for the version just saved. The tool sends the
+   complete temporary preview link and authenticated web editor link directly
+   to Feishu; do not repeat, shorten, or reconstruct either URL in the
+   member-facing reply. Do the same when the member explicitly asks to preview
+   the saved Draft. The temporary link is read-only, short-lived, and
+   version-bound; it does not create or update a public WxPost revision. The
+   editor link opens the same workspace in Draft Edit so a signed-in member can
+   continue editing. Remind the member that the signed-in web Draft
+   Assistant uses an independent Web session and does not inherit the current
+   Feishu conversation, although both operate on the same workspace and Draft.
+   A successful `sent: true` result completes delivery:
+   do not call the tool again and do not attempt to open the member's local URL.
+   It also means both the temporary preview and Draft Edit links were delivered;
+   do not call `wxpost_send_web_editor_link` in that turn. In the final reply,
+   confirm delivery without writing any URL or reusing a link from chat history.
+   If link delivery fails, report that preview delivery
+   failed without changing or retrying the Draft save.
+10. Call `wxpost_send_draft_preview_image` only when the member explicitly asks
+   for a screenshot, full-page image, or “整篇预览图”. It renders the saved
+   Draft through the same canonical renderer as the web editor and sends one
+   native Feishu image. Do not send the image automatically after ordinary
+   Draft edits. A screenshot failure must not mutate Draft, Materials, or public
+   revision state, and must never be replaced with an older workspace image.
+11. When the member explicitly asks to edit Materials on the web, call
+   `wxpost_send_web_editor_link` with `target=materials`. When the member asks
+   to edit the Draft on the web, call it with `target=draft`. The tool sends the
+   authenticated route directly to Feishu; do not repeat, shorten, or
+   reconstruct the URL. For Draft editing, remind the member that the web Draft
+   Assistant session is independent from this Feishu conversation, while both
+   still operate on the same workspace and Draft. A `sent: true` result
+   completes delivery and must not be retried.
+   Do not call this tool when the same request includes a temporary Draft
+   preview; `wxpost_get_draft_preview` already sends the Draft Edit link beside
+   the temporary preview.
+
 ## Materials image-description workflow
 
-For a selected-image description request, inspect only the image path named in
-the request. Write one short, natural English sentence that captures the main
+The Controller-owned description service inspects only the selected imported
+image. It writes one short, natural English sentence that captures the main
 human moment and its visible mood. This is an editorial caption, not an
-inventory of everything visible: omit incidental furniture, refreshments,
-signage, clothing, and background objects unless they are essential to the
-moment. If the current description contains text in any language, preserve its
-supported meaning while translating, compressing, and polishing it into the
-same concise style. The image and current description are authoritative; use
-linked meeting theme, introduction, and agenda only as supporting context.
-Convey warmth or energy only when the image or supplied context supports it,
-and never infer or invent a person, role, award, quotation, reaction, or event.
-Return the strict JSON response requested by the operation and never update
-Materials or the Draft during this workflow.
+inventory of everything visible: incidental furniture, refreshments, signage,
+clothing, and background objects are omitted unless essential to the moment.
+When a current description exists in any language, the service preserves its
+supported meaning while translating, compressing, and polishing it. The image
+and current description are authoritative; linked meeting theme, introduction,
+and agenda are supporting context only. The service never invents a person,
+role, award, quotation, reaction, or event. The web Materials page keeps the
+result local until `Save Materials`, which confirms and persists it. Feishu
+uses the explicit two-turn `wxpost_describe_material` confirmation workflow
+above. Neither suggestion step changes Materials or the Draft.
 
 ## Web Draft workflow
 
@@ -54,6 +177,11 @@ Materials or the Draft during this workflow.
    item, media occurrence, media description, or cover change is a fine-grained
    edit. `setCover` may directly select any imported workspace-ready image; it
    does not insert that image into the body or change Materials inclusion.
+   `replaceMediaDescription` changes only the caption stored in the Draft. It
+   never changes a Materials description. If the requested source is not in the
+   Draft body or cover, explain that there is no Draft caption to edit and that
+   its Materials description must be changed on the Materials page. Do not call
+   a Draft save tool for that request.
 7. Call `wxpost_save_draft` with the request's expected `manifestVersion`,
    expected `draftVersion` (zero when absent), `operation_id`,
    `refresh_from_materials`, and the complete `proposal`. Generate and
@@ -72,21 +200,25 @@ Materials or the Draft during this workflow.
    serialized YAML, guess a version, retry a version conflict, or make more
    than two total save attempts.
 
-## Draft Assistant media terminology
+## Media terminology and operation boundary
 
-- The Draft Assistant's entire usable media library is the imported or uploaded
-  `workspaceReady` image and video set. This is the only physical media the
-  Draft can use.
-- In Draft Assistant conversation, treat “素材库”, “候选素材”, “可用素材”,
-  “media library”, “candidate media”, and “available media” as that same
-  imported `workspaceReady` set.
-- Never count or list `workspaceReady: false` meeting-library entries as Draft
-  media. They are import options visible only in the Materials stage. Mention
-  them only when the member explicitly asks about meeting images that have not
-  been imported, and label them as unimported Materials-stage options.
-- Materials `included` is a separate filter used only by Generate and
-  Regenerate. A focused Draft revision may use any imported workspace-ready
-  medium whether or not it is included.
+- “素材库” or “media library” means the complete workspace catalog: both
+  linked-meeting candidates and imported media. When asked for its size or
+  contents, report the total and split it into candidates and imported media.
+- “候选素材” or “candidate media” means linked meeting/event media that has
+  not been imported. Candidates are visible in Materials but cannot be used by
+  the Draft until they are imported.
+- “已导入素材” or “imported media” means uploaded or imported
+  `workspaceReady` media. This is the only physical media the Draft can use.
+- “Included 素材” means imported media selected for the next Generate or
+  Regenerate. Inclusion does not control later focused Draft edits.
+- “Draft 素材” means imported media currently referenced by the saved Draft
+  body or cover.
+- A focused Draft revision may add any imported medium, including one that is
+  not Included. It must never add an unimported candidate.
+- The Web Draft Assistant cannot mutate Materials. Materials descriptions,
+  inclusion, import, and deletion remain Materials-stage operations even when
+  the same source is referenced by the Draft.
 
 ## Draft proposal rules
 

@@ -126,6 +126,99 @@ def _controller(
     )
 
 
+def test_workspace_report_and_display_media_use_one_canonical_catalog(
+    tmp_path: Path,
+) -> None:
+    media = [
+        _media(
+            "meetings/462/first.jpg",
+            "first.jpg",
+            size=5,
+            uploaded_at="2026-07-20T09:00:00Z",
+        ),
+        _media(
+            "meetings/462/second.mp4",
+            "second.mp4",
+            size=5,
+            uploaded_at="2026-07-20T10:00:00Z",
+            mime_type="video/mp4",
+        ),
+    ]
+    files = {
+        "https://assets.example/first.jpg": b"first",
+        "https://assets.example/second.mp4": b"video",
+    }
+    controller = WorkspaceController(
+        tmp_path,
+        article_validator=lambda document: document,
+        meeting_media_loader=lambda meeting_id: (
+            list(media) if meeting_id == MEETING_ID else []
+        ),
+        meeting_context_loader=lambda meeting_id: {
+            "id": meeting_id,
+            "no": 462,
+            "theme": "Belonging",
+        },
+        source_loader=lambda url: files[url],
+    )
+    created = _bootstrap(controller)
+    imported = controller.import_source(
+        "material-workspace",
+        expected_manifest_version=created["manifest"]["manifestVersion"],
+        source_id="M01",
+    )
+    included = controller.set_source_included(
+        "material-workspace",
+        expected_manifest_version=imported["manifestVersion"],
+        source_id="M01",
+        included=True,
+    )
+    controller.save_draft(
+        "material-workspace",
+        expected_manifest_version=included["manifestVersion"],
+        expected_draft_version=0,
+        document=_draft("M01"),
+        refresh_source_snapshot=True,
+    )
+
+    report = controller.get_workspace_report("material-workspace")
+    displayed = controller.read_materials_for_display("material-workspace")
+
+    assert report["source"]["kind"] == "meeting"
+    assert report["source"]["meetingId"] == MEETING_ID
+    assert report["source"]["meeting"]["id"] == MEETING_ID
+    assert report["source"]["meeting"]["no"] == 462
+    assert report["source"]["meeting"]["theme"] == "Belonging"
+    assert report["counts"] == {
+        "total": 2,
+        "candidates": 1,
+        "imported": 1,
+        "included": 1,
+        "draftMedia": 1,
+    }
+    assert [
+        (
+            item["id"],
+            item["candidate"],
+            item["imported"],
+            item["usedInDraft"],
+            item["usedAsCover"],
+        )
+        for item in report["materials"]
+    ] == [
+        ("M01", False, True, True, True),
+        ("M02", True, False, False, False),
+    ]
+    assert report["draft"] == {
+        "version": 1,
+        "mediaIds": ["M01"],
+        "coverMediaId": "M01",
+    }
+    assert report["publication"]["state"] == "unavailable"
+    assert [item["source"]["id"] for item in displayed] == ["M01", "M02"]
+    assert [item["data"] for item in displayed] == [b"first", b"video"]
+
+
 def _bootstrap(
     controller: WorkspaceController,
     workspace_id: str = "material-workspace",
@@ -390,7 +483,7 @@ def test_bootstrap_rejects_bad_upstream_metadata(
     assert not (tmp_path / "inbox" / "another-workspace").exists()
 
 
-def test_workspace_update_changes_meeting_in_place_and_preserves_uploads(
+def test_workspace_update_rejects_fixed_setup_changes_and_preserves_uploads(
     tmp_path: Path,
 ) -> None:
     media_by_meeting = {
@@ -437,31 +530,27 @@ def test_workspace_update_changes_meeting_in_place_and_preserves_uploads(
     )
     assert [source["id"] for source in uploaded["sources"]] == ["M01", "M02"]
 
-    updated = controller.update_workspace(
-        "material-workspace",
-        expected_manifest_version=uploaded["manifestVersion"],
-        meeting_id=SECOND_MEETING_ID,
-        editorial={
-            **EDITORIAL,
-            "articleType": "member-story",
-        },
-    )
-    manifest = updated["manifest"]
-
-    assert updated["workspaceId"] == "material-workspace"
-    assert manifest["meetingId"] == SECOND_MEETING_ID
-    assert manifest["editorial"]["articleType"] == "member-story"
-    assert manifest["manifestVersion"] == 4
-    assert manifest["nextMaterialNumber"] == 4
-    assert [
-        (source["id"], source["origin"]["type"]) for source in manifest["sources"]
-    ] == [
-        ("M02", "web-upload"),
-        ("M03", "meeting-library"),
-    ]
-    assert manifest["sources"][1]["origin"]["fileKey"] == ("meetings/461/workshop.jpg")
+    with pytest.raises(InvalidRequest, match="meeting/source is fixed"):
+        controller.update_workspace(
+            "material-workspace",
+            expected_manifest_version=uploaded["manifestVersion"],
+            meeting_id=SECOND_MEETING_ID,
+            editorial=EDITORIAL,
+        )
+    with pytest.raises(InvalidRequest, match="article type is fixed"):
+        controller.update_workspace(
+            "material-workspace",
+            expected_manifest_version=uploaded["manifestVersion"],
+            meeting_id=MEETING_ID,
+            editorial={**EDITORIAL, "articleType": "member-story"},
+        )
+    manifest = controller.get_context("material-workspace")["manifest"]
+    assert manifest["meetingId"] == MEETING_ID
+    assert manifest["editorial"]["articleType"] == "meeting-recap"
+    assert manifest["manifestVersion"] == 3
+    assert manifest["nextMaterialNumber"] == 3
     workspace = tmp_path / "inbox" / "material-workspace"
-    assert not (workspace / "sources" / "M01.jpg").exists()
+    assert (workspace / "sources" / "M01.jpg").read_bytes() == b"photo"
     assert (workspace / "sources" / "M02.png").read_bytes() == b"member-note"
 
 
@@ -483,25 +572,23 @@ def test_workspace_update_is_version_checked_and_idempotent(
         "material-workspace",
         expected_manifest_version=1,
         meeting_id=MEETING_ID,
-        editorial={**EDITORIAL, "articleType": "member-story"},
+        editorial={**EDITORIAL, "extraNotes": "Saved notes."},
     )
+    assert first["manifest"]["manifestVersion"] == 2
     with pytest.raises(VersionConflict):
         controller.update_workspace(
             "material-workspace",
             expected_manifest_version=1,
             meeting_id=MEETING_ID,
-            editorial={**EDITORIAL, "articleType": "action-guide"},
+            editorial={**EDITORIAL, "extraNotes": "Stale notes."},
         )
-    last = controller.update_workspace(
+    unchanged_again = controller.update_workspace(
         "material-workspace",
         expected_manifest_version=2,
         meeting_id=MEETING_ID,
-        editorial={**EDITORIAL, "articleType": "action-guide"},
+        editorial={**EDITORIAL, "extraNotes": "Saved notes."},
     )
-
-    assert first["manifest"]["manifestVersion"] == 2
-    assert last["manifest"]["manifestVersion"] == 3
-    assert last["manifest"]["editorial"]["articleType"] == "action-guide"
+    assert unchanged_again == first
 
 
 def test_stale_materials_save_conflicts_before_a_deleted_source_is_applied(
@@ -801,7 +888,11 @@ def test_failed_import_and_stale_write_leave_state_unchanged(
 
 def test_web_and_feishu_uploads_use_high_water_ids_and_canonical_paths(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    monkeypatch.setenv("WXPOST_UPLOAD_CACHE_ROOTS", str(incoming))
     controller = _controller(tmp_path, [], {})
     _bootstrap(controller)
 
@@ -830,34 +921,38 @@ def test_web_and_feishu_uploads_use_high_water_ids_and_canonical_paths(
         tmp_path / "inbox/material-workspace/sources/M01.txt"
     ).read_bytes() == b"notes"
 
-    incoming = tmp_path / "incoming"
-    incoming.mkdir()
     (incoming / "clip.mp4").write_bytes(b"video")
-    feishu = controller.upload_source_from_path(
+    feishu = controller.upload_sources_from_paths(
         "material-workspace",
         expected_manifest_version=2,
-        source_path=str(incoming / "clip.mp4"),
-        origin="feishu-upload",
-        description="A short clip.",
-        description_source="user",
-        description_status="confirmed",
+        message_id="om_upload",
+        attachments=[{"sourcePath": str(incoming / "clip.mp4")}],
     )
-    assert feishu["sources"][1]["id"] == "M02"
-    assert feishu["sources"][1]["kind"] == "video"
-    assert feishu["nextMaterialNumber"] == 3
+    assert feishu["sourceIds"] == ["M02"]
+    assert feishu["manifest"]["sources"][1]["kind"] == "video"
+    assert feishu["manifest"]["nextMaterialNumber"] == 3
     assert (
         tmp_path / "inbox/material-workspace/sources/M02.mp4"
     ).read_bytes() == b"video"
 
+    workspace_file = tmp_path / "inbox/material-workspace/sources/M01.txt"
+    with pytest.raises(InvalidRequest, match="configured upload cache"):
+        controller.upload_sources_from_paths(
+            "material-workspace",
+            expected_manifest_version=3,
+            message_id="om_cross_workspace_path",
+            attachments=[{"sourcePath": str(workspace_file)}],
+        )
+
     outside = tmp_path.parent / "outside-upload.txt"
     outside.write_bytes(b"outside")
     try:
-        with pytest.raises(InvalidRequest, match="WXPOST_WORKSPACE_ROOT"):
-            controller.upload_source_from_path(
+        with pytest.raises(InvalidRequest, match="configured upload cache"):
+            controller.upload_sources_from_paths(
                 "material-workspace",
                 expected_manifest_version=3,
-                source_path=str(outside),
-                origin="feishu-upload",
+                message_id="om_outside",
+                attachments=[{"sourcePath": str(outside)}],
             )
     finally:
         outside.unlink()

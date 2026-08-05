@@ -25,17 +25,17 @@ import type { DraftProgressActivity } from './useWxPostDraftAssistant';
 function ActivityDetails({ step }: { step: DraftProgressActivity }) {
   if (!step.toolName && !step.operationNames?.length) return null;
   return (
-    <span className='ml-1.5 inline-flex flex-wrap items-center gap-1 align-middle'>
+    <span className='ml-1.5 inline-flex min-w-0 max-w-full flex-wrap items-center gap-1 align-middle'>
       {step.operationNames?.map((operationName) => (
         <code
           key={operationName}
-          className='rounded bg-blue-50 px-1.5 py-0.5 font-mono text-[10px] text-blue-700'
+          className='max-w-full break-all rounded bg-blue-50 px-1.5 py-0.5 font-mono text-[10px] whitespace-normal text-blue-700'
         >
           {operationName}
         </code>
       ))}
       {step.toolName && (
-        <code className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500'>
+        <code className='max-w-full break-all rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] whitespace-normal text-slate-500'>
           {step.toolName}
         </code>
       )}
@@ -48,21 +48,34 @@ function CompletedProgressDisclosure({
 }: {
   steps: DraftProgressActivity[];
 }) {
+  const failedCount = steps.filter((step) => step.failed).length;
+  const summary =
+    failedCount > 0
+      ? `${steps.length} ${steps.length === 1 ? 'step' : 'steps'} finished · ${failedCount} failed`
+      : `${steps.length} ${steps.length === 1 ? 'step' : 'steps'} completed`;
   return (
-    <details className='group text-xs text-slate-500'>
-      <summary className='flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-slate-100'>
-        <Check className='h-3.5 w-3.5 text-emerald-600' />
-        {steps.length} {steps.length === 1 ? 'step' : 'steps'} completed
+    <details className='group min-w-0 max-w-full text-xs text-slate-500'>
+      <summary className='flex max-w-full w-fit cursor-pointer list-none items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-slate-100'>
+        {failedCount > 0 ? (
+          <CircleX className='h-3.5 w-3.5 text-red-600' />
+        ) : (
+          <Check className='h-3.5 w-3.5 text-emerald-600' />
+        )}
+        {summary}
         <ChevronDown className='h-3.5 w-3.5 transition group-open:rotate-180' />
       </summary>
-      <div className='mt-1 grid gap-1 pl-2'>
+      <div className='mt-1 grid min-w-0 max-w-full gap-1 pl-2'>
         {steps.map((step) => (
           <p
             key={step.activityId}
-            className='m-0 flex items-start gap-2 leading-5'
+            className='m-0 flex min-w-0 max-w-full items-start gap-2 leading-5'
           >
-            <Check className='mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600' />
-            <span className='min-w-0'>
+            {step.failed ? (
+              <CircleX className='mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600' />
+            ) : (
+              <Check className='mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600' />
+            )}
+            <span className='min-w-0 max-w-full break-words [overflow-wrap:anywhere]'>
               {step.label}
               <ActivityDetails step={step} />
             </span>
@@ -188,7 +201,7 @@ export function WxPostHermesPanel({
   );
 
   return (
-    <div className='flex h-full min-h-0 flex-col overflow-hidden bg-white'>
+    <div className='flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-hidden bg-white'>
       <div className='flex shrink-0 items-start justify-between border-b border-slate-200 px-4 py-3'>
         <div>
           <div className='flex items-center gap-2'>
@@ -229,7 +242,7 @@ export function WxPostHermesPanel({
       </div>
       <div
         ref={historyRef}
-        className='grid min-h-0 flex-1 content-start gap-3 overflow-y-auto bg-slate-50/60 p-4'
+        className='grid min-h-0 min-w-0 max-w-full flex-1 content-start gap-3 overflow-x-hidden overflow-y-auto bg-slate-50/60 p-4'
         aria-live='polite'
         data-testid={
           mobile ? 'mobile-draft-chat-history' : 'draft-chat-history'
@@ -263,14 +276,14 @@ export function WxPostHermesPanel({
                 </p>
                 {isPendingMessage && (
                   <div
-                    className='grid gap-1 px-2 py-1 text-xs text-slate-500'
+                    className='grid min-w-0 max-w-full gap-1 px-2 py-1 text-xs text-slate-500'
                     data-testid='draft-assistant-progress'
                   >
                     {progress.map((activity) => {
                       return (
                         <p
                           key={activity.activityId}
-                          className='m-0 flex min-w-0 items-start gap-2 leading-5'
+                          className='m-0 flex min-w-0 max-w-full items-start gap-2 leading-5'
                         >
                           {activity.failed ? (
                             <CircleX
@@ -282,7 +295,7 @@ export function WxPostHermesPanel({
                           ) : (
                             <Loader2 className='mt-0.5 h-4 w-4 shrink-0 animate-spin' />
                           )}
-                          <span className='min-w-0'>
+                          <span className='min-w-0 max-w-full break-words [overflow-wrap:anywhere]'>
                             {activity.label}
                             <ActivityDetails step={activity} />
                           </span>

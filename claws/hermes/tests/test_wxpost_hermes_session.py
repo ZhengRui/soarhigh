@@ -15,6 +15,7 @@ from wxpost_controller.draft_session_store import (
 from wxpost_controller.errors import (
     DraftSessionStoreUnavailable,
     HermesTurnFailed,
+    HermesUnavailable,
 )
 from wxpost_controller.hermes_session import (
     HERMES_DRAFT_IDENTITY,
@@ -140,16 +141,27 @@ class _SessionClient:
         cwd: str,
         prompt: str,
         session_id: str | None = None,
+        on_event=None,
     ) -> HermesTurn:
         self.turn_session_ids.append(session_id)
         self.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         operation_id = prompt.split('operation_id="', 1)[1].split('"', 1)[0]
+        if on_event is not None:
+            on_event(
+                "tool.start",
+                {"toolId": "save-default", "name": "wxpost_save_draft"},
+            )
         draft = self.controller.context["draft"]
         draft["draftVersion"] += 1
         self.controller.context["manifest"]["draft"] = {
             "version": draft["draftVersion"],
             "operationId": operation_id,
         }
+        if on_event is not None:
+            on_event(
+                "tool.complete",
+                {"toolId": "save-default", "name": "wxpost_save_draft"},
+            )
         return HermesTurn(
             session_id="stored-session",
             reply="Draft regenerated.",
@@ -205,7 +217,9 @@ def test_draft_service_resumes_history_and_runs_one_versioned_turn(
     assert session.prompts[0]["cwd"].endswith("/inbox/wxpost-test")
     assert "Expected manifest version: 4" in session.prompts[0]["prompt"]
     assert "Expected draft version: 2" in session.prompts[0]["prompt"]
-    assert 'workspace_id="wxpost-test"' in session.prompts[0]["prompt"]
+    assert "workspace_id=" not in session.prompts[0]["prompt"]
+    assert "wxpost_get_current_context" in session.prompts[0]["prompt"]
+    assert "wxpost_save_current_draft" in session.prompts[0]["prompt"]
     assert "expected_manifest_version=4" in session.prompts[0]["prompt"]
     assert "expected_draft_version=2" in session.prompts[0]["prompt"]
     assert 'operation_id="draft-' in session.prompts[0]["prompt"]
@@ -505,6 +519,24 @@ def test_workspace_delete_retires_its_persisted_draft_session(
     assert store.pending_deletions() == []
 
 
+def test_retire_session_physically_deletes_without_changing_workspace_pointer(
+    tmp_path: Path,
+) -> None:
+    service, session = _service(tmp_path)
+    store = HermesDraftSessionStore(tmp_path)
+    store.set_session("wxpost-test", "web-session")
+
+    result = service.retire_session("feishu-old-session")
+
+    assert result == {
+        "sessionId": "feishu-old-session",
+        "cleanupScheduled": True,
+    }
+    assert session.deleted_session_ids == ["feishu-old-session"]
+    assert store.get("wxpost-test") == "web-session"
+    assert store.pending_deletions() == []
+
+
 def test_workspace_delete_retires_a_legacy_title_only_session(
     tmp_path: Path,
 ) -> None:
@@ -522,21 +554,79 @@ def test_workspace_delete_retires_a_legacy_title_only_session(
     assert store.pending_deletions() == []
 
 
-def test_draft_service_rejects_a_stale_editorial_save_after_calling_hermes(
+def test_draft_service_accepts_a_successful_save_despite_manifest_drift(
     tmp_path: Path,
 ) -> None:
     service, session = _service(tmp_path)
 
-    with pytest.raises(VersionConflict, match="expected manifest version 3"):
-        service.chat(
-            "wxpost-test",
-            expected_manifest_version=3,
-            expected_draft_version=2,
-            message="Tighten the opening.",
-            selected_text=None,
-        )
+    result = service.chat(
+        "wxpost-test",
+        expected_manifest_version=3,
+        expected_draft_version=2,
+        message="Tighten the opening.",
+        selected_text=None,
+    )
 
     assert len(session.prompts) == 1
+    assert result["draftChanged"] is True
+    assert result["context"]["draft"]["draftVersion"] == 3
+
+
+def test_chat_rejects_a_save_attributed_to_an_earlier_turn(
+    tmp_path: Path,
+) -> None:
+    service, session = _service(tmp_path)
+    progress: list[dict[str, Any]] = []
+
+    def stale_operation_turn(
+        *,
+        title: str,
+        cwd: str,
+        prompt: str,
+        session_id: str | None,
+        on_event,
+    ) -> HermesTurn:
+        session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
+        tool_name = "wxpost_edit_current_draft"
+        on_event("tool.start", {"toolId": "save-1", "name": tool_name})
+        session.controller.context["draft"]["draftVersion"] = 3
+        session.controller.context["manifest"]["draft"] = {
+            "version": 3,
+            "operationId": "draft-from-an-earlier-turn",
+        }
+        on_event(
+            "tool.complete",
+            {
+                "toolId": "save-1",
+                "name": tool_name,
+                "arguments": {
+                    "edits": [
+                        {
+                            "type": "replaceMetadata",
+                            "field": "title",
+                            "value": "Updated title",
+                        }
+                    ]
+                },
+            },
+        )
+        return HermesTurn(session_id="stored-session", reply="Title updated.")
+
+    session.turn = stale_operation_turn  # type: ignore[method-assign]
+
+    with pytest.raises(VersionConflict, match="expected draft version 2"):
+        service.chat(
+            "wxpost-test",
+            expected_manifest_version=4,
+            expected_draft_version=2,
+            message="Add a period to the title.",
+            selected_text=None,
+            on_progress=progress.append,
+        )
+
+    assert progress[0]["toolName"] == "wxpost_edit_draft"
+    assert progress[1]["toolName"] == "wxpost_edit_draft"
+    assert progress[1]["label"] == "Updating the Draft title"
 
 
 def test_general_chat_is_not_blocked_by_unrelated_stale_page_versions(
@@ -545,7 +635,7 @@ def test_general_chat_is_not_blocked_by_unrelated_stale_page_versions(
     service, session = _service(tmp_path)
 
     def answer_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None
+        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         return HermesTurn(session_id="stored-session", reply="It is sunny today.")
@@ -631,9 +721,15 @@ def test_draft_service_does_not_duplicate_hermes_version_transition(
     original_turn = session.turn
 
     def versioned_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None
+        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
     ) -> HermesTurn:
-        turn = original_turn(title=title, cwd=cwd, prompt=prompt, session_id=session_id)
+        turn = original_turn(
+            title=title,
+            cwd=cwd,
+            prompt=prompt,
+            session_id=session_id,
+            on_event=on_event,
+        )
         return HermesTurn(
             session_id=turn.session_id,
             reply="Opening tightened.\n\nDraft version: v2 → v3",
@@ -675,7 +771,7 @@ def test_chat_can_answer_a_read_only_draft_question_without_saving(
     service, session = _service(tmp_path)
 
     def answer_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None
+        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         return HermesTurn(session_id="stored-session", reply="There are four parts.")
@@ -696,14 +792,78 @@ def test_chat_can_answer_a_read_only_draft_question_without_saving(
     prompt = session.prompts[0]["prompt"]
     assert "Choose exactly one mode before calling a tool" in prompt
     assert "Do not read the workspace and do not load a Skill" in prompt
-    assert "wxpost_get_context and answer without saving. Do not load a Skill" in prompt
-    assert "imported workspaceReady images" in prompt
-    assert "Never count workspaceReady=false" in prompt
+    assert (
+        "wxpost_get_current_context and answer without saving. Do not load a Skill"
+        in prompt
+    )
+    assert "wxpost_get_current_workspace_report and answer without saving" in prompt
+    assert "complete workspace catalog: candidates plus" in prompt
+    assert "Candidates are linked meeting/event media not yet" in prompt
+    assert "Included means selected for the next Generate or Regenerate" in prompt
     assert "Only when the member explicitly asks" in prompt
     assert "create or revise Draft" in prompt
-    assert "wxpost_edit_draft for a local title" in prompt
+    assert "wxpost_edit_current_draft for a local title" in prompt
     assert "node indexes come from draft.editContext" in prompt
-    assert "wxpost_save_draft only for whole-article restructuring" in prompt
+    assert "wxpost_save_current_draft only for whole-article restructuring" in prompt
+    assert "take no\nworkspace ID" in prompt
+
+
+def test_failed_current_workspace_read_is_not_replaced_with_stale_history(
+    tmp_path: Path,
+) -> None:
+    service, session = _service(tmp_path)
+    progress: list[dict[str, Any]] = []
+
+    def failed_read_turn(
+        *,
+        title: str,
+        cwd: str,
+        prompt: str,
+        session_id: str | None,
+        on_event,
+    ) -> HermesTurn:
+        session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
+        on_event(
+            "tool.start",
+            {
+                "toolId": "report-1",
+                "name": "wxpost_get_current_workspace_report",
+            },
+        )
+        on_event(
+            "tool.complete",
+            {
+                "toolId": "report-1",
+                "name": "wxpost_get_current_workspace_report",
+                "error": True,
+            },
+        )
+        return HermesTurn(
+            session_id="stored-session",
+            reply="There are 11 materials from an earlier answer.",
+        )
+
+    session.turn = failed_read_turn  # type: ignore[method-assign]
+
+    result = service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="List the current material library.",
+        selected_text=None,
+        on_progress=progress.append,
+    )
+
+    assert result["reply"] == (
+        "I could not read the current workspace, so I did not use older "
+        "conversation data as if it were current. Please retry."
+    )
+    assert progress[-1] == {
+        "stage": "activity_failed",
+        "activityId": "report-1",
+        "label": "Reading the workspace configuration",
+        "toolName": "wxpost_get_workspace_report",
+    }
 
 
 def test_chat_maps_only_genuine_hermes_events_to_product_progress(
@@ -967,6 +1127,27 @@ def test_failed_draft_save_does_not_report_verification_success(
     ]
     assert result["reply"] == "Unable to save."
     assert result["draftChanged"] is False
+    restored = HermesDraftSessionStore(tmp_path).restore_completed_progress(
+        "stored-session",
+        [
+            {
+                "role": "assistant",
+                "text": "Unable to save.",
+                "turnId": session.prompts[-1]["prompt"]
+                .split("Draft operation ID: ", 1)[1]
+                .splitlines()[0],
+            }
+        ],
+    )
+    assert restored[0]["steps"] == [
+        {
+            "activityId": "save-1",
+            "label": "Saving Draft v3",
+            "toolName": "wxpost_save_draft",
+            "completed": False,
+            "failed": True,
+        }
+    ]
 
 
 def test_failed_draft_save_without_start_event_does_not_report_verification(
@@ -1016,7 +1197,7 @@ def test_draft_service_does_not_adopt_an_unrelated_save(
     service, session = _service(tmp_path)
 
     def unrelated_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None
+        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         session.controller.context["draft"]["draftVersion"] = 3
@@ -1039,7 +1220,7 @@ def test_draft_service_reports_a_manifest_change_during_the_turn_as_a_conflict(
     service, session = _service(tmp_path)
 
     def changed_materials_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None
+        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         session.controller.context["manifest"]["manifestVersion"] = 5
@@ -1055,13 +1236,43 @@ def test_draft_service_reports_a_manifest_change_during_the_turn_as_a_conflict(
         )
 
 
+def test_chat_does_not_misreport_a_materials_change_as_a_draft_conflict(
+    tmp_path: Path,
+) -> None:
+    service, session = _service(tmp_path)
+
+    def changed_materials_turn(
+        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
+    ) -> HermesTurn:
+        session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
+        session.controller.context["manifest"]["manifestVersion"] = 5
+        return HermesTurn(
+            session_id="stored-session",
+            reply="Materials changed; no Draft was saved.",
+        )
+
+    session.turn = changed_materials_turn  # type: ignore[method-assign]
+
+    result = service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="Change the Materials description for M02.",
+        selected_text=None,
+    )
+
+    assert result["draftChanged"] is False
+    assert result["context"]["manifest"]["manifestVersion"] == 5
+    assert result["context"]["draft"]["draftVersion"] == 2
+
+
 def test_draft_service_keeps_a_no_save_turn_as_a_hermes_failure(
     tmp_path: Path,
 ) -> None:
     service, session = _service(tmp_path)
 
     def no_save_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None
+        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         return HermesTurn(session_id="stored-session", reply="Unable to save.")
@@ -1286,24 +1497,45 @@ def test_draft_edit_activity_uses_typed_operation_details(
     assert result == (expected_label, [edit["type"]])
 
 
+def _description_service(
+    controller: _Controller,
+    session: _SessionClient,
+    *,
+    retired_sessions: list[str] | None = None,
+) -> HermesDescriptionService:
+    def retire(session_id: str) -> None:
+        if retired_sessions is not None:
+            retired_sessions.append(session_id)
+
+    return HermesDescriptionService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=session,  # type: ignore[arg-type]
+        retire_session=retire,
+    )
+
+
 def test_description_service_polishes_any_language_into_local_english_suggestion(
     tmp_path: Path,
 ) -> None:
     controller = _Controller(tmp_path)
     session = _SessionClient(controller)
-    session.turn = lambda **kwargs: (  # type: ignore[method-assign]
-        session.prompts.append(kwargs)
-        or HermesTurn(
-            session_id="description-session",
-            reply=(
-                '{"description":"Members exchange ideas around a table '
-                'before the meeting begins."}'
-            ),
+    session.turn = (
+        lambda **kwargs: (  # type: ignore[method-assign]
+            session.prompts.append(kwargs)
+            or HermesTurn(
+                session_id="description-session",
+                reply=(
+                    '{"status":"ok","description":"Members exchange ideas around a table '
+                    'before the meeting begins."}'
+                ),
+            )
         )
     )
-    service = HermesDescriptionService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=session,  # type: ignore[arg-type]
+    retired_sessions: list[str] = []
+    service = _description_service(
+        controller,
+        session,
+        retired_sessions=retired_sessions,
     )
 
     result = service.suggest(
@@ -1316,6 +1548,7 @@ def test_description_service_polishes_any_language_into_local_english_suggestion
     assert result == {
         "workspaceId": "wxpost-test",
         "sourceId": "M01",
+        "manifestVersion": 4,
         "description": (
             "Members exchange ideas around a table before the meeting begins."
         ),
@@ -1330,6 +1563,7 @@ def test_description_service_polishes_any_language_into_local_english_suggestion
     assert "internalNote" not in prompt
     assert "会员们在会议开始前围坐交流。" in prompt
     assert "Do not save or update the workspace" in prompt
+    assert retired_sessions == ["description-session"]
 
 
 def test_description_service_uses_image_first_generation_for_empty_text(
@@ -1337,17 +1571,19 @@ def test_description_service_uses_image_first_generation_for_empty_text(
 ) -> None:
     controller = _Controller(tmp_path)
     session = _SessionClient(controller)
-    session.turn = lambda **kwargs: (  # type: ignore[method-assign]
-        session.prompts.append(kwargs)
-        or HermesTurn(
-            session_id="description-session",
-            reply='{"description":"A speaker addresses seated members."}',
+    session.turn = (
+        lambda **kwargs: (  # type: ignore[method-assign]
+            session.prompts.append(kwargs)
+            or HermesTurn(
+                session_id="description-session",
+                reply=(
+                    '{"status":"ok","description":'
+                    '"A speaker addresses seated members."}'
+                ),
+            )
         )
     )
-    service = HermesDescriptionService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=session,  # type: ignore[arg-type]
-    )
+    service = _description_service(controller, session)
 
     service.suggest(
         "wxpost-test",
@@ -1365,8 +1601,9 @@ def test_description_service_uses_image_first_generation_for_empty_text(
     "reply",
     [
         "A plain sentence without the response contract.",
-        '{"description":""}',
-        '{"description":"Useful","extra":true}',
+        '{"description":"Old response contract"}',
+        '{"status":"ok","description":""}',
+        '{"status":"ok","description":"Useful","extra":true}',
     ],
 )
 def test_description_service_rejects_non_contract_replies(
@@ -1379,10 +1616,7 @@ def test_description_service_rejects_non_contract_replies(
         session_id="description-session",
         reply=reply,
     )
-    service = HermesDescriptionService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=session,  # type: ignore[arg-type]
-    )
+    service = _description_service(controller, session)
 
     with pytest.raises(HermesTurnFailed, match="invalid image description"):
         service.suggest(
@@ -1391,6 +1625,63 @@ def test_description_service_rejects_non_contract_replies(
             source_id="M01",
             current_description="",
         )
+
+
+def test_description_service_surfaces_inspection_errors_without_a_suggestion(
+    tmp_path: Path,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+    session.turn = (
+        lambda **kwargs: HermesTurn(  # type: ignore[method-assign]
+            session_id="description-session",
+            reply=('{"status":"error","error":' '"sources/M01.jpg was unavailable"}'),
+        )
+    )
+    retired_sessions: list[str] = []
+    service = _description_service(
+        controller,
+        session,
+        retired_sessions=retired_sessions,
+    )
+
+    with pytest.raises(HermesTurnFailed, match="could not inspect the image"):
+        service.suggest(
+            "wxpost-test",
+            expected_manifest_version=4,
+            source_id="M01",
+            current_description="",
+        )
+    assert retired_sessions == ["description-session"]
+
+
+def test_description_service_retires_a_session_when_the_turn_fails(
+    tmp_path: Path,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+
+    def failing_turn(*, on_session_resolved, **_kwargs) -> HermesTurn:
+        on_session_resolved("description-session")
+        raise HermesUnavailable("connection lost")
+
+    session.turn = failing_turn  # type: ignore[method-assign]
+    retired_sessions: list[str] = []
+    service = _description_service(
+        controller,
+        session,
+        retired_sessions=retired_sessions,
+    )
+
+    with pytest.raises(HermesUnavailable, match="connection lost"):
+        service.suggest(
+            "wxpost-test",
+            expected_manifest_version=4,
+            source_id="M01",
+            current_description="",
+        )
+
+    assert retired_sessions == ["description-session"]
 
 
 def test_description_service_keeps_a_snapshot_suggestion_when_manifest_changes(
@@ -1403,14 +1694,11 @@ def test_description_service_keeps_a_snapshot_suggestion_when_manifest_changes(
         controller.context["manifest"]["manifestVersion"] = 5
         return HermesTurn(
             session_id="description-session",
-            reply='{"description":"A meeting room."}',
+            reply='{"status":"ok","description":"A meeting room."}',
         )
 
     session.turn = changed_turn  # type: ignore[method-assign]
-    service = HermesDescriptionService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=session,  # type: ignore[arg-type]
-    )
+    service = _description_service(controller, session)
 
     suggestion = service.suggest(
         "wxpost-test",
@@ -1433,14 +1721,11 @@ def test_description_service_rejects_a_suggestion_when_its_source_changes(
         controller.source_revision = "source-revision-2"
         return HermesTurn(
             session_id="description-session",
-            reply='{"description":"A meeting room."}',
+            reply='{"status":"ok","description":"A meeting room."}',
         )
 
     session.turn = changed_turn  # type: ignore[method-assign]
-    service = HermesDescriptionService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=session,  # type: ignore[arg-type]
-    )
+    service = _description_service(controller, session)
 
     with pytest.raises(VersionConflict, match="current manifest version is 5"):
         service.suggest(
@@ -1451,15 +1736,12 @@ def test_description_service_rejects_a_suggestion_when_its_source_changes(
         )
 
 
-def test_description_service_serializes_only_turns_for_the_same_source(
+def test_description_service_uses_one_turn_lock_per_source(
     tmp_path: Path,
 ) -> None:
     controller = _Controller(tmp_path)
     session = _SessionClient(controller)
-    service = HermesDescriptionService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=session,  # type: ignore[arg-type]
-    )
+    service = _description_service(controller, session)
 
     assert service._turn_lock("workspace-a", "M01") is service._turn_lock(
         "workspace-a", "M01"
@@ -1467,6 +1749,26 @@ def test_description_service_serializes_only_turns_for_the_same_source(
     assert service._turn_lock("workspace-a", "M01") is not service._turn_lock(
         "workspace-a", "M02"
     )
+
+
+def test_description_service_rejects_a_duplicate_turn_for_the_same_source(
+    tmp_path: Path,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+    service = _description_service(controller, session)
+    turn_lock = service._turn_lock("wxpost-test", "M01")
+    turn_lock.acquire()
+    try:
+        with pytest.raises(InvalidRequest, match="already being generated"):
+            service.suggest(
+                "wxpost-test",
+                expected_manifest_version=4,
+                source_id="M01",
+                current_description="",
+            )
+    finally:
+        turn_lock.release()
     assert service._turn_lock("workspace-a", "M01") is not service._turn_lock(
         "workspace-b", "M01"
     )

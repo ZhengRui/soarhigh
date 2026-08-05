@@ -160,8 +160,8 @@ export function useWxPostDraftAssistant({
           toast.error(failure);
         }
       }
-      const completedSteps = progressRef.current.filter(
-        (step) => step.completed
+      const finishedSteps = progressRef.current.filter(
+        (step) => step.completed || step.failed
       );
       setSession((current) => ({
         workspaceId,
@@ -171,7 +171,7 @@ export function useWxPostDraftAssistant({
           {
             role: 'assistant',
             text: result.reply,
-            ...(completedSteps.length > 0 ? { steps: completedSteps } : {}),
+            ...(finishedSteps.length > 0 ? { steps: finishedSteps } : {}),
           },
         ],
       }));
@@ -184,7 +184,8 @@ export function useWxPostDraftAssistant({
       );
       if (
         caught instanceof WorkspaceApiError &&
-        caught.code === 'version_conflict'
+        caught.code === 'version_conflict' &&
+        caught.versionKind === 'draft'
       ) {
         onConflict();
         return;

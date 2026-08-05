@@ -199,7 +199,6 @@ function MaterialCard({
   workspaceId,
   material,
   busy,
-  descriptionPending,
   importing,
   describing,
   onImport,
@@ -211,7 +210,6 @@ function MaterialCard({
   workspaceId: string;
   material: WxPostMaterial;
   busy: boolean;
-  descriptionPending: boolean;
   importing: boolean;
   describing: boolean;
   onImport: () => Promise<void>;
@@ -319,7 +317,7 @@ function MaterialCard({
             }
             disabled={
               busy ||
-              descriptionPending ||
+              describing ||
               material.kind !== 'image' ||
               !material.workspaceReady
             }
@@ -362,7 +360,7 @@ export function MaterialsPanel({
   importingSourceId,
   uploading,
   deletingSourceId,
-  describingSourceId,
+  describingSourceIds,
   onImport,
   onToggleIncluded,
   onDescriptionChange,
@@ -378,7 +376,7 @@ export function MaterialsPanel({
   importingSourceId: string | null;
   uploading: boolean;
   deletingSourceId: string | null;
-  describingSourceId: string | null;
+  describingSourceIds: ReadonlySet<string>;
   onImport: (sourceId: string) => Promise<void>;
   onToggleIncluded: (sourceId: string, included: boolean) => Promise<void>;
   onDescriptionChange: (sourceId: string, description: string) => void;
@@ -468,9 +466,8 @@ export function MaterialsPanel({
                   workspaceId={workspaceId}
                   material={material}
                   busy={busy}
-                  descriptionPending={describingSourceId !== null}
                   importing={importingSourceId === material.sourceId}
-                  describing={describingSourceId === material.sourceId}
+                  describing={describingSourceIds.has(material.sourceId)}
                   onImport={() => onImport(material.sourceId)}
                   onToggleIncluded={() =>
                     onToggleIncluded(material.sourceId, !material.included)

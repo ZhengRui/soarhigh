@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any, Iterator
 
 from .errors import DraftSessionStoreUnavailable, HermesTurnFailed
+from .sqlite_support import serialize_controller_database_initialization
 
 HERMES_DRAFT_PROTOCOL_VERSION = 7
 
@@ -161,6 +162,20 @@ class HermesDraftSessionStore:
             ).fetchall()
         return [str(row[0]) for row in rows]
 
+    def schedule_cleanup(self, session_id: str) -> None:
+        """Durably retire one Hermes session without changing workspace routing."""
+
+        if not session_id:
+            raise HermesTurnFailed("Hermes session identifier must not be empty")
+        with self._connect() as connection:
+            self._begin_immediate(connection)
+            try:
+                self._retire_session(connection, session_id)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
     def mark_deleted(self, session_id: str) -> None:
         with self._connect() as connection:
             self._begin_immediate(connection)
@@ -192,10 +207,11 @@ class HermesDraftSessionStore:
             raise HermesTurnFailed("Draft session store directory is unsafe")
         if self._path.is_symlink():
             raise HermesTurnFailed("Draft session store must not be a symlink")
-        with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.executescript(
-                """
+        with serialize_controller_database_initialization(self._directory):
+            with self._connect() as connection:
+                connection.execute("PRAGMA journal_mode = WAL")
+                connection.executescript(
+                    """
                 CREATE TABLE IF NOT EXISTS metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -224,19 +240,20 @@ class HermesDraftSessionStore:
                     steps_json TEXT NOT NULL,
                     UNIQUE(session_id, turn_sequence)
                 );
-                """
-            )
-            connection.execute(
-                "INSERT OR IGNORE INTO metadata(key, value) VALUES ('schema_version', ?)",
-                (str(self._SCHEMA_VERSION),),
-            )
-            row = connection.execute(
-                "SELECT value FROM metadata WHERE key = 'schema_version'"
-            ).fetchone()
-            if row is None or str(row[0]) != str(self._SCHEMA_VERSION):
-                raise HermesTurnFailed("Draft session store schema is incompatible")
-        self._migrate_legacy_json()
-        self._retire_incompatible_protocol()
+                    """
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO metadata(key, value) "
+                    "VALUES ('schema_version', ?)",
+                    (str(self._SCHEMA_VERSION),),
+                )
+                row = connection.execute(
+                    "SELECT value FROM metadata WHERE key = 'schema_version'"
+                ).fetchone()
+                if row is None or str(row[0]) != str(self._SCHEMA_VERSION):
+                    raise HermesTurnFailed("Draft session store schema is incompatible")
+            self._migrate_legacy_json()
+            self._retire_incompatible_protocol()
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

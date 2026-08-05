@@ -239,3 +239,14 @@ def test_draft_session_store_retires_sessions_after_protocol_change(
         ],
     )
     assert "steps" not in restored[0]
+
+
+def test_store_schedules_standalone_session_cleanup_idempotently(
+    tmp_path: Path,
+) -> None:
+    store = HermesDraftSessionStore(tmp_path)
+
+    store.schedule_cleanup("feishu-old-session")
+    store.schedule_cleanup("feishu-old-session")
+
+    assert store.pending_deletions() == ["feishu-old-session"]

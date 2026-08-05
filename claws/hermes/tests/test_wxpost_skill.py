@@ -98,3 +98,23 @@ def test_skill_contains_flexible_recipes_and_full_tone_instructions() -> None:
         assert preset in skill
     assert "not literal headings" in skill
     assert "`meetingContext`" in skill
+
+
+def test_feishu_draft_preview_is_version_bound_and_screenshot_is_explicit() -> None:
+    skill = (SKILL_ROOT / "SKILL.md").read_text()
+
+    assert "`wxpost_get_draft_preview` for the version just saved" in skill
+    assert (
+        "sends the\n   complete temporary preview link and authenticated web editor link"
+        in skill
+    )
+    assert "do not repeat, shorten, or reconstruct either URL" in skill
+    assert "opens the same workspace in Draft Edit" in skill
+    assert "uses an independent Web session" in skill
+    assert "confirm delivery without writing any URL" in skill
+    assert "do not call `wxpost_send_web_editor_link` in that turn" in skill
+    assert "does not create or update a public WxPost revision" in skill
+    assert "Call `wxpost_send_draft_preview_image` only when" in skill
+    assert "Do not send the image automatically" in skill
+    assert "`wxpost_send_web_editor_link` with `target=materials`" in skill
+    assert "with `target=draft`" in skill

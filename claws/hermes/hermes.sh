@@ -243,7 +243,12 @@ case "${action}" in
     compose down
     ;;
   restart)
-    compose restart
+    # The controller joins the gateway's network namespace. Restarting both
+    # containers in parallel can leave it trying to join a gateway that is
+    # temporarily stopped, so bring them back in dependency order.
+    compose stop controller gateway
+    compose up --detach gateway
+    compose up --detach controller
     ;;
   shell)
     compose exec \

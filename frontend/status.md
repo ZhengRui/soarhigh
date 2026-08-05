@@ -21,8 +21,11 @@ verified the complete rich-block and presentation matrix at desktop and 390 px.
 Slice 7A adds explicit saved-Draft-to-public synchronization, one stable public
 WxPost per workspace, revision/freshness status in Draft and Workspaces, and
 atomic Supabase/OSS publication. Slice 7B adds explicit Hermes descriptions for
-selected workspace images. Feishu ingestion remains Slice 7C; WeChat delivery
-remains Phase 3.
+selected workspace images. Slice 7C completes the dedicated WxPost Assistant
+runtime, observable persisted sessions, and deterministic fine-grained Draft
+edits. Slice 7D completes conversational Feishu workspace/material authoring
+with Feishu-only navigation and separate sessions. WeChat delivery remains
+Phase 3.
 
 ## Application Overview
 
@@ -152,8 +155,8 @@ All routes in the (auth) group are protected by authentication middleware which 
   directly instead of flashing Setup first
 - Article type, descriptions, inclusion, transcript, notes, and writing brief
   are one browser-local Materials working copy
-- "Save Materials" persists that working copy atomically and does not change
-  the last saved Draft
+- "Save Materials" persists that working copy atomically, confirms any local
+  AI image-description suggestions, and does not change the last saved Draft
 - Import, upload, and delete remain immediate file operations
 - Import, upload, and delete persist only their structural workspace changes;
   they do not save unrelated local Materials form edits
@@ -193,10 +196,10 @@ All routes in the (auth) group are protected by authentication middleware which 
   Focused revisions may explicitly add any imported workspace-ready image or
   video without changing its Materials inclusion, and preserve unrelated media
   and cover state by default
-- Draft Assistant references to the media library, available media, or
-  candidate media always mean imported `workspaceReady` media. Unimported
-  meeting-library options exist only in Materials and are excluded from Draft
-  media counts and lists
+- The media library means the complete workspace catalog. Reports split it
+  into unimported meeting/event candidates and imported `workspaceReady`
+  media. Draft operations can use only imported media; candidates must first
+  be imported in Materials
 - The Draft workbench maps each visible member-authored field back to its
   canonical source: article title/excerpt/byline, individual Markdown blocks,
   section kickers and headings, every directive text field, and media
@@ -224,9 +227,9 @@ All routes in the (auth) group are protected by authentication middleware which 
   of a broken private URL
 - Regenerate replaces the current canonical Draft and advances its version;
   retained version history and rollback are not part of Slice 6
-- Feishu active-workspace selection, Feishu attachment ingestion, and
-  selected-image description generation are not part of the Draft workbench or
-  Slice 7A
+- Feishu active-workspace selection and attachment ingestion are not part of
+  the Draft workbench and remain Slice 7D. Selected-image descriptions are
+  complete in Slice 7B
 - Explicit public sync always reads the saved Draft again on Backend; unsaved
   Draft edits disable synchronization and are never published accidentally
 - First sync creates public revision 1 behind a confirmation dialog. A later
@@ -341,7 +344,12 @@ All routes in the (auth) group are protected by authentication middleware which 
   `frontend/.env.local` as well as Backend; restart `bun dev` after adding it.
   This is the same credential value, not a new renderer token, and it remains
   unavailable to browser JavaScript
-- Preview may retain editor-only node identifiers and private preview URLs.
+- Feishu temporary Draft links use the same compiler through
+  `/posts/wxposts/draft-preview/[token]`. Backend owns the short-lived,
+  version-bound token and media authorization; the route is read-only,
+  unindexed, and refuses stale Draft versions instead of creating a public
+  revision or falling forward to newer content
+- Preview may retain editor-only node identifiers and signed preview URLs.
   Delivery may replace media URLs, remove editor-only attributes, sanitize the
   result, and validate platform limits. These are output post-processors, not
   separate renderers
@@ -560,30 +568,123 @@ Acceptance:
 
 - image-description generation is explicit and scoped to one selected image
 - the result is an editable English suggestion rather than a silent overwrite
+- `Save Materials` is the explicit confirmation action and persists the
+  suggestion as an AI-authored, confirmed description
 - an existing description is translated, compressed, and polished rather than
   discarded
 - upload, import, delete, and other local Materials edits remain usable while
   Hermes is working
 
-#### Slice 7C - Feishu ingestion (planned)
+#### Slice 7C - Draft Assistant and Controller hardening (complete)
 
-Complete the cross-surface workflow without rebuilding the Materials editor
-inside Feishu cards. Feishu selects or creates the active workspace, collects
-attachments and concise instructions, reports status, and links to the web
-workspace for full editing. It reuses the completed Slice 7A publication state
-and Slice 7B descriptions without adding another rendering path.
+This slice turns the initial Draft chat into a focused, observable, durable
+WxPost assistant without changing the canonical authoring boundary. The saved
+workspace Draft remains authoritative; Hermes chooses tools, Backend validates
+typed edits, and Controller remains the only workspace writer.
 
-Acceptance:
+Implemented contract:
 
-- a Feishu member can create/select a workspace and attach material without
-  seeing controller credentials or private storage paths
-- retries and duplicate Feishu events do not duplicate materials
-- attachments receive stable workspace material IDs and appear in the web
-  Materials page with correct provenance
-- generation and public-sync status can be queried from Feishu, while complex
-  editing remains in the web UI
-- one real Feishu-to-web-to-Hermes-to-public-WxPost smoke proves the complete
-  Phase 2 workflow
+- web Draft chat and the future Feishu channel use one managed `wxpost` Hermes
+  profile with the formal WxPost Skill and MCP surface, fast model mode,
+  browser/image access, and optional Tavily search. General terminal, coding,
+  delegation, cron, plugin, and assistant-owned memory capabilities remain
+  disabled
+- ordinary questions may be answered directly; questions about the article
+  read saved context; only explicit editorial requests load writing guidance
+  and mutate the Draft
+- local title, metadata, body-node, directive, media-description, body-media,
+  and cover changes use version-bound typed operations. Whole-article
+  restructuring continues to use the complete proposal contract
+- imported media form the Draft editing pool. Materials `included` state
+  affects Generate/Regenerate only; later Draft body and cover choices are
+  independent, while Materials deletion still refuses saved Draft references
+- genuine Hermes tool milestones stream beneath the pending member message,
+  expose normalized tool and fine-grained edit names, collapse above the final
+  response, follow the conversation while the member remains at the bottom,
+  and survive refresh
+- `/new` atomically switches the workspace to a fresh future Hermes session,
+  retires the previous session asynchronously, and remains empty across a
+  refresh before the first new message
+- Hermes conversation history stays in the managed profile's `state.db`.
+  Controller stores only workspace/session pointers, retryable deletion work,
+  and exact UI milestone metadata in transactional SQLite; legacy JSON is
+  imported once and removed
+- a successful canonical Draft save is not reported as failed merely because
+  auxiliary session or milestone metadata could not be persisted
+- Draft updates replace the changed Draft data without blanking the workbench,
+  and the frontend keeps one message-owned source of truth for completed steps
+
+Acceptance completed with typed-edit Backend tests, controller session/store
+and concurrency tests, frontend lint/type checks, and real signed-in Chrome
+smoke. The final smoke changed one title through Hermes from Draft v68 to v69,
+showed live fine-grained milestones without a whole-workbench loading state,
+then refreshed and restored the final response plus all four completed steps.
+The Controller SQLite integrity check returned `ok`.
+
+#### Slice 7D - Conversational Feishu integration (complete)
+
+This slice extends the existing plain Feishu channel without cards, Bitable,
+or another rendering path. The managed `wxpost` profile is shared, but its tool
+surface is selected by platform: Feishu receives workspace navigation plus the
+canonical WxPost authoring tools, while the web Draft Assistant remains bound
+to its current workspace and cannot list or switch workspaces.
+
+Implemented contract:
+
+- Feishu can list, select, and create linked or independent workspaces. Source,
+  meeting/event, and Article Type are chosen during creation and become
+  immutable, matching the web setup contract
+- active Feishu workspace bindings and exact pending create/delete
+  confirmations live transactionally in Controller SQLite. A confirmation must
+  arrive in a later Feishu message, and duplicate delivery remains idempotent
+- linked meeting candidates can be listed and imported; Feishu file/image
+  attachments are imported from approved profile cache roots, content-hash
+  deduplicated, assigned stable material IDs, and excluded by default
+- Feishu can update saved Materials, generate a Draft, and apply the same typed
+  Draft operations as the web assistant. Public synchronization remains an
+  explicit authenticated web action
+- the web Draft Assistant is physically bound to a read/Draft-only MCP surface;
+  it cannot import, include, reorder, describe, or delete Materials. A request
+  to change a Materials description explains the boundary without saving a
+  Draft, incrementing its version, or opening a false Draft-conflict dialog
+- the shared read-only workspace report deterministically separates the full
+  media catalog into meeting/event candidates, imported media, Included media,
+  and current Draft body/cover use while also reporting source, editorial,
+  Draft, and public-revision state
+- Feishu media-library requests display the complete catalog with stable M
+  identifiers and state labels. Images use native image messages; videos use
+  native video delivery and fall back to file attachments when needed
+- Feishu and web keep different Hermes sessions even when they address the same
+  workspace. Platform-specific tools cannot leak into the web session. Feishu
+  can send canonical authenticated Materials or Draft Edit links, but the
+  handoff explicitly warns that the web Draft Assistant does not inherit the
+  Feishu conversation
+- the integration uses the public Hermes profile/plugin lifecycle only; it does
+  not patch the private Feishu adapter or restore the abandoned card flow
+
+Deployment remains split by responsibility. Frontend and Backend may run on
+Vercel; Backend reaches the Controller/Hermes deployment on DigitalOcean over
+HTTPS with the existing service token. The new report path uses that same
+contract and does not require these services to be deployed together.
+
+Acceptance completed on 2026-08-04:
+
+- a real Feishu DM listed and selected workspaces, reset its Hermes conversation
+  while preserving the active binding, created a Meeting 463 workspace, listed
+  ten linked candidates, imported and included M01, generated Draft v1, and
+  changed its title through a typed edit to Draft v2
+- a real Feishu attachment imported once as M11 and remained excluded; signed-in
+  Chrome then displayed M11 with `Use material`, the saved Draft v2, and locked
+  Source, meeting, and Article Type controls
+- the Feishu single-confirmation flow created one independent Custom workspace;
+  the same channel rejected public publication as out of scope
+- Chrome proved session and tool isolation: Feishu turns did not appear in the
+  web Draft Assistant, and the web assistant refused global workspace listing
+- automated coverage includes group/thread binding, absent bindings, duplicate
+  events, confirmations, candidate import, attachment safety/deduplication, and
+  platform tool isolation. The complete Hermes/controller suite passed 187/187
+  and the complete Backend suite passed 620/620; frontend TypeScript and lint
+  checks passed with only the four pre-existing `TimePickerModal` hook warnings
 
 ### Phase 3 - WeChat Official Account Draft integration
 
@@ -763,7 +864,8 @@ The meeting management workflow is now fully implemented:
 
 8. **WxPost Workspace Authoring**
 
-   - Creates linked or independent workspaces from a source-only Setup page
+   - Creates linked or independent workspaces from immutable Source and Article
+     Type choices on the Setup page
    - Opens existing workspaces directly in Materials
    - Keeps ordinary form edits local until "Save Materials"
    - Keeps the saved Draft isolated from Materials edits
@@ -796,9 +898,9 @@ The meeting management workflow is now fully implemented:
      canvas selection browser-local
    - Preserves the saved Draft on generation/chat failure or version conflict;
      stale direct edits remain local for the member to recover
-   - Leaves Feishu workspace/attachment integration for Slice 7C; explicit
-     public synchronization is complete in Slice 7A and selected-image
-     descriptions are complete in Slice 7B
+   - Keeps full workspace editing in the web workbench while Slice 7D exposes
+     Feishu-only workspace navigation and conversational Materials/Draft
+     operations; public synchronization remains the explicit Slice 7A web action
 
    Validation recorded on 2026-08-03:
 

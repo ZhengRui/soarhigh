@@ -1,10 +1,11 @@
 # SoarHigh Toastmasters Club - Backend Status
 
-**Last updated:** 2026-08-03
+**Last updated:** 2026-08-04
 
-**WxPost checkpoint:** `d1c85a4` is the committed pre-Slice-6 base. The current
-working tree completes Slice 6 Draft session, save, generation, revision, and
-canonical rendering. Backend normalizes every Draft mutation into
+**WxPost checkpoint:** `8f5b233` includes the completed Slice 6 authoring flow
+and the subsequent Slice 7A-7D work described below. Slice 6 provides Draft
+session, save, generation, revision, and canonical rendering. Backend
+normalizes every Draft mutation into
 `WxPostRenderDocument`, then requires the authenticated stateless Next route to
 compile it with the same pure TypeScript source used by the browser. A compiler
 failure returns 503 before controller persistence, so the previous saved Draft
@@ -16,14 +17,17 @@ deterministically serializes canonical ArticleDocument v1 directives before
 Backend validation. This removes model-authored YAML without adding repair
 heuristics or a second validator. Slice 7A now synchronizes one saved workspace
 Draft to one stable public WxPost with guarded Supabase revisions and
-content-addressed OSS assets, and Slice 7B image-description proposals are also
-complete. Feishu ingestion is next; WeChat Draft delivery remains Phase 3.
-Draft Assistant small edits now use a typed, version-bound edit endpoint instead
-of resubmitting the complete article. Backend applies exact body-node,
-directive, media, description, and cover operations, derives the
-body-plus-cover media dependency snapshot, validates the complete result, and
-returns it to the controller for the existing atomic compare-and-swap save.
-Materials inclusion remains independent from Draft body and cover state.
+content-addressed OSS assets. Slice 7B image-description proposals, Slice 7C
+Draft Assistant/Controller hardening, and Slice 7D conversational Feishu
+workspace/material authoring are also complete. WeChat Draft delivery remains
+Phase 3.
+
+Slice 7C gives small Draft edits a typed, version-bound endpoint instead of
+resubmitting the complete article. Backend applies exact body-node, directive,
+media, description, and cover operations, derives the body-plus-cover media
+dependency snapshot, validates the complete result, and returns it to the
+controller for the existing atomic compare-and-swap save. Materials inclusion
+remains independent from Draft body and cover state.
 
 ## Architecture Overview
 
@@ -103,17 +107,35 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 - **/posts/wxposts/{id}** - PATCH: Update a stored WxPost with revision
   protection
 - **/posts/wxposts/{slug}** - GET: Return a public render document
-- **/posts/wxposts/workspaces** - GET: List paginated shared workspaces
+- **/posts/wxposts/workspaces** - POST/GET: Create a controller-identified
+  workspace or list paginated shared workspaces
 - **/posts/wxposts/workspaces/{id}/publication** - GET: Derive publication
   freshness from the current saved Draft and ready public revision
+- **/posts/wxposts/workspaces/{id}/publication/service** - GET: Return the same
+  database-only publication metadata to the Controller under the existing
+  service token, without creating a Controller-to-Backend proxy loop
+- **/posts/wxposts/workspaces/{id}/draft-preview** - POST: Under the existing
+  service credential, issue a 24-hour temporary link bound to the current saved
+  Draft version together with the authenticated Draft Edit URL
+- **/posts/wxposts/workspaces/{id}/editor-links** - GET: Under the same service
+  credential, return canonical authenticated Materials and Draft Edit routes
+  for Feishu-to-web handoff
+- **/posts/wxposts/draft-previews/{token}** - GET: Return canonical render input
+  only while the signed Draft version remains current; its nested media route
+  serves only media referenced by that exact Draft
 - **/posts/wxposts/workspaces/{id}/publication/sync** - POST: Explicitly and
   version-safely synchronize the saved Draft, included assets, and canonical
   render to one stable public WxPost
-- **/posts/wxposts/workspaces/{id}** - PUT/PATCH/DELETE: Create, save, or
-  delete a versioned workspace
+- **/posts/wxposts/workspaces/{id}** - PATCH/DELETE: Save or delete a versioned
+  workspace
 - **/posts/wxposts/workspaces/{id}/...** - Authenticated proxy for the
   controller's context, material, import, upload, content, delete, Draft
   session, Draft save, Draft generation, and Draft chat operations
+
+Frontend and Backend may remain on Vercel while Controller and Hermes run on a
+DigitalOcean VPS. Backend proxies canonical workspace operations over HTTPS
+using `WXPOST_SERVICE_TOKEN`; no feature requires the processes to share a
+host. Their checked API contracts must remain compatible.
 
 ## Data Models
 

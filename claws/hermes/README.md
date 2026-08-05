@@ -29,21 +29,43 @@ settings from the default Hermes configuration, enables Hermes fast mode for
 `gpt-5.6-luna`, then narrows the agent surface to:
 
 - the tracked `soarhigh-wxpost-authoring` Skill;
-- the canonical `soarhigh-wxpost` MCP server;
+- the full `soarhigh-wxpost` MCP server for Feishu;
+- session-bound `wxpost_current` tools for the web Draft Assistant, which
+  derive the exact workspace from the Controller-owned session directory and
+  accept no model-supplied workspace ID;
 - browser-based web access and image understanding;
 - Tavily search and extraction when `TAVILY_API_KEY` is configured.
 
 General terminal, filesystem, code-execution, delegation, memory, cron, and
-plugin capabilities are explicitly disabled. Profile memory and user-profile
-injection are also disabled so workspace state remains in the canonical
-controller rather than a second assistant-owned store.
+unrelated plugin capabilities are explicitly disabled. The one tracked
+navigation plugin exposes only Feishu conversation identity, workspace
+navigation, configuration reports, native media display, and attachment
+import; its toolset is absent from web sessions. The web surface cannot call
+Materials import, inclusion, description, ordering, or deletion mutations.
+Profile memory and user-profile injection are also disabled so workspace state
+remains in the canonical controller rather than a second assistant-owned store.
+
+Feishu conversations start in read-only mode. They retain the selected
+workspace context and may inspect Materials and Drafts, answer questions,
+search the web, and deliver previews, but every workspace, Materials, and Draft
+write is rejected in code. Send `/editing` twice in separate messages to see
+the warning and confirm editing mode; send `/readonly` to return immediately.
+Selecting or creating a workspace and `/new` always reset the conversation to
+read-only. The mode and its short-lived confirmation are stored by the
+Controller in `controller.sqlite3`, independently from Hermes chat history.
+The Feishu navigation layer checks the mode before its own mutations, while a
+`pre_tool_call` hook guards the complete raw WxPost MCP write surface. Web Draft
+Assistant sessions are not subject to this Feishu-only mode.
+Images and files sent while read-only remain available for ordinary visual
+questions and conversation. They are not imported into Materials unless the
+member explicitly enters editing mode and resends them for import.
 
 `wxpost_profile/configure.py` recreates the managed capability configuration
-and tracked Skill on every container start. It does not modify the default
-profile beyond removing the superseded WxPost MCP, Skill copy, and abandoned
-card plugin. `run_gateway.sh` stops any gateway restored from stale profile
-state, makes `wxpost` the active profile, and leaves exactly one supervised
-Feishu gateway plus one isolated backend on port 9119.
+plus the tracked Skill and navigation plugin on every container start. It does
+not modify the default profile beyond removing the superseded WxPost MCP, Skill
+copy, and abandoned card plugin. `run_gateway.sh` stops any gateway restored
+from stale profile state, makes `wxpost` the active profile, and leaves exactly
+one supervised Feishu gateway plus one isolated backend on port 9119.
 
 After changing the profile source, Skill, Compose mounts, or startup script,
 recreate the services so the generated profile is refreshed:
@@ -174,21 +196,29 @@ configuration when a newer image starts.
 ## WxPost workspace controller
 
 The tracked `wxpost_controller` package is the shared boundary for one
-canonical WxPost authoring workspace. Its MCP surface implements the complete
-material-controller and draft operations:
+canonical WxPost authoring workspace. Its full Feishu MCP surface implements
+the complete material-controller and Draft operations:
 
 ```text
 wxpost_get_context
-wxpost_bootstrap_workspace
+wxpost_get_workspace_report
 wxpost_update_workspace
 wxpost_import_source
 wxpost_set_source_included
-wxpost_upload_source
 wxpost_update_sources
 wxpost_delete_source_preflight
 wxpost_delete_source
 wxpost_save_draft
+wxpost_edit_draft
 ```
+
+The web Draft Assistant receives only `wxpost_get_context`,
+`wxpost_get_workspace_report`, `wxpost_save_draft`, and
+`wxpost_edit_draft`. This is enforced by the configured platform tool surface,
+not merely by prompt instructions. A request to change a Materials description
+therefore receives an explanation and cannot mutate Materials or create a
+Draft version. Feishu receives the full surface because Materials management
+is part of its approved conversational workflow.
 
 The HTTP and MCP servers are thin adapters over the same controller core and
 return the same error and version-conflict details. HTTP exposes the Materials
@@ -419,7 +449,7 @@ value. For local development, put that same value in `frontend/.env.local` and
 restart `bun dev`; it is read only by the trusted Next route and is never
 exposed as a `NEXT_PUBLIC_` variable.
 
-Draft Preview may retain editor-only node IDs and private preview URLs.
+Draft Preview may retain editor-only node IDs and signed preview URLs.
 Publish/Sync replaces media URLs, removes editor-only attributes, sanitizes,
 and validates the same output. Those steps are post-processors, not alternative
 renderers. A renderer failure changes no saved or public state.
@@ -475,6 +505,25 @@ containers; its value must equal Backend's existing `WXPOST_SERVICE_TOKEN`.
 The same value is also mapped to the Gateway's `API_SERVER_KEY` and
 `HERMES_DASHBOARD_SESSION_TOKEN`; it is sent only from Backend to the
 controller or Hermes, never to the browser or an asset URL.
+
+Feishu Draft replies use a temporary preview flow rather than a public WxPost
+revision. Backend signs a 24-hour link bound to the selected workspace and the
+exact saved Draft version; the public-facing Next route renders that version
+with the canonical TypeScript compiler. If the Draft changes, the old link
+stops instead of silently showing newer content. Generate, Regenerate, and
+successful Draft edits send that link beside the authenticated web Draft
+Edit URL, so a signed-in member can continue editing the same workspace. The
+message explicitly notes that the authenticated web Draft Assistant uses an
+independent session from the current Feishu conversation. When a member asks to
+edit Materials or Draft on the web, the Feishu-only navigation plugin sends the
+corresponding canonical authenticated editor route directly instead of asking
+the model to reconstruct it. An explicit screenshot request
+calls `wxpost_send_draft_preview_image`, opens the same link with Hermes'
+bundled headless browser, and sends one compressed full-page image through the
+native Feishu sender. It is read-only and never changes Materials, Draft, or
+public revision state. Local Docker sets
+`WXPOST_PREVIEW_BROWSER_BASE_URL=http://host.docker.internal:3000`; deployment
+must set it to the externally reachable frontend origin.
 
 Configure the stdio MCP server once in the dedicated SoarHigh Hermes home:
 
@@ -533,7 +582,7 @@ HTTP routes are:
 
 ```text
 GET    /workspaces?page=1&page_size=10
-PUT    /workspaces/{workspaceId}
+POST   /workspaces
 PATCH  /workspaces/{workspaceId}
 DELETE /workspaces/{workspaceId}
 GET    /workspaces/{workspaceId}/context
@@ -598,13 +647,33 @@ exposes derived publication status to Draft and Workspaces.
    Materials stage can ask Hermes for a selected image's English description,
    using the image and any current description as factual authority and linked
    meeting theme, introduction, and agenda as supporting context. The
-   suggestion stays local until `Save Materials`.
-2. **Phase 2, Slice 7C - Feishu ingestion:** add Feishu workspace selection and
-   deduplicated attachments. Feishu may query the completed public-sync status,
-   while complex editing remains in the web workspace.
-3. **Phase 3 - WeChat Draft integration:** upload WeChat media, replace URLs,
+   suggestion stays local until `Save Materials`, which confirms and persists
+   it as an AI-authored description.
+2. **Phase 2, Slice 7C - Draft Assistant and Controller hardening (complete):**
+   use the managed fast WxPost profile, route general/read-only/editorial turns
+   deliberately, expose and persist genuine tool milestones, support atomic
+   `/new`, keep session metadata in Controller SQLite, and apply small Draft
+   changes through typed version-bound operations without conflating Materials
+   inclusion, Draft body media, or cover state.
+3. **Phase 2, Slice 7D - conversational Feishu integration (complete):** keep
+   the existing plain Feishu channel on the managed `wxpost` profile while
+   exposing a Feishu-only workspace-navigation toolset. Members can list,
+   select, and create workspaces, search linked meetings, import linked
+   candidates or deduplicated Feishu attachments, manage Materials, and
+   generate or edit typed Drafts. A read-only configuration report presents
+   source, editorial settings, candidates/imported/Included/Draft media, cover,
+   Draft version, and public status from canonical state. “素材库” means the
+   complete catalog; candidates must be imported before Draft use. Feishu can
+   display every catalog image natively and every video natively with a file
+   fallback. Its dedicated image-description tool stages the same
+   Controller-owned suggestion used by the web, then saves it only after a
+   later explicit member confirmation. Controller SQLite owns active Feishu
+   bindings and pending confirmations. Web and Feishu sessions remain
+   separate, setup is immutable after creation, and public synchronization
+   remains web-only.
+4. **Phase 3 - WeChat Draft integration:** upload WeChat media, replace URLs,
    submit the same canonical inline HTML, create/update the Draft idempotently,
    and verify platform readback plus mobile preview.
-4. **Phase 4 - optional hardening:** version history/rollback, simultaneous
+5. **Phase 4 - optional hardening:** version history/rollback, simultaneous
    collaborative editing, analytics, bulk operations, shareable style presets,
    and Bitable.

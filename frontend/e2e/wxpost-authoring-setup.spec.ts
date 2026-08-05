@@ -125,13 +125,15 @@ test('keeps the Posts and Meetings create actions vertically aligned', async ({
   expect(postsButton?.y).toBe(meetingsButton?.y);
 });
 
-test('keeps Setup source-only and creates one immutable workspace', async ({
-  page,
-}) => {
+test('creates one workspace from immutable Setup choices', async ({ page }) => {
   const workspace = await openAuthoringPage(page);
   const setup = page.getByTestId('setup-stage');
 
-  await expect(setup.getByTestId('article-type-panel')).toHaveCount(0);
+  await expect(setup.getByTestId('article-type-panel')).toBeVisible();
+  await expect(page.getByTestId('article-type-meeting-recap')).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
   await expect(page.getByTestId('association-linked')).toHaveAttribute(
     'aria-pressed',
     'true'
@@ -156,11 +158,9 @@ test('keeps Setup source-only and creates one immutable workspace', async ({
 
   await page.getByTestId('create-workspace').click();
   await expect(page.getByTestId('materials-stage')).toBeVisible();
-  await expect(page.getByTestId('article-type-panel')).toBeVisible();
-  await expect(page.getByTestId('article-type-meeting-recap')).toHaveAttribute(
-    'aria-pressed',
-    'true'
-  );
+  await expect(
+    page.getByTestId('materials-stage').getByTestId('article-type-panel')
+  ).toHaveCount(0);
   await expect(page).toHaveURL(/\/posts\/wxposts\/edit\/[0-9a-f]{12}$/);
   await expect(
     page.getByRole('heading', { name: 'WxPost', exact: true })
@@ -180,9 +180,10 @@ test('keeps Setup source-only and creates one immutable workspace', async ({
   await expect(page.getByTestId('association-linked')).toBeDisabled();
   await expect(page.getByTestId('association-independent')).toBeDisabled();
   await expect(page.getByTestId('meeting-select-trigger')).toBeDisabled();
+  await expect(page.getByTestId('article-type-meeting-recap')).toBeDisabled();
   await expect(page.getByTestId('create-workspace')).toHaveCount(0);
   expect(
-    workspace.requests.filter((request) => request === 'PUT /')
+    workspace.requests.filter((request) => request === 'POST /')
   ).toHaveLength(1);
   expect(
     workspace.requests.filter((request) => request === 'PATCH /')
@@ -196,13 +197,16 @@ test('creates an independent workspace without meeting context', async ({
   await page.getByTestId('association-independent').click();
   await expect(page.getByTestId('meeting-select-trigger')).toHaveCount(0);
   await expect(page.locator('header p')).toHaveText('Independent article');
-  await page.getByTestId('create-workspace').click();
-
   await expect(page.getByTestId('article-type-custom')).toHaveAttribute(
     'aria-pressed',
     'true'
   );
   await expect(page.getByTestId('custom-article-type')).toHaveValue('');
+  await page.getByTestId('create-workspace').click();
+
+  await expect(
+    page.getByTestId('materials-stage').getByTestId('article-type-panel')
+  ).toHaveCount(0);
   await expect(page.getByTestId('meeting-context')).toHaveCount(0);
   await expect(page.getByText('No media', { exact: true })).toBeVisible();
   const context = Array.from(workspace.contexts.values())[0];
@@ -237,9 +241,6 @@ test('defaults event-number workspaces to a custom Event Recap', async ({
   await expect(page.getByTestId('meeting-select-trigger')).toContainText(
     '#100001'
   );
-
-  await page.getByTestId('create-workspace').click();
-
   await expect(page.getByTestId('article-type-custom')).toHaveAttribute(
     'aria-pressed',
     'true'
@@ -247,15 +248,18 @@ test('defaults event-number workspaces to a custom Event Recap', async ({
   await expect(page.getByTestId('custom-article-type')).toHaveValue(
     'Event Recap'
   );
+  await expect(page.getByTestId('article-type-event-preview')).toHaveAttribute(
+    'aria-pressed',
+    'false'
+  );
+
+  await page.getByTestId('create-workspace').click();
+
   await expect(page.getByTestId('wxpost-header-subtitle')).toContainText(
     'Event #100001 · Event Recap'
   );
   await expect(page.getByTestId('meeting-context')).toContainText(
     'Event · #100001'
-  );
-  await expect(page.getByTestId('article-type-event-preview')).toHaveAttribute(
-    'aria-pressed',
-    'false'
   );
   const context = Array.from(workspace.contexts.values())[0];
   expect(context.manifest.meetingId).toBe('meeting-449');
@@ -326,7 +330,7 @@ test('resumes an existing workspace without creating or unlocking it', async ({
   await expect(page.getByTestId('association-linked')).toBeDisabled();
   await expect(page.getByTestId('meeting-select-trigger')).toBeDisabled();
   expect(workspace.requests).toContain('GET /context');
-  expect(workspace.requests).not.toContain('PUT /');
+  expect(workspace.requests).not.toContain('POST /');
   expect(workspace.requests).not.toContain('PATCH /');
 });
 

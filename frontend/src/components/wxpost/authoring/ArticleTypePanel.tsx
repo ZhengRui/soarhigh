@@ -40,18 +40,27 @@ export function ArticleTypePanel({
   onChange,
   customArticleType,
   onCustomArticleTypeChange,
+  disabled = false,
 }: {
   value: WorkspaceArticleType;
   onChange: (type: WorkspaceArticleType) => void;
   customArticleType: string;
   onCustomArticleTypeChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
-    <section className={PANEL_CLASS} data-testid='article-type-panel'>
+    <section
+      className={`${PANEL_CLASS} ${disabled ? 'bg-slate-50' : ''}`}
+      data-testid='article-type-panel'
+    >
       <div className={PANEL_HEADER_CLASS}>
         <h2 className={PANEL_TITLE_CLASS}>Article type</h2>
       </div>
-      <div className='grid gap-4 p-[22px] max-[480px]:gap-3 max-[480px]:p-3'>
+      <div
+        className={`grid gap-4 p-[22px] max-[480px]:gap-3 max-[480px]:p-3 ${
+          disabled ? 'opacity-70' : ''
+        }`}
+      >
         <div className='grid grid-cols-3 gap-[10px] max-[760px]:grid-cols-2 max-[480px]:grid-cols-1'>
           {ARTICLE_TYPES.map(({ value: type, icon: Icon }) => {
             const selected = value === type;
@@ -60,13 +69,14 @@ export function ArticleTypePanel({
               <button
                 type='button'
                 key={type}
-                className={`flex min-h-[52px] min-w-0 cursor-pointer items-center justify-between gap-[10px] rounded-xl border px-[15px] py-3 text-left text-sm font-semibold transition-colors ${FOCUS_RING_CLASS} max-[480px]:min-h-10 max-[480px]:px-3 max-[480px]:py-2 max-[480px]:text-[13px] ${
+                className={`flex min-h-[52px] min-w-0 cursor-pointer items-center justify-between gap-[10px] rounded-xl border px-[15px] py-3 text-left text-sm font-semibold transition-colors disabled:cursor-default ${FOCUS_RING_CLASS} max-[480px]:min-h-10 max-[480px]:px-3 max-[480px]:py-2 max-[480px]:text-[13px] ${
                   selected
                     ? 'border-[#4b7df0] bg-[#eef4ff] text-[#1749bb]'
                     : 'border-[#d6dfeb] bg-white text-[#40506a] hover:border-[#9fb8e7] hover:bg-[#f8fbff]'
                 }`}
                 onClick={() => onChange(type)}
                 aria-pressed={selected}
+                disabled={disabled}
                 data-testid={`article-type-${type}`}
               >
                 <span className='inline-flex min-w-0 items-center gap-[9px] max-[480px]:gap-2 [&_svg]:h-[18px] [&_svg]:w-[18px] [&_svg]:shrink-0 max-[480px]:[&_svg]:h-4 max-[480px]:[&_svg]:w-4'>
@@ -97,6 +107,7 @@ export function ArticleTypePanel({
               placeholder='For example: Member interview'
               className='min-h-[46px] rounded-[10px] border border-[#cad5e4] bg-white px-3 text-[15px] text-[#172033] outline-none placeholder:text-[#93a0b2] hover:border-[#9fb1c8] focus:border-blue-600 max-[480px]:min-h-10 max-[480px]:text-sm'
               data-testid='custom-article-type'
+              disabled={disabled}
             />
           </label>
         )}

@@ -227,7 +227,7 @@ async def r_list_meetings(
 
 @r.get("/meetings/options", response_model=PaginatedMeetingOptions)
 async def r_list_meeting_options(
-    user: Optional[User] = Depends(get_optional_user),
+    user_id: Optional[str] = Depends(get_meeting_reader_user_id),
     status: Optional[str] = Query(None, description="Filter by status (draft or published)"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=100, description="Items per page"),
@@ -235,7 +235,7 @@ async def r_list_meeting_options(
     """List lightweight meeting options with the same visibility rules as `/meetings`."""
     try:
         options = get_meeting_options(
-            user_id=user.uid if user else None,
+            user_id=user_id,
             status=status,
             page=page,
             page_size=page_size,
@@ -248,13 +248,13 @@ async def r_list_meeting_options(
 @r.post("/meetings/options/batch", response_model=MeetingOptionsByIdsResponse)
 async def r_list_meeting_options_by_ids(
     request: MeetingOptionsByIdsRequest,
-    user: Optional[User] = Depends(get_optional_user),
+    user_id: Optional[str] = Depends(get_meeting_reader_user_id),
 ) -> MeetingOptionsByIdsResponse:
     """Resolve compact meeting records in one request for workspace lists."""
     try:
         options = get_meeting_options_by_ids(
             request.ids,
-            user_id=user.uid if user else None,
+            user_id=user_id,
         )
         return MeetingOptionsByIdsResponse.model_validate({"items": options})
     except Exception as e:
@@ -639,7 +639,7 @@ async def r_get_meeting_media(
         for obj in oss2.ObjectIterator(bucket, prefix=prefix):
             if obj.key != prefix:  # Skip the directory itself
                 filename = obj.key.split("/")[-1]
-                public_url = f"https://{ALICLOUD_OSS_BUCKET}.{ALICLOUD_OSS_ENDPOINT}/" f"{quote(obj.key, safe='/')}"
+                public_url = f"https://{ALICLOUD_OSS_BUCKET}.{ALICLOUD_OSS_ENDPOINT}/{quote(obj.key, safe='/')}"
 
                 modified_time = datetime.fromtimestamp(
                     obj.last_modified,

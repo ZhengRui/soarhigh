@@ -361,11 +361,11 @@ def test_http_workspace_delete_requires_the_current_manifest_version(
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    url = f"http://127.0.0.1:{server.server_port}/workspaces/delete-versioned"
+    base_url = f"http://127.0.0.1:{server.server_port}"
     try:
         status, created = _json_request(
-            url,
-            method="PUT",
+            f"{base_url}/workspaces",
+            method="POST",
             payload={
                 "meetingId": None,
                 "editorial": {
@@ -377,6 +377,9 @@ def test_http_workspace_delete_requires_the_current_manifest_version(
             },
         )
         assert status == 200
+        workspace_id = created["workspaceId"]
+        assert workspace_id.startswith("wxpost-")
+        url = f"{base_url}/workspaces/{workspace_id}"
 
         status, missing = _json_request(url, method="DELETE")
         assert status == HTTPStatus.UNPROCESSABLE_ENTITY
@@ -561,10 +564,69 @@ def test_http_draft_session_delete_resets_only_the_assistant_history(
         thread.join(timeout=5)
 
 
-def _mcp_parameters(root: Path, validation_url: str) -> StdioServerParameters:
+def test_http_session_retirement_requires_auth_and_queues_cleanup(
+    tmp_path: Path,
+) -> None:
+    class DraftService:
+        def __init__(self) -> None:
+            self.session_ids: list[str] = []
+
+        def retire_session(self, session_id: str) -> dict[str, Any]:
+            self.session_ids.append(session_id)
+            return {"sessionId": session_id, "cleanupScheduled": True}
+
+    draft_service = DraftService()
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.draft_service = draft_service  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}/sessions/retire"
+    try:
+        unauthorized, _ = _json_request(
+            url,
+            method="POST",
+            payload={"sessionId": "old-feishu-session"},
+            token="wrong",
+        )
+        invalid, invalid_body = _json_request(
+            url,
+            method="POST",
+            payload={"sessionId": "   "},
+        )
+        status, result = _json_request(
+            url,
+            method="POST",
+            payload={"sessionId": "old-feishu-session"},
+        )
+
+        assert unauthorized == HTTPStatus.UNAUTHORIZED
+        assert invalid == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert invalid_body["error"]["code"] == "invalid_request"
+        assert status == HTTPStatus.OK
+        assert result == {
+            "sessionId": "old-feishu-session",
+            "cleanupScheduled": True,
+        }
+        assert draft_service.session_ids == ["old-feishu-session"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _mcp_parameters(
+    root: Path,
+    validation_url: str,
+    module: str = "wxpost_controller.mcp_server",
+) -> StdioServerParameters:
     return StdioServerParameters(
         command=sys.executable,
-        args=["-m", "wxpost_controller.mcp_server"],
+        args=["-m", module],
         cwd=str(root),
         env={
             **os.environ,
@@ -2215,15 +2277,11 @@ def test_materials_update_preserves_a_saved_draft(
     assert saved["draftVersion"] == 1
 
     current = controller.get_context(workspace_id)
-    editorial = {
-        **current["manifest"]["editorial"],
-        "articleType": "member-story",
-    }
     updated = controller.update_workspace(
         workspace_id,
         expected_manifest_version=current["manifest"]["manifestVersion"],
         meeting_id=current["manifest"]["meetingId"],
-        editorial=editorial,
+        editorial=current["manifest"]["editorial"],
         source_updates=[
             {
                 "sourceId": WEB_IMAGE_ID,
@@ -2237,7 +2295,7 @@ def test_materials_update_preserves_a_saved_draft(
 
     assert updated["workspaceId"] == workspace_id
     assert updated["manifest"]["manifestVersion"] == 2
-    assert updated["manifest"]["editorial"]["articleType"] == "member-story"
+    assert updated["manifest"]["editorial"]["articleType"] == "meeting-recap"
     updated_source = next(
         source
         for source in updated["manifest"]["sources"]
@@ -2298,7 +2356,7 @@ def test_materials_update_preserves_a_saved_draft(
         proposal=_draft_proposal(media_ids=()),
         refresh_from_materials=True,
     )
-    assert regenerated["document"]["articleType"] == "member-story"
+    assert regenerated["document"]["articleType"] == "meeting-recap"
     assert regenerated["document"]["media"] == []
     assert (
         controller.get_context(workspace_id)["manifest"]["draft"][
@@ -2308,7 +2366,7 @@ def test_materials_update_preserves_a_saved_draft(
     )
 
 
-def test_meeting_source_change_invalidates_a_saved_draft(
+def test_meeting_source_change_is_rejected_without_touching_saved_draft(
     seeded_workspace: tuple[Path, str],
 ) -> None:
     root, workspace_id = seeded_workspace
@@ -2321,22 +2379,16 @@ def test_meeting_source_change_invalidates_a_saved_draft(
     )
     current = controller.get_context(workspace_id)
 
-    updated = controller.update_workspace(
-        workspace_id,
-        expected_manifest_version=current["manifest"]["manifestVersion"],
-        meeting_id=None,
-        editorial=current["manifest"]["editorial"],
-    )
-
-    assert updated["manifest"]["manifestVersion"] == 2
-    assert updated["manifest"]["meetingId"] is None
-    assert updated["manifest"]["draft"] is None
-    assert updated["draft"] is None
-    assert not (root / "inbox" / workspace_id / "draft" / "article.json").exists()
-    assert all(
-        source["origin"]["type"] != "meeting-library"
-        for source in updated["manifest"]["sources"]
-    )
+    with pytest.raises(InvalidRequest, match="meeting/source is fixed"):
+        controller.update_workspace(
+            workspace_id,
+            expected_manifest_version=current["manifest"]["manifestVersion"],
+            meeting_id=None,
+            editorial=current["manifest"]["editorial"],
+        )
+    unchanged = controller.get_context(workspace_id)
+    assert unchanged == current
+    assert (root / "inbox" / workspace_id / "draft" / "article.json").is_file()
 
 
 @pytest.mark.asyncio
@@ -2455,7 +2507,6 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
     tmp_path: Path,
     validation_url: str,
 ) -> None:
-    workspace_id = "transport-materials"
     server = build_server(
         workspace_root=str(tmp_path),
         bearer_token=TOKEN,
@@ -2467,8 +2518,8 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
     base_url = f"http://127.0.0.1:{server.server_port}"
     try:
         status, created = _json_request(
-            f"{base_url}/workspaces/{workspace_id}",
-            method="PUT",
+            f"{base_url}/workspaces",
+            method="POST",
             payload={
                 "meetingId": None,
                 "editorial": {
@@ -2483,6 +2534,8 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
             },
         )
         assert status == 200
+        workspace_id = created["workspaceId"]
+        assert workspace_id.startswith("wxpost-")
         assert created["manifest"]["manifestVersion"] == 1
         assert created["manifest"]["sources"] == []
 
@@ -2546,10 +2599,16 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
         assert status == 409
         assert conflict["error"]["code"] == "version_conflict"
 
-        incoming = tmp_path / "incoming"
-        incoming.mkdir()
-        clip_path = incoming / "clip.mp4"
-        clip_path.write_bytes(b"feishu-video")
+        status, second_upload = _upload_request(
+            f"{base_url}/workspaces/{workspace_id}/uploads",
+            filename="clip.mp4",
+            expected_manifest_version=3,
+            data=b"web-video",
+            mime_type="video/mp4",
+        )
+        assert status == 200
+        assert second_upload["manifestVersion"] == 4
+        assert second_upload["sources"][1]["id"] == "M02"
 
         async with stdio_client(_mcp_parameters(tmp_path, validation_url)) as (
             read,
@@ -2559,28 +2618,13 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
                 await session.initialize()
                 tools = {tool.name for tool in (await session.list_tools()).tools}
                 assert {
-                    "wxpost_bootstrap_workspace",
                     "wxpost_update_workspace",
                     "wxpost_import_source",
                     "wxpost_set_source_included",
-                    "wxpost_upload_source",
                     "wxpost_delete_source_preflight",
                     "wxpost_delete_source",
                 }.issubset(tools)
-
-                mcp_uploaded = _mcp_value(
-                    await session.call_tool(
-                        "wxpost_upload_source",
-                        {
-                            "workspace_id": workspace_id,
-                            "expected_manifest_version": 3,
-                            "source_path": str(clip_path),
-                        },
-                    )
-                )
-                assert mcp_uploaded["manifestVersion"] == 4
-                assert mcp_uploaded["sources"][1]["id"] == "M02"
-                assert mcp_uploaded["sources"][1]["origin"] == {"type": "feishu-upload"}
+                assert "wxpost_upload_source" not in tools
 
                 status, http_conflict = _json_request(
                     f"{base_url}/workspaces/{workspace_id}/sources/M01/inclusion",

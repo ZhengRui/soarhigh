@@ -15,7 +15,7 @@ import toast from 'react-hot-toast';
 
 import { useMeetingOptions } from '@/hooks/useMeetingOptions';
 import {
-  bootstrapWorkspace,
+  createWorkspace,
   generateWorkspaceDraft,
   getWorkspaceContext,
   WORKSPACE_ARTICLE_TYPE_LABELS,
@@ -24,6 +24,7 @@ import {
   workspaceListPath,
   type WorkspaceContext,
   type WorkspaceEditorial,
+  type WorkspaceArticleType,
 } from '@/utils/wxpostWorkspace';
 
 import type { WxPostAuthoringStage, WxPostMaterialsWorkingCopy } from './types';
@@ -35,14 +36,13 @@ import type { DraftMode } from './WxPostDraftControls';
 import { STAGE_BUTTON_CLASS } from './authoringStyles';
 
 function createInitialEditorial(
-  linked: boolean,
-  meeting: LinkedMeetingOption | null
+  articleType: WorkspaceArticleType,
+  customArticleType: string
 ): WorkspaceEditorial {
-  const isEvent = linked && isEventMeeting(meeting);
-
   return {
-    articleType: !linked || isEvent ? 'custom' : 'meeting-recap',
-    customArticleType: isEvent ? 'Event Recap' : null,
+    articleType,
+    customArticleType:
+      articleType === 'custom' ? customArticleType.trim() || null : null,
     writingApproach: 'chronological',
     transcript: '',
     extraNotes: '',
@@ -103,11 +103,6 @@ function reconcileMaterialsWorkingCopy(
       ])
     ),
   };
-}
-
-function createWorkspaceId() {
-  const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 12);
-  return `wxpost-${suffix}`;
 }
 
 function StageTabs({
@@ -192,6 +187,9 @@ export function WxPostAuthoringWorkspace({
   const [linked, setLinked] = useState(true);
   const [selectedMeeting, setSelectedMeeting] =
     useState<LinkedMeetingOption | null>(null);
+  const [setupArticleType, setSetupArticleType] =
+    useState<WorkspaceArticleType>('meeting-recap');
+  const [setupCustomArticleType, setSetupCustomArticleType] = useState('');
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceContext, setWorkspaceContext] =
     useState<WorkspaceContext | null>(null);
@@ -242,6 +240,10 @@ export function WxPostAuthoringWorkspace({
           : reconcileMaterialsWorkingCopy(current, context)
       );
       setLinked(Boolean(context.manifest.meetingId));
+      setSetupArticleType(context.manifest.editorial.articleType);
+      setSetupCustomArticleType(
+        context.manifest.editorial.customArticleType ?? ''
+      );
       setSelectedMeeting((current) =>
         current?.id === context.manifest.meetingId ? current : null
       );
@@ -311,7 +313,12 @@ export function WxPostAuthoringWorkspace({
       return;
     }
     if (!selectedMeeting && meetings.length > 0) {
-      setSelectedMeeting(meetings[0]);
+      const meeting = meetings[0];
+      setSelectedMeeting(meeting);
+      if (isEventMeeting(meeting)) {
+        setSetupArticleType('custom');
+        setSetupCustomArticleType('Event Recap');
+      }
     }
   }, [
     meetings,
@@ -324,13 +331,14 @@ export function WxPostAuthoringWorkspace({
   const handleCreateWorkspace = useCallback(async () => {
     const meetingId = linked ? (selectedMeeting?.id ?? null) : null;
     if (linked && !meetingId) return;
-    const editorial = createInitialEditorial(linked, selectedMeeting);
-    const nextWorkspaceId = createWorkspaceId();
-
+    const editorial = createInitialEditorial(
+      setupArticleType,
+      setupCustomArticleType
+    );
     setWorkspacePending(true);
     setWorkspaceError(null);
     try {
-      const context = await bootstrapWorkspace(nextWorkspaceId, {
+      const context = await createWorkspace({
         meetingId,
         editorial,
       });
@@ -347,7 +355,14 @@ export function WxPostAuthoringWorkspace({
     } finally {
       setWorkspacePending(false);
     }
-  }, [linked, queryClient, router, selectedMeeting]);
+  }, [
+    linked,
+    queryClient,
+    router,
+    selectedMeeting,
+    setupArticleType,
+    setupCustomArticleType,
+  ]);
 
   const handleGenerateDraft = useCallback(async () => {
     if (!workspaceContext || !workspaceId) return;
@@ -476,7 +491,14 @@ export function WxPostAuthoringWorkspace({
         <div hidden={stage !== 'setup'}>
           <WxPostSetupStage
             linked={linked}
-            onLinkedChange={setLinked}
+            onLinkedChange={(nextLinked) => {
+              setLinked(nextLinked);
+              const event = nextLinked && isEventMeeting(selectedMeeting);
+              setSetupArticleType(
+                event || !nextLinked ? 'custom' : 'meeting-recap'
+              );
+              setSetupCustomArticleType(event ? 'Event Recap' : '');
+            }}
             meetings={meetings}
             meetingsPending={meetingsQuery.isPending}
             meetingsError={meetingsQuery.isError}
@@ -489,6 +511,9 @@ export function WxPostAuthoringWorkspace({
               if (meeting) {
                 setSelectedMeeting(meeting);
                 setSyncWorkspaceMeeting(false);
+                const event = isEventMeeting(meeting);
+                setSetupArticleType(event ? 'custom' : 'meeting-recap');
+                setSetupCustomArticleType(event ? 'Event Recap' : '');
               }
             }}
             onLoadMoreMeetings={() => {
@@ -501,6 +526,10 @@ export function WxPostAuthoringWorkspace({
             isCreating={workspacePending}
             createError={workspaceError}
             sourceLocked={Boolean(workspaceContext)}
+            articleType={setupArticleType}
+            onArticleTypeChange={setSetupArticleType}
+            customArticleType={setupCustomArticleType}
+            onCustomArticleTypeChange={setSetupCustomArticleType}
           />
         </div>
 

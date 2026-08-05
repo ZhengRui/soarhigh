@@ -1,8 +1,12 @@
 """Authoring and public-read routes for Hermes-authored WxPosts."""
 
+import base64
+import hashlib
+import hmac
 import json
 import re
 import secrets
+import time
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 from urllib.parse import quote
@@ -92,6 +96,103 @@ class VoiceToneSuggestionRequest(BaseModel):
 
 class VoiceToneSuggestionResponse(BaseModel):
     instruction: str
+
+
+class DraftPreviewLinkResponse(BaseModel):
+    previewUrl: str
+    editorUrl: str
+    workspaceId: str
+    draftVersion: int
+    expiresAt: int
+
+
+class WorkspaceEditorLinksResponse(BaseModel):
+    workspaceId: str
+    materialsUrl: str
+    draftUrl: str
+
+
+WXPOST_DRAFT_PREVIEW_TTL_SECONDS = 24 * 60 * 60
+
+
+def _workspace_editor_urls(workspace_id: str) -> tuple[str, str]:
+    workspace_key = quote(workspace_id.removeprefix("wxpost-"), safe="")
+    editor_url = f"{WXPOST_PUBLIC_BASE_URL}/posts/wxposts/edit/{workspace_key}"
+    return editor_url, f"{editor_url}?view=edit"
+
+
+def _encode_draft_preview_token(
+    workspace_id: str,
+    draft_version: int,
+    expires_at: int,
+) -> str:
+    if not WXPOST_SERVICE_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="WxPost Draft preview signing is not configured.",
+        )
+    payload = json.dumps(
+        {
+            "workspaceId": workspace_id,
+            "draftVersion": draft_version,
+            "expiresAt": expires_at,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    signature = hmac.new(WXPOST_SERVICE_TOKEN.encode(), payload, hashlib.sha256).digest()
+    return ".".join(base64.urlsafe_b64encode(part).decode().rstrip("=") for part in (payload, signature))
+
+
+def _decode_draft_preview_token(token: str) -> tuple[str, int]:
+    if not WXPOST_SERVICE_TOKEN:
+        raise HTTPException(status_code=404, detail="Draft preview is unavailable.")
+    try:
+        encoded_payload, encoded_signature = token.split(".", 1)
+        payload = base64.urlsafe_b64decode(encoded_payload + "=" * (-len(encoded_payload) % 4))
+        signature = base64.urlsafe_b64decode(encoded_signature + "=" * (-len(encoded_signature) % 4))
+        expected = hmac.new(WXPOST_SERVICE_TOKEN.encode(), payload, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("invalid signature")
+        claims = json.loads(payload)
+        workspace_id = claims["workspaceId"]
+        draft_version = claims["draftVersion"]
+        expires_at = claims["expiresAt"]
+        if (
+            not isinstance(workspace_id, str)
+            or not workspace_id
+            or not isinstance(draft_version, int)
+            or draft_version < 1
+            or not isinstance(expires_at, int)
+        ):
+            raise ValueError("invalid claims")
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=404, detail="Draft preview is unavailable.") from error
+    if expires_at < int(time.time()):
+        raise HTTPException(status_code=410, detail="This Draft preview link has expired.")
+    return workspace_id, draft_version
+
+
+async def _load_versioned_draft_preview(
+    token: str,
+) -> tuple[str, int, ArticleDocument]:
+    workspace_id, expected_draft_version = _decode_draft_preview_token(token)
+    context = await _load_workspace_context(workspace_id)
+    draft = context.get("draft")
+    if not isinstance(draft, dict) or draft.get("draftVersion") != expected_draft_version:
+        raise HTTPException(
+            status_code=410,
+            detail="This Draft preview is no longer current. Request a new preview link.",
+        )
+    try:
+        document = ArticleDocument.model_validate(draft.get("document"))
+        validate_and_parse(document)
+    except (ValidationError, ArticleDocumentValidationError) as error:
+        raise HTTPException(
+            status_code=422,
+            detail="The saved Draft cannot be previewed.",
+        ) from error
+    return workspace_id, expected_draft_version, document
 
 
 async def require_wxpost_service(
@@ -224,6 +325,26 @@ async def _proxy_workspace_controller(
         status_code=upstream.status_code,
         headers=response_headers,
     )
+
+
+async def _workspace_creation_body(request: Request, user: User) -> bytes:
+    try:
+        payload = json.loads(await request.body())
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail="Workspace creation body must be valid JSON.",
+        ) from error
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Workspace creation body must be a JSON object.",
+        )
+    payload["createdBy"] = {
+        "id": user.uid,
+        "name": user.full_name or user.username,
+    }
+    return json.dumps(payload, ensure_ascii=False).encode()
 
 
 async def _stream_workspace_controller(
@@ -361,7 +482,7 @@ async def _load_workspace_source(
 ) -> tuple[bytes, str]:
     upstream = await _request_workspace_controller(
         "GET",
-        (f"/workspaces/{quote(workspace_id, safe='')}/sources/" f"{quote(source_id, safe='')}/content"),
+        (f"/workspaces/{quote(workspace_id, safe='')}/sources/{quote(source_id, safe='')}/content"),
     )
     if upstream.status_code != 200:
         raise _upstream_error(upstream)
@@ -414,7 +535,7 @@ async def _proxy_workspace_request(
         )
     return await _proxy_workspace_controller(
         request.method,
-        (f"/workspaces/{quote(workspace_id, safe='')}/" f"{controller_path}{query}"),
+        (f"/workspaces/{quote(workspace_id, safe='')}/{controller_path}{query}"),
         body=body,
         content_type=request.headers.get("Content-Type"),
         expected_manifest_version=request.headers.get("X-Expected-Manifest-Version"),
@@ -598,34 +719,17 @@ async def r_delete_public_wxpost(
     return WxPostPublicationDeleteResult(workspace_id=workspace_id)
 
 
-@r.put(
-    "/posts/wxposts/workspaces/{workspace_id}",
+@r.post(
+    "/posts/wxposts/workspaces",
 )
-async def r_bootstrap_wxpost_workspace(
+async def r_create_wxpost_workspace(
     request: Request,
-    workspace_id: str = Path(..., min_length=1),
     user: User = Depends(get_current_user),
 ) -> Response:
-    try:
-        payload = json.loads(await request.body())
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise HTTPException(
-            status_code=400,
-            detail="Workspace bootstrap body must be valid JSON.",
-        ) from error
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=400,
-            detail="Workspace bootstrap body must be a JSON object.",
-        )
-    payload["createdBy"] = {
-        "id": user.uid,
-        "name": user.full_name or user.username,
-    }
     return await _proxy_workspace_controller(
-        "PUT",
-        f"/workspaces/{quote(workspace_id, safe='')}",
-        body=json.dumps(payload, ensure_ascii=False).encode(),
+        "POST",
+        "/workspaces",
+        body=await _workspace_creation_body(request, user),
         content_type="application/json",
     )
 
@@ -726,6 +830,117 @@ async def r_get_wxpost_workspace_publication(
         workspace_id,
         current_draft_version=current_draft_version,
         row=get_wxpost_by_workspace_id(workspace_id),
+    )
+
+
+@r.get(
+    "/posts/wxposts/workspaces/{workspace_id}/publication/service",
+    response_model=WxPostPublicationStatus,
+    dependencies=[Depends(require_wxpost_service)],
+)
+async def r_get_wxpost_workspace_publication_for_service(
+    workspace_id: str = Path(..., min_length=1),
+    current_draft_version: int | None = Query(default=None, ge=1),
+) -> WxPostPublicationStatus:
+    """Return publication metadata without calling back into the Controller."""
+
+    return publication_status(
+        workspace_id,
+        current_draft_version=current_draft_version,
+        row=get_wxpost_by_workspace_id(workspace_id),
+    )
+
+
+@r.post(
+    "/posts/wxposts/workspaces/{workspace_id}/draft-preview",
+    response_model=DraftPreviewLinkResponse,
+    dependencies=[Depends(require_wxpost_service)],
+)
+async def r_create_wxpost_draft_preview_link(
+    workspace_id: str = Path(..., min_length=1),
+    draft_version: int | None = Query(default=None, ge=1),
+) -> DraftPreviewLinkResponse:
+    """Issue a short-lived, version-bound link for one private saved Draft."""
+
+    context = await _load_workspace_context(workspace_id)
+    draft = context.get("draft")
+    current_version = draft.get("draftVersion") if isinstance(draft, dict) else None
+    if not isinstance(current_version, int) or current_version < 1:
+        raise HTTPException(status_code=409, detail="This workspace has no saved Draft.")
+    if draft_version is not None and draft_version != current_version:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Draft v{draft_version} is not the current saved Draft v{current_version}.",
+        )
+    expires_at = int(time.time()) + WXPOST_DRAFT_PREVIEW_TTL_SECONDS
+    token = _encode_draft_preview_token(workspace_id, current_version, expires_at)
+    _materials_url, draft_url = _workspace_editor_urls(workspace_id)
+    return DraftPreviewLinkResponse(
+        previewUrl=f"{WXPOST_PUBLIC_BASE_URL}/posts/wxposts/draft-preview/{token}",
+        editorUrl=draft_url,
+        workspaceId=workspace_id,
+        draftVersion=current_version,
+        expiresAt=expires_at,
+    )
+
+
+@r.get(
+    "/posts/wxposts/workspaces/{workspace_id}/editor-links",
+    response_model=WorkspaceEditorLinksResponse,
+    dependencies=[Depends(require_wxpost_service)],
+)
+async def r_get_wxpost_workspace_editor_links(
+    workspace_id: str = Path(..., min_length=1),
+) -> WorkspaceEditorLinksResponse:
+    """Return authenticated web-editor routes for a Controller workspace."""
+
+    await _load_workspace_context(workspace_id)
+    materials_url, draft_url = _workspace_editor_urls(workspace_id)
+    return WorkspaceEditorLinksResponse(
+        workspaceId=workspace_id,
+        materialsUrl=materials_url,
+        draftUrl=draft_url,
+    )
+
+
+@r.get("/posts/wxposts/draft-previews/{token}")
+async def r_get_wxpost_draft_preview(token: str) -> dict[str, Any]:
+    """Return canonical render input for a valid temporary Draft link."""
+
+    workspace_id, draft_version, document = await _load_versioned_draft_preview(token)
+    render_document = (
+        validate_and_parse(document)
+        .render_document(document)
+        .model_dump(
+            by_alias=True,
+            mode="json",
+        )
+    )
+    for media in render_document["media"]:
+        source_id = media["id"]
+        media["sourceUrl"] = (
+            f"/posts/wxposts/draft-previews/{quote(token, safe='')}/media/" f"{quote(source_id, safe='')}"
+        )
+        media["posterUrl"] = None
+    return {
+        "workspaceId": workspace_id,
+        "draftVersion": draft_version,
+        "renderDocument": render_document,
+    }
+
+
+@r.get("/posts/wxposts/draft-previews/{token}/media/{source_id}")
+async def r_get_wxpost_draft_preview_media(token: str, source_id: str) -> Response:
+    """Serve only media referenced by the exact Draft bound to the link."""
+
+    workspace_id, _draft_version, document = await _load_versioned_draft_preview(token)
+    if source_id not in {media.id for media in document.media}:
+        raise HTTPException(status_code=404, detail="Draft media is unavailable.")
+    content, mime_type = await _load_workspace_source(workspace_id, source_id)
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={"Cache-Control": "private, no-store"},
     )
 
 

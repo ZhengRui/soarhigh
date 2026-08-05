@@ -291,6 +291,31 @@ export async function mockWxPostWorkspaceApi(
     return sessionId;
   };
 
+  const createWorkspaceContext = (
+    workspaceId: string,
+    input: {
+      meetingId: string | null;
+      editorial: WorkspaceManifest['editorial'];
+    }
+  ) =>
+    ({
+      workspaceId,
+      manifest: {
+        schemaVersion: 4,
+        workspaceId,
+        manifestVersion: 1,
+        nextMaterialNumber: meetingSources(input.meetingId).length + 1,
+        createdBy: { id: 'member-123', name: 'Test Member' },
+        createdAt: '2026-07-29T03:00:00Z',
+        updatedAt: '2026-07-29T03:00:00Z',
+        meetingId: input.meetingId,
+        draft: null,
+        editorial: input.editorial,
+        sources: meetingSources(input.meetingId),
+      },
+      draft: null,
+    }) as const;
+
   await page.route(/\/posts\/wxposts\/validate$/, async (route) => {
     mock.draftValidationRequests += 1;
     if (mock.failDraftValidation) {
@@ -316,6 +341,27 @@ export async function mockWxPostWorkspaceApi(
   });
 
   await page.route(
+    /^http:\/\/localhost:5000\/posts\/wxposts\/workspaces\/?$/,
+    async (route) => {
+      const request = route.request();
+      const method = request.method();
+      mock.requests.push(`${method} /`);
+      if (method !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      const input = request.postDataJSON() as {
+        meetingId: string | null;
+        editorial: WorkspaceManifest['editorial'];
+      };
+      const workspaceId = 'wxpost-a1b2c3d4e5f6';
+      const context = createWorkspaceContext(workspaceId, input);
+      mock.contexts.set(workspaceId, context);
+      await route.fulfill({ status: 200, json: context });
+    }
+  );
+
+  await page.route(
     /^http:\/\/localhost:5000\/posts\/wxposts\/workspaces\//,
     async (route) => {
       const request = route.request();
@@ -328,46 +374,6 @@ export async function mockWxPostWorkspaceApi(
       const workspaceId = decodeURIComponent(encodedWorkspaceId);
       const method = request.method();
       mock.requests.push(`${method} /${parts.join('/')}`);
-
-      if (method === 'PUT' && parts.length === 0) {
-        const input = request.postDataJSON() as {
-          meetingId: string | null;
-          editorial: WorkspaceManifest['editorial'];
-        };
-        const existing = mock.contexts.get(workspaceId);
-        if (existing) {
-          await route.fulfill({
-            status: 409,
-            json: {
-              error: {
-                code: 'workspace_already_exists',
-                message: `workspace already exists: ${workspaceId}`,
-              },
-            },
-          });
-          return;
-        }
-        const context = {
-          workspaceId,
-          manifest: {
-            schemaVersion: 4,
-            workspaceId,
-            manifestVersion: 1,
-            nextMaterialNumber: meetingSources(input.meetingId).length + 1,
-            createdBy: { id: 'member-123', name: 'Test Member' },
-            createdAt: '2026-07-29T03:00:00Z',
-            updatedAt: '2026-07-29T03:00:00Z',
-            meetingId: input.meetingId,
-            draft: null,
-            editorial: input.editorial,
-            sources: meetingSources(input.meetingId),
-          },
-          draft: null,
-        } as const;
-        mock.contexts.set(workspaceId, context);
-        await route.fulfill({ status: 200, json: context });
-        return;
-      }
 
       let context = mock.contexts.get(workspaceId);
       if (!context) {

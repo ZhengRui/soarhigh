@@ -29,7 +29,7 @@ from .errors import (
     HermesUnavailable,
 )
 
-HERMES_DESCRIPTION_PROTOCOL_VERSION = 2
+HERMES_DESCRIPTION_PROTOCOL_VERSION = 3
 HERMES_DRAFT_IDENTITY = (
     "You are SoarHigh Club's AI Assistant "
     "(SoarHigh 俱乐部的 AI 助手). In this workspace, your role is to help "
@@ -42,17 +42,36 @@ HERMES_DRAFT_IDENTITY = (
 )
 
 HermesEventCallback = Callable[[str, dict[str, Any]], None]
+HermesSessionResolvedCallback = Callable[[str], None]
 DraftProgressCallback = Callable[[dict[str, Any]], None]
 SessionCleanupCallback = Callable[[Callable[[], None]], None]
 
-_WXPOST_MCP_PREFIX = "mcp__soarhigh_wxpost__"
+_WXPOST_MCP_PREFIXES = (
+    "mcp__soarhigh_wxpost__",
+    "mcp__soarhigh_wxpost_draft__",
+)
+_CURRENT_TOOL_ALIASES = {
+    "wxpost_get_current_context": "wxpost_get_context",
+    "wxpost_get_current_workspace_report": "wxpost_get_workspace_report",
+    "wxpost_save_current_draft": "wxpost_save_draft",
+    "wxpost_edit_current_draft": "wxpost_edit_draft",
+}
 logger = logging.getLogger(__name__)
 
 
 def _normalized_tool_name(tool_name: str) -> str:
-    if tool_name.startswith(_WXPOST_MCP_PREFIX):
-        return tool_name.removeprefix(_WXPOST_MCP_PREFIX)
-    return tool_name
+    for prefix in _WXPOST_MCP_PREFIXES:
+        if tool_name.startswith(prefix):
+            tool_name = tool_name.removeprefix(prefix)
+            break
+    return _CURRENT_TOOL_ALIASES.get(tool_name, tool_name)
+
+
+def _is_draft_save_tool(tool_name: str) -> bool:
+    return _normalized_tool_name(tool_name) in {
+        "wxpost_save_draft",
+        "wxpost_edit_draft",
+    }
 
 
 def _draft_edit_activity(
@@ -186,6 +205,7 @@ class HermesSessionClient:
         prompt: str,
         session_id: str | None = None,
         on_event: HermesEventCallback | None = None,
+        on_session_resolved: HermesSessionResolvedCallback | None = None,
     ) -> HermesTurn:
         try:
             with self._connect() as websocket:
@@ -210,6 +230,8 @@ class HermesSessionClient:
                         "Hermes did not return a live session identifier"
                     )
                 stored_session_id = self._stored_session_id(session)
+                if on_session_resolved is not None:
+                    on_session_resolved(stored_session_id)
                 self._rpc(
                     websocket,
                     "prompt.submit",
@@ -453,6 +475,7 @@ class HermesSessionClient:
             "skill_view": "Loading the writing guidance",
             "view_skill": "Loading the writing guidance",
             "wxpost_get_context": "Reading the saved Draft and media",
+            "wxpost_get_workspace_report": "Reading the workspace configuration",
             "wxpost_edit_draft": "Updating the Draft",
             "wxpost_save_draft": "Saving the Draft",
             "web_search": "Searching the web",
@@ -594,6 +617,16 @@ class HermesDraftService:
             "messages": [],
         }
 
+    def retire_session(self, session_id: str) -> dict[str, Any]:
+        """Durably queue a superseded Hermes session for physical deletion."""
+
+        self._session_store.schedule_cleanup(session_id)
+        self._schedule_session_cleanup()
+        return {
+            "sessionId": session_id,
+            "cleanupScheduled": True,
+        }
+
     def delete_workspace(
         self,
         workspace_id: str,
@@ -637,10 +670,10 @@ class HermesDraftService:
                 f"Expected manifest version: {expected_manifest_version}",
                 f"Expected draft version: {expected_draft_version}",
                 f"Draft operation ID: {operation_id}",
-                "Read the workspace through wxpost_get_context and stop without",
+                "Read the workspace through wxpost_get_current_context and stop without",
                 "saving if either returned version differs from the expected",
                 "version above. Otherwise author a complete Draft proposal from",
-                "its saved Materials and call wxpost_save_draft with the expected",
+                "its saved Materials and call wxpost_save_current_draft with the expected",
                 "versions above and refresh_from_materials=true.",
                 "For Regenerate, author a fresh proposal from current Materials",
                 "and guidance rather than preserving the prior Draft's structure.",
@@ -648,12 +681,13 @@ class HermesDraftService:
                 "proposal or ArticleDocument validation, correct that error and",
                 "make one replacement save call with the same versions. Never",
                 "retry a version conflict or make more than two save attempts.",
-                "The final wxpost_save_draft call must contain all six top-level",
-                f'arguments: workspace_id="{workspace_id}",',
+                "The final wxpost_save_current_draft call must contain these",
+                "required top-level arguments:",
                 f"expected_manifest_version={expected_manifest_version},",
                 f"expected_draft_version={expected_draft_version},",
                 f'operation_id="{operation_id}", and proposal.',
-                "Set refresh_from_materials=true.",
+                "Set refresh_from_materials=true. The current-workspace tools",
+                "are already bound to this session; never supply a workspace ID.",
                 "Do not change Materials or perform any public synchronization.",
                 f"After success, reply exactly: Draft {'generated' if expected_draft_version == 0 else 'regenerated'}.",
                 f"End that reply with: Draft version: v{expected_draft_version} → v{expected_draft_version + 1}",
@@ -709,28 +743,34 @@ class HermesDraftService:
                 "Choose exactly one mode before calling a tool:",
                 "1. For an ordinary question that does not depend on this WxPost,",
                 "answer directly. Do not read the workspace and do not load a Skill.",
-                "2. For a read-only question about the current article or media, call",
-                "wxpost_get_context and answer without saving. Do not load a Skill.",
-                "3. Only when the member explicitly asks to create or revise Draft",
+                "2. For a read-only question about the current article or Draft media, call",
+                "wxpost_get_current_context and answer without saving. Do not load a Skill.",
+                "3. For a complete workspace configuration report, media-library",
+                "inventory, or candidate/imported-media breakdown, call",
+                "wxpost_get_current_workspace_report and answer without saving. Do not load a Skill.",
+                "The media library is the complete workspace catalog: candidates plus",
+                "imported media. Candidates are linked meeting/event media not yet",
+                "imported; imported media are workspaceReady and usable by the Draft.",
+                "Included means selected for the next Generate or Regenerate; Draft media",
+                "means imported media referenced by the current body or cover.",
+                "4. Only when the member explicitly asks to create or revise Draft",
                 "content, media, or cover, load the soarhigh-wxpost-authoring Skill,",
                 "read the context, then choose the narrowest save tool. Use",
-                "wxpost_edit_draft for a local title, metadata, body node, directive,",
+                "wxpost_edit_current_draft for a local title, metadata, body node, directive,",
                 "media occurrence, description, or cover change. Use",
-                "wxpost_save_draft only for whole-article restructuring or rewriting.",
-                "In Draft Assistant turns, 素材库, 候选素材, media library, candidate",
-                "media, and available media all mean imported workspaceReady images",
-                "and videos only. Never count workspaceReady=false meeting-library",
-                "entries; they are Materials-stage import options, not Draft media.",
+                "wxpost_save_current_draft only for whole-article restructuring or rewriting.",
                 "For either save tool, use the exact expected versions and operation ID above,",
                 f'pass operation_id="{operation_id}",',
-                "For wxpost_edit_draft, submit only explicit typed edits whose body",
+                "For wxpost_edit_current_draft, submit only explicit typed edits whose body",
                 "node indexes come from draft.editContext. Do not resubmit the article.",
-                "For a whole-article wxpost_save_draft revision, set",
+                "For a whole-article wxpost_save_current_draft revision, set",
                 "refresh_from_materials=false and include media_changes.",
                 "The Draft media pool is every imported workspace-ready",
                 "image or video; Materials inclusion is only for Generate/Regenerate.",
                 "Preserve unrelated article content, media, cover, and metadata.",
                 "Never call a Materials mutation or public synchronization tool.",
+                "Current-workspace tools are bound to this Web session and take no",
+                "workspace ID. Never call a cross-workspace MCP tool.",
                 "Reply naturally and briefly whether you answered or saved a change.",
                 "After a successful save, end the reply with exactly:",
                 f"Draft version: v{expected_draft_version} → v{expected_draft_version + 1}",
@@ -767,38 +807,34 @@ class HermesDraftService:
                     expected_draft_version=expected_draft_version,
                 )
             save_started = False
-            save_failed = False
+            save_succeeded = False
+            workspace_read_failed = False
             visible_activities: dict[str, tuple[str, str]] = {}
-            completed_steps: list[dict[str, Any]] = []
+            final_steps: list[dict[str, Any]] = []
 
             def emit(stage: str, **details: Any) -> None:
-                if stage == "activity_completed":
-                    completed_steps.append(
+                if stage in {"activity_completed", "activity_failed"}:
+                    final_steps.append(
                         {
                             **details,
-                            "completed": True,
-                            "failed": False,
+                            "completed": stage == "activity_completed",
+                            "failed": stage == "activity_failed",
                         }
                     )
                 if on_progress is not None:
                     on_progress({"stage": stage, **details})
 
             def activity_label(tool_name: str, payload: dict[str, Any]) -> str | None:
-                if tool_name in {
-                    "wxpost_get_context",
-                    "mcp__soarhigh_wxpost__wxpost_get_context",
-                }:
+                normalized_name = _normalized_tool_name(tool_name)
+                if normalized_name == "wxpost_get_context":
                     return "Reading the saved Draft and media"
+                if normalized_name == "wxpost_get_workspace_report":
+                    return "Reading the workspace configuration"
                 if tool_name in {"view_skill", "skill_view"}:
                     return "Loading the writing guidance"
-                if tool_name in {
-                    "wxpost_save_draft",
-                    "mcp__soarhigh_wxpost__wxpost_save_draft",
-                    "wxpost_edit_draft",
-                    "mcp__soarhigh_wxpost__wxpost_edit_draft",
-                }:
+                if _is_draft_save_tool(tool_name):
                     return f"Saving Draft v{expected_draft_version + 1}"
-                if tool_name not in {
+                if normalized_name not in {
                     "web_search",
                     "web_extract",
                     "browser_navigate",
@@ -817,26 +853,30 @@ class HermesDraftService:
                     "browser_snapshot": "Reading the current webpage",
                     "browser_vision": "Examining the current webpage",
                     "vision_analyze": "Examining an image",
-                }.get(tool_name)
+                }.get(normalized_name)
 
             def handle_hermes_event(
                 event_type: str,
                 payload: dict[str, Any],
             ) -> None:
-                nonlocal save_failed, save_started
+                nonlocal save_started, save_succeeded, workspace_read_failed
                 if event_type not in {"tool.start", "tool.complete"}:
                     return
                 tool_name = str(payload.get("name") or "")
-                is_save_tool = tool_name in {
-                    "wxpost_save_draft",
-                    "mcp__soarhigh_wxpost__wxpost_save_draft",
-                    "wxpost_edit_draft",
-                    "mcp__soarhigh_wxpost__wxpost_edit_draft",
-                }
+                is_save_tool = _is_draft_save_tool(tool_name)
+                normalized_name = _normalized_tool_name(tool_name)
                 if is_save_tool:
                     save_started = True
-                    if event_type == "tool.complete" and payload.get("error") is True:
-                        save_failed = True
+                    if event_type == "tool.complete":
+                        if payload.get("error") is not True:
+                            save_succeeded = True
+                if (
+                    event_type == "tool.complete"
+                    and payload.get("error") is True
+                    and normalized_name
+                    in {"wxpost_get_context", "wxpost_get_workspace_report"}
+                ):
+                    workspace_read_failed = True
                 tool_id = str(payload.get("toolId") or "")
                 if not tool_id:
                     return
@@ -856,13 +896,6 @@ class HermesDraftService:
                 if activity is not None:
                     label, started_tool_name = activity
                     activity_failed = payload.get("error") is True
-                    if activity_failed and started_tool_name in {
-                        "wxpost_save_draft",
-                        "mcp__soarhigh_wxpost__wxpost_save_draft",
-                        "wxpost_edit_draft",
-                        "mcp__soarhigh_wxpost__wxpost_edit_draft",
-                    }:
-                        save_failed = True
                     operation_names: list[str] | None = None
                     if (
                         not activity_failed
@@ -896,8 +929,10 @@ class HermesDraftService:
                 "prompt": prompt,
                 "session_id": session_locator,
             }
-            if on_progress is not None:
-                turn_kwargs["on_event"] = handle_hermes_event
+            # Tool lifecycle is authoritative for attributing a saved version
+            # to this turn. It must be observed even when the caller does not
+            # render progress (for example, initial Generate/Regenerate).
+            turn_kwargs["on_event"] = handle_hermes_event
             turn = self._session_client.turn(**turn_kwargs)
             session_store_available = True
             try:
@@ -908,7 +943,7 @@ class HermesDraftService:
                     "Hermes turn completed, but session metadata could not be stored",
                     exc_info=True,
                 )
-            if save_started and not save_failed:
+            if save_succeeded:
                 verification_id = f"verify-{operation_id}"
                 emit(
                     "activity_started",
@@ -925,21 +960,12 @@ class HermesDraftService:
             )
             actual_manifest_version = context["manifest"]["manifestVersion"]
             draft_changed = (
-                actual_draft_version == expected_draft_version + 1
+                save_succeeded
+                and actual_draft_version == expected_draft_version + 1
                 and actual_operation_id == operation_id
             )
-            mutation_expected = save_required or save_started or draft_changed
             if (
-                mutation_expected
-                and actual_manifest_version != expected_manifest_version
-            ):
-                raise VersionConflict(
-                    resource="manifest",
-                    expected=expected_manifest_version,
-                    actual=actual_manifest_version,
-                )
-            if (
-                mutation_expected
+                (save_required or save_started)
                 and not draft_changed
                 and actual_draft_version != expected_draft_version
             ):
@@ -949,16 +975,31 @@ class HermesDraftService:
                     actual=actual_draft_version,
                 )
             if save_required and not draft_changed:
+                if actual_manifest_version != expected_manifest_version:
+                    raise VersionConflict(
+                        resource="manifest",
+                        expected=expected_manifest_version,
+                        actual=actual_manifest_version,
+                    )
                 raise HermesTurnFailed(
                     turn.reply or "Hermes did not save the requested draft"
                 )
-            if save_started and not save_failed:
+            if save_succeeded and not draft_changed:
+                raise HermesTurnFailed(
+                    turn.reply or "Hermes did not save the requested draft"
+                )
+            if save_succeeded:
                 emit(
                     "activity_completed",
                     activityId=verification_id,
                     label="Verifying the saved Draft",
                 )
             reply = turn.reply
+            if workspace_read_failed:
+                reply = (
+                    "I could not read the current workspace, so I did not use "
+                    "older conversation data as if it were current. Please retry."
+                )
             if draft_changed:
                 version_transition = (
                     f"Draft version: v{expected_draft_version} → "
@@ -976,7 +1017,7 @@ class HermesDraftService:
                     self._session_store.append_completed_progress(
                         turn.session_id,
                         turn_id=operation_id,
-                        steps=completed_steps,
+                        steps=final_steps,
                     )
                 except DraftSessionStoreUnavailable:
                     logger.warning(
@@ -1095,9 +1136,11 @@ class HermesDescriptionService:
         *,
         controller: WorkspaceController,
         session_client: HermesSessionClient,
+        retire_session: Callable[[str], object],
     ) -> None:
         self._controller = controller
         self._session_client = session_client
+        self._retire_session = retire_session
         self._turn_locks: WeakValueDictionary[tuple[str, str], threading.Lock] = (
             WeakValueDictionary()
         )
@@ -1116,7 +1159,18 @@ class HermesDescriptionService:
         if not isinstance(current_description, str):
             raise InvalidRequest("Current description must be text")
 
-        with self._turn_lock(workspace_id, source_id):
+        turn_lock = self._turn_lock(workspace_id, source_id)
+        if not turn_lock.acquire(blocking=False):
+            raise InvalidRequest(
+                "An image description is already being generated for this source"
+            )
+        resolved_session_id: str | None = None
+
+        def remember_session(session_id: str) -> None:
+            nonlocal resolved_session_id
+            resolved_session_id = session_id
+
+        try:
             context = self._controller.get_source_description_context(
                 workspace_id,
                 expected_manifest_version=expected_manifest_version,
@@ -1165,7 +1219,11 @@ class HermesDescriptionService:
                     + json.dumps(current_description, ensure_ascii=False),
                     "MEETING_CONTEXT_JSON:"
                     + json.dumps(meeting_context, ensure_ascii=False),
-                    'Reply with exactly one JSON object: {"description":"..."}.',
+                    "If the image was inspected successfully, reply with exactly",
+                    'one JSON object: {"status":"ok","description":"..."}.',
+                    "If the image cannot be inspected, reply with exactly one JSON",
+                    'object: {"status":"error","error":"brief reason"}.',
+                    "Never put an inspection or processing error in description.",
                     "Do not save or update the workspace and do not include markdown",
                     "fences, commentary, or any other fields.",
                 ]
@@ -1174,7 +1232,9 @@ class HermesDescriptionService:
                 title=self._session_title(workspace_id, source_id),
                 cwd=str(self._controller.inbox_root / workspace_id),
                 prompt=prompt,
+                on_session_resolved=remember_session,
             )
+            resolved_session_id = turn.session_id
             description = self._description_from_reply(turn.reply)
             self._controller.assert_source_description_target(
                 workspace_id,
@@ -1182,9 +1242,14 @@ class HermesDescriptionService:
                 source_id=source_id,
                 expected_source_revision=context["sourceRevision"],
             )
+        finally:
+            if resolved_session_id:
+                self._retire_session(resolved_session_id)
+            turn_lock.release()
         return {
             "workspaceId": workspace_id,
             "sourceId": source_id,
+            "manifestVersion": expected_manifest_version,
             "description": description,
         }
 
@@ -1205,7 +1270,18 @@ class HermesDescriptionService:
             raise HermesTurnFailed(
                 "Hermes returned an invalid image description"
             ) from error
-        if not isinstance(payload, dict) or set(payload) != {"description"}:
+        if not isinstance(payload, dict):
+            raise HermesTurnFailed("Hermes returned an invalid image description")
+
+        if set(payload) == {"status", "error"} and payload.get("status") == "error":
+            error_message = payload.get("error")
+            if isinstance(error_message, str) and error_message.strip():
+                raise HermesTurnFailed(
+                    f"Hermes could not inspect the image: {error_message.strip()}"
+                )
+            raise HermesTurnFailed("Hermes could not inspect the image")
+
+        if set(payload) != {"status", "description"} or payload.get("status") != "ok":
             raise HermesTurnFailed("Hermes returned an invalid image description")
         description = payload.get("description")
         if not isinstance(description, str):

@@ -8,7 +8,8 @@ profile_home="${root_home}/profiles/wxpost"
 /opt/hermes/.venv/bin/python /opt/soarhigh/wxpost_profile/configure.py \
   --root-home "${root_home}" \
   --source-skill /opt/soarhigh/skills/soarhigh-wxpost-authoring \
-  --source-soul /opt/soarhigh/wxpost_profile/SOUL.md
+  --source-soul /opt/soarhigh/wxpost_profile/SOUL.md \
+  --source-plugin /opt/soarhigh/wxpost_profile/plugins/soarhigh-wxpost-navigation
 
 # The image reconciles persisted profile gateway state before this command is
 # run. Stop any gateway it restored, then make the managed profile the sticky
@@ -16,7 +17,10 @@ profile_home="${root_home}/profiles/wxpost"
 HERMES_HOME="${root_home}" /opt/hermes/.venv/bin/hermes profile use wxpost
 HERMES_HOME="${root_home}" /opt/hermes/.venv/bin/hermes gateway stop --all
 
-export HERMES_HOME="${root_home}"
+# Hermes resolves config, state, skills, and plugins from HERMES_HOME. Point
+# both long-running processes at the managed profile itself; HERMES_PROFILE is
+# only an identity label and does not redirect config reads.
+export HERMES_HOME="${profile_home}"
 export HERMES_PROFILE=wxpost
 
 serve_pid=''

@@ -1,0 +1,28 @@
+name: soarhigh-wxpost-navigation
+version: 1.0.0
+description: Session-scoped Web Draft tools plus Feishu navigation, reporting, and media delivery for SoarHigh WxPost workspaces.
+kind: standalone
+platforms:
+  - linux
+hooks:
+  - pre_gateway_dispatch
+  - pre_tool_call
+  - on_session_reset
+provides_tools:
+  - wxpost_get_current_context
+  - wxpost_get_current_workspace_report
+  - wxpost_save_current_draft
+  - wxpost_edit_current_draft
+  - wxpost_list_workspaces
+  - wxpost_search_meetings
+  - wxpost_get_active_workspace
+  - wxpost_get_active_workspace_report
+  - wxpost_show_material_library
+  - wxpost_describe_material
+  - wxpost_get_draft_preview
+  - wxpost_send_web_editor_link
+  - wxpost_send_draft_preview_image
+  - wxpost_select_workspace
+  - wxpost_create_workspace
+  - wxpost_delete_workspace
+  - wxpost_import_feishu_attachments
