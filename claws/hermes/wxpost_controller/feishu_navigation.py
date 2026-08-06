@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .contracts import ArticleType
 from .core import (
     InvalidRequest,
+    SOARHIGH_SERVICE_USER_AGENT,
     UpstreamUnavailable,
     WorkspaceController,
     WorkspaceNotFound,
@@ -374,7 +375,10 @@ class FeishuNavigation:
             f"{self._api_base_url}/posts/wxposts/workspaces/"
             f"{quote(workspace_id, safe='')}/draft-preview{query}",
             data=b"",
-            headers={"Authorization": f"Bearer {self._service_token}"},
+            headers={
+                "Authorization": f"Bearer {self._service_token}",
+                "User-Agent": SOARHIGH_SERVICE_USER_AGENT,
+            },
             method="POST",
         )
         try:
@@ -417,7 +421,10 @@ class FeishuNavigation:
         request = Request(
             f"{self._api_base_url}/posts/wxposts/workspaces/"
             f"{quote(workspace_id, safe='')}/editor-links",
-            headers={"Authorization": f"Bearer {self._service_token}"},
+            headers={
+                "Authorization": f"Bearer {self._service_token}",
+                "User-Agent": SOARHIGH_SERVICE_USER_AGENT,
+            },
             method="GET",
         )
         try:
@@ -716,9 +723,14 @@ class FeishuNavigation:
             query = urlencode({"page": page, "page_size": 100})
             request = Request(
                 f"{self._api_base_url}/meetings/options?{query}",
-                headers={"Authorization": f"Bearer {self._service_token}"}
-                if self._service_token
-                else {},
+                headers={
+                    "User-Agent": SOARHIGH_SERVICE_USER_AGENT,
+                    **(
+                        {"Authorization": f"Bearer {self._service_token}"}
+                        if self._service_token
+                        else {}
+                    ),
+                },
             )
             try:
                 with urlopen(request, timeout=15) as response:
@@ -747,6 +759,7 @@ class FeishuNavigation:
             data=json.dumps({"ids": meeting_ids}).encode(),
             headers={
                 "Content-Type": "application/json",
+                "User-Agent": SOARHIGH_SERVICE_USER_AGENT,
                 **(
                     {"Authorization": f"Bearer {self._service_token}"}
                     if self._service_token

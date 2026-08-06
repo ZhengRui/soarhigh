@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from wxpost_controller.core import InvalidRequest, VersionConflict
+from wxpost_controller.core import (
+    SOARHIGH_SERVICE_USER_AGENT,
+    InvalidRequest,
+    VersionConflict,
+)
 from wxpost_controller.feishu_navigation import FeishuNavigation
 from wxpost_controller.feishu_state_store import FeishuStateStore
 
@@ -711,6 +715,49 @@ def test_linked_workspace_requires_matching_meeting_or_event(
         confirmed=True,
     )
     assert created["workspace"]["manifest"]["meetingId"] == "event-10001"
+
+
+def test_meeting_api_requests_identify_the_controller_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    navigation = _navigation(tmp_path, monkeypatch)
+    captured = []
+
+    class Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self._payload).encode()
+
+    def open_request(request, timeout):
+        captured.append((request, timeout))
+        payload = (
+            {"items": [], "pages": 1}
+            if request.get_method() == "GET"
+            else {"items": []}
+        )
+        return Response(payload)
+
+    monkeypatch.setattr("wxpost_controller.feishu_navigation.urlopen", open_request)
+
+    assert navigation._meeting_options() == []
+    assert navigation._meeting_options_by_ids(["meeting-464"]) == []
+
+    assert [request.get_header("User-agent") for request, _timeout in captured] == [
+        SOARHIGH_SERVICE_USER_AGENT,
+        SOARHIGH_SERVICE_USER_AGENT,
+    ]
+    assert [request.get_header("Authorization") for request, _timeout in captured] == [
+        "Bearer test-token",
+        "Bearer test-token",
+    ]
 
 
 def test_feishu_attachment_import_is_idempotent_per_message_and_content(

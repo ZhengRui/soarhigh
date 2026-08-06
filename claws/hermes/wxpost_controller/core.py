@@ -63,6 +63,7 @@ MeetingContextLoader = Callable[[str], Mapping[str, Any]]
 SourceLoader = Callable[[str], bytes]
 RequestModel = TypeVar("RequestModel", bound=BaseModel)
 logger = logging.getLogger(__name__)
+SOARHIGH_SERVICE_USER_AGENT = "SoarHigh-WxPost-Controller/1.0"
 DEFAULT_DRAFT_PRESENTATION = {
     "layout": "brand-default",
     "palette": "fresh-sage",
@@ -597,6 +598,7 @@ class WorkspaceController:
             url,
             headers={
                 "Authorization": f"Bearer {self._soarhigh_service_token}",
+                "User-Agent": SOARHIGH_SERVICE_USER_AGENT,
             },
             method="GET",
         )
@@ -1584,7 +1586,7 @@ class WorkspaceController:
                 raise UpstreamUnavailable(
                     "SOARHIGH_API_BASE_URL is required to list meeting media"
                 )
-            headers = {}
+            headers = {"User-Agent": SOARHIGH_SERVICE_USER_AGENT}
             if self._soarhigh_service_token:
                 headers["Authorization"] = f"Bearer {self._soarhigh_service_token}"
             request = Request(
@@ -1657,7 +1659,7 @@ class WorkspaceController:
                 raise UpstreamUnavailable(
                     "SOARHIGH_API_BASE_URL is required to read linked meeting context"
                 )
-            headers = {}
+            headers = {"User-Agent": SOARHIGH_SERVICE_USER_AGENT}
             if self._soarhigh_service_token:
                 headers["Authorization"] = f"Bearer {self._soarhigh_service_token}"
             request = Request(
@@ -2380,7 +2382,10 @@ class WorkspaceController:
         request = Request(
             f"{self._soarhigh_api_base_url}{path}",
             data=json.dumps(payload_data, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": SOARHIGH_SERVICE_USER_AGENT,
+            },
             method="POST",
         )
         try:
