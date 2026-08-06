@@ -1032,7 +1032,7 @@ async def test_gateway_client_preserves_wechat_error_codes(
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            502,
+            404,
             json={
                 "code": "wechat_api_error",
                 "message": "invalid media_id",
@@ -1048,6 +1048,7 @@ async def test_gateway_client_preserves_wechat_error_codes(
             await client.update_draft("missing-id", {"title": "Updated"})
 
     assert caught.value.wechat_errcode == 40007
+    assert caught.value.status_code == 404
     assert caught.value.uncertain is False
 
 

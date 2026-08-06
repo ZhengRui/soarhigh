@@ -211,7 +211,7 @@ class WechatGatewayClient:
                 503
                 if response.status_code in {401, 403}
                 else response.status_code
-                if response.status_code in {409, 422}
+                if response.status_code in {404, 409, 422}
                 else 502
             )
             raise WechatDraftError(

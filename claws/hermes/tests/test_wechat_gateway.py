@@ -544,6 +544,27 @@ def test_draft_add_invalid_json_is_uncertain_and_not_retried() -> None:
     assert add_calls == 1
 
 
+def test_missing_wechat_media_is_a_structured_not_found_error() -> None:
+    def handler(**kwargs: Any) -> TransportResponse:
+        if "/stable_token" in kwargs["url"]:
+            return response({"access_token": "token", "expires_in": 7200})
+        assert "/draft/get" in kwargs["url"]
+        return response({"errcode": 40007, "errmsg": "invalid media_id"})
+
+    gateway = OfficialAccountGateway(
+        app_id="app-id",
+        app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
+        transport=FakeTransport(handler),
+    )
+
+    with pytest.raises(GatewayError, match="invalid media_id") as caught:
+        gateway.get_draft("missing-id")
+
+    assert caught.value.status == 404
+    assert caught.value.wechat_errcode == 40007
+
+
 def test_non_success_wechat_status_is_never_reported_as_update_success() -> None:
     def handler(**kwargs: Any) -> TransportResponse:
         if "/stable_token" in kwargs["url"]:
@@ -790,4 +811,33 @@ def test_http_gateway_preserves_structured_upstream_uncertainty() -> None:
         "code": "upstream_result_uncertain",
         "message": "The WeChat API response was unavailable.",
         "uncertain": True,
+    }
+
+
+def test_http_gateway_preserves_missing_media_details_without_a_502() -> None:
+    with running_server() as server:
+
+        def missing_draft(media_id: str) -> dict:
+            del media_id
+            raise GatewayError(
+                "wechat_api_error",
+                "WeChat API error 40007: invalid media_id",
+                status=404,
+                wechat_errcode=40007,
+            )
+
+        server.gateway.get_draft = missing_draft  # type: ignore[method-assign]
+        status, payload = request(
+            server,
+            "GET",
+            "/v1/drafts/missing-id",
+            headers=authorized_headers(),
+        )
+
+    assert status == 404
+    assert payload == {
+        "code": "wechat_api_error",
+        "message": "WeChat API error 40007: invalid media_id",
+        "uncertain": False,
+        "wechatErrcode": 40007,
     }

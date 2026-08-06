@@ -14,6 +14,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 WECHAT_API_BASE = "https://api.weixin.qq.com"
 TOKEN_ERROR_CODES = {40014, 42001}
+MISSING_MEDIA_ERROR_CODE = 40007
 TOKEN_EXPIRY_BUFFER_SECONDS = 300
 PUBLIC_ASSET_PREFIX = "public/wxposts/"
 BODY_IMAGE_MAX_BYTES = 1024 * 1024 - 1
@@ -365,6 +366,7 @@ class OfficialAccountGateway:
             raise GatewayError(
                 "wechat_api_error",
                 f"WeChat API error {errcode}: {payload.get('errmsg', 'unknown error')}",
+                status=404 if errcode == MISSING_MEDIA_ERROR_CODE else 502,
                 wechat_errcode=errcode if isinstance(errcode, int) else None,
             )
         return payload
