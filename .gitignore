@@ -2,8 +2,6 @@
 plans/
 **/.playwright-mcp/
 .codex/config.toml
-claws/hermes/.env.local
-claws/hermes/.env.local.tmp.*
 
 # Python runtime and test-tool output outside backend/.
 **/__pycache__/

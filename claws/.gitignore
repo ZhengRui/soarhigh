@@ -1,0 +1,4 @@
+# Local service configuration.
+hermes/.env.local
+hermes/.env.local.tmp.*
+**/.env.example
