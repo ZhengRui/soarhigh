@@ -61,9 +61,9 @@ DEEPSEEK_API_KEY = config("DEEPSEEK_API_KEY", cast=str, default="")
 WECHAT_APP_ID = config("WECHAT_APP_ID", cast=str)
 WECHAT_APP_SECRET = config("WECHAT_APP_SECRET", cast=str)
 WECHAT_JWT_SECRET = config("WECHAT_JWT_SECRET", cast=str)
-WECHAT_OFFICIAL_ACCOUNT_APP_ID = config("WECHAT_OFFICIAL_ACCOUNT_APP_ID", cast=str, default="")
-WECHAT_OFFICIAL_ACCOUNT_APP_SECRET = config("WECHAT_OFFICIAL_ACCOUNT_APP_SECRET", cast=str, default="")
 WECHAT_OFFICIAL_ACCOUNT_NAME = config("WECHAT_OFFICIAL_ACCOUNT_NAME", cast=str, default="")
+WECHAT_GATEWAY_BASE_URL = config("WECHAT_GATEWAY_BASE_URL", cast=str, default="").rstrip("/")
+WECHAT_GATEWAY_SERVICE_TOKEN = config("WECHAT_GATEWAY_SERVICE_TOKEN", cast=str, default="")
 
 # WxPost ingestion is intentionally separate from member authentication and
 # WeChat draft credentials. Local development links point at the existing

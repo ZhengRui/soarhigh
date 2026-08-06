@@ -1,10 +1,11 @@
 # Hermes container
 
-This directory runs the Hermes Gateway and WxPost HTTP controller as two
-services in one Compose project. The Gateway exposes Hermes's authenticated
-Agent API for focused editorial suggestions and `hermes serve` for persisted
-workspace-scoped Draft sessions. Hermes state and article working files remain
-in two separate host directories:
+This directory runs the Hermes Gateway, WxPost HTTP controller, and fixed-egress
+WeChat API gateway as three isolated services in one Compose project. The
+Hermes Gateway exposes its authenticated Agent API for focused editorial
+suggestions and `hermes serve` for persisted workspace-scoped Draft sessions.
+The WeChat gateway has no Hermes, workspace, or database access. Hermes state
+and article working files remain in two separate host directories:
 
 | Host setting           | Container path | Purpose                                                                 |
 | ---------------------- | -------------- | ----------------------------------------------------------------------- |
@@ -74,13 +75,14 @@ recreate the services so the generated profile is refreshed:
 docker compose \
   --env-file claws/hermes/.env.local \
   --file claws/hermes/compose.yaml \
-  up --detach --force-recreate gateway controller
+  up --detach --build --force-recreate wechat-gateway gateway controller
 ```
 
 ## First startup
 
 The first interactive `up` asks for the Hermes home, workspace, image,
-container name, and the existing Backend WxPost service token:
+container name, existing Backend WxPost service token, independent WeChat
+gateway token, and Official Account credentials:
 
 ```bash
 ./claws/hermes/hermes.sh up
@@ -99,6 +101,10 @@ HERMES_WORKSPACE_DIR=/Users/example/hermes-workspace
 HERMES_IMAGE=nousresearch/hermes-agent:latest
 HERMES_CONTAINER_NAME=soarhigh-hermes
 SOARHIGH_WXPOST_SERVICE_TOKEN=use-the-value-from-backend-WXPOST_SERVICE_TOKEN
+WECHAT_GATEWAY_SERVICE_TOKEN=use-a-different-random-secret
+WECHAT_OFFICIAL_ACCOUNT_APP_ID=official-account-app-id
+WECHAT_OFFICIAL_ACCOUNT_APP_SECRET=official-account-app-secret
+WECHAT_GATEWAY_PORT=8790
 ```
 
 The setup accepts `~` in an answer but stores the resolved absolute path. It
@@ -118,6 +124,91 @@ deliberately refuses to create missing bind-mount directories.
 `HERMES_HOME_DIR` contains secrets and persistent Hermes state. Keep it outside
 the repository and back it up before image upgrades. `.env.local` is ignored by
 Git.
+
+Existing deployments are never rewritten by `hermes.sh`. Before using the new
+Compose file, manually add the three required `WECHAT_*` credentials above to
+the existing VPS `.env.local`; `WECHAT_GATEWAY_PORT` is optional and defaults
+to 8790. Keep `WECHAT_GATEWAY_SERVICE_TOKEN` different from
+`SOARHIGH_WXPOST_SERVICE_TOKEN`.
+
+## Fixed-egress WeChat API gateway
+
+`wechat-gateway` is a dedicated dependency-free Python container bound only to
+`127.0.0.1:${WECHAT_GATEWAY_PORT:-8790}`. The host HTTPS reverse proxy exposes
+that loopback service to Vercel Backend. Its public base URL must resolve
+immediately before `/v1`; for example, if Backend uses
+`https://services.example.com/wechat-gateway`, the reverse proxy must map
+`/wechat-gateway/v1/...` to the container's `/v1/...` without exposing port
+8790 directly.
+
+The authenticated contract is intentionally closed:
+
+```text
+POST /v1/images/body
+POST /v1/images/cover
+POST /v1/drafts
+PUT  /v1/drafts/{mediaId}
+GET  /v1/drafts/{mediaId}
+GET  /v1/drafts?limit=1..20
+GET  /healthz
+```
+
+Every `/v1` route requires
+`Authorization: Bearer ${WECHAT_GATEWAY_SERVICE_TOKEN}`. `/healthz` is the only
+unauthenticated route. The gateway accepts bounded multipart image uploads and
+JSON draft operations, then calls only the corresponding hard-coded
+`api.weixin.qq.com` endpoint. It cannot proxy an arbitrary path.
+
+Official Account AppID/AppSecret and the in-memory access-token cache live only
+in this container. One process-level lock serializes refreshes. A WeChat token
+error refreshes and retries the rejected operation once; a transport failure
+after `draft/add` is never retried and returns explicit uncertainty so Backend
+can use its existing batch-read recovery. The gateway does not read Saved
+Drafts or Public Revisions, download OSS files, compile or sanitize HTML,
+choose create versus update, access Supabase, or persist idempotency state.
+Draft JSON is sent as real UTF-8 rather than ASCII `\\u` escapes because the
+real API otherwise preserved escaped punctuation inside article HTML and
+returned a corrupted title byte. Readback remains strict UTF-8 so platform
+corruption cannot be hidden by a local content repair. Any non-success HTTP
+status is rejected; malformed or incomplete `draft/add` responses are marked
+uncertain and are never blindly retried.
+
+For a Backend process running directly on the same development machine, use
+`WECHAT_GATEWAY_BASE_URL=http://127.0.0.1:8790`. Do not append `/v1`; Backend
+adds the typed route itself. A Backend running in Docker should use
+`http://host.docker.internal:8790` instead.
+
+Production rollout order:
+
+1. Generate a separate gateway credential, for example with
+   `openssl rand -hex 32`, and add it plus the Official Account credentials to
+   the VPS `.env.local`.
+2. Build and start only the gateway first:
+   `docker compose --env-file claws/hermes/.env.local -f claws/hermes/compose.yaml up -d --build wechat-gateway`.
+3. Configure the host's existing HTTPS reverse proxy and verify `/healthz`.
+4. Add the VPS public egress IPv4 to the Official Account API IP allowlist.
+5. Set Vercel Backend `WECHAT_GATEWAY_BASE_URL`,
+   `WECHAT_GATEWAY_SERVICE_TOKEN`, and the non-secret
+   `WECHAT_OFFICIAL_ACCOUNT_NAME`; deploy Backend and verify an authenticated
+   `GET /v1/drafts?limit=1` through the public HTTPS URL.
+6. Create or update one existing diagnostic WeChat draft and confirm that its
+   media ID is reused, `draft/get` succeeds, and the official temporary preview
+   opens.
+7. Apply migration `20260806000003` only after the new Backend is live; it
+   removes the obsolete Supabase access-token cache without touching
+   `wxpost_wechat_drafts`. Then remove AppID/AppSecret from Vercel.
+
+Gateway logs contain only client address, method, typed path, status, and
+response size. Request bodies, article HTML, bearer credentials, WeChat access
+tokens, AppSecret, and query strings are never logged.
+
+Local acceptance covers independent bearer authentication, closed typed
+routing, multipart and JSON bounds, exact WeChat request shapes, locked token
+caching, shared concurrent refresh, one retry after an explicit token error,
+and no retry after an uncertain `draft/add` transport failure. The Compose
+configuration validates, the dedicated image builds, and its read-only,
+capability-dropped container answers `/healthz`. Those checks do not replace
+the production rollout smoke against the allowlisted VPS IP.
 
 The mounted Hermes `config.yaml` should use the container-local terminal:
 
@@ -671,17 +762,17 @@ exposes derived publication status to Draft and Workspaces.
    bindings and pending confirmations. Web and Feishu sessions remain
    separate, setup is immutable after creation, and public synchronization
    remains web-only.
-4. **Phase 3 - WeChat Draft integration (Backend/Frontend complete; production
-   fixed-egress gateway pending):**
+4. **Phase 3 - WeChat Draft integration (Backend/Frontend and fixed-egress
+   gateway implementation complete; production rollout pending):**
    publish only from an authenticated Public Revision, upload WeChat media,
    replace rendered image URLs, submit the same canonical inline HTML,
    create/update one Draft idempotently, and verify platform readback plus the
    official mobile preview. Hermes has no role in this projection and cannot
    regenerate, rewrite, or re-layout content during publication. Production
-   deployment will route only the WeChat API transport through a thin VPS
-   gateway; Backend remains the sole projection orchestrator and database
-   writer, while the gateway has no Draft, Revision, Supabase, or renderer
-   authority.
+   deployment routes only the WeChat API transport through the typed VPS
+   gateway described above. Backend remains the sole projection orchestrator
+   and database writer, while the gateway has no Draft, Revision, Supabase, or
+   renderer authority.
 5. **Phase 4 - optional hardening:** version history/rollback, simultaneous
    collaborative editing, analytics, bulk operations, shareable style presets,
    and Bitable.

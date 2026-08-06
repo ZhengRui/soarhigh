@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 import httpx
@@ -693,85 +694,118 @@ def test_platform_sanitizer_maps_dark_palette_to_platform_adaptive_light_tokens(
     assert f'<section style="{expected_styles}">' in sanitized
 
 
-async def test_access_token_cache_avoids_a_network_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(wxpost_wechat, "WECHAT_OFFICIAL_ACCOUNT_APP_ID", "official-app")
-    monkeypatch.setattr(wxpost_wechat, "WECHAT_OFFICIAL_ACCOUNT_APP_SECRET", "official-secret")
-    monkeypatch.setattr(
-        wxpost_wechat.store,
-        "get_cached_access_token",
-        lambda: {
-            "access_token": "cached-token",
-            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
-        },
-    )
-    network_calls = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal network_calls
-        network_calls += 1
-        return httpx.Response(500, request=request)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
-        client = wxpost_wechat.WechatOfficialAccountClient(http_client)
-        assert await client.access_token() == "cached-token"
-    assert network_calls == 0
-
-
-async def test_access_token_reports_ip_allowlist_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(wxpost_wechat, "WECHAT_OFFICIAL_ACCOUNT_APP_ID", "official-app")
-    monkeypatch.setattr(wxpost_wechat, "WECHAT_OFFICIAL_ACCOUNT_APP_SECRET", "official-secret")
-    monkeypatch.setattr(wxpost_wechat.store, "get_cached_access_token", lambda: None)
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={"errcode": 40164, "errmsg": "invalid ip"},
-            request=request,
-        )
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
-        client = wxpost_wechat.WechatOfficialAccountClient(http_client)
-        with pytest.raises(wxpost_wechat.WechatDraftError, match=r"IP allowlist \(40164\)"):
-            await client.access_token()
-
-
-async def test_expired_token_is_refreshed_once_and_the_draft_request_retried(
+async def test_gateway_client_requires_its_independent_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(wxpost_wechat, "WECHAT_OFFICIAL_ACCOUNT_APP_ID", "official-app")
-    monkeypatch.setattr(wxpost_wechat, "WECHAT_OFFICIAL_ACCOUNT_APP_SECRET", "official-secret")
-    cached = {
-        "access_token": "old-token",
-        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
-    }
-    monkeypatch.setattr(wxpost_wechat.store, "get_cached_access_token", lambda: deepcopy(cached))
-    monkeypatch.setattr(wxpost_wechat.store, "clear_access_token", lambda: cached.clear())
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_BASE_URL", "")
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_SERVICE_TOKEN", "")
 
-    def save_token(token: str, expires_at: datetime) -> None:
-        cached.update({"access_token": token, "expires_at": expires_at.isoformat()})
+    def unexpected_request(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(request.url)
 
-    monkeypatch.setattr(wxpost_wechat.store, "save_access_token", save_token)
-    requests: list[tuple[str, str | None]] = []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(unexpected_request)) as http_client:
+        client = wxpost_wechat.WechatGatewayClient(http_client)
+        with pytest.raises(wxpost_wechat.WechatDraftError, match="gateway is not configured") as caught:
+            await client.get_draft("media-id")
+    assert caught.value.status_code == 503
+
+
+async def test_gateway_client_uses_only_typed_routes_and_its_bearer_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_BASE_URL", "https://gateway.example/internal")
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_SERVICE_TOKEN", "gateway-secret")
+    requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        requests.append((request.url.path, request.url.params.get("access_token")))
-        if request.url.path == "/cgi-bin/stable_token":
-            return httpx.Response(200, json={"access_token": "new-token", "expires_in": 7200}, request=request)
-        if request.url.params.get("access_token") == "old-token":
-            return httpx.Response(200, json={"errcode": 42001, "errmsg": "expired"}, request=request)
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer gateway-secret"
+        if request.url.path.endswith("/images/body"):
+            return httpx.Response(200, json={"url": WECHAT_IMAGE_URL}, request=request)
+        if request.url.path.endswith("/images/cover"):
+            return httpx.Response(200, json={"mediaId": "cover-id"}, request=request)
+        if request.method == "POST":
+            assert json.loads(request.content) == {"article": {"title": "Created"}}
+            return httpx.Response(200, json={"mediaId": "draft/id"}, request=request)
+        if request.method == "PUT":
+            assert request.url.path.endswith("/drafts/draft/id")
+            assert json.loads(request.content) == {"article": {"title": "Updated"}}
+            return httpx.Response(200, json={"updated": True}, request=request)
+        if request.url.params.get("limit") == "20":
+            return httpx.Response(200, json={"items": [{"media_id": "draft/id"}]}, request=request)
         return httpx.Response(
             200,
-            json={"news_item": [{"content": "<p>readback</p>", "url": "https://mp.weixin.qq.com/s/preview"}]},
+            json={"article": {"content": "<p>readback</p>", "url": "https://mp.weixin.qq.com/s/preview"}},
             request=request,
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
-        client = wxpost_wechat.WechatOfficialAccountClient(http_client)
-        draft = await client.get_draft("media-id")
+        client = wxpost_wechat.WechatGatewayClient(http_client)
+        assert await client.upload_body_image("body.jpg", b"body", "image/jpeg") == WECHAT_IMAGE_URL
+        assert await client.upload_cover("cover.jpg", b"cover", "image/jpeg") == "cover-id"
+        assert await client.add_draft({"title": "Created"}) == "draft/id"
+        await client.update_draft("draft/id", {"title": "Updated"})
+        assert (await client.get_draft("draft/id"))["content"] == "<p>readback</p>"
+        assert await client.batch_get_drafts() == [{"media_id": "draft/id"}]
 
-    assert draft["url"] == "https://mp.weixin.qq.com/s/preview"
-    assert requests == [
-        ("/cgi-bin/draft/get", "old-token"),
-        ("/cgi-bin/stable_token", None),
-        ("/cgi-bin/draft/get", "new-token"),
-    ]
+    assert {request.url.path for request in requests} == {
+        "/internal/v1/images/body",
+        "/internal/v1/images/cover",
+        "/internal/v1/drafts",
+        "/internal/v1/drafts/draft/id",
+    }
+
+
+@pytest.mark.parametrize(
+    ("gateway_status", "gateway_uncertain", "expected_status", "expected_uncertain"),
+    [(502, True, 502, True), (401, False, 503, False)],
+)
+async def test_gateway_client_preserves_add_uncertainty_and_hides_internal_auth_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    gateway_status: int,
+    gateway_uncertain: bool,
+    expected_status: int,
+    expected_uncertain: bool,
+) -> None:
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_BASE_URL", "https://gateway.example")
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_SERVICE_TOKEN", "gateway-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            gateway_status,
+            json={
+                "code": "upstream_result_uncertain" if gateway_uncertain else "unauthorized",
+                "message": "Gateway failure",
+                "uncertain": gateway_uncertain,
+            },
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = wxpost_wechat.WechatGatewayClient(http_client)
+        with pytest.raises(wxpost_wechat.WechatDraftError, match="Gateway failure") as caught:
+            await client.add_draft({"title": "Draft"})
+
+    assert caught.value.status_code == expected_status
+    assert caught.value.uncertain is expected_uncertain
+
+
+async def test_gateway_transport_loss_during_add_is_uncertain_without_a_client_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_BASE_URL", "https://gateway.example")
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_SERVICE_TOKEN", "gateway-secret")
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("lost", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = wxpost_wechat.WechatGatewayClient(http_client)
+        with pytest.raises(wxpost_wechat.WechatDraftError, match="gateway response was unavailable") as caught:
+            await client.add_draft({"title": "Draft"})
+
+    assert caught.value.uncertain is True
+    assert calls == 1

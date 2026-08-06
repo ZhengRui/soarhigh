@@ -8,26 +8,6 @@ from uuid import UUID
 from .supabase import supabase
 
 
-def get_cached_access_token() -> dict | None:
-    response = supabase.table("wxpost_wechat_token_cache").select("*").eq("id", True).execute()
-    return response.data[0] if response.data else None
-
-
-def save_access_token(access_token: str, expires_at: datetime) -> None:
-    supabase.table("wxpost_wechat_token_cache").upsert(
-        {
-            "id": True,
-            "access_token": access_token,
-            "expires_at": expires_at.isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).execute()
-
-
-def clear_access_token() -> None:
-    supabase.table("wxpost_wechat_token_cache").delete().eq("id", True).execute()
-
-
 def get_projection(workspace_id: str) -> dict | None:
     response = supabase.table("wxpost_wechat_drafts").select("*").eq("source_workspace_id", workspace_id).execute()
     return response.data[0] if response.data else None

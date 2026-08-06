@@ -6,26 +6,22 @@ import hashlib
 import html as html_module
 import json
 import re
-from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Literal, Protocol
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import httpx
 
 from ..config import (
-    WECHAT_OFFICIAL_ACCOUNT_APP_ID,
-    WECHAT_OFFICIAL_ACCOUNT_APP_SECRET,
+    WECHAT_GATEWAY_BASE_URL,
+    WECHAT_GATEWAY_SERVICE_TOKEN,
     WECHAT_OFFICIAL_ACCOUNT_NAME,
 )
 from ..db import wxpost_wechat as store
 from ..models.wxpost import Presentation, WxPostRenderDocument, WxPostWechatDraftResult, WxPostWechatDraftStatus
 
-WECHAT_API_BASE = "https://api.weixin.qq.com"
-TOKEN_EXPIRY_BUFFER = timedelta(minutes=5)
-TOKEN_ERROR_CODES = {40014, 42001}
-WECHAT_PROJECTION_VERSION = 13
+WECHAT_PROJECTION_VERSION = 14
 IMG_SRC_RE = re.compile(r'<img\b[^>]*\bsrc="([^"]+)"', re.IGNORECASE)
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 ANCHOR_TAG_RE = re.compile(r"</?a\b[^>]*>", re.IGNORECASE)
@@ -143,11 +139,7 @@ def _sha256(value: bytes | str) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _parse_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
-class WechatOfficialAccountClient:
+class WechatGatewayClient:
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         self.client = client or httpx.AsyncClient(timeout=30, trust_env=False)
         self._owns_client = client is None
@@ -156,40 +148,7 @@ class WechatOfficialAccountClient:
         if self._owns_client:
             await self.client.aclose()
 
-    async def access_token(self, *, force_refresh: bool = False) -> str:
-        if not WECHAT_OFFICIAL_ACCOUNT_APP_ID or not WECHAT_OFFICIAL_ACCOUNT_APP_SECRET:
-            raise WechatDraftError("WeChat Official Account credentials are not configured.", status_code=503)
-        if not force_refresh:
-            cached = store.get_cached_access_token()
-            if cached and _parse_datetime(cached["expires_at"]) > datetime.now(timezone.utc) + TOKEN_EXPIRY_BUFFER:
-                return str(cached["access_token"])
-        try:
-            response = await self.client.post(
-                f"{WECHAT_API_BASE}/cgi-bin/stable_token",
-                json={
-                    "grant_type": "client_credential",
-                    "appid": WECHAT_OFFICIAL_ACCOUNT_APP_ID,
-                    "secret": WECHAT_OFFICIAL_ACCOUNT_APP_SECRET,
-                    "force_refresh": force_refresh,
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except (httpx.HTTPError, ValueError) as error:
-            raise WechatDraftError("Could not obtain a WeChat access token.") from error
-        if "access_token" not in payload:
-            if payload.get("errcode") == 40164:
-                raise WechatDraftError(
-                    "The current backend IP is not in the WeChat Official Account IP allowlist (40164)."
-                )
-            raise WechatDraftError(
-                f"WeChat rejected the Official Account credentials ({payload.get('errcode', 'unknown')})."
-            )
-        expires_in = int(payload.get("expires_in", 7200))
-        store.save_access_token(payload["access_token"], datetime.now(timezone.utc) + timedelta(seconds=expires_in))
-        return str(payload["access_token"])
-
-    async def _json_request(
+    async def _request(
         self,
         method: str,
         path: str,
@@ -197,86 +156,78 @@ class WechatOfficialAccountClient:
         json_body: dict | None = None,
         files: dict | None = None,
         params: dict[str, str] | None = None,
-        retry_token: bool = True,
         uncertain_on_transport: bool = False,
     ) -> dict:
-        token = await self.access_token()
-        query = {**(params or {}), "access_token": token}
+        if not WECHAT_GATEWAY_BASE_URL or not WECHAT_GATEWAY_SERVICE_TOKEN:
+            raise WechatDraftError("The WeChat API gateway is not configured.", status_code=503)
         try:
             response = await self.client.request(
-                method, f"{WECHAT_API_BASE}{path}", params=query, json=json_body, files=files
+                method,
+                f"{WECHAT_GATEWAY_BASE_URL}{path}",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {WECHAT_GATEWAY_SERVICE_TOKEN}",
+                },
+                params=params,
+                json=json_body,
+                files=files,
             )
-            response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPError, ValueError) as error:
             raise WechatDraftError(
-                "The WeChat API response was unavailable.", uncertain=uncertain_on_transport
+                "The WeChat API gateway response was unavailable.",
+                uncertain=uncertain_on_transport,
             ) from error
-        errcode = payload.get("errcode", 0)
-        if errcode in TOKEN_ERROR_CODES and retry_token:
-            store.clear_access_token()
-            await self.access_token(force_refresh=True)
-            return await self._json_request(
-                method,
-                path,
-                json_body=json_body,
-                files=files,
-                params=params,
-                retry_token=False,
-                uncertain_on_transport=uncertain_on_transport,
+        if not isinstance(payload, dict):
+            raise WechatDraftError("The WeChat API gateway returned an invalid response.")
+        if not response.is_success:
+            message = payload.get("message")
+            gateway_uncertain = payload.get("uncertain") is True
+            status_code = 503 if response.status_code in {401, 403} else 502
+            raise WechatDraftError(
+                message if isinstance(message, str) else "The WeChat API gateway rejected the request.",
+                status_code=status_code,
+                uncertain=uncertain_on_transport and gateway_uncertain,
             )
-        if errcode:
-            raise WechatDraftError(f"WeChat API error {errcode}: {payload.get('errmsg', 'unknown error')}")
         return payload
 
     async def upload_body_image(self, filename: str, content: bytes, mime_type: str) -> str:
-        payload = await self._json_request(
-            "POST", "/cgi-bin/media/uploadimg", files={"media": (filename, content, mime_type)}
-        )
+        payload = await self._request("POST", "/v1/images/body", files={"media": (filename, content, mime_type)})
         if not isinstance(payload.get("url"), str):
-            raise WechatDraftError("WeChat did not return a body-image URL.")
+            raise WechatDraftError("The WeChat API gateway did not return a body-image URL.")
         return payload["url"]
 
     async def upload_cover(self, filename: str, content: bytes, mime_type: str) -> str:
-        payload = await self._json_request(
-            "POST",
-            "/cgi-bin/material/add_material",
-            params={"type": "image"},
-            files={"media": (filename, content, mime_type)},
-        )
-        if not isinstance(payload.get("media_id"), str):
-            raise WechatDraftError("WeChat did not return a cover media ID.")
-        return payload["media_id"]
+        payload = await self._request("POST", "/v1/images/cover", files={"media": (filename, content, mime_type)})
+        if not isinstance(payload.get("mediaId"), str):
+            raise WechatDraftError("The WeChat API gateway did not return a cover media ID.")
+        return payload["mediaId"]
 
     async def add_draft(self, article: dict) -> str:
-        payload = await self._json_request(
-            "POST", "/cgi-bin/draft/add", json_body={"articles": [article]}, uncertain_on_transport=True
-        )
-        if not isinstance(payload.get("media_id"), str):
-            raise WechatDraftError("WeChat did not return a draft media ID.", uncertain=True)
-        return payload["media_id"]
+        payload = await self._request("POST", "/v1/drafts", json_body={"article": article}, uncertain_on_transport=True)
+        if not isinstance(payload.get("mediaId"), str):
+            raise WechatDraftError("The WeChat API gateway did not return a draft media ID.", uncertain=True)
+        return payload["mediaId"]
 
     async def update_draft(self, media_id: str, article: dict) -> None:
-        await self._json_request(
-            "POST", "/cgi-bin/draft/update", json_body={"media_id": media_id, "index": 0, "articles": article}
+        await self._request(
+            "PUT",
+            f"/v1/drafts/{quote(media_id, safe='')}",
+            json_body={"article": article},
         )
 
     async def get_draft(self, media_id: str) -> dict:
-        payload = await self._json_request("POST", "/cgi-bin/draft/get", json_body={"media_id": media_id})
-        items = payload.get("news_item")
-        if not isinstance(items, list) or not items or not isinstance(items[0], dict):
-            raise WechatDraftError("WeChat returned an invalid draft readback.")
-        return items[0]
+        payload = await self._request("GET", f"/v1/drafts/{quote(media_id, safe='')}")
+        article = payload.get("article")
+        if not isinstance(article, dict):
+            raise WechatDraftError("The WeChat API gateway returned an invalid draft readback.")
+        return article
 
     async def batch_get_drafts(self, *, count: int = 20) -> list[dict]:
-        payload = await self._json_request(
-            "POST",
-            "/cgi-bin/draft/batchget",
-            json_body={"offset": 0, "count": count, "no_content": 0},
-        )
-        items = payload.get("item")
+        payload = await self._request("GET", "/v1/drafts", params={"limit": str(count)})
+        items = payload.get("items")
         if not isinstance(items, list):
-            raise WechatDraftError("WeChat returned an invalid draft list.")
+            raise WechatDraftError("The WeChat API gateway returned an invalid draft list.")
         return [item for item in items if isinstance(item, dict)]
 
 
@@ -637,7 +588,7 @@ async def publish_wechat_draft(
                 )
             submitted_html = _replace_body_image_urls(platform_html, body_urls, images, mappings)
             expected_article = _article_payload(render_document, submitted_html, mappings[cover_key])
-            client = api or WechatOfficialAccountClient()
+            client = api or WechatGatewayClient()
             try:
                 candidates: list[str] = []
                 for item in await client.batch_get_drafts():
@@ -694,7 +645,7 @@ async def publish_wechat_draft(
         if not required_keys.issubset(mappings):
             raise WechatDraftError("The existing WeChat projection is incomplete.", status_code=409)
         submitted_html = _replace_body_image_urls(platform_html, body_urls, images, mappings)
-        client = api or WechatOfficialAccountClient()
+        client = api or WechatGatewayClient()
         try:
             readback = await client.get_draft(media_id)
         finally:
@@ -732,7 +683,7 @@ async def publish_wechat_draft(
             preview_url=readback.get("url"),
         )
 
-    client = api or WechatOfficialAccountClient()
+    client = api or WechatGatewayClient()
     try:
         for index, url in enumerate(body_urls):
             content, mime_type, extension, digest = images[url]
@@ -807,7 +758,7 @@ async def get_preview_url(workspace_id: str, api: WechatDraftApi | None = None) 
     projection = store.get_projection(workspace_id)
     if not projection or not projection.get("wechat_media_id"):
         raise WechatDraftError("No WeChat draft is linked to this Public Revision.", status_code=404)
-    client = api or WechatOfficialAccountClient()
+    client = api or WechatGatewayClient()
     try:
         readback = await client.get_draft(projection["wechat_media_id"])
     finally:

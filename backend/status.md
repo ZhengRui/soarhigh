@@ -383,8 +383,9 @@ Model for blog posts:
     without one Supabase query per card; a temporary Supabase status failure
     does not make private workspace listing unavailable
   - Authenticated Public Revision projection to one WeChat Official Account
-    draft per durable workspace, with server-owned credential use and a shared
-    service-role access-token cache
+    draft per durable workspace, with Backend-owned projection state and a
+    typed fixed-egress VPS gateway that alone owns Official Account credentials
+    and its process-local access-token cache
   - Deterministic WeChat delivery over the existing canonical inline HTML:
     editor-only `data-*`/`contenteditable` attributes are removed, active
     content is rejected, rendered image `src` values are replaced with URLs
@@ -403,10 +404,13 @@ Model for blog posts:
     `http://mp.weixin.qq.com` response and deterministically upgrades it to
     HTTPS while continuing to reject every non-WeChat host
 
-Phase 3 persistence is installed through Supabase migrations
-`20260806000000` through `20260806000002`. Configure the backend with
-`WECHAT_OFFICIAL_ACCOUNT_APP_ID`, `WECHAT_OFFICIAL_ACCOUNT_APP_SECRET`, and
-`WECHAT_OFFICIAL_ACCOUNT_NAME`; none of these values are sent to the browser.
+Phase 3 projection persistence is installed through Supabase migrations
+`20260806000000` through `20260806000002`. Migration `20260806000003` removes
+the obsolete service-role token table after Backend transport moves to the VPS
+gateway; it does not touch draft projections. Configure Backend with
+`WECHAT_GATEWAY_BASE_URL`, `WECHAT_GATEWAY_SERVICE_TOKEN`, and
+`WECHAT_OFFICIAL_ACCOUNT_NAME`. AppID/AppSecret live only on the gateway; none
+of these server settings are sent to the browser.
 
 Validation recorded on 2026-08-06:
 
@@ -505,6 +509,14 @@ Validation recorded on 2026-08-06:
   the existing diagnostic projection returned `updated`, reused its stored
   draft rather than adding another one, and completed the required `draft/get`
   readback;
+- projection version 14 moves Gateway draft payloads from ASCII `\\u` escapes
+  to real UTF-8 bytes. This prevents WeChat from preserving escaped curly
+  quotes and dashes as visible text or corrupting the title's middle dot. The
+  Gateway no longer repairs readback content locally, so platform corruption
+  remains visible. A real update reused the existing media ID; strict
+  `draft/get` returned the exact title, curly quotes, and em dash with no
+  replacement character or literal escape, and the refreshed 390 x 844 Chrome
+  preview displayed the same corrected punctuation;
 - full backend validation passed with 674 tests, 23 intentionally deselected,
   Ruff, Ruff format, and mypy;
 - physical-phone checks confirmed the content-controlled list, Quote, Takeaway,
@@ -513,15 +525,21 @@ Validation recorded on 2026-08-06:
   deployment smoke remains after the fixed-egress gateway is installed. The
   adapter continues to reject over-limit revisions instead of truncating or
   rewriting Saved Draft content;
-- the current allowlist proof covers the local direct egress IP
-  `223.74.150.124`. The deployed Backend's actual outbound IP must be
-  allowlisted separately before production WeChat calls can succeed. The next
-  deployment slice will add a narrow WeChat API gateway on the existing VPS:
-  Vercel Backend remains the sole publication orchestrator and Supabase writer,
-  while the gateway owns only Official Account credentials, access-token cache,
-  fixed-IP calls to `api.weixin.qq.com`, and synchronous response forwarding.
-  It will not read Public Revisions, access Supabase, persist publication state,
-  or implement a second renderer or idempotency model.
+- the typed fixed-egress gateway implementation now owns only Official Account
+  credentials, a locked in-memory token cache, fixed-IP calls to the seven
+  required WeChat operations, and synchronous response forwarding. Vercel
+  Backend remains the sole publication orchestrator and Supabase writer. The
+  gateway cannot read Public Revisions, access Supabase, persist publication
+  state, proxy arbitrary WeChat paths, or implement a second renderer or
+  idempotency model. Production HTTPS reverse-proxy setup, VPS-IP allowlisting,
+  Vercel environment migration, and the final real draft smoke remain deployment
+  operations rather than local implementation claims.
+- fixed-egress gateway validation passed the complete Backend suite at 676
+  tests with 23 intentionally deselected, the complete Hermes/Controller/Gateway
+  suite at 237 tests, Ruff, Ruff format, mypy, shell syntax, Compose config,
+  a real Docker image build, and a locked-down container `/healthz` smoke. The
+  13-test WxPost renderer/browser suite also passed without a frontend contract
+  change.
 
 The real Supabase/OSS publication lifecycle has an opt-in destructive smoke
 test at `app/services/tests/test_wxpost_publication_live.py`. It creates only a

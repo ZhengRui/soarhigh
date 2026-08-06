@@ -1,6 +1,34 @@
 name: soarhigh-hermes
 
 services:
+  wechat-gateway:
+    build:
+      context: .
+      dockerfile: wechat_gateway/Dockerfile
+    restart: unless-stopped
+    environment:
+      WECHAT_GATEWAY_SERVICE_TOKEN: "${WECHAT_GATEWAY_SERVICE_TOKEN:?Set WECHAT_GATEWAY_SERVICE_TOKEN in .env.local}"
+      WECHAT_OFFICIAL_ACCOUNT_APP_ID: "${WECHAT_OFFICIAL_ACCOUNT_APP_ID:?Set WECHAT_OFFICIAL_ACCOUNT_APP_ID in .env.local}"
+      WECHAT_OFFICIAL_ACCOUNT_APP_SECRET: "${WECHAT_OFFICIAL_ACCOUNT_APP_SECRET:?Set WECHAT_OFFICIAL_ACCOUNT_APP_SECRET in .env.local}"
+    ports:
+      - "127.0.0.1:${WECHAT_GATEWAY_PORT:-8790}:8790"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8790/healthz', timeout=2).read()"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
   gateway:
     image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
     container_name: ${HERMES_CONTAINER_NAME:-soarhigh-hermes}

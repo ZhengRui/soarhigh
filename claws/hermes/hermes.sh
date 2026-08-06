@@ -21,8 +21,11 @@ prompt() {
   local default_value="$2"
   local input
 
-  if ! IFS= read -r -p "${label} [${default_value}]: " input; then
-    fail "Setup cancelled."
+  if [[ -n "${default_value}" ]]; then
+    IFS= read -r -p "${label} [${default_value}]: " input ||
+      fail "Setup cancelled."
+  else
+    IFS= read -r -p "${label}: " input || fail "Setup cancelled."
   fi
   PROMPT_VALUE="${input:-${default_value}}"
 }
@@ -116,6 +119,9 @@ configure_first_run() {
   local image
   local container_name
   local wxpost_service_token
+  local wechat_gateway_token
+  local wechat_app_id
+  local wechat_app_secret
   local confirmation
   local temp_file
 
@@ -151,11 +157,27 @@ configure_first_run() {
   [[ -n "${wxpost_service_token}" ]] ||
     fail "WxPost service token must not be empty."
 
+  prompt_secret "New independent WeChat gateway service token"
+  wechat_gateway_token="${PROMPT_VALUE}"
+  [[ -n "${wechat_gateway_token}" ]] ||
+    fail "WeChat gateway service token must not be empty."
+
+  prompt "WeChat Official Account App ID" ""
+  wechat_app_id="${PROMPT_VALUE}"
+  [[ -n "${wechat_app_id}" ]] ||
+    fail "WeChat Official Account App ID must not be empty."
+
+  prompt_secret "WeChat Official Account App Secret"
+  wechat_app_secret="${PROMPT_VALUE}"
+  [[ -n "${wechat_app_secret}" ]] ||
+    fail "WeChat Official Account App Secret must not be empty."
+
   printf '\nConfiguration:\n'
   printf '  Hermes home:      %s\n' "${hermes_home}"
   printf '  Hermes workspace: %s\n' "${workspace}"
   printf '  Hermes image:     %s\n' "${image}"
   printf '  Container name:   %s\n\n' "${container_name}"
+  printf '  WeChat App ID:     %s\n\n' "${wechat_app_id}"
 
   prompt "Write .env.local and start Hermes?" "y"
   confirmation="${PROMPT_VALUE}"
@@ -186,6 +208,12 @@ configure_first_run() {
       "$(dotenv_quote "${container_name}")"
     printf 'SOARHIGH_WXPOST_SERVICE_TOKEN=%s\n' \
       "$(dotenv_quote "${wxpost_service_token}")"
+    printf 'WECHAT_GATEWAY_SERVICE_TOKEN=%s\n' \
+      "$(dotenv_quote "${wechat_gateway_token}")"
+    printf 'WECHAT_OFFICIAL_ACCOUNT_APP_ID=%s\n' \
+      "$(dotenv_quote "${wechat_app_id}")"
+    printf 'WECHAT_OFFICIAL_ACCOUNT_APP_SECRET=%s\n' \
+      "$(dotenv_quote "${wechat_app_secret}")"
   } >"${temp_file}"
   mv -- "${temp_file}" "${ENV_FILE}"
 
@@ -246,8 +274,8 @@ case "${action}" in
     # The controller joins the gateway's network namespace. Restarting both
     # containers in parallel can leave it trying to join a gateway that is
     # temporarily stopped, so bring them back in dependency order.
-    compose stop controller gateway
-    compose up --detach gateway
+    compose stop controller gateway wechat-gateway
+    compose up --detach wechat-gateway gateway
     compose up --detach controller
     ;;
   shell)

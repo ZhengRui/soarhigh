@@ -998,6 +998,13 @@ The meeting management workflow is now fully implemented:
      candidate can be recovered, a separate warning confirmation lets a member
      reset only the local uncertain state after checking that no matching
      Official Account draft exists.
+   - Projection version 14 changes only the Gateway transport encoding to real
+     UTF-8, ensuring punctuation reaches WeChat as characters instead of
+     visible `\\u` escape text. Existing linked drafts update in place; the
+     frontend contract and canonical renderer remain unchanged. A real update
+     reused the existing media ID, and Computer Use verified the corrected
+     title, curly quotes, and em dash in the refreshed 390 x 844 official
+     preview.
    - The Public Revision footer now states that its presentation choices are
      used by the next WeChat draft publication instead of incorrectly claiming
      they affect only the web preview.
@@ -1009,11 +1016,14 @@ The meeting management workflow is now fully implemented:
      Takeaway, image, caption-spacing, and light-surface behavior. No
      publication code truncated, regenerated, rewrote, or re-laid out content;
      the final production smoke follows deployment of the fixed-egress gateway.
-   - Production rollout still requires fixed outbound IP for Vercel-originated
-     WeChat API work. The next deployment slice will route only those API calls
-     through a thin VPS gateway; the Backend remains the sole projection
-     orchestrator and Supabase writer, and the frontend contract does not
-     change.
+   - The typed fixed-egress VPS gateway implementation now routes only required
+     WeChat API operations and has no Supabase, Revision, renderer, or
+     idempotency authority. Backend remains the sole projection orchestrator
+     and Supabase writer, and the frontend contract does not change. Production
+     HTTPS reverse-proxy setup, VPS-IP allowlisting, Vercel environment
+     migration, and the final real draft smoke remain deployment operations.
+     Backend and Gateway contract tests passed, and the unchanged 13-test
+     WxPost renderer/browser suite passed against the same frontend API shape.
 
 9. **Voting System**
 
