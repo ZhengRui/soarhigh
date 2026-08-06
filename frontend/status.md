@@ -1,9 +1,10 @@
 # SoarHigh Toastmasters Club - Frontend Status
 
-**Last updated:** 2026-08-03
+**Last updated:** 2026-08-06
 
-**WxPost checkpoint:** `d1c85a4` is the committed pre-Slice-6 base. The current
-working tree completes Slice 6: one workspace-scoped Hermes session and formal
+**WxPost checkpoint:** `46d8d7e` is the committed Phase 2 baseline. The Phase 3
+implementation described below completes WeChat Draft delivery. Slice 6
+established one workspace-scoped Hermes session and formal
 Skill generate and revise canonical Drafts through typed proposal schema v2,
 while one pure TypeScript compiler renders the same backend-normalized input in
 the browser and in an authenticated, stateless Next server route. Draft owns
@@ -24,8 +25,9 @@ atomic Supabase/OSS publication. Slice 7B adds explicit Hermes descriptions for
 selected workspace images. Slice 7C completes the dedicated WxPost Assistant
 runtime, observable persisted sessions, and deterministic fine-grained Draft
 edits. Slice 7D completes conversational Feishu workspace/material authoring
-with Feishu-only navigation and separate sessions. WeChat delivery remains
-Phase 3.
+with Feishu-only navigation and separate sessions. Phase 3 now publishes only
+from an authenticated Public Revision to one confirmed, idempotent Official
+Account draft; Hermes is not involved in that projection.
 
 ## Application Overview
 
@@ -688,7 +690,7 @@ Acceptance completed on 2026-08-04:
 
 ### Phase 3 - WeChat Official Account Draft integration
 
-This remains a separate publishing integration, not another Phase 2 authoring
+This is a completed publishing integration, not another Phase 2 authoring
 slice. Backend-owned credentials and token caching, WeChat media upload, cover
 and metadata validation, and create/update Draft operations all consume the
 same saved Draft and canonical inline HTML. No agent regenerates or restyles
@@ -901,6 +903,18 @@ The meeting management workflow is now fully implemented:
    - Keeps full workspace editing in the web workbench while Slice 7D exposes
      Feishu-only workspace navigation and conversational Materials/Draft
      operations; public synchronization remains the explicit Slice 7A web action
+   - Shows a member-only circular WeChat action immediately left of Public
+     Revision deletion; it freezes the selected layout, palette, appearance,
+     and typeface for explicit confirmation before creating or updating a
+     WeChat draft
+   - Treats the WeChat result as a publication projection rather than another
+     editor: the dialog blocks Video and lets an uncertain first create retry
+     the server-owned recovery path; after a draft exists, a separate
+     member-only action remains visibly reserved to the left of publishing,
+     stays disabled until a draft exists, and then fetches and opens the
+     official temporary preview
+   - Leaves the WeChat draft in the Official Account when a Public Revision is
+     deleted and states that behavior in the deletion confirmation
 
    Validation recorded on 2026-08-03:
 
@@ -918,6 +932,88 @@ The meeting management workflow is now fully implemented:
      persistence, proxy, directive, Hermes, and publication tests passed
      105/105. The only remaining output is the existing pytest-asyncio fixture
      loop-scope deprecation warning.
+
+   Phase 3 validation recorded on 2026-08-06:
+
+   - TypeScript, changed-file Prettier, and ESLint passed; ESLint still reports
+     only the existing `TimePickerModal.tsx` hook warnings.
+   - The authenticated flow passed in the user's current Chrome: the green
+     outline WeChat icon uses the same white circular treatment as deletion,
+     remains between the separate preview and deletion actions, and opens the
+     create/update confirmation immediately without publishing or repeating
+     the page-load status request on the first click. The confirmation keeps
+     the selected Revision/presentation and draft-only explanation without the
+     obsolete Dark/Gallery mobile-preview warning.
+   - The full WxPost Playwright surface passed 81/82 after two unrelated
+     parallel-only failures passed when rerun alone. The Phase 3 renderer and
+     publication tests passed; the sole failure is the pre-existing,
+     untouched Workspace test for refreshing a cached empty list after an
+     independent workspace is created. It also fails alone and is not treated
+     as a Phase 3 regression.
+   - After explicit approval, the real Meeting 463 Saved Draft changed only its
+     excerpt (v18 to v19), synchronized Public Revision 2, and passed the
+     120-character WeChat digest boundary with an exact 118-character value.
+   - Real WeChat body/cover upload and `draft/add` created one draft. An
+     identical retry was `unchanged`; a Modern Sans update and restoration to
+     the final Brand Default / Paper Neutral / Light / Editorial Serif setting
+     all kept the same media ID and real draft count of one.
+   - Real readback preserved the text and tag sequence while WeChat performed
+     bounded platform filtering on image loading attributes and selected inline
+     styles. The standalone preview action opened the real `mp.weixin.qq.com`
+     temporary preview in the user's Chrome with the title, digest, article
+     structure, and both body images loaded.
+   - Media captions now use the canonical renderer's smaller 14px / 1.65 line
+     height treatment instead of matching 16px body copy. The v6 WeChat image
+     wrapper compatibility remains in place; the real submitted HTML and
+     `draft/get` readback retained both the compact wrapper and all four caption
+     styles on the diagnostic draft without creating a new media ID.
+   - The v9 WeChat projection removes only the selected palette's ordinary
+     foreground color after deterministic appearance mapping. This lets
+     WeChat supply readable body and heading text in its current Light or Dark
+     surface while preserving muted copy, accents, borders, and component
+     surfaces. A real dark diagnostic update reused the existing media ID, and
+     `draft/get` retained the expected bounded color set. Computer Use then
+     reopened the official preview at 390 x 844 and confirmed that ordinary
+     body and heading text resolve through WeChat's native dark foreground.
+   - The v10 WeChat projection removes the canonical article header only for
+     WeChat delivery, avoiding a second title, byline, and digest beneath the
+     platform's native metadata. The real diagnostic draft updated in place;
+     submitted HTML, `draft/get`, and the refreshed 390 x 844 official preview
+     all begin with the actual opening paragraph. Public Revision rendering is
+     unchanged.
+   - The v11 WeChat projection preserves the canonical header's top rule after
+     removing its repeated metadata, including the original Brand Blue
+     gradient, and halves the combined whitespace before the opening paragraph.
+     The real 390 x 844 official preview shows the rule directly above the
+     compact opening copy; Web rendering remains unchanged.
+   - The v12 WeChat projection removes its remaining article top padding and
+     caps thick WeChat header rules at 2px without widening palettes that use a
+     1px rule. Submitted HTML, readback, and the real 390 x 844 preview preserve
+     the thinner gradient and leave only WeChat's native metadata gap above it.
+   - Projection version 13 confines dark-to-adaptive palette conversion to
+     inline `style` values, so matching color tokens in prose, alt text, URLs,
+     and other attributes remain byte-for-byte content. Uncertain creation can
+     now retry server recovery after a page reload; recovery candidates must
+     also match deterministic body text/tag/image signatures. If no unique
+     candidate can be recovered, a separate warning confirmation lets a member
+     reset only the local uncertain state after checking that no matching
+     Official Account draft exists.
+   - The Public Revision footer now states that its presentation choices are
+     used by the next WeChat draft publication instead of incorrectly claiming
+     they affect only the web preview.
+   - Computer Use verified the revised footer and ordinary update confirmation
+     in the user's current 390px Chrome view. An explicitly confirmed update of
+     the existing diagnostic draft completed with `WeChat draft updated!`; the
+     Backend returned success only after its real WeChat `draft/get` readback.
+   - Physical-phone checks confirmed the content-controlled list, Quote,
+     Takeaway, image, caption-spacing, and light-surface behavior. No
+     publication code truncated, regenerated, rewrote, or re-laid out content;
+     the final production smoke follows deployment of the fixed-egress gateway.
+   - Production rollout still requires fixed outbound IP for Vercel-originated
+     WeChat API work. The next deployment slice will route only those API calls
+     through a thin VPS gateway; the Backend remains the sole projection
+     orchestrator and Supabase writer, and the frontend contract does not
+     change.
 
 9. **Voting System**
 

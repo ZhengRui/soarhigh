@@ -671,9 +671,17 @@ exposes derived publication status to Draft and Workspaces.
    bindings and pending confirmations. Web and Feishu sessions remain
    separate, setup is immutable after creation, and public synchronization
    remains web-only.
-4. **Phase 3 - WeChat Draft integration:** upload WeChat media, replace URLs,
-   submit the same canonical inline HTML, create/update the Draft idempotently,
-   and verify platform readback plus mobile preview.
+4. **Phase 3 - WeChat Draft integration (Backend/Frontend complete; production
+   fixed-egress gateway pending):**
+   publish only from an authenticated Public Revision, upload WeChat media,
+   replace rendered image URLs, submit the same canonical inline HTML,
+   create/update one Draft idempotently, and verify platform readback plus the
+   official mobile preview. Hermes has no role in this projection and cannot
+   regenerate, rewrite, or re-layout content during publication. Production
+   deployment will route only the WeChat API transport through a thin VPS
+   gateway; Backend remains the sole projection orchestrator and database
+   writer, while the gateway has no Draft, Revision, Supabase, or renderer
+   authority.
 5. **Phase 4 - optional hardening:** version history/rollback, simultaneous
    collaborative editing, analytics, bulk operations, shareable style presets,
    and Bitable.

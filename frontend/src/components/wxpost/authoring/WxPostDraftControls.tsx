@@ -35,9 +35,11 @@ const PRESENTATION_LABELS = {
   'brand-default': 'Brand Default',
   'field-notes': 'Field Notes',
   'editorial-feature': 'Editorial Feature',
-  'brand-blue': 'Brand Blue',
-  'paper-neutral': 'Paper Neutral',
-  'warm-terracotta': 'Warm Terracotta',
+  'brand-blue': 'SoarHigh Blue',
+  'paper-neutral': 'Editorial Ink',
+  'fresh-sage': 'Fresh Sage',
+  'warm-terracotta': 'Warm Coral',
+  'minimal-mono': 'Minimal Mono',
   light: 'Light',
   dark: 'Dark',
   'modern-sans': 'Modern Sans',
@@ -312,7 +314,15 @@ export function WxPostDraftControls({
         <PresentationSelect
           label='Palette'
           value={presentation.palette}
-          options={['brand-blue', 'paper-neutral', 'warm-terracotta'] as const}
+          options={
+            [
+              'brand-blue',
+              'paper-neutral',
+              'fresh-sage',
+              'warm-terracotta',
+              'minimal-mono',
+            ] as const
+          }
           menuAlign='end'
           onChange={(palette) =>
             onPresentationChange({ ...presentation, palette })

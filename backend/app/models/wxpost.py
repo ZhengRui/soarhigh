@@ -45,7 +45,9 @@ class Layout(str, Enum):
 class Palette(str, Enum):
     BRAND_BLUE = "brand-blue"
     PAPER_NEUTRAL = "paper-neutral"
+    FRESH_SAGE = "fresh-sage"
     WARM_TERRACOTTA = "warm-terracotta"
+    MINIMAL_MONO = "minimal-mono"
 
 
 class Appearance(str, Enum):
@@ -392,3 +394,32 @@ class WxPostPublicationStatus(WireModel):
     current_draft_version: int | None = Field(default=None, ge=1)
     published_at: datetime | None = None
     public_url: str | None = None
+
+
+class WxPostWechatDraftRequest(WireModel):
+    expected_public_revision: int = Field(ge=1, strict=True)
+    presentation: Presentation
+    confirmed: Literal[True]
+
+
+class WxPostWechatUncertainResetRequest(WireModel):
+    expected_public_revision: int = Field(ge=1, strict=True)
+    confirmed_no_draft: Literal[True]
+
+
+class WxPostWechatDraftStatus(WireModel):
+    state: Literal["not-created", "creating", "ready", "uncertain"]
+    source_public_revision: int | None = Field(default=None, ge=1)
+    presentation: Presentation | None = None
+    readback_changed: bool | None = None
+    needs_update: bool = False
+    message: str | None = None
+
+
+class WxPostWechatDraftResult(WxPostWechatDraftStatus):
+    action: Literal["created", "updated", "unchanged"]
+    preview_url: AnyHttpUrl | None = None
+
+
+class WxPostWechatPreviewResult(WireModel):
+    preview_url: AnyHttpUrl

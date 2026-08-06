@@ -179,7 +179,13 @@ def test_capabilities_describe_the_versioned_authoring_contract(client: TestClie
     assert payload["renderDocumentSchema"]["properties"]["body"]["type"] == "array"
     assert payload["presentation"] == {
         "layouts": ["brand-default", "field-notes", "editorial-feature"],
-        "palettes": ["brand-blue", "paper-neutral", "warm-terracotta"],
+        "palettes": [
+            "brand-blue",
+            "paper-neutral",
+            "fresh-sage",
+            "warm-terracotta",
+            "minimal-mono",
+        ],
         "appearances": ["light", "dark"],
         "typefaces": ["modern-sans", "editorial-serif", "humanist-mix"],
     }
@@ -516,7 +522,9 @@ def test_every_standard_article_type_accepts_freeform_markdown(
         ("layout", "editorial-feature"),
         ("palette", "brand-blue"),
         ("palette", "paper-neutral"),
+        ("palette", "fresh-sage"),
         ("palette", "warm-terracotta"),
+        ("palette", "minimal-mono"),
         ("appearance", "light"),
         ("appearance", "dark"),
         ("typeface", "modern-sans"),

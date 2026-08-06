@@ -12,7 +12,7 @@ import app.api.routes.wxpost as wxpost_route
 import app.services.wxpost_publication as wxpost_publication
 from app.api.serv import app
 from app.models.users import User
-from app.models.wxpost import WxPostPublicationStatus
+from app.models.wxpost import WxPostPublicationStatus, WxPostWechatDraftResult
 
 WXPOST_FIXTURE = Path(__file__).parent / "fixtures" / "wxpost-meeting-recap-v1.json"
 
@@ -45,6 +45,29 @@ def _configure_controller(
     monkeypatch.setattr(wxpost_route, "WXPOST_CONTROLLER_URL", "http://controller")
     monkeypatch.setattr(wxpost_route, "WXPOST_SERVICE_TOKEN", "controller-secret")
     monkeypatch.setattr(wxpost_route.httpx, "AsyncClient", client_factory)
+
+
+def _public_row(article: dict, *, revision: int = 3) -> dict:
+    return {
+        "id": "00000000-0000-4000-8000-000000000236",
+        "slug": article["slug"],
+        "title": article["title"],
+        "content": article["bodyMarkdown"],
+        "schema_version": article["schemaVersion"],
+        "article_type": article["articleType"],
+        "custom_article_type": article.get("customArticleType"),
+        "source_meeting_id": article.get("sourceMeetingId"),
+        "excerpt": article.get("excerpt"),
+        "byline": article.get("byline"),
+        "media_manifest": article["media"],
+        "cover_media_id": article["coverMediaId"],
+        "default_presentation": article["presentation"],
+        "render_version": 1,
+        "article_revision": revision,
+        "source_workspace_id": "wxpost-abc",
+        "status": "ready",
+        "is_public": True,
+    }
 
 
 def test_service_can_issue_and_read_a_version_bound_private_draft_preview(
@@ -925,3 +948,177 @@ def test_workspace_draft_chat_preserves_the_controller_event_stream(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert response.text == stream
+
+
+def test_member_reads_the_wechat_projection_status_from_the_public_revision(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = json.loads(WXPOST_FIXTURE.read_text())
+    row = _public_row(article)
+    monkeypatch.setattr(wxpost_route, "get_wxpost_by_id", lambda wxpost_id: row)
+    monkeypatch.setattr(
+        wxpost_route.wxpost_wechat_store,
+        "get_projection",
+        lambda workspace_id: {
+            "state": "ready",
+            "source_public_revision": 2,
+            "presentation": article["presentation"],
+            "readback_changed": True,
+            "last_error": None,
+        },
+    )
+
+    response = client.get(f"/posts/wxposts/{row['id']}/wechat-draft")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "ready"
+    assert response.json()["sourcePublicRevision"] == 2
+    assert response.json()["needsUpdate"] is True
+
+
+def test_member_publishes_server_compiled_revision_with_selected_presentation(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = json.loads(WXPOST_FIXTURE.read_text())
+    row = _public_row(article)
+    monkeypatch.setattr(wxpost_route, "get_wxpost_by_id", lambda wxpost_id: row)
+    compiled: list[tuple[dict, dict]] = []
+    published: list[dict] = []
+
+    async def compile_render(render_document: dict, presentation: dict) -> str:
+        compiled.append((render_document, presentation))
+        return "<p>trusted canonical HTML</p>"
+
+    async def publish(**values) -> WxPostWechatDraftResult:
+        published.append(values)
+        return WxPostWechatDraftResult.model_validate(
+            {
+                "state": "ready",
+                "action": "created",
+                "sourcePublicRevision": 3,
+                "presentation": values["presentation"],
+                "readbackChanged": False,
+                "needsUpdate": False,
+                "message": None,
+                "previewUrl": "https://mp.weixin.qq.com/s/test-preview",
+            }
+        )
+
+    monkeypatch.setattr(wxpost_route, "_compile_trusted_render", compile_render)
+    monkeypatch.setattr(wxpost_route, "publish_wechat_draft", publish)
+    selected = {
+        "layout": "brand-default",
+        "palette": "paper-neutral",
+        "appearance": "dark",
+        "typeface": "modern-sans",
+    }
+
+    response = client.post(
+        f"/posts/wxposts/{row['id']}/wechat-draft",
+        json={"expectedPublicRevision": 3, "presentation": selected, "confirmed": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["action"] == "created"
+    assert compiled[0][1] == selected
+    assert published[0]["canonical_html"] == "<p>trusted canonical HTML</p>"
+    assert published[0]["row"] is row
+
+
+def test_wechat_publish_requires_literal_user_confirmation(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/posts/wxposts/00000000-0000-4000-8000-000000000236/wechat-draft",
+        json={
+            "expectedPublicRevision": 3,
+            "presentation": {
+                "layout": "brand-default",
+                "palette": "paper-neutral",
+                "appearance": "light",
+                "typeface": "modern-sans",
+            },
+            "confirmed": False,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_wechat_publish_rejects_a_stale_public_revision_before_rendering(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = json.loads(WXPOST_FIXTURE.read_text())
+    row = _public_row(article, revision=4)
+    monkeypatch.setattr(wxpost_route, "get_wxpost_by_id", lambda wxpost_id: row)
+
+    response = client.post(
+        f"/posts/wxposts/{row['id']}/wechat-draft",
+        json={"expectedPublicRevision": 3, "presentation": article["presentation"], "confirmed": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "The Public Revision changed before WeChat publishing started."
+
+
+def test_member_can_reset_an_uncertain_wechat_projection_after_explicit_confirmation(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = json.loads(WXPOST_FIXTURE.read_text())
+    row = _public_row(article)
+    monkeypatch.setattr(wxpost_route, "get_wxpost_by_id", lambda wxpost_id: row)
+    reset_workspaces: list[str] = []
+
+    def reset(workspace_id: str) -> dict:
+        reset_workspaces.append(workspace_id)
+        return {
+            "state": "idle",
+            "source_public_revision": None,
+            "presentation": None,
+            "readback_changed": None,
+            "last_error": None,
+        }
+
+    monkeypatch.setattr(wxpost_route.wxpost_wechat_store, "reset_uncertain_projection", reset)
+
+    response = client.post(
+        f"/posts/wxposts/{row['id']}/wechat-draft/reset-uncertain",
+        json={"expectedPublicRevision": 3, "confirmedNoDraft": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "not-created"
+    assert reset_workspaces == ["wxpost-abc"]
+
+
+def test_wechat_uncertain_reset_requires_literal_confirmation(client: TestClient) -> None:
+    response = client.post(
+        "/posts/wxposts/00000000-0000-4000-8000-000000000236/wechat-draft/reset-uncertain",
+        json={"expectedPublicRevision": 3, "confirmedNoDraft": False},
+    )
+
+    assert response.status_code == 422
+
+
+def test_member_opens_the_link_refetched_from_the_linked_wechat_draft(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = json.loads(WXPOST_FIXTURE.read_text())
+    row = _public_row(article)
+    monkeypatch.setattr(wxpost_route, "get_wxpost_by_id", lambda wxpost_id: row)
+
+    async def preview_url(workspace_id: str) -> str:
+        assert workspace_id == "wxpost-abc"
+        return "https://mp.weixin.qq.com/s/test-preview"
+
+    monkeypatch.setattr(wxpost_route, "get_preview_url", preview_url)
+
+    response = client.post(f"/posts/wxposts/{row['id']}/wechat-draft/preview")
+
+    assert response.status_code == 200
+    assert response.json() == {"previewUrl": "https://mp.weixin.qq.com/s/test-preview"}

@@ -31,9 +31,11 @@ const LABELS: Record<WxPostPresentationOption, string> = {
   'brand-default': 'Brand Default',
   'field-notes': 'Field Notes',
   'editorial-feature': 'Editorial Feature',
-  'brand-blue': 'Brand Blue',
-  'paper-neutral': 'Paper Neutral',
-  'warm-terracotta': 'Warm Terracotta',
+  'brand-blue': 'SoarHigh Blue',
+  'paper-neutral': 'Editorial Ink',
+  'fresh-sage': 'Fresh Sage',
+  'warm-terracotta': 'Warm Coral',
+  'minimal-mono': 'Minimal Mono',
   light: 'Light',
   dark: 'Dark',
   'modern-sans': 'Modern Sans',
@@ -52,7 +54,9 @@ const LAYOUT_DESCRIPTIONS: Record<WxPostLayout, string> = {
 const PALETTE_SWATCHES: Record<WxPostPalette, readonly string[]> = {
   'brand-blue': ['#2563eb', '#7c3aed', '#eef2ff'],
   'paper-neutral': ['#2d2b27', '#9b9285', '#f8f6f0'],
+  'fresh-sage': ['#4f7a5b', '#b28b3b', '#edf4e8'],
   'warm-terracotta': ['#d8653b', '#e9a23b', '#fff0dd'],
+  'minimal-mono': ['#171717', '#a3a3a3', '#f5f5f5'],
 };
 
 export function formatWxPostPresentationSelection(

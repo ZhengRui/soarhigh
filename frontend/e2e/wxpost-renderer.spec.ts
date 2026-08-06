@@ -81,6 +81,7 @@ test('renders the formal public page and every v1 directive', async ({
   await expect(page.getByText('meeting-236', { exact: true })).toHaveCount(0);
   await expect(page.getByText('WxPost Renderer Lab')).toHaveCount(0);
   await expect(page.getByTestId('delete-public-wxpost')).toHaveCount(0);
+  await expect(page.getByTestId('publish-wechat-draft')).toHaveCount(0);
 
   for (const directive of [
     'section',
@@ -230,7 +231,7 @@ test('lets a signed-in member delete the public revision and its media', async (
   const dialog = page.getByTestId('delete-public-wxpost-dialog');
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText(
-    'This removes the public revision and its public media. The private workspace and Draft will remain.'
+    'This removes the public revision and its public media. The private workspace, Saved Draft, and any existing WeChat draft will remain.'
   );
   // The app's Supabase client may reconcile its empty test session after the
   // page has loaded. Restore the synthetic member token immediately before
@@ -247,6 +248,352 @@ test('lets a signed-in member delete the public revision and its media', async (
     id: '00000000-0000-4000-8000-meeting-reca',
     revision: 3,
   });
+});
+
+test('publishes the selected Public Revision presentation to one WeChat draft', async ({
+  page,
+}) => {
+  const publishable = structuredClone(WXPOST_FIXTURES['meeting-recap']);
+  publishable.body = publishable.body.filter(
+    (node) => node.kind !== 'directive' || node.name !== 'video'
+  );
+  publishable.media = publishable.media.filter(
+    (media) => media.kind !== 'video'
+  );
+  await page.route(/\/posts\/wxposts\/meeting-recap$/, async (route) => {
+    if (route.request().resourceType() === 'document') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      json: {
+        id: '00000000-0000-4000-8000-meeting-reca',
+        slug: 'meeting-recap',
+        is_public: true,
+        article_revision: 3,
+        context_label: WXPOST_FIXTURE_CONTEXT_LABELS['meeting-recap'],
+        created_at: '2026-07-18T12:00:00+00:00',
+        updated_at: '2026-07-19T12:00:00+00:00',
+        render_document: publishable,
+      },
+    });
+  });
+  await page.addInitScript(() => {
+    window.localStorage.setItem('token', 'member-token');
+  });
+  await page.route(/\/whoami$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: { uid: 'member-123', username: 'member', full_name: 'Test Member' },
+    });
+  });
+  let requestBody: Record<string, unknown> | null = null;
+  let publishRequests = 0;
+  let statusRequests = 0;
+  await page.route(
+    /\/posts\/wxposts\/([^/?]+)\/wechat-draft$/,
+    async (route) => {
+      if (route.request().method() === 'GET') {
+        statusRequests += 1;
+        await route.fulfill({
+          status: 200,
+          json: requestBody
+            ? {
+                state: 'ready',
+                sourcePublicRevision: 3,
+                presentation: requestBody.presentation,
+                readbackChanged: true,
+                needsUpdate: false,
+                message: null,
+              }
+            : {
+                state: 'not-created',
+                sourcePublicRevision: null,
+                presentation: null,
+                readbackChanged: null,
+                needsUpdate: false,
+                message: null,
+              },
+        });
+        return;
+      }
+      publishRequests += 1;
+      requestBody = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        status: 200,
+        json: {
+          state: 'ready',
+          action: 'created',
+          sourcePublicRevision: 3,
+          presentation: requestBody.presentation,
+          readbackChanged: true,
+          needsUpdate: false,
+          message: null,
+          previewUrl: 'https://mp.weixin.qq.com/s/test-preview',
+        },
+      });
+    }
+  );
+  await page.route(
+    /\/posts\/wxposts\/([^/?]+)\/wechat-draft\/preview$/,
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await route.fulfill({
+        status: 200,
+        json: { previewUrl: 'https://mp.weixin.qq.com/s/test-preview' },
+      });
+    }
+  );
+
+  await openFixture(page);
+  const wechatButton = page.getByTestId('publish-wechat-draft');
+  const previewButton = page.getByTestId('preview-wechat-draft');
+  const deleteButton = page.getByTestId('delete-public-wxpost');
+  await expect(wechatButton).toBeVisible();
+  await expect(previewButton).toBeVisible();
+  await expect(previewButton).toBeDisabled();
+  await page.waitForTimeout(100);
+  const statusRequestsBeforeOpen = statusRequests;
+  const wechatStyle = await wechatButton.evaluate((button) => {
+    const style = window.getComputedStyle(button);
+    const icon = button.querySelector('svg');
+    return {
+      backgroundColor: style.backgroundColor,
+      color: style.color,
+      fill: icon?.getAttribute('fill'),
+      stroke: icon?.getAttribute('stroke'),
+    };
+  });
+  const deleteBackground = await deleteButton.evaluate(
+    (button) => window.getComputedStyle(button).backgroundColor
+  );
+  expect(wechatStyle.backgroundColor).toBe(deleteBackground);
+  expect(wechatStyle.color).not.toBe(
+    await deleteButton.evaluate(
+      (button) => window.getComputedStyle(button).color
+    )
+  );
+  expect(wechatStyle.fill).toBe('none');
+  expect(wechatStyle.stroke).toBe('currentColor');
+  const wechatBox = await wechatButton.boundingBox();
+  const deleteBox = await deleteButton.boundingBox();
+  expect(wechatBox).not.toBeNull();
+  expect(deleteBox).not.toBeNull();
+  const disabledPreviewBox = await previewButton.boundingBox();
+  expect(disabledPreviewBox).not.toBeNull();
+  expect(disabledPreviewBox!.x + disabledPreviewBox!.width).toBeLessThan(
+    wechatBox!.x
+  );
+  expect(wechatBox!.x + wechatBox!.width).toBeLessThan(deleteBox!.x);
+
+  await presentationOption(page, 'appearance', 'dark').click();
+  await wechatButton.click();
+  const dialog = page.getByTestId('publish-wechat-draft-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Revision 3');
+  await expect(dialog).toContainText('dark');
+  await expect(dialog).toContainText('does not publish or send the article');
+  await expect(dialog).not.toContainText(
+    'Dark appearance and horizontal Gallery behavior'
+  );
+  expect(statusRequests).toBe(statusRequestsBeforeOpen);
+  expect(publishRequests).toBe(0);
+  expect(requestBody).toBeNull();
+  await dialog.click({ position: { x: 2, y: 2 } });
+  await expect(dialog).toHaveCount(0);
+  await wechatButton.click();
+  await expect(dialog).toBeVisible();
+  await dialog
+    .getByRole('button', { name: 'Publish to WeChat Drafts' })
+    .evaluate((button) => {
+      window.localStorage.setItem('token', 'member-token');
+      (button as HTMLButtonElement).click();
+    });
+  await expect(dialog).toHaveCount(0);
+  expect(publishRequests).toBe(1);
+  await expect(previewButton).toBeEnabled();
+  const publishedWechatBox = await wechatButton.boundingBox();
+  const previewBox = await previewButton.boundingBox();
+  const publishedDeleteBox = await deleteButton.boundingBox();
+  expect(publishedWechatBox).not.toBeNull();
+  expect(previewBox).not.toBeNull();
+  expect(publishedDeleteBox).not.toBeNull();
+  expect(previewBox!.x + previewBox!.width).toBeLessThan(publishedWechatBox!.x);
+  expect(publishedWechatBox!.x + publishedWechatBox!.width).toBeLessThan(
+    publishedDeleteBox!.x
+  );
+
+  expect(requestBody).toEqual({
+    expectedPublicRevision: 3,
+    presentation: {
+      layout: 'brand-default',
+      palette: 'paper-neutral',
+      appearance: 'dark',
+      typeface: 'editorial-serif',
+    },
+    confirmed: true,
+  });
+
+  await wechatButton.click();
+  await expect(dialog).toContainText('Update WeChat Draft?');
+  expect(statusRequests).toBe(statusRequestsBeforeOpen);
+  await expect(dialog).not.toContainText('WeChat adjusted the submitted HTML');
+  await expect(dialog).not.toContainText('No HTML changes were detected');
+  await expect(
+    dialog.getByRole('button', { name: 'Update WeChat Draft' })
+  ).toBeVisible();
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+  const popupPromise = page.waitForEvent('popup');
+  const previewClick = previewButton.click();
+  await expect(previewButton.locator('.animate-spin')).toBeVisible();
+  await previewClick;
+  const popup = await popupPromise;
+  await expect(popup).toHaveURL('https://mp.weixin.qq.com/s/test-preview');
+});
+
+test('retries and explicitly resets an uncertain WeChat creation', async ({
+  page,
+}) => {
+  const publishable = structuredClone(WXPOST_FIXTURES['meeting-recap']);
+  publishable.body = publishable.body.filter(
+    (node) => node.kind !== 'directive' || node.name !== 'video'
+  );
+  publishable.media = publishable.media.filter(
+    (media) => media.kind !== 'video'
+  );
+  await page.route(/\/posts\/wxposts\/meeting-recap$/, async (route) => {
+    if (route.request().resourceType() === 'document') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      json: {
+        id: '00000000-0000-4000-8000-meeting-reca',
+        slug: 'meeting-recap',
+        is_public: true,
+        article_revision: 3,
+        context_label: WXPOST_FIXTURE_CONTEXT_LABELS['meeting-recap'],
+        created_at: '2026-07-18T12:00:00+00:00',
+        updated_at: '2026-07-19T12:00:00+00:00',
+        render_document: publishable,
+      },
+    });
+  });
+  await page.addInitScript(() => {
+    window.localStorage.setItem('token', 'member-token');
+    const removeItem = Storage.prototype.removeItem;
+    Storage.prototype.removeItem = function (key: string) {
+      if (this === window.localStorage && key === 'token') return;
+      removeItem.call(this, key);
+    };
+  });
+  await page.route(/\/whoami$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: { uid: 'member-123', username: 'member', full_name: 'Test Member' },
+    });
+  });
+
+  let recoveryRequests = 0;
+  let recoveryBody: Record<string, unknown> | null = null;
+  let resetBody: Record<string, unknown> | null = null;
+  let statusRequests = 0;
+  await page.route(
+    /\/posts\/wxposts\/([^/?]+)\/wechat-draft\/reset-uncertain$/,
+    async (route) => {
+      resetBody = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        status: 200,
+        json: {
+          state: 'not-created',
+          sourcePublicRevision: null,
+          presentation: null,
+          readbackChanged: null,
+          needsUpdate: false,
+          message: null,
+        },
+      });
+    }
+  );
+  await page.route(
+    /\/posts\/wxposts\/([^/?]+)\/wechat-draft$/,
+    async (route) => {
+      if (route.request().method() === 'GET') {
+        statusRequests += 1;
+        await route.fulfill({
+          status: 200,
+          json: {
+            state: 'uncertain',
+            sourcePublicRevision: 3,
+            presentation: {
+              layout: 'brand-default',
+              palette: 'brand-blue',
+              appearance: 'dark',
+              typeface: 'modern-sans',
+            },
+            readbackChanged: null,
+            needsUpdate: false,
+            message: 'The previous creation result is uncertain.',
+          },
+        });
+        return;
+      }
+      recoveryRequests += 1;
+      recoveryBody = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        status: 409,
+        json: {
+          detail:
+            'The previous WeChat draft creation result is uncertain and could not be uniquely recovered.',
+        },
+      });
+    }
+  );
+
+  await openFixture(page);
+  await expect(page.getByTestId('publish-wechat-draft')).toBeVisible();
+  await expect.poll(() => statusRequests).toBeGreaterThan(0);
+  await page.waitForTimeout(50);
+  await page.getByTestId('publish-wechat-draft').click();
+  const recoveryDialog = page.getByTestId('publish-wechat-draft-dialog');
+  await expect(recoveryDialog).toContainText('Recover WeChat Draft?');
+  await recoveryDialog.getByRole('button', { name: 'Retry Recovery' }).click();
+  await expect(recoveryDialog.getByRole('alert')).toContainText(
+    'could not be uniquely recovered'
+  );
+  expect(recoveryRequests).toBe(1);
+  expect(recoveryBody).toEqual({
+    expectedPublicRevision: 3,
+    presentation: {
+      layout: 'brand-default',
+      palette: 'brand-blue',
+      appearance: 'dark',
+      typeface: 'modern-sans',
+    },
+    confirmed: true,
+  });
+
+  await recoveryDialog
+    .getByRole('button', { name: 'I checked; no matching draft exists' })
+    .click();
+  const resetDialog = page.getByTestId('reset-uncertain-wechat-draft-dialog');
+  await expect(resetDialog).toContainText(
+    'confirming that no matching draft exists'
+  );
+  await resetDialog.getByRole('button', { name: 'Reset WeChat State' }).click();
+  await expect(resetDialog).toHaveCount(0);
+  expect(resetBody).toEqual({
+    expectedPublicRevision: 3,
+    confirmedNoDraft: true,
+  });
+
+  await page.getByTestId('publish-wechat-draft').click();
+  await expect(page.getByTestId('publish-wechat-draft-dialog')).toContainText(
+    'Publish to WeChat Drafts?'
+  );
 });
 
 test('renders a controlled placeholder for missing media', async ({ page }) => {
@@ -343,7 +690,7 @@ test('starts with stored defaults and changes presentation only locally', async 
     headingFontSize: '20px',
     headingLineHeight: '27px',
     metaFontSize: '16px',
-    captionFontSize: '16px',
+    captionFontSize: '14px',
   });
 
   await presentationOption(page, 'layout', 'editorial-feature').click();
@@ -358,7 +705,7 @@ test('starts with stored defaults and changes presentation only locally', async 
   await expect(article).toHaveAttribute('data-typeface', 'humanist-mix');
   await expect(stage).toHaveAttribute('data-preview-size', 'desktop-760');
   await expect(page.getByTestId('current-style')).toContainText(
-    'Editorial Feature · Brand Blue · Dark · Humanist Mix · Desktop 760px'
+    'Editorial Feature · SoarHigh Blue · Dark · Humanist Mix · Desktop 760px'
   );
 
   const desktopWidth = await stage.evaluate(
@@ -396,9 +743,17 @@ test('renders every layout, palette, appearance, and typeface combination', asyn
       light: 'rgb(248, 246, 240)',
       dark: 'rgb(27, 26, 23)',
     },
+    'fresh-sage': {
+      light: 'rgb(248, 250, 245)',
+      dark: 'rgb(18, 25, 21)',
+    },
     'warm-terracotta': {
       light: 'rgb(255, 250, 242)',
       dark: 'rgb(33, 22, 18)',
+    },
+    'minimal-mono': {
+      light: 'rgb(255, 255, 255)',
+      dark: 'rgb(17, 17, 17)',
     },
   } as const;
   const expectedTitleFonts = {
@@ -552,6 +907,10 @@ test('keeps three article shapes readable in every layout and preview size', asy
                   borderBottomWidth: Number.parseFloat(
                     sectionHeadingStyle.borderBottomWidth
                   ),
+                  borderLeftWidth: Number.parseFloat(
+                    sectionHeadingStyle.borderLeftWidth
+                  ),
+                  backgroundColor: sectionHeadingStyle.backgroundColor,
                 }
               : null,
             sectionRoot: sectionRootStyle
@@ -621,8 +980,11 @@ test('keeps three article shapes readable in every layout and preview size', asy
         }
         if (layout === 'brand-default' && geometry.sectionHeading) {
           expect(
-            geometry.sectionHeading.borderBottomWidth
-          ).toBeGreaterThanOrEqual(1);
+            geometry.sectionHeading.borderLeftWidth
+          ).toBeGreaterThanOrEqual(4);
+          expect(geometry.sectionHeading.backgroundColor).not.toBe(
+            'rgba(0, 0, 0, 0)'
+          );
         }
       }
     }
@@ -740,7 +1102,7 @@ test('customizes the mobile preview in a bottom drawer', async ({ page }) => {
   await doneButton.click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByTestId('mobile-style-summary')).toContainText(
-    'Brand Blue'
+    'SoarHigh Blue'
   );
   await expect(page.locator('body')).not.toHaveCSS('overflow', 'hidden');
   expect(await page.evaluate(() => window.scrollY)).toBe(scrollPosition);

@@ -26,9 +26,11 @@ from ...config import (
     WXPOST_PUBLISHER_NAME,
     WXPOST_SERVICE_TOKEN,
 )
+from ...db import wxpost_wechat as wxpost_wechat_store
 from ...db.wxpost import (
     WxPostNotFoundError,
     WxPostRevisionConflictError,
+    article_document_from_row,
     create_wxpost,
     get_public_wxpost_by_slug,
     get_wxpost_by_id,
@@ -51,6 +53,11 @@ from ...models.wxpost import (
     WxPostUpdateRequest,
     WxPostValidationFailure,
     WxPostValidationSuccess,
+    WxPostWechatDraftRequest,
+    WxPostWechatDraftResult,
+    WxPostWechatDraftStatus,
+    WxPostWechatPreviewResult,
+    WxPostWechatUncertainResetRequest,
 )
 from ...services.wxpost_document import (
     ArticleDocumentValidationError,
@@ -70,6 +77,7 @@ from ...services.wxpost_publication import (
     publication_status,
     synchronize_workspace_publication,
 )
+from ...services.wxpost_wechat import WechatDraftError, get_preview_url, publish_wechat_draft, wechat_status
 from .auth import get_current_user
 
 wxpost_router = r = APIRouter()
@@ -210,13 +218,16 @@ async def require_wxpost_service(
         raise HTTPException(status_code=401, detail="Invalid WxPost service credential.")
 
 
-async def _compile_trusted_render(render_document: dict[str, Any]) -> str:
+async def _compile_trusted_render(
+    render_document: dict[str, Any],
+    presentation_override: dict[str, Any] | None = None,
+) -> str:
     if not WXPOST_PUBLIC_BASE_URL or not WXPOST_SERVICE_TOKEN:
         raise HTTPException(
             status_code=503,
             detail="WxPost canonical renderer is not configured.",
         )
-    presentation = render_document.get("presentation")
+    presentation = presentation_override or render_document.get("presentation")
     media = render_document.get("media")
     asset_urls = (
         {
@@ -1020,6 +1031,89 @@ async def r_proxy_wxpost_workspace_operation(
     controller_path: str = Path(..., min_length=1),
 ) -> Response:
     return await _proxy_workspace_request(request, workspace_id, controller_path)
+
+
+def _ready_public_wxpost(wxpost_id: UUID) -> dict:
+    row = get_wxpost_by_id(wxpost_id)
+    if row is None or row.get("status") != "ready" or not row.get("is_public"):
+        raise HTTPException(status_code=404, detail="Public WxPost not found.")
+    if not row.get("source_workspace_id"):
+        raise HTTPException(status_code=422, detail="Only workspace-backed Public Revisions support WeChat Drafts.")
+    return row
+
+
+@r.get("/posts/wxposts/{wxpost_id}/wechat-draft", response_model=WxPostWechatDraftStatus)
+async def r_get_wxpost_wechat_draft(
+    wxpost_id: UUID,
+    user: User = Depends(get_current_user),
+) -> WxPostWechatDraftStatus:
+    del user
+    row = _ready_public_wxpost(wxpost_id)
+    return wechat_status(row, wxpost_wechat_store.get_projection(row["source_workspace_id"]))
+
+
+@r.post("/posts/wxposts/{wxpost_id}/wechat-draft", response_model=WxPostWechatDraftResult)
+async def r_publish_wxpost_wechat_draft(
+    request: WxPostWechatDraftRequest,
+    wxpost_id: UUID,
+    user: User = Depends(get_current_user),
+) -> WxPostWechatDraftResult:
+    del user
+    row = _ready_public_wxpost(wxpost_id)
+    if row["article_revision"] != request.expected_public_revision:
+        raise HTTPException(status_code=409, detail="The Public Revision changed before WeChat publishing started.")
+    document = article_document_from_row(row)
+    render_document = validate_and_parse(document).render_document(document)
+    presentation_payload = request.presentation.model_dump(by_alias=True, mode="json")
+    canonical_html = await _compile_trusted_render(
+        render_document.model_dump(by_alias=True, mode="json"), presentation_payload
+    )
+    try:
+        return await publish_wechat_draft(
+            row=row,
+            render_document=render_document,
+            presentation=request.presentation,
+            canonical_html=canonical_html,
+        )
+    except WechatDraftError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@r.post(
+    "/posts/wxposts/{wxpost_id}/wechat-draft/reset-uncertain",
+    response_model=WxPostWechatDraftStatus,
+)
+async def r_reset_uncertain_wxpost_wechat_draft(
+    request: WxPostWechatUncertainResetRequest,
+    wxpost_id: UUID,
+    user: User = Depends(get_current_user),
+) -> WxPostWechatDraftStatus:
+    del user
+    row = _ready_public_wxpost(wxpost_id)
+    if row["article_revision"] != request.expected_public_revision:
+        raise HTTPException(status_code=409, detail="The Public Revision changed before reset was confirmed.")
+    try:
+        projection = wxpost_wechat_store.reset_uncertain_projection(row["source_workspace_id"])
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="The WeChat draft state is no longer eligible for reset.",
+        ) from error
+    return wechat_status(row, projection)
+
+
+@r.post("/posts/wxposts/{wxpost_id}/wechat-draft/preview", response_model=WxPostWechatPreviewResult)
+async def r_get_wxpost_wechat_preview(
+    wxpost_id: UUID,
+    user: User = Depends(get_current_user),
+) -> WxPostWechatPreviewResult:
+    del user
+    row = _ready_public_wxpost(wxpost_id)
+    try:
+        url = await get_preview_url(row["source_workspace_id"])
+    except WechatDraftError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    return WxPostWechatPreviewResult.model_validate({"previewUrl": url})
 
 
 @r.get("/posts/wxposts/{slug}", response_model=WxPostPublicDetail)

@@ -1,9 +1,10 @@
 # SoarHigh Toastmasters Club - Backend Status
 
-**Last updated:** 2026-08-04
+**Last updated:** 2026-08-06
 
-**WxPost checkpoint:** `8f5b233` includes the completed Slice 6 authoring flow
-and the subsequent Slice 7A-7D work described below. Slice 6 provides Draft
+**WxPost checkpoint:** `46d8d7e` is the committed Phase 2 baseline. The Phase 3
+implementation described below completes the WeChat Draft projection. Slice 6
+provides Draft
 session, save, generation, revision, and canonical rendering. Backend
 normalizes every Draft mutation into
 `WxPostRenderDocument`, then requires the authenticated stateless Next route to
@@ -19,8 +20,8 @@ heuristics or a second validator. Slice 7A now synchronizes one saved workspace
 Draft to one stable public WxPost with guarded Supabase revisions and
 content-addressed OSS assets. Slice 7B image-description proposals, Slice 7C
 Draft Assistant/Controller hardening, and Slice 7D conversational Feishu
-workspace/material authoring are also complete. WeChat Draft delivery remains
-Phase 3.
+workspace/material authoring are also complete. Phase 3 now adds authenticated,
+confirmed, idempotent Public Revision delivery to one Official Account draft.
 
 Slice 7C gives small Draft edits a typed, version-bound endpoint instead of
 resubmitting the complete article. Backend applies exact body-node, directive,
@@ -381,6 +382,146 @@ Model for blog posts:
   - Batched publication status enrichment for paginated workspace summaries
     without one Supabase query per card; a temporary Supabase status failure
     does not make private workspace listing unavailable
+  - Authenticated Public Revision projection to one WeChat Official Account
+    draft per durable workspace, with server-owned credential use and a shared
+    service-role access-token cache
+  - Deterministic WeChat delivery over the existing canonical inline HTML:
+    editor-only `data-*`/`contenteditable` attributes are removed, active
+    content is rejected, rendered image `src` values are replaced with URLs
+    returned by WeChat, root `clamp()` padding becomes a fixed mobile inset,
+    section-heading font quotes are normalized, and hyperlinks become visible
+    plain text before submission
+  - Content-addressed body-image and permanent-cover reuse, revision and
+    presentation fingerprinting, update-in-place through the stored WeChat
+    media ID, and no publication-time content generation or re-layout
+  - Atomic `creating`/`ready`/`uncertain` projection state with a 15-minute
+    lease, safe retry of updates, and bounded recovery of an ambiguous first
+    add without issuing a blind second `draft/add`
+  - `draft/get` readback hashes and official temporary-preview refetch without
+    storing a third editable HTML document
+  - Official preview URL validation accepts WeChat's observed
+    `http://mp.weixin.qq.com` response and deterministically upgrades it to
+    HTTPS while continuing to reject every non-WeChat host
+
+Phase 3 persistence is installed through Supabase migrations
+`20260806000000` through `20260806000002`. Configure the backend with
+`WECHAT_OFFICIAL_ACCOUNT_APP_ID`, `WECHAT_OFFICIAL_ACCOUNT_APP_SECRET`, and
+`WECHAT_OFFICIAL_ACCOUNT_NAME`; none of these values are sent to the browser.
+
+Validation recorded on 2026-08-06:
+
+- the configured real Official Account issued an access token and accepted a
+  `draft/batchget` read after its direct backend IP was allowlisted;
+- the remote claim RPC was probed with temporary rows and correctly returned
+  claimed, busy for a live add, and uncertain only after lease expiry; probes
+  were deleted in `finally`;
+- Saved Draft v19 changed only its explicitly approved 118-character excerpt,
+  then synchronized Public Revision 2 without changing its durable row or
+  public slug;
+- real body-image and cover uploads plus `draft/add` created exactly one
+  Official Account draft from Public Revision 2; an identical retry returned
+  `unchanged`, kept the same media ID, and left the real draft count at one;
+- changing only the typeface updated that same draft in place, and restoring
+  the final `brand-default` / `paper-neutral` / `light` / `editorial-serif`
+  projection again preserved the media ID and draft count;
+- real `draft/get` readback preserved the complete text and tag sequence. The
+  detected platform filtering moved two image `src` values to `data-src`,
+  removed their `loading` attributes, and stripped a bounded set of heading,
+  article-padding, and positioned-container styles. The official temporary
+  `mp.weixin.qq.com` preview still loaded the title, digest, body structure,
+  and both body images;
+- projection version 4 was revalidated over all 15 controlled observations:
+  fixed root padding survived in 15/15 readbacks, empty section-title styles
+  fell from 17 to zero, and hyperlink tag differences fell from 10 to zero;
+  all six existing draft media IDs were reused, including one diagnostic draft
+  updated and captured sequentially across ten presentation states;
+- a focused official-preview check used Chrome device emulation at a 390 x 844
+  viewport through Computer Use. WeChat's mobile stylesheet overrode ordinary
+  root `text-align:left` with justified text; the deterministic projection now
+  submits `text-align:left!important`. After reusing and updating the same
+  diagnostic media ID, submitted HTML and `draft/get` readback retained that
+  declaration, and the live page computed `left` for both the root article and
+  its paragraphs with `word-spacing: 0px`;
+- physical-phone evidence then isolated two content-controlled differences:
+  WeChat's native `blockquote` styling added a rule to the centered Quote, and
+  three whitespace-only list nodes appeared as three empty bullets in the
+  Official Account Assistant. Projection version 5 now resets border and
+  padding only on borderless styled blockquotes and removes only whitespace
+  between list boundaries and `li` elements;
+- the same diagnostic draft was updated in place with its original media ID.
+  Submitted HTML and `draft/get` readback retained both v5 transforms. A fresh
+  official temporary preview at 390 x 844 computed zero Quote border/padding,
+  exposed exactly two list items with no whitespace child nodes, and retained
+  the intentional 2px Pull Quote and 3px Takeaway rules. Physical-phone
+  confirmation of those two fixes remains pending;
+- the desktop temporary preview still remaps the light palette through
+  WeChat-generated `prefers-color-scheme: dark` rules. The physical-phone
+  Official Account Assistant already renders the requested light background
+  and black Takeaway rule, so no unsupported color override or second renderer
+  was added for that surface-specific behavior;
+- the physical-phone Official Account Assistant also inserted roughly one
+  inherited line box between images and their captions even though submitted
+  HTML, readback, and the official temporary preview retained the intended 8px
+  gap. Projection version 6 gives only direct image-wrapper containers zero
+  font size and line height. The user confirmed that this makes the Assistant
+  caption spacing compact; the same declarations survive `draft/get`, while
+  the canonical renderer and caption spacing remain unchanged;
+- projection version 9 delegates only each palette's ordinary body and heading
+  text color to WeChat instead of submitting a fixed light-palette foreground.
+  All five palettes and both requested appearances are covered by focused
+  tests; muted text, accents, borders, and local surfaces remain explicit. A
+  real dark Brand Blue update reused the existing diagnostic media ID, and
+  both submitted HTML and `draft/get` readback omitted the base foreground
+  while retaining `#5f6b7a` muted text and `#2563eb` accents. At a 390 x 844
+  dark official-preview viewport, Chrome computed ordinary body and heading
+  text from WeChat's native rule as `rgba(255, 255, 255, 0.55)`;
+- projection version 10 removes only the canonical `<article>`'s direct
+  `<header>` before WeChat submission because the official page already owns
+  the title, account name, and date, while the excerpt is supplied separately
+  as the WeChat digest. Submitted HTML and `draft/get` both fell from 100 to 93
+  elements without any additional readback tag loss. The official 390 x 844
+  preview retained only WeChat's native heading metadata and began the article
+  at its opening paragraph after one refresh for WeChat's preview cache;
+- projection version 11 retains the removed header's original top rule as a
+  content-free separator: Brand Blue keeps its two-color `border-image`
+  gradient, Warm Terracotta keeps its solid accent, and the remaining palettes
+  keep their existing thin rule. The WeChat-only article top padding is 16px,
+  the separator-to-body gap is 16px, and the canonical body's additional 32px
+  top padding becomes zero. Real submitted HTML, `draft/get`, and the 390 x 844
+  official preview retained the gradient and the compact opening spacing;
+- projection version 12 removes the remaining WeChat-only article top padding,
+  leaving only the platform's own fixed space below its native metadata. Header
+  rules authored at 4px become 2px in the WeChat separator while existing 1px
+  rules remain unchanged. Real submitted HTML and `draft/get` retained the 2px
+  Brand Blue gradient, and the 390 x 844 official preview confirmed the tighter
+  placement above it;
+- projection version 13 restricts palette-token mapping to inline `style`
+  declarations so matching literal text, alt attributes, and URLs cannot be
+  rewritten. Ambiguous-add recovery now requires matching metadata plus a
+  deterministic text/tag/body-image signature. Reloaded clients can invoke the
+  recovery request, while a separate literal confirmation can reset only an
+  uncertain projection with no known media ID after the member verifies that
+  no matching Official Account draft exists. An authenticated Chrome update of
+  the existing diagnostic projection returned `updated`, reused its stored
+  draft rather than adding another one, and completed the required `draft/get`
+  readback;
+- full backend validation passed with 674 tests, 23 intentionally deselected,
+  Ruff, Ruff format, and mypy;
+- physical-phone checks confirmed the content-controlled list, Quote, Takeaway,
+  image, caption-spacing, and light-surface behavior. The real API lifecycle
+  and official temporary browser preview are complete; a final production
+  deployment smoke remains after the fixed-egress gateway is installed. The
+  adapter continues to reject over-limit revisions instead of truncating or
+  rewriting Saved Draft content;
+- the current allowlist proof covers the local direct egress IP
+  `223.74.150.124`. The deployed Backend's actual outbound IP must be
+  allowlisted separately before production WeChat calls can succeed. The next
+  deployment slice will add a narrow WeChat API gateway on the existing VPS:
+  Vercel Backend remains the sole publication orchestrator and Supabase writer,
+  while the gateway owns only Official Account credentials, access-token cache,
+  fixed-IP calls to `api.weixin.qq.com`, and synchronous response forwarding.
+  It will not read Public Revisions, access Supabase, persist publication state,
+  or implement a second renderer or idempotency model.
 
 The real Supabase/OSS publication lifecycle has an opt-in destructive smoke
 test at `app/services/tests/test_wxpost_publication_live.py`. It creates only a

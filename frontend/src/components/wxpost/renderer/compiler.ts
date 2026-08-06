@@ -57,7 +57,8 @@ function mediaUrl(
 function moduleLabel(label: string, tokens: PresentationTokens) {
   return `<span ${styleAttribute([
     ...MODULE_LABEL_STYLE,
-    ['color', tokens.muted],
+    ['color', tokens.accent],
+    ['font-weight', '600'],
   ])}>${escapeHtml(label)}</span>`;
 }
 
@@ -164,6 +165,7 @@ function renderSection(
   const markdownParts = compileSectionMarkdown(
     markdown.source,
     tokens,
+    layout,
     editable ? { nodeIndex: markdownIndex } : undefined
   );
   const isBrand = layout === 'brand-default';
@@ -176,8 +178,10 @@ function renderSection(
         ['justify-content', 'space-between'],
         ['column-gap', '12px'],
         ['flex', '0 0 100%'],
-        ['padding-bottom', '12px'],
-        ['border-bottom', `1px solid ${tokens.border}`],
+        ['padding', '12px 14px'],
+        ['border-left', `4px solid ${tokens.accent}`],
+        ['border-radius', '0 8px 8px 0'],
+        ['background', tokens.soft],
       ]
     : isFieldNotes
       ? [
@@ -254,12 +258,12 @@ function renderSection(
   )} ${styleAttribute([
     ...MODULE_LABEL_STYLE,
     ['margin-bottom', '0'],
-    ['color', tokens.muted],
+    ['color', tokens.accent],
   ])}>${escapeHtml(node.payload.kicker)}</span><span data-wxpost-decoration="true" contenteditable="false" ${styleAttribute(
     [
       ...MODULE_LABEL_STYLE,
       ['margin-bottom', '0'],
-      ['color', tokens.muted],
+      ['color', isBrand ? tokens.accent : tokens.muted],
       ['font-variant-numeric', 'tabular-nums'],
     ]
   )}>${String(number).padStart(2, '0')}</span>${
@@ -273,8 +277,9 @@ function caption(value: string, tokens: PresentationTokens, attributes = '') {
   return `<p ${attributes} ${styleAttribute([
     ['margin', '8px 0 0'],
     ['color', tokens.muted],
-    ['font-size', '16px'],
-    ['line-height', '1.85'],
+    ['font-size', '14px'],
+    ['font-style', 'italic'],
+    ['line-height', '1.65'],
   ])}>${escapeHtml(value)}</p>`;
 }
 
@@ -296,7 +301,8 @@ function imageMarkup(
   media: WxPostMediaAsset | undefined,
   context: WxPostRenderContext,
   tokens: PresentationTokens,
-  missingLabel: string
+  missingLabel: string,
+  layout: WxPostCompileRequest['presentation']['layout']
 ) {
   const url = mediaUrl(media, context);
   if (!url || media?.kind !== 'image') {
@@ -311,6 +317,11 @@ function imageMarkup(
     ['height', 'auto'],
     ['margin', '0 auto'],
     ['border', `1px solid ${tokens.border}`],
+    ['border-radius', layout === 'brand-default' ? '8px' : '0'],
+    [
+      'box-shadow',
+      layout === 'brand-default' ? '0 8px 20px rgba(15,23,42,0.10)' : 'none',
+    ],
   ])}>`;
 }
 
@@ -387,6 +398,7 @@ function renderImage(
   mediaById: Map<string, WxPostMediaAsset>,
   context: WxPostRenderContext,
   tokens: PresentationTokens,
+  layout: WxPostCompileRequest['presentation']['layout'],
   editable: boolean,
   nodeIndex: number
 ) {
@@ -405,7 +417,8 @@ function renderImage(
         media,
         context,
         tokens,
-        `Missing image ${node.payload.media}`
+        `Missing image ${node.payload.media}`,
+        layout
       ),
       editable,
       node.payload.media,
@@ -423,6 +436,7 @@ function renderGallery(
   mediaById: Map<string, WxPostMediaAsset>,
   context: WxPostRenderContext,
   tokens: PresentationTokens,
+  layout: WxPostCompileRequest['presentation']['layout'],
   editable: boolean,
   nodeIndex: number
 ) {
@@ -454,7 +468,13 @@ function renderGallery(
           ['margin', '0'],
           ['scroll-snap-align', 'start'],
         ])}>${editableMediaFrame(
-          imageMarkup(media, context, tokens, `Missing image ${media.id}`),
+          imageMarkup(
+            media,
+            context,
+            tokens,
+            `Missing image ${media.id}`,
+            layout
+          ),
           editable,
           media.id,
           wxPostEditKey({
@@ -507,10 +527,21 @@ type DirectiveRendererRegistry = {
 
 const DIRECTIVE_RENDERERS = {
   section: () => '',
-  image: (node, { mediaById, context, tokens, editable, nodeIndex }) =>
-    renderImage(node, mediaById, context, tokens, editable, nodeIndex),
-  gallery: (node, { mediaById, context, tokens, editable, nodeIndex }) =>
-    renderGallery(node, mediaById, context, tokens, editable, nodeIndex),
+  image: (node, { mediaById, context, tokens, layout, editable, nodeIndex }) =>
+    renderImage(node, mediaById, context, tokens, layout, editable, nodeIndex),
+  gallery: (
+    node,
+    { mediaById, context, tokens, layout, editable, nodeIndex }
+  ) =>
+    renderGallery(
+      node,
+      mediaById,
+      context,
+      tokens,
+      layout,
+      editable,
+      nodeIndex
+    ),
   video: (node, { mediaById, context, tokens, editable, nodeIndex }) => {
     const media = mediaById.get(node.payload.media);
     const url = mediaUrl(media, context);
@@ -598,20 +629,33 @@ const DIRECTIVE_RENDERERS = {
             ['border-bottom', `1px solid ${tokens.border}`],
             ['text-align', 'center'],
           ]
-        : [
-            ['padding-left', '16px'],
-            ['border-left', `3px solid ${tokens.accent}`],
-          ]
+        : layout === 'brand-default'
+          ? [
+              ['padding', '16px'],
+              ['border-left', `3px solid ${tokens.accent}`],
+              ['border-radius', '0 8px 8px 0'],
+              ['background', tokens.soft],
+            ]
+          : [
+              ['padding-left', '16px'],
+              ['border-left', `3px solid ${tokens.accent}`],
+            ]
     ),
   person: (
     node,
-    { mediaById, context, tokens, editable, nodeIndex, inset }
+    { mediaById, context, tokens, layout, editable, nodeIndex, inset }
   ) => {
     const media = node.payload.media
       ? mediaById.get(node.payload.media)
       : undefined;
     const portrait = node.payload.media
-      ? imageMarkup(media, context, tokens, `Portrait of ${node.payload.name}`)
+      ? imageMarkup(
+          media,
+          context,
+          tokens,
+          `Portrait of ${node.payload.name}`,
+          layout
+        )
       : '';
     const copy = `${moduleHeading(
       node.payload.name,
@@ -686,10 +730,18 @@ const DIRECTIVE_RENDERERS = {
         ['flex', '2 1 260px'],
         ['min-width', '0'],
       ])}>${copy}</div></div>`,
-      inset
+      inset,
+      layout === 'brand-default'
+        ? [
+            ['padding', '16px'],
+            ['border', `1px solid ${tokens.border}`],
+            ['border-radius', '8px'],
+            ['background', tokens.soft],
+          ]
+        : []
     );
   },
-  'info-grid': (node, { tokens, editable, nodeIndex, inset }) => {
+  'info-grid': (node, { tokens, layout, editable, nodeIndex, inset }) => {
     const items = node.payload.items
       .map(
         (item, index) =>
@@ -746,14 +798,18 @@ const DIRECTIVE_RENDERERS = {
         ['display', 'flex'],
         ['flex-wrap', 'wrap'],
         ['gap', '16px'],
-        ['padding', '16px 0'],
+        ['padding', layout === 'brand-default' ? '16px' : '16px 0'],
         ['border-top', `1px solid ${tokens.border}`],
         ['border-bottom', `1px solid ${tokens.border}`],
+        [
+          'background',
+          layout === 'brand-default' ? tokens.soft : 'transparent',
+        ],
       ])}>${items}</div>`,
       inset
     );
   },
-  timeline: (node, { tokens, editable, nodeIndex, inset }) => {
+  timeline: (node, { tokens, layout, editable, nodeIndex, inset }) => {
     const items = node.payload.items
       .map(
         (item, index) =>
@@ -767,7 +823,7 @@ const DIRECTIVE_RENDERERS = {
             ['border-top', index > 0 ? `1px solid ${tokens.border}` : false],
           ])} data-wxpost-item-container><strong ${styleAttribute([
             ['flex', '0 1 80px'],
-            ['color', tokens.muted],
+            ['color', layout === 'field-notes' ? tokens.accent : tokens.muted],
             ['font-size', '16px'],
             ['letter-spacing', '0.08em'],
             ['line-height', '1.85'],
@@ -1104,11 +1160,10 @@ export function compileWxPost(
           ['min-width', '0'],
           ['margin', '0 0 32px'],
         ]
-      )}><div>${compileMarkdown(
-        node.source,
-        tokens,
-        editable ? { editable: { nodeIndex: index } } : undefined
-      )}</div></section>`
+      )}><div>${compileMarkdown(node.source, tokens, {
+        layout: presentation.layout,
+        ...(editable ? { editable: { nodeIndex: index } } : {}),
+      })}</div></section>`
     );
   }
   const body = bodyParts.join('');

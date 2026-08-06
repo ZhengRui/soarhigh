@@ -11,6 +11,8 @@ export function ConfirmActionDialog({
   pending,
   confirmLabel,
   pendingLabel,
+  confirmTone = 'danger',
+  dismissOnBackdrop = false,
   testId,
   onCancel,
   onConfirm,
@@ -21,6 +23,8 @@ export function ConfirmActionDialog({
   pending: boolean;
   confirmLabel: string;
   pendingLabel: string;
+  confirmTone?: 'danger' | 'success';
+  dismissOnBackdrop?: boolean;
   testId: string;
   onCancel: () => void;
   onConfirm: () => void;
@@ -34,6 +38,15 @@ export function ConfirmActionDialog({
       aria-modal='true'
       aria-labelledby={titleId}
       data-testid={testId}
+      onClick={(event) => {
+        if (
+          dismissOnBackdrop &&
+          !pending &&
+          event.target === event.currentTarget
+        ) {
+          onCancel();
+        }
+      }}
     >
       <div className='w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl'>
         <h2 id={titleId} className='m-0 text-lg font-bold text-slate-900'>
@@ -56,7 +69,11 @@ export function ConfirmActionDialog({
           </button>
           <button
             type='button'
-            className='inline-flex min-h-11 items-center justify-center gap-2 rounded-[11px] border border-red-700 bg-red-700 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-60'
+            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-[11px] border px-4 py-2.5 text-sm font-bold text-white transition disabled:cursor-not-allowed disabled:opacity-60 ${
+              confirmTone === 'success'
+                ? 'border-emerald-600 bg-emerald-600 hover:bg-emerald-700'
+                : 'border-red-700 bg-red-700 hover:bg-red-800'
+            }`}
             disabled={pending}
             onClick={onConfirm}
           >

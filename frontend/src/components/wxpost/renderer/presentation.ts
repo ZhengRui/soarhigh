@@ -62,6 +62,26 @@ const PALETTES: Record<
       border: '#514c43',
     },
   },
+  'fresh-sage': {
+    light: {
+      background: '#f8faf5',
+      text: '#24332a',
+      muted: '#66736a',
+      accent: '#4f7a5b',
+      accentSecondary: '#b28b3b',
+      soft: '#edf4e8',
+      border: '#cad8c8',
+    },
+    dark: {
+      background: '#121915',
+      text: '#edf5ef',
+      muted: '#aab8ad',
+      accent: '#8fc49d',
+      accentSecondary: '#d7b66c',
+      soft: '#1e2922',
+      border: '#39483d',
+    },
+  },
   'warm-terracotta': {
     light: {
       background: '#fffaf2',
@@ -80,6 +100,26 @@ const PALETTES: Record<
       accentSecondary: '#f6bd60',
       soft: '#34231c',
       border: '#5c3c30',
+    },
+  },
+  'minimal-mono': {
+    light: {
+      background: '#ffffff',
+      text: '#171717',
+      muted: '#6b6b6b',
+      accent: '#171717',
+      accentSecondary: '#a3a3a3',
+      soft: '#f5f5f5',
+      border: '#d4d4d4',
+    },
+    dark: {
+      background: '#111111',
+      text: '#f5f5f5',
+      muted: '#b5b5b5',
+      accent: '#ffffff',
+      accentSecondary: '#a3a3a3',
+      soft: '#222222',
+      border: '#404040',
     },
   },
 };

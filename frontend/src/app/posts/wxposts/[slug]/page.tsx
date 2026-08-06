@@ -1,10 +1,10 @@
 'use client';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CalendarDays, Loader2, Trash2 } from 'lucide-react';
+import { ArrowLeft, CalendarDays, Eye, Loader2, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog';
@@ -15,10 +15,50 @@ import {
 import { WxPostPresentationDrawer } from '@/components/wxpost/WxPostPresentationDrawer';
 import { WxPostRenderer } from '@/components/wxpost/WxPostRenderer';
 import { formatWxPostDisplayDate } from '@/components/wxpost/renderer/context';
-import type { WxPostPublicDetail } from '@/components/wxpost/types';
+import type {
+  WxPostPresentation,
+  WxPostPublicDetail,
+  WxPostWechatDraftStatus,
+} from '@/components/wxpost/types';
 import { useAuth } from '@/hooks/useAuth';
 import { useWxPost } from '@/hooks/useWxPost';
-import { deletePublicWxPost } from '@/utils/wxposts';
+import {
+  deletePublicWxPost,
+  getWxPostWechatDraft,
+  getWxPostWechatPreview,
+  publishWxPostWechatDraft,
+  resetUncertainWxPostWechatDraft,
+} from '@/utils/wxposts';
+
+function WechatIcon() {
+  return (
+    <svg
+      viewBox='0 0 24 24'
+      className='h-5 w-5'
+      fill='none'
+      stroke='currentColor'
+      strokeWidth='1.8'
+      strokeLinecap='round'
+      strokeLinejoin='round'
+      aria-hidden='true'
+    >
+      <path d='M12.9 15.6c-1 .45-2.2.7-3.5.7C5.3 16.3 2 13.6 2 10.2s3.3-6.1 7.4-6.1 7.4 2.7 7.4 6.1c0 .2-.01.39-.04.58' />
+      <path d='m5.2 14.7-.8 2.3 2.65-1.28' />
+      <path d='M22 14.5c0-2.7-2.7-4.9-6-4.9s-6 2.2-6 4.9 2.7 4.9 6 4.9c.85 0 1.67-.14 2.4-.39L20.6 20l-.62-1.97C21.24 17.14 22 15.88 22 14.5Z' />
+      <path d='M7 9h.01M11.8 9h.01M14.1 13.7h.01M18 13.7h.01' />
+    </svg>
+  );
+}
+
+function apiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = error.message;
+    if (typeof message === 'string') return message;
+  }
+  return fallback;
+}
 
 function PublicWxPost({
   detail,
@@ -38,6 +78,130 @@ function PublicWxPost({
   const [deleteConfirming, setDeleteConfirming] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [wechatOpen, setWechatOpen] = useState(false);
+  const [wechatPending, setWechatPending] = useState(false);
+  const [wechatPreviewPending, setWechatPreviewPending] = useState(false);
+  const [wechatError, setWechatError] = useState<string | null>(null);
+  const [wechatResetConfirming, setWechatResetConfirming] = useState(false);
+  const [wechatResetPending, setWechatResetPending] = useState(false);
+  const [wechatResetError, setWechatResetError] = useState<string | null>(null);
+  const [wechatStatus, setWechatStatus] =
+    useState<WxPostWechatDraftStatus | null>(null);
+  const [wechatPresentation, setWechatPresentation] =
+    useState<WxPostPresentation | null>(null);
+
+  const selectedPresentation: WxPostPresentation = {
+    layout: selection.layout,
+    palette: selection.palette,
+    appearance: selection.appearance,
+    typeface: selection.typeface,
+  };
+  const hasVideo = detail.render_document.body.some(
+    (node) => node.kind === 'directive' && node.name === 'video'
+  );
+  const publishPresentation = wechatPresentation ?? selectedPresentation;
+  const hasWechatDraft = wechatStatus?.state === 'ready';
+
+  useEffect(() => {
+    if (!canDelete) return;
+    let cancelled = false;
+    void getWxPostWechatDraft(detail.id)
+      .then((status) => {
+        if (!cancelled) setWechatStatus(status);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [canDelete, detail.id]);
+
+  function openWechatDialog() {
+    setWechatOpen(true);
+    setWechatError(null);
+    setWechatPresentation(
+      wechatStatus?.state === 'uncertain' && wechatStatus.presentation
+        ? wechatStatus.presentation
+        : selectedPresentation
+    );
+  }
+
+  async function openWechatPreview() {
+    setWechatPreviewPending(true);
+    setWechatError(null);
+    try {
+      const previewUrl = (await getWxPostWechatPreview(detail.id)).previewUrl;
+      window.open(previewUrl, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      const message = apiErrorMessage(
+        error,
+        'The official WeChat preview could not be opened.'
+      );
+      setWechatError(message);
+      toast.error(message);
+    } finally {
+      setWechatPreviewPending(false);
+    }
+  }
+
+  async function confirmWechat() {
+    if (hasVideo) {
+      setWechatError(
+        'This Revision contains a Video block, which is not supported in Phase 3.'
+      );
+      return;
+    }
+    if (wechatStatus?.state === 'creating') {
+      setWechatError('Another WeChat draft operation is already running.');
+      return;
+    }
+    setWechatPending(true);
+    setWechatError(null);
+    try {
+      const result = await publishWxPostWechatDraft(
+        detail.id,
+        detail.article_revision,
+        publishPresentation
+      );
+      setWechatStatus(result);
+      setWechatOpen(false);
+      toast.success(
+        {
+          created: 'WeChat draft created!',
+          updated: 'WeChat draft updated!',
+          unchanged: 'WeChat draft is already up to date!',
+        }[result.action]
+      );
+    } catch (error) {
+      setWechatError(
+        apiErrorMessage(error, 'The WeChat draft could not be published.')
+      );
+    } finally {
+      setWechatPending(false);
+    }
+  }
+
+  async function confirmWechatReset() {
+    setWechatResetPending(true);
+    setWechatResetError(null);
+    try {
+      const status = await resetUncertainWxPostWechatDraft(
+        detail.id,
+        detail.article_revision
+      );
+      setWechatStatus(status);
+      setWechatResetConfirming(false);
+      toast.success('The uncertain WeChat operation was reset.');
+    } catch (error) {
+      setWechatResetError(
+        apiErrorMessage(
+          error,
+          'The uncertain WeChat operation could not be reset.'
+        )
+      );
+    } finally {
+      setWechatResetPending(false);
+    }
+  }
 
   async function confirmDelete() {
     setDeletePending(true);
@@ -79,7 +243,7 @@ function PublicWxPost({
   return (
     <>
       <div className='relative mb-7' data-testid='public-wxpost-header'>
-        <div className={canDelete ? 'min-w-0 pr-12' : 'min-w-0'}>
+        <div className={canDelete ? 'min-w-0 pr-36' : 'min-w-0'}>
           <div className='mb-3 flex flex-wrap items-center gap-2'>
             <span className='rounded-full bg-gradient-to-r from-blue-600 to-purple-600 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-white'>
               WxPost
@@ -108,19 +272,50 @@ function PublicWxPost({
           <span>Revision {detail.article_revision}</span>
         </div>
         {canDelete && (
-          <button
-            type='button'
-            className='absolute right-0 top-0 inline-flex h-9 w-9 items-center justify-center rounded-full border border-red-200 bg-white text-red-700 shadow-sm transition hover:border-red-300 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200'
-            onClick={() => {
-              setDeleteError(null);
-              setDeleteConfirming(true);
-            }}
-            aria-label='Delete public revision'
-            title='Delete public revision'
-            data-testid='delete-public-wxpost'
-          >
-            <Trash2 className='h-4 w-4' aria-hidden='true' />
-          </button>
+          <div className='absolute right-0 top-0 flex items-center gap-2'>
+            <button
+              type='button'
+              className='inline-flex h-9 w-9 items-center justify-center rounded-full border border-blue-200 bg-white text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none'
+              disabled={!hasWechatDraft || wechatPreviewPending}
+              onClick={() => void openWechatPreview()}
+              aria-label='Open WeChat draft preview'
+              title={
+                hasWechatDraft
+                  ? 'Open WeChat draft preview'
+                  : 'Publish a WeChat draft to enable preview'
+              }
+              data-testid='preview-wechat-draft'
+            >
+              {wechatPreviewPending ? (
+                <Loader2 className='h-4 w-4 animate-spin' aria-hidden='true' />
+              ) : (
+                <Eye className='h-4 w-4' aria-hidden='true' />
+              )}
+            </button>
+            <button
+              type='button'
+              className='inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-200 bg-white text-emerald-700 shadow-sm transition hover:border-emerald-300 hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200'
+              onClick={openWechatDialog}
+              aria-label='Publish to WeChat Drafts'
+              title='Publish to WeChat Drafts'
+              data-testid='publish-wechat-draft'
+            >
+              <WechatIcon />
+            </button>
+            <button
+              type='button'
+              className='inline-flex h-9 w-9 items-center justify-center rounded-full border border-red-200 bg-white text-red-700 shadow-sm transition hover:border-red-300 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200'
+              onClick={() => {
+                setDeleteError(null);
+                setDeleteConfirming(true);
+              }}
+              aria-label='Delete public revision'
+              title='Delete public revision'
+              data-testid='delete-public-wxpost'
+            >
+              <Trash2 className='h-4 w-4' aria-hidden='true' />
+            </button>
+          </div>
         )}
       </div>
 
@@ -154,8 +349,8 @@ function PublicWxPost({
       />
 
       <footer className='mx-auto mt-10 max-w-3xl border-t border-slate-200 py-6 text-center text-xs text-slate-500'>
-        Published by SoarHigh Toastmasters · Presentation choices affect only
-        this preview.
+        Published by SoarHigh Toastmasters · Presentation choices will be used
+        when publishing to WeChat Drafts.
       </footer>
 
       {deleteConfirming && (
@@ -165,12 +360,93 @@ function PublicWxPost({
           pending={deletePending}
           confirmLabel='Delete public WxPost'
           pendingLabel='Deleting…'
+          dismissOnBackdrop
           testId='delete-public-wxpost-dialog'
           onCancel={() => setDeleteConfirming(false)}
           onConfirm={() => void confirmDelete()}
         >
           This removes the public revision and its public media. The private
-          workspace and Draft will remain.
+          workspace, Saved Draft, and any existing WeChat draft will remain.
+        </ConfirmActionDialog>
+      )}
+
+      {wechatOpen && (
+        <ConfirmActionDialog
+          title={
+            wechatStatus?.state === 'uncertain'
+              ? 'Recover WeChat Draft?'
+              : wechatStatus?.state === 'ready'
+                ? 'Update WeChat Draft?'
+                : 'Publish to WeChat Drafts?'
+          }
+          error={wechatError}
+          pending={wechatPending}
+          confirmLabel={
+            wechatStatus?.state === 'uncertain'
+              ? 'Retry Recovery'
+              : wechatStatus?.state === 'ready'
+                ? 'Update WeChat Draft'
+                : 'Publish to WeChat Drafts'
+          }
+          pendingLabel={
+            wechatStatus?.state === 'uncertain' ? 'Recovering…' : 'Publishing…'
+          }
+          confirmTone='success'
+          dismissOnBackdrop
+          testId='publish-wechat-draft-dialog'
+          onCancel={() => setWechatOpen(false)}
+          onConfirm={() => void confirmWechat()}
+        >
+          {wechatStatus?.state === 'uncertain' ? (
+            <>
+              <span className='block'>
+                Retry searches the Official Account draft box for the exact
+                Revision {detail.article_revision} content without creating a
+                second draft.
+              </span>
+              <button
+                type='button'
+                className='mt-2 font-semibold text-red-700 underline decoration-red-300 underline-offset-2 hover:text-red-800'
+                onClick={() => {
+                  setWechatOpen(false);
+                  setWechatResetError(null);
+                  setWechatResetConfirming(true);
+                }}
+              >
+                I checked; no matching draft exists
+              </button>
+            </>
+          ) : (
+            <span className='block'>
+              Revision {detail.article_revision} · {publishPresentation.layout}{' '}
+              · {publishPresentation.palette} · {publishPresentation.appearance}{' '}
+              · {publishPresentation.typeface}. This creates or updates a draft
+              only; it does not publish or send the article.
+            </span>
+          )}
+          {hasVideo && (
+            <span className='mt-2 block font-medium text-red-700'>
+              Video blocks are not supported for WeChat Drafts in Phase 3.
+            </span>
+          )}
+        </ConfirmActionDialog>
+      )}
+
+      {wechatResetConfirming && (
+        <ConfirmActionDialog
+          title='Reset uncertain WeChat operation?'
+          error={wechatResetError}
+          pending={wechatResetPending}
+          confirmLabel='Reset WeChat State'
+          pendingLabel='Resetting…'
+          dismissOnBackdrop
+          testId='reset-uncertain-wechat-draft-dialog'
+          onCancel={() => setWechatResetConfirming(false)}
+          onConfirm={() => void confirmWechatReset()}
+        >
+          Continue only after checking the Official Account draft box and
+          confirming that no matching draft exists. Resetting the state when a
+          draft does exist can cause a duplicate on the next publish.
         </ConfirmActionDialog>
       )}
     </>

@@ -79,13 +79,13 @@ test('preserves the complete v1 published and editable HTML contract', () => {
       .update(html.join('\n---WXPOST-OUTPUT---\n'))
       .digest('hex');
 
-  expect(outputs.published).toHaveLength(162);
-  expect(outputs.editable).toHaveLength(162);
+  expect(outputs.published).toHaveLength(270);
+  expect(outputs.editable).toHaveLength(270);
   expect(digest(outputs.published)).toBe(
-    'e8a4b89c89fd64118c1763b27baf5afdc9f9a51a3b3e4a39d73a230ad3a6bf1c'
+    '39e12fc7cd55a914343ff32c08b88e3e813ed51b713220fe095df9cc3b31a106'
   );
   expect(digest(outputs.editable)).toBe(
-    '57407f1c694e2c0cb9c61e267acf0a597107be53342585a6e36f721bbe88254d'
+    '6e1322584a270a878fcca8ee2c6a533a4c2e494f99196f5be6a50d7bf15b97c4'
   );
 });
 

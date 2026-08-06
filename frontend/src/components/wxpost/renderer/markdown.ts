@@ -8,6 +8,7 @@ import remarkRehype from 'remark-rehype';
 import { unified } from 'unified';
 
 import { remarkKeyPoints } from '../remarkKeyPoints';
+import type { WxPostLayout } from '../types';
 import { wxPostEditKey } from './editing';
 import type { PresentationTokens } from './presentation';
 import { inlineStyle, safeUrl } from './html';
@@ -23,6 +24,7 @@ type HastNode = Root['children'][number] & {
 };
 
 interface MarkdownStyleOptions {
+  layout: WxPostLayout;
   sectionBody?: boolean;
   sectionHeading?: boolean;
   editable?: {
@@ -119,6 +121,24 @@ function styleMarkdown(
               ['font-weight', '500'],
               ['line-height', '1.35'],
               ['letter-spacing', '-0.02em'],
+              ...(options.sectionHeading
+                ? []
+                : options.layout === 'brand-default'
+                  ? ([
+                      ['padding', '10px 12px'],
+                      ['border-left', `4px solid ${tokens.accent}`],
+                      ['border-radius', '0 8px 8px 0'],
+                      ['background', tokens.soft],
+                    ] as Array<[string, string]>)
+                  : options.layout === 'field-notes'
+                    ? ([
+                        ['padding-bottom', '8px'],
+                        ['border-bottom', `1px dashed ${tokens.border}`],
+                      ] as Array<[string, string]>)
+                    : ([
+                        ['padding-top', '10px'],
+                        ['border-top', `3px solid ${tokens.accent}`],
+                      ] as Array<[string, string]>)),
             ]);
             break;
           case 'h3':
@@ -162,12 +182,31 @@ function styleMarkdown(
             setStyle(node, [['margin', '0 0 6px']]);
             break;
           case 'blockquote':
-            setStyle(node, [
-              ['margin', '0 0 16px'],
-              ['padding-left', '16px'],
-              ['border-left', `2px solid ${tokens.accent}`],
-              ['color', tokens.text],
-            ]);
+            setStyle(
+              node,
+              options.layout === 'editorial-feature'
+                ? [
+                    ['margin', '0 0 16px'],
+                    ['padding', '16px 0'],
+                    ['border-top', `1px solid ${tokens.border}`],
+                    ['border-bottom', `1px solid ${tokens.border}`],
+                    ['color', tokens.text],
+                    ['font-family', tokens.titleFont],
+                    ['text-align', 'center'],
+                  ]
+                : [
+                    ['margin', '0 0 16px'],
+                    ['padding', '14px 16px'],
+                    ['border-left', `2px solid ${tokens.accent}`],
+                    [
+                      'background',
+                      options.layout === 'brand-default'
+                        ? tokens.soft
+                        : 'transparent',
+                    ],
+                    ['color', tokens.text],
+                  ]
+            );
             break;
           case 'a':
             setStyle(node, [
@@ -201,7 +240,14 @@ function styleMarkdown(
             setStyle(node, [
               ['margin', '20px 0'],
               ['border', '0'],
-              ['border-top', `1px solid ${tokens.border}`],
+              [
+                'border-top',
+                options.layout === 'brand-default'
+                  ? `2px solid ${tokens.accent}`
+                  : options.layout === 'field-notes'
+                    ? `1px dashed ${tokens.border}`
+                    : `1px solid ${tokens.border}`,
+              ],
             ]);
             break;
           case 'table':
@@ -222,6 +268,13 @@ function styleMarkdown(
               ['border-bottom', `1px solid ${tokens.border}`],
               ['text-align', alignment],
               ['vertical-align', 'top'],
+              ...(node.tagName === 'th'
+                ? ([
+                    ['background', tokens.soft],
+                    ['color', tokens.accent],
+                    ['font-weight', '600'],
+                  ] as Array<[string, string]>)
+                : []),
             ]);
             break;
           }
@@ -268,7 +321,7 @@ function processor(tokens: PresentationTokens, options: MarkdownStyleOptions) {
 export function compileMarkdown(
   source: string,
   tokens: PresentationTokens,
-  options: MarkdownStyleOptions = {}
+  options: MarkdownStyleOptions
 ) {
   return String(processor(tokens, options).processSync(source));
 }
@@ -276,6 +329,7 @@ export function compileMarkdown(
 export function compileSectionMarkdown(
   source: string,
   tokens: PresentationTokens,
+  layout: WxPostLayout,
   editable?: MarkdownStyleOptions['editable']
 ) {
   const parsed = unified().use(remarkParse).parse(source) as MdastRoot;
@@ -290,8 +344,8 @@ export function compileSectionMarkdown(
   };
   return {
     heading: heading
-      ? compile([heading], { sectionHeading: true, editable })
+      ? compile([heading], { layout, sectionHeading: true, editable })
       : '',
-    body: compile(body, { sectionBody: true, editable }),
+    body: compile(body, { layout, sectionBody: true, editable }),
   };
 }

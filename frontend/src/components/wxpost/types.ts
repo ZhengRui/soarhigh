@@ -17,7 +17,9 @@ export const WXPOST_LAYOUTS = [
 export const WXPOST_PALETTES = [
   'brand-blue',
   'paper-neutral',
+  'fresh-sage',
   'warm-terracotta',
+  'minimal-mono',
 ] as const;
 export const WXPOST_APPEARANCES = ['light', 'dark'] as const;
 export const WXPOST_TYPEFACES = [
@@ -105,6 +107,20 @@ export interface WxPostPublicDetail {
   created_at: string;
   updated_at: string;
   render_document: WxPostRenderDocument;
+}
+
+export interface WxPostWechatDraftStatus {
+  state: 'not-created' | 'creating' | 'ready' | 'uncertain';
+  sourcePublicRevision: number | null;
+  presentation: WxPostPresentation | null;
+  readbackChanged: boolean | null;
+  needsUpdate: boolean;
+  message: string | null;
+}
+
+export interface WxPostWechatDraftResult extends WxPostWechatDraftStatus {
+  action: 'created' | 'updated' | 'unchanged';
+  previewUrl: string | null;
 }
 
 export interface GalleryDirectivePayload {
