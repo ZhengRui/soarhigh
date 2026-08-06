@@ -779,6 +779,7 @@ def test_capture_full_page_uses_mobile_viewport_and_crops_to_article(
     tmp_path: Path, monkeypatch
 ) -> None:
     plugin = _load_plugin(monkeypatch)
+    monkeypatch.setenv("WXPOST_CHROMIUM_PATH", "/test/chrome-headless-shell")
     calls: list[tuple[str, ...]] = []
     crops: list[tuple[int, int, int, int]] = []
     destination = tmp_path / "draft.png"
@@ -830,7 +831,40 @@ def test_capture_full_page_uses_mobile_viewport_and_crops_to_article(
     )
 
     assert any(args[-4:] == ("set", "viewport", "390", "844") for args in calls)
+    assert calls[0][2:4] == (
+        "--executable-path",
+        "/test/chrome-headless-shell",
+    )
     assert crops == [(12, 20, 378, 820)]
+
+
+def test_resolve_chromium_path_uses_override(monkeypatch) -> None:
+    plugin = _load_plugin(monkeypatch)
+    monkeypatch.setenv("WXPOST_CHROMIUM_PATH", "/custom/headless-shell")
+
+    assert plugin.feishu_delivery.resolve_chromium_path() == "/custom/headless-shell"
+
+
+def test_resolve_chromium_path_discovers_latest_hermes_browser(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plugin = _load_plugin(monkeypatch)
+    monkeypatch.delenv("WXPOST_CHROMIUM_PATH", raising=False)
+    monkeypatch.setenv("WXPOST_PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
+    old_browser = (
+        tmp_path / "chromium_headless_shell-1228" / "chrome-linux" / "headless_shell"
+    )
+    current_browser = (
+        tmp_path
+        / "chromium_headless_shell-1234"
+        / "chrome-headless-shell-linux64"
+        / "chrome-headless-shell"
+    )
+    for browser in (old_browser, current_browser):
+        browser.parent.mkdir(parents=True)
+        browser.touch(mode=0o755)
+
+    assert plugin.feishu_delivery.resolve_chromium_path() == str(current_browser)
 
 
 def test_draft_preview_tool_sends_complete_link_without_returning_token(

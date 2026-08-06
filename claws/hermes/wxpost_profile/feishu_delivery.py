@@ -222,13 +222,39 @@ async def run_browser(*args: str, timeout: int = 120) -> str:
     return stdout.decode(errors="replace").strip()
 
 
+def resolve_chromium_path() -> str:
+    override = os.environ.get("WXPOST_CHROMIUM_PATH")
+    if override:
+        return override
+
+    browser_root = Path(
+        os.environ.get(
+            "WXPOST_PLAYWRIGHT_BROWSERS_PATH",
+            "/opt/hermes/.playwright",
+        )
+    )
+    candidates = sorted(
+        (
+            *browser_root.glob(
+                "chromium_headless_shell-*/"
+                "chrome-headless-shell-linux64/chrome-headless-shell"
+            ),
+            *browser_root.glob("chromium_headless_shell-*/chrome-linux/headless_shell"),
+        ),
+        reverse=True,
+    )
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    raise RuntimeError(
+        "Draft preview rendering requires an installed Chromium headless shell; "
+        "set WXPOST_CHROMIUM_PATH when it is outside Hermes' Playwright cache"
+    )
+
+
 async def capture_full_page(preview_url: str, destination: Path) -> None:
     session = f"wxpost-preview-{uuid4().hex}"
-    browser_path = os.environ.get(
-        "WXPOST_CHROMIUM_PATH",
-        "/opt/hermes/.playwright/chromium_headless_shell-1228/"
-        "chrome-linux/headless_shell",
-    )
+    browser_path = resolve_chromium_path()
     try:
         await run_browser(
             "--session",
