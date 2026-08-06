@@ -191,7 +191,7 @@ def test_capabilities_describe_the_versioned_authoring_contract(client: TestClie
     }
     assert payload["defaultPresentation"] == {
         "layout": "brand-default",
-        "palette": "paper-neutral",
+        "palette": "fresh-sage",
         "appearance": "light",
         "typeface": "editorial-serif",
     }

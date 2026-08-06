@@ -291,6 +291,8 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
   let requestBody: Record<string, unknown> | null = null;
   let publishRequests = 0;
   let statusRequests = 0;
+  let remoteDraftExists = false;
+  let previewRequestFails = false;
   await page.route(
     /\/posts\/wxposts\/([^/?]+)\/wechat-draft$/,
     async (route) => {
@@ -298,11 +300,11 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
         statusRequests += 1;
         await route.fulfill({
           status: 200,
-          json: requestBody
+          json: remoteDraftExists
             ? {
                 state: 'ready',
                 sourcePublicRevision: 3,
-                presentation: requestBody.presentation,
+                presentation: requestBody!.presentation,
                 readbackChanged: true,
                 needsUpdate: false,
                 message: null,
@@ -320,6 +322,7 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
       }
       publishRequests += 1;
       requestBody = route.request().postDataJSON() as Record<string, unknown>;
+      remoteDraftExists = true;
       await route.fulfill({
         status: 200,
         json: {
@@ -339,6 +342,20 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
     /\/posts\/wxposts\/([^/?]+)\/wechat-draft\/preview$/,
     async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 100));
+      if (previewRequestFails) {
+        await route.fulfill({
+          status: 502,
+          json: { detail: 'WeChat preview service unavailable.' },
+        });
+        return;
+      }
+      if (!remoteDraftExists) {
+        await route.fulfill({
+          status: 409,
+          json: { detail: 'The linked WeChat draft no longer exists.' },
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         json: { previewUrl: 'https://mp.weixin.qq.com/s/test-preview' },
@@ -352,7 +369,7 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
   const deleteButton = page.getByTestId('delete-public-wxpost');
   await expect(wechatButton).toBeVisible();
   await expect(previewButton).toBeVisible();
-  await expect(previewButton).toBeDisabled();
+  await expect(previewButton).toBeEnabled();
   await page.waitForTimeout(100);
   const statusRequestsBeforeOpen = statusRequests;
   const wechatStyle = await wechatButton.evaluate((button) => {
@@ -380,9 +397,9 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
   const deleteBox = await deleteButton.boundingBox();
   expect(wechatBox).not.toBeNull();
   expect(deleteBox).not.toBeNull();
-  const disabledPreviewBox = await previewButton.boundingBox();
-  expect(disabledPreviewBox).not.toBeNull();
-  expect(disabledPreviewBox!.x + disabledPreviewBox!.width).toBeLessThan(
+  const initialPreviewBox = await previewButton.boundingBox();
+  expect(initialPreviewBox).not.toBeNull();
+  expect(initialPreviewBox!.x + initialPreviewBox!.width).toBeLessThan(
     wechatBox!.x
   );
   expect(wechatBox!.x + wechatBox!.width).toBeLessThan(deleteBox!.x);
@@ -436,12 +453,12 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
   });
 
   await wechatButton.click();
-  await expect(dialog).toContainText('Update WeChat Draft?');
+  await expect(dialog).toContainText('Publish to WeChat Drafts?');
   expect(statusRequests).toBe(statusRequestsBeforeOpen);
   await expect(dialog).not.toContainText('WeChat adjusted the submitted HTML');
   await expect(dialog).not.toContainText('No HTML changes were detected');
   await expect(
-    dialog.getByRole('button', { name: 'Update WeChat Draft' })
+    dialog.getByRole('button', { name: 'Publish to WeChat Drafts' })
   ).toBeVisible();
   await dialog.getByRole('button', { name: 'Cancel' }).click();
 
@@ -451,6 +468,23 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
   await previewClick;
   const popup = await popupPromise;
   await expect(popup).toHaveURL('https://mp.weixin.qq.com/s/test-preview');
+
+  remoteDraftExists = false;
+  await previewButton.click();
+  await expect(
+    page.getByText('The linked WeChat draft no longer exists.')
+  ).toBeVisible();
+  await expect(previewButton).toBeEnabled();
+  expect(statusRequests).toBe(statusRequestsBeforeOpen);
+
+  remoteDraftExists = true;
+  previewRequestFails = true;
+  await previewButton.click();
+  await expect(
+    page.getByText('WeChat preview service unavailable.')
+  ).toBeVisible();
+  await expect(previewButton).toBeEnabled();
+  expect(statusRequests).toBe(statusRequestsBeforeOpen);
 });
 
 test('retries and explicitly resets an uncertain WeChat creation', async ({

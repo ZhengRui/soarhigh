@@ -325,6 +325,25 @@ def test_unreferenced_ready_assets_are_abandoned_and_deletable(monkeypatch) -> N
     assert delete_query.filters == [("id", ["asset-old"])]
 
 
+def test_ready_asset_descriptor_lookup_is_scoped_to_one_public_wxpost(monkeypatch) -> None:
+    rows = [
+        {
+            "object_key": "public/wxposts/post/assets/image/original.jpg",
+            "content_sha256": "a" * 64,
+            "size_bytes": 123,
+            "kind": "image",
+        }
+    ]
+    query = FakeQuery(data=rows)
+    monkeypatch.setattr(wxpost_db, "supabase", FakeAnyTableSupabase([query]))
+
+    assert wxpost_db.get_ready_wxpost_assets(WXPOST_ID) == rows
+    assert query.filters == [
+        ("wxpost_id", str(WXPOST_ID)),
+        ("status", "ready"),
+    ]
+
+
 def test_batch_publication_lookup_uses_one_query(monkeypatch) -> None:
     rows = [{"source_workspace_id": "wxpost-a"}]
     query = FakeQuery(data=rows)

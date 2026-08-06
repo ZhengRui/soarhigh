@@ -100,14 +100,13 @@ function PublicWxPost({
     (node) => node.kind === 'directive' && node.name === 'video'
   );
   const publishPresentation = wechatPresentation ?? selectedPresentation;
-  const hasWechatDraft = wechatStatus?.state === 'ready';
 
   useEffect(() => {
     if (!canDelete) return;
     let cancelled = false;
     void getWxPostWechatDraft(detail.id)
       .then((status) => {
-        if (!cancelled) setWechatStatus(status);
+        if (!cancelled) setWechatStatus((current) => current ?? status);
       })
       .catch(() => undefined);
     return () => {
@@ -127,7 +126,6 @@ function PublicWxPost({
 
   async function openWechatPreview() {
     setWechatPreviewPending(true);
-    setWechatError(null);
     try {
       const previewUrl = (await getWxPostWechatPreview(detail.id)).previewUrl;
       window.open(previewUrl, '_blank', 'noopener,noreferrer');
@@ -136,7 +134,6 @@ function PublicWxPost({
         error,
         'The official WeChat preview could not be opened.'
       );
-      setWechatError(message);
       toast.error(message);
     } finally {
       setWechatPreviewPending(false);
@@ -148,10 +145,6 @@ function PublicWxPost({
       setWechatError(
         'This Revision contains a Video block, which is not supported in Phase 3.'
       );
-      return;
-    }
-    if (wechatStatus?.state === 'creating') {
-      setWechatError('Another WeChat draft operation is already running.');
       return;
     }
     setWechatPending(true);
@@ -276,14 +269,10 @@ function PublicWxPost({
             <button
               type='button'
               className='inline-flex h-9 w-9 items-center justify-center rounded-full border border-blue-200 bg-white text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none'
-              disabled={!hasWechatDraft || wechatPreviewPending}
+              disabled={wechatPreviewPending}
               onClick={() => void openWechatPreview()}
               aria-label='Open WeChat draft preview'
-              title={
-                hasWechatDraft
-                  ? 'Open WeChat draft preview'
-                  : 'Publish a WeChat draft to enable preview'
-              }
+              title='Open WeChat draft preview'
               data-testid='preview-wechat-draft'
             >
               {wechatPreviewPending ? (
@@ -375,18 +364,14 @@ function PublicWxPost({
           title={
             wechatStatus?.state === 'uncertain'
               ? 'Recover WeChat Draft?'
-              : wechatStatus?.state === 'ready'
-                ? 'Update WeChat Draft?'
-                : 'Publish to WeChat Drafts?'
+              : 'Publish to WeChat Drafts?'
           }
           error={wechatError}
           pending={wechatPending}
           confirmLabel={
             wechatStatus?.state === 'uncertain'
               ? 'Retry Recovery'
-              : wechatStatus?.state === 'ready'
-                ? 'Update WeChat Draft'
-                : 'Publish to WeChat Drafts'
+              : 'Publish to WeChat Drafts'
           }
           pendingLabel={
             wechatStatus?.state === 'uncertain' ? 'Recovering…' : 'Publishing…'

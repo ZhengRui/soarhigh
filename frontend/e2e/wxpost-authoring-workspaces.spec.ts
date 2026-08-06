@@ -722,6 +722,10 @@ test('refreshes a cached empty list after creating an independent workspace', as
   const workspaceApi = await mockWxPostWorkspaceApi(page);
   let listRequests = 0;
   await page.route(WORKSPACES_API_URL, async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback();
+      return;
+    }
     listRequests += 1;
     await route.fulfill({
       status: 200,
@@ -768,6 +772,7 @@ test('refreshes a cached empty list after creating an independent workspace', as
   );
   await page.getByTestId('association-independent').click();
   await page.getByTestId('create-workspace').click();
+  await expect(page).toHaveURL(/\/posts\/wxposts\/edit\/[0-9a-f]{12}$/);
   await page.getByTestId('wxpost-workspaces-link').click();
 
   await expect(

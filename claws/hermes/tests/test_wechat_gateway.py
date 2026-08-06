@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import hashlib
 import json
 import threading
 from collections.abc import Callable
@@ -10,17 +11,60 @@ from typing import Any
 import pytest
 
 from wechat_gateway.core import (
+    AssetResponse,
+    AssetSource,
+    BODY_IMAGE_MAX_BYTES,
+    COVER_IMAGE_MAX_BYTES,
     GatewayError,
     OfficialAccountGateway,
     TransportResponse,
     TransportUnavailable,
 )
 from wechat_gateway.http_server import (
-    BODY_IMAGE_REQUEST_LIMIT,
-    COVER_REQUEST_LIMIT,
+    ASSET_REQUEST_LIMIT,
     GatewayHTTPServer,
     GatewayRequestHandler,
 )
+
+ASSET_BODY = b"\xff\xd8\xffimage-bytes"
+ASSET_SHA256 = hashlib.sha256(ASSET_BODY).hexdigest()
+ASSET_BASE_URL = "https://assets.example/"
+ASSET_OBJECT_KEY = "public/wxposts/post/assets/image/original.jpg"
+
+
+def asset_source(
+    *,
+    body: bytes = ASSET_BODY,
+    size_bytes: int | None = None,
+    sha256: str | None = None,
+    object_key: str = ASSET_OBJECT_KEY,
+) -> AssetSource:
+    return AssetSource(
+        object_key=object_key,
+        sha256=sha256 or hashlib.sha256(body).hexdigest(),
+        size_bytes=len(body) if size_bytes is None else size_bytes,
+    )
+
+
+class FakeAssetFetcher:
+    def __init__(
+        self,
+        *,
+        body: bytes = ASSET_BODY,
+        status: int = 200,
+        unavailable: bool = False,
+    ) -> None:
+        self.body = body
+        self.status = status
+        self.unavailable = unavailable
+        self.requests: list[tuple[str, int]] = []
+
+    def fetch(self, url: str, *, maximum: int, timeout: float = 30) -> AssetResponse:
+        del timeout
+        self.requests.append((url, maximum))
+        if self.unavailable:
+            raise TransportUnavailable
+        return AssetResponse(self.status, self.body[: maximum + 1])
 
 
 class FakeTransport:
@@ -48,6 +92,178 @@ def response(payload: dict, status: int = 200) -> TransportResponse:
     return TransportResponse(status=status, body=json.dumps(payload).encode())
 
 
+def gateway_with_asset_fetcher(fetcher: FakeAssetFetcher) -> OfficialAccountGateway:
+    def handler(**kwargs: Any) -> TransportResponse:
+        if "/stable_token" in kwargs["url"]:
+            return response({"access_token": "token", "expires_in": 7200})
+        if "/media/uploadimg" in kwargs["url"]:
+            return response({"url": "https://mmbiz.qpic.cn/body.jpg"})
+        if "/material/add_material" in kwargs["url"]:
+            return response({"media_id": "cover-id"})
+        raise AssertionError(kwargs["url"])
+
+    return OfficialAccountGateway(
+        app_id="app-id",
+        app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
+        transport=FakeTransport(handler),
+        asset_fetcher=fetcher,
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {
+            "objectKey": "https://attacker.example/image.jpg",
+            "sha256": ASSET_SHA256,
+            "sizeBytes": len(ASSET_BODY),
+        },
+        {
+            "objectKey": "public/wxposts/../secret.jpg",
+            "sha256": ASSET_SHA256,
+            "sizeBytes": len(ASSET_BODY),
+        },
+        {
+            "objectKey": ASSET_OBJECT_KEY,
+            "sha256": "not-a-sha",
+            "sizeBytes": len(ASSET_BODY),
+        },
+        {
+            "objectKey": ASSET_OBJECT_KEY,
+            "sha256": ASSET_SHA256,
+            "sizeBytes": True,
+        },
+        {
+            "objectKey": ASSET_OBJECT_KEY,
+            "sha256": ASSET_SHA256,
+            "sizeBytes": len(ASSET_BODY),
+            "url": "https://attacker.example/image.jpg",
+        },
+    ],
+)
+def test_asset_source_rejects_untrusted_or_incomplete_descriptors(
+    payload: dict,
+) -> None:
+    with pytest.raises(GatewayError, match="fields are invalid") as caught:
+        AssetSource.from_payload(payload)
+    assert caught.value.status == 422
+
+
+def test_gateway_fetches_only_the_configured_public_asset_key() -> None:
+    fetcher = FakeAssetFetcher()
+    gateway = gateway_with_asset_fetcher(fetcher)
+
+    assert gateway.upload_body_image(asset_source()).endswith("body.jpg")
+    assert fetcher.requests == [
+        (f"{ASSET_BASE_URL}{ASSET_OBJECT_KEY}", BODY_IMAGE_MAX_BYTES)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("fetcher", "source", "message", "status"),
+    [
+        (
+            FakeAssetFetcher(status=302),
+            asset_source(),
+            "returned HTTP 302",
+            502,
+        ),
+        (
+            FakeAssetFetcher(unavailable=True),
+            asset_source(),
+            "could not be downloaded",
+            502,
+        ),
+        (
+            FakeAssetFetcher(body=b""),
+            asset_source(body=b"", size_bytes=1, sha256=ASSET_SHA256),
+            "is empty",
+            422,
+        ),
+        (
+            FakeAssetFetcher(body=ASSET_BODY + b"changed"),
+            asset_source(),
+            "size no longer matches",
+            409,
+        ),
+        (
+            FakeAssetFetcher(body=b"\xff\xd8\xffother-bytes"),
+            asset_source(size_bytes=len(b"\xff\xd8\xffother-bytes")),
+            "content no longer matches",
+            409,
+        ),
+    ],
+)
+def test_gateway_rejects_unavailable_or_changed_oss_assets(
+    fetcher: FakeAssetFetcher,
+    source: AssetSource,
+    message: str,
+    status: int,
+) -> None:
+    gateway = gateway_with_asset_fetcher(fetcher)
+
+    with pytest.raises(GatewayError, match=message) as caught:
+        gateway.upload_body_image(source)
+    assert caught.value.status == status
+
+
+def test_gateway_rejects_content_that_is_not_a_supported_image_format() -> None:
+    body = b"not-really-a-jpeg"
+    gateway = gateway_with_asset_fetcher(FakeAssetFetcher(body=body))
+
+    with pytest.raises(GatewayError, match="supported image type") as caught:
+        gateway.upload_body_image(asset_source(body=body))
+    assert caught.value.status == 422
+
+
+def test_gateway_uses_the_image_signature_for_the_wechat_multipart_type() -> None:
+    body = b"\x89PNG\r\n\x1a\nimage-bytes"
+    transport = FakeTransport(
+        lambda **kwargs: (
+            response({"access_token": "token", "expires_in": 7200})
+            if "/stable_token" in kwargs["url"]
+            else response({"media_id": "cover-id"})
+        )
+    )
+    gateway = OfficialAccountGateway(
+        app_id="app-id",
+        app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
+        transport=transport,
+        asset_fetcher=FakeAssetFetcher(body=body),
+    )
+
+    assert gateway.upload_cover(asset_source(body=body)) == "cover-id"
+
+    upload_body = transport.requests[-1][3]
+    assert upload_body is not None
+    assert b'filename="cover.png"' in upload_body
+    assert b"Content-Type: image/png" in upload_body
+
+
+def test_gateway_enforces_distinct_body_and_cover_contracts() -> None:
+    fetcher = FakeAssetFetcher()
+    gateway = gateway_with_asset_fetcher(fetcher)
+
+    gif = b"GIF89aimage-bytes"
+    with pytest.raises(GatewayError, match="supported image type") as body_type:
+        gateway_with_asset_fetcher(FakeAssetFetcher(body=gif)).upload_body_image(
+            asset_source(body=gif)
+        )
+    assert body_type.value.status == 422
+
+    with pytest.raises(GatewayError, match="exceeds the allowed size") as body_size:
+        gateway.upload_body_image(asset_source(size_bytes=BODY_IMAGE_MAX_BYTES + 1))
+    assert body_size.value.status == 422
+
+    with pytest.raises(GatewayError, match="exceeds the allowed size") as cover_size:
+        gateway.upload_cover(asset_source(size_bytes=COVER_IMAGE_MAX_BYTES + 1))
+    assert cover_size.value.status == 422
+    assert fetcher.requests == []
+
+
 def test_access_token_is_cached_and_refreshed_once_across_concurrent_callers() -> None:
     token_calls = 0
     lock = threading.Lock()
@@ -62,6 +278,7 @@ def test_access_token_is_cached_and_refreshed_once_across_concurrent_callers() -
     gateway = OfficialAccountGateway(
         app_id="app-id",
         app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
         transport=FakeTransport(handler),
     )
     results: list[str] = []
@@ -100,12 +317,14 @@ def test_token_error_refreshes_once_then_retries_the_same_typed_operation() -> N
     gateway = OfficialAccountGateway(
         app_id="app-id",
         app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
         transport=FakeTransport(handler),
+        asset_fetcher=FakeAssetFetcher(),
     )
 
-    assert gateway.upload_body_image(
-        b"multipart", "multipart/form-data; boundary=test"
-    ) == ("https://mmbiz.qpic.cn/body.jpg")
+    assert gateway.upload_body_image(asset_source()) == (
+        "https://mmbiz.qpic.cn/body.jpg"
+    )
     assert token_calls == 2
     assert upload_tokens == ["token-1", "token-2"]
     assert force_refresh_values == [False, True]
@@ -130,17 +349,15 @@ def test_concurrent_token_errors_share_one_refresh() -> None:
     gateway = OfficialAccountGateway(
         app_id="app-id",
         app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
         transport=FakeTransport(handler),
+        asset_fetcher=FakeAssetFetcher(),
     )
     assert gateway.access_token() == "old-token"
     results: list[str] = []
     threads = [
         threading.Thread(
-            target=lambda: results.append(
-                gateway.upload_body_image(
-                    b"multipart", "multipart/form-data; boundary=test"
-                )
-            )
+            target=lambda: results.append(gateway.upload_body_image(asset_source()))
         )
         for _ in range(2)
     ]
@@ -168,6 +385,7 @@ def test_draft_add_transport_failure_is_uncertain_and_never_retried() -> None:
     gateway = OfficialAccountGateway(
         app_id="app-id",
         app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
         transport=FakeTransport(handler),
     )
 
@@ -186,9 +404,16 @@ def test_typed_operations_map_to_the_exact_wechat_api_contract() -> None:
         if "/stable_token" in url:
             return response({"access_token": "token", "expires_in": 7200})
         if "/media/uploadimg" in url:
+            assert kwargs["headers"]["Content-Type"].startswith(
+                "multipart/form-data; boundary=soarhigh-"
+            )
+            assert b'filename="body.jpg"' in kwargs["body"]
+            assert ASSET_BODY in kwargs["body"]
             return response({"url": "https://mmbiz.qpic.cn/body.jpg"})
         if "/material/add_material" in url:
             assert "type=image" in url
+            assert b'filename="cover.jpg"' in kwargs["body"]
+            assert ASSET_BODY in kwargs["body"]
             return response({"media_id": "cover-id"})
         if "/draft/add" in url:
             assert json.loads(kwargs["body"]) == {"articles": [{"title": "Test"}]}
@@ -218,15 +443,13 @@ def test_typed_operations_map_to_the_exact_wechat_api_contract() -> None:
     gateway = OfficialAccountGateway(
         app_id="app-id",
         app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
         transport=transport,
+        asset_fetcher=FakeAssetFetcher(),
     )
 
-    assert gateway.upload_body_image(
-        b"body", "multipart/form-data; boundary=x"
-    ).endswith("body.jpg")
-    assert (
-        gateway.upload_cover(b"cover", "multipart/form-data; boundary=x") == "cover-id"
-    )
+    assert gateway.upload_body_image(asset_source()).endswith("body.jpg")
+    assert gateway.upload_cover(asset_source()) == "cover-id"
     assert gateway.add_draft({"title": "Test"}) == "draft-id"
     gateway.update_draft("draft-id", {"title": "Updated"})
     assert gateway.get_draft("draft-id")["content"] == "<p>Body</p>"
@@ -258,6 +481,7 @@ def test_draft_update_sends_unicode_as_utf8_and_readback_remains_strict() -> Non
     gateway = OfficialAccountGateway(
         app_id="app-id",
         app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
         transport=FakeTransport(handler),
     )
 
@@ -287,6 +511,7 @@ def test_draft_readback_rejects_invalid_utf8_instead_of_rewriting_content() -> N
     gateway = OfficialAccountGateway(
         app_id="app-id",
         app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
         transport=FakeTransport(handler),
     )
 
@@ -309,6 +534,7 @@ def test_draft_add_invalid_json_is_uncertain_and_not_retried() -> None:
     gateway = OfficialAccountGateway(
         app_id="app-id",
         app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
         transport=FakeTransport(handler),
     )
 
@@ -328,6 +554,7 @@ def test_non_success_wechat_status_is_never_reported_as_update_success() -> None
     gateway = OfficialAccountGateway(
         app_id="app-id",
         app_secret="app-secret",
+        asset_base_url=ASSET_BASE_URL,
         transport=FakeTransport(handler),
     )
 
@@ -339,15 +566,15 @@ def test_non_success_wechat_status_is_never_reported_as_update_success() -> None
 
 class FakeGateway:
     def __init__(self) -> None:
-        self.upload: tuple[bytes, str] | None = None
+        self.upload: AssetSource | None = None
         self.article: dict | None = None
 
-    def upload_body_image(self, body: bytes, content_type: str) -> str:
-        self.upload = (body, content_type)
+    def upload_body_image(self, source: AssetSource) -> str:
+        self.upload = source
         return "https://mmbiz.qpic.cn/body.jpg"
 
-    def upload_cover(self, body: bytes, content_type: str) -> str:
-        self.upload = (body, content_type)
+    def upload_cover(self, source: AssetSource) -> str:
+        self.upload = source
         return "cover-id"
 
     def add_draft(self, article: dict) -> str:
@@ -424,18 +651,23 @@ def test_http_gateway_exposes_health_and_requires_its_independent_token() -> Non
 
 def test_http_gateway_accepts_only_typed_image_and_draft_payloads() -> None:
     with running_server() as server:
-        multipart = b"--x\r\nContent-Disposition: form-data; name=media\r\n\r\nimage\r\n--x--\r\n"
+        source = asset_source()
+        source_payload = json.dumps(
+            {
+                "objectKey": source.object_key,
+                "sha256": source.sha256,
+                "sizeBytes": source.size_bytes,
+            }
+        ).encode()
         status, payload = request(
             server,
             "POST",
             "/v1/images/body",
-            body=multipart,
-            headers=authorized_headers(
-                **{"Content-Type": "multipart/form-data; boundary=x"}
-            ),
+            body=source_payload,
+            headers=authorized_headers(**{"Content-Type": "application/json"}),
         )
         assert (status, payload) == (200, {"url": "https://mmbiz.qpic.cn/body.jpg"})
-        assert server.gateway.upload == (multipart, "multipart/form-data; boundary=x")  # type: ignore[attr-defined]
+        assert server.gateway.upload == source  # type: ignore[attr-defined]
 
         article = json.dumps({"article": {"title": "Draft"}}).encode()
         assert request(
@@ -475,7 +707,28 @@ def test_http_gateway_accepts_only_typed_image_and_draft_payloads() -> None:
         assert payload["code"] == "not_found"
 
 
-def test_http_gateway_rejects_wrong_media_types_and_oversized_requests_before_reading() -> (
+def test_http_gateway_rejects_malformed_asset_descriptors() -> None:
+    with running_server() as server:
+        payload = json.dumps(
+            {
+                "objectKey": "https://attacker.example/image.jpg",
+                "sha256": ASSET_SHA256,
+                "sizeBytes": len(ASSET_BODY),
+            }
+        ).encode()
+        status, response_payload = request(
+            server,
+            "POST",
+            "/v1/images/body",
+            body=payload,
+            headers=authorized_headers(**{"Content-Type": "application/json"}),
+        )
+
+    assert status == 422
+    assert response_payload["code"] == "invalid_asset"
+
+
+def test_http_gateway_rejects_wrong_content_types_and_oversized_requests_before_reading() -> (
     None
 ):
     with running_server() as server:
@@ -489,19 +742,16 @@ def test_http_gateway_rejects_wrong_media_types_and_oversized_requests_before_re
         assert status == 415
         assert payload["code"] == "unsupported_media_type"
 
-        for path, limit in (
-            ("/v1/images/body", BODY_IMAGE_REQUEST_LIMIT),
-            ("/v1/images/cover", COVER_REQUEST_LIMIT),
-        ):
+        for path in ("/v1/images/body", "/v1/images/cover"):
             status, payload = request(
                 server,
                 "POST",
                 path,
-                body=b"multipart",
+                body=b"{}",
                 headers=authorized_headers(
                     **{
-                        "Content-Type": "multipart/form-data; boundary=x",
-                        "Content-Length": str(limit + 1),
+                        "Content-Type": "application/json",
+                        "Content-Length": str(ASSET_REQUEST_LIMIT + 1),
                     }
                 ),
             )

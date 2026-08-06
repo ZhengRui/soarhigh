@@ -11,10 +11,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .core import GatewayError, OfficialAccountGateway
+from .core import AssetSource, GatewayError, OfficialAccountGateway
 
-BODY_IMAGE_REQUEST_LIMIT = 1_100_000
-COVER_REQUEST_LIMIT = 10_600_000
+ASSET_REQUEST_LIMIT = 16_384
 JSON_REQUEST_LIMIT = 1_100_000
 DRAFT_PATH = re.compile(r"^/v1/drafts/([^/]+)$")
 
@@ -74,22 +73,24 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         if path == "/v1/images/body":
-            upload = self._read_upload(BODY_IMAGE_REQUEST_LIMIT)
-            if upload is not None:
-                body, content_type = upload
+            payload = self._read_json(limit=ASSET_REQUEST_LIMIT)
+            if payload is not None:
                 self._run(
                     lambda: {
-                        "url": self.server.gateway.upload_body_image(body, content_type)
+                        "url": self.server.gateway.upload_body_image(
+                            AssetSource.from_payload(payload)
+                        )
                     }
                 )
             return
         if path == "/v1/images/cover":
-            upload = self._read_upload(COVER_REQUEST_LIMIT)
-            if upload is not None:
-                body, content_type = upload
+            payload = self._read_json(limit=ASSET_REQUEST_LIMIT)
+            if payload is not None:
                 self._run(
                     lambda: {
-                        "mediaId": self.server.gateway.upload_cover(body, content_type)
+                        "mediaId": self.server.gateway.upload_cover(
+                            AssetSource.from_payload(payload)
+                        )
                     }
                 )
             return
@@ -175,30 +176,15 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             return None
         return length
 
-    def _read_upload(self, limit: int) -> tuple[bytes, str] | None:
-        content_type = self.headers.get("Content-Type", "")
-        if (
-            not content_type.lower().startswith("multipart/form-data;")
-            or "boundary=" not in content_type.lower()
-        ):
-            self._send_error(
-                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-                "unsupported_media_type",
-                "Image uploads require multipart/form-data.",
-            )
-            return None
-        length = self._content_length(limit)
-        return (self.rfile.read(length), content_type) if length is not None else None
-
-    def _read_json(self) -> dict[str, Any] | None:
+    def _read_json(self, *, limit: int = JSON_REQUEST_LIMIT) -> dict[str, Any] | None:
         if self.headers.get_content_type() != "application/json":
             self._send_error(
                 HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
                 "unsupported_media_type",
-                "Draft requests require application/json.",
+                "Requests require application/json.",
             )
             return None
-        length = self._content_length(JSON_REQUEST_LIMIT)
+        length = self._content_length(limit)
         if length is None:
             return None
         try:
@@ -264,12 +250,26 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         )
 
 
-def serve(*, host: str, port: int, token: str, app_id: str, app_secret: str) -> None:
+def serve(
+    *,
+    host: str,
+    port: int,
+    token: str,
+    app_id: str,
+    app_secret: str,
+    asset_base_url: str,
+) -> None:
     if not token:
         raise ValueError("WECHAT_GATEWAY_SERVICE_TOKEN is required.")
     server = GatewayHTTPServer((host, port), GatewayRequestHandler)
     server.bearer_token = token
-    server.gateway = OfficialAccountGateway(app_id=app_id, app_secret=app_secret)
+    if not asset_base_url:
+        raise ValueError("WECHAT_ASSET_BASE_URL is required.")
+    server.gateway = OfficialAccountGateway(
+        app_id=app_id,
+        app_secret=app_secret,
+        asset_base_url=asset_base_url,
+    )
     server.serve_forever()
 
 
@@ -284,6 +284,7 @@ def main() -> None:
         token=os.environ.get("WECHAT_GATEWAY_SERVICE_TOKEN", ""),
         app_id=os.environ.get("WECHAT_OFFICIAL_ACCOUNT_APP_ID", ""),
         app_secret=os.environ.get("WECHAT_OFFICIAL_ACCOUNT_APP_SECRET", ""),
+        asset_base_url=os.environ.get("WECHAT_ASSET_BASE_URL", ""),
     )
 
 

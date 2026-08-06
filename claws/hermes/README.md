@@ -104,6 +104,7 @@ SOARHIGH_WXPOST_SERVICE_TOKEN=use-the-value-from-backend-WXPOST_SERVICE_TOKEN
 WECHAT_GATEWAY_SERVICE_TOKEN=use-a-different-random-secret
 WECHAT_OFFICIAL_ACCOUNT_APP_ID=official-account-app-id
 WECHAT_OFFICIAL_ACCOUNT_APP_SECRET=official-account-app-secret
+WECHAT_ASSET_BASE_URL=https://bucket.oss-region.aliyuncs.com/
 WECHAT_GATEWAY_PORT=8790
 ```
 
@@ -126,7 +127,7 @@ the repository and back it up before image upgrades. `.env.local` is ignored by
 Git.
 
 Existing deployments are never rewritten by `hermes.sh`. Before using the new
-Compose file, manually add the three required `WECHAT_*` credentials above to
+Compose file, manually add the four required `WECHAT_*` settings above to
 the existing VPS `.env.local`; `WECHAT_GATEWAY_PORT` is optional and defaults
 to 8790. Keep `WECHAT_GATEWAY_SERVICE_TOKEN` different from
 `SOARHIGH_WXPOST_SERVICE_TOKEN`.
@@ -155,17 +156,25 @@ GET  /healthz
 
 Every `/v1` route requires
 `Authorization: Bearer ${WECHAT_GATEWAY_SERVICE_TOKEN}`. `/healthz` is the only
-unauthenticated route. The gateway accepts bounded multipart image uploads and
-JSON draft operations, then calls only the corresponding hard-coded
-`api.weixin.qq.com` endpoint. It cannot proxy an arbitrary path.
+unauthenticated route. The gateway accepts bounded JSON image descriptors and
+draft operations, then calls only the corresponding hard-coded
+`api.weixin.qq.com` endpoint. An image descriptor contains the immutable
+`public/wxposts/*` OSS object key plus its stored SHA-256 and byte size. It
+cannot proxy an arbitrary path or download an arbitrary URL.
 
 Official Account AppID/AppSecret and the in-memory access-token cache live only
 in this container. One process-level lock serializes refreshes. A WeChat token
 error refreshes and retries the rejected operation once; a transport failure
 after `draft/add` is never retried and returns explicit uncertainty so Backend
 can use its existing batch-read recovery. The gateway does not read Saved
-Drafts or Public Revisions, download OSS files, compile or sanitize HTML,
-choose create versus update, access Supabase, or persist idempotency state.
+Drafts or Public Revisions, compile or sanitize HTML, choose create versus
+update, access Supabase, or persist idempotency state. For a missing WeChat
+asset mapping, it constructs one URL from the fixed `WECHAT_ASSET_BASE_URL` and
+a validated `public/wxposts/*` object key, downloads that public object without
+redirects, verifies its stored size and SHA-256, then derives the WeChat
+multipart MIME type and filename extension from the actual image signature.
+The HTTP response metadata is deliberately not a second format authority.
+Backend never relays those image bytes.
 Draft JSON is sent as real UTF-8 rather than ASCII `\\u` escapes because the
 real API otherwise preserved escaped punctuation inside article HTML and
 returned a corrupted title byte. Readback remains strict UTF-8 so platform
@@ -177,6 +186,11 @@ For a Backend process running directly on the same development machine, use
 `WECHAT_GATEWAY_BASE_URL=http://127.0.0.1:8790`. Do not append `/v1`; Backend
 adds the typed route itself. A Backend running in Docker should use
 `http://host.docker.internal:8790` instead.
+
+For local and production Gateway processes, set `WECHAT_ASSET_BASE_URL` to the
+public OSS bucket root, including the scheme and trailing slash. Do not include
+`public/wxposts`; Backend supplies that validated object-key prefix. The
+Gateway needs no OSS credentials.
 
 Production rollout order:
 
@@ -772,7 +786,10 @@ exposes derived publication status to Draft and Workspaces.
    deployment routes only the WeChat API transport through the typed VPS
    gateway described above. Backend remains the sole projection orchestrator
    and database writer, while the gateway has no Draft, Revision, Supabase, or
-   renderer authority.
+   renderer authority. If WeChat confirms that a stored draft ID was deleted,
+   the same confirmed publish refreshes its cover and creates one replacement
+   draft; ambiguous transport failures still use the existing uncertainty gate
+   instead of creating blindly.
 5. **Phase 4 - optional hardening:** version history/rollback, simultaneous
    collaborative editing, analytics, bulk operations, shareable style presets,
    and Bitable.

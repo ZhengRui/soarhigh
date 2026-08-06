@@ -340,6 +340,10 @@ test('reveals the public WxPost delete action responsively and deletes from the 
   await expect(dialog).toContainText(
     'The private workspace and Draft will remain.'
   );
+  await dialog.click({ position: { x: 2, y: 2 } });
+  await expect(dialog).toHaveCount(0);
+
+  await wxPostDelete.click();
   await dialog
     .getByRole('button', { name: 'Delete public WxPost' })
     .evaluate((button) => {

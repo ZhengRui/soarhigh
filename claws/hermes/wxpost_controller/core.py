@@ -65,7 +65,7 @@ RequestModel = TypeVar("RequestModel", bound=BaseModel)
 logger = logging.getLogger(__name__)
 DEFAULT_DRAFT_PRESENTATION = {
     "layout": "brand-default",
-    "palette": "paper-neutral",
+    "palette": "fresh-sage",
     "appearance": "light",
     "typeface": "editorial-serif",
 }

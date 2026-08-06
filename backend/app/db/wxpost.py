@@ -163,6 +163,19 @@ def get_ready_wxpost_asset(
     return response.data[0] if response.data else None
 
 
+def get_ready_wxpost_assets(wxpost_id: UUID) -> list[dict]:
+    """Return immutable public asset metadata for one ready WxPost."""
+
+    response = (
+        supabase.table("wxpost_assets")
+        .select("object_key,content_sha256,size_bytes,kind")
+        .eq("wxpost_id", str(wxpost_id))
+        .eq("status", "ready")
+        .execute()
+    )
+    return response.data or []
+
+
 def create_pending_wxpost_asset(values: dict) -> dict:
     """Create or recover one idempotent pending public asset row."""
 

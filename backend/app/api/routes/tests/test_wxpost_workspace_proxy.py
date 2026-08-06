@@ -962,6 +962,7 @@ def test_member_reads_the_wechat_projection_status_from_the_public_revision(
         "get_projection",
         lambda workspace_id: {
             "state": "ready",
+            "wechat_media_id": "linked-draft-id",
             "source_public_revision": 2,
             "presentation": article["presentation"],
             "readback_changed": True,

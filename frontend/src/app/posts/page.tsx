@@ -420,6 +420,7 @@ export default function PostsPage() {
           pending={deletePending}
           confirmLabel='Delete public WxPost'
           pendingLabel='Deleting…'
+          dismissOnBackdrop
           testId='delete-content-dialog'
           onCancel={() => setDeleteTarget(null)}
           onConfirm={() => void confirmDelete()}

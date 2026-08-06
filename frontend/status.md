@@ -464,7 +464,7 @@ Acceptance:
 - a future directive is added only as a versioned registry extension with a
   semantic purpose and the same end-to-end contract coverage; unknown or
   arbitrary directives remain invalid
-- the agreed default presentation is `brand-default`, `paper-neutral`, `light`,
+- the agreed default presentation is `brand-default`, `fresh-sage`, `light`,
   and `editorial-serif`
 - local title/block/directive edits and presentation changes invoke the shared
   compiler in the browser without a render API request
@@ -911,8 +911,9 @@ The meeting management workflow is now fully implemented:
      editor: the dialog blocks Video and lets an uncertain first create retry
      the server-owned recovery path; after a draft exists, a separate
      member-only action remains visibly reserved to the left of publishing,
-     stays disabled until a draft exists, and then fetches and opens the
-     official temporary preview
+     remains available and checks the remote draft only when clicked; it opens
+     the official temporary preview when present and reports missing drafts or
+     request failures with a toast
    - Leaves the WeChat draft in the Official Account when a Public Revision is
      deleted and states that behavior in the deletion confirmation
 

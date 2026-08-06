@@ -101,7 +101,7 @@ def capabilities() -> WxPostCapabilities:
         ),
         default_presentation=Presentation(
             layout=Layout.BRAND_DEFAULT,
-            palette=Palette.PAPER_NEUTRAL,
+            palette=Palette.FRESH_SAGE,
             appearance=Appearance.LIGHT,
             typeface=Typeface.EDITORIAL_SERIF,
         ),

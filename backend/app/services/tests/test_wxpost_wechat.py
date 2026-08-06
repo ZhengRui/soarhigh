@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -14,6 +15,8 @@ from app.services import wxpost_wechat
 WXPOST_ID = UUID("00000000-0000-4000-8000-000000000888")
 IMAGE_URL = "https://cdn.example.com/article.jpg"
 WECHAT_IMAGE_URL = "https://mmbiz.qpic.cn/example/article.jpg"
+IMAGE_SHA256 = hashlib.sha256(b"image-bytes").hexdigest()
+IMAGE_OBJECT_KEY = f"public/wxposts/{WXPOST_ID}/assets/image/original.jpg"
 
 
 def _render_document(*, video: bool = False) -> WxPostRenderDocument:
@@ -73,12 +76,14 @@ class FakeWechatApi:
         fail_add: bool = False,
         accept_on_timeout: bool = False,
         fail_first_readback: bool = False,
+        invalid_cover_once: bool = False,
         preview_url: str = "https://mp.weixin.qq.com/s/example-preview",
         batch_items: list[dict] | None = None,
     ) -> None:
         self.fail_add = fail_add
         self.accept_on_timeout = accept_on_timeout
         self.fail_first_readback = fail_first_readback
+        self.invalid_cover_once = invalid_cover_once
         self.preview_url = preview_url
         self.batch_items = batch_items
         self.body_uploads = 0
@@ -87,38 +92,65 @@ class FakeWechatApi:
         self.updates = 0
         self.readbacks = 0
         self.article: dict | None = None
+        self.current_media_id = "wechat-draft-id"
+        self.remote_missing = False
 
     async def close(self) -> None:
         return None
 
-    async def upload_body_image(self, filename: str, content: bytes, mime_type: str) -> str:
+    async def upload_body_image(self, source: wxpost_wechat.WechatAssetSource) -> str:
         self.body_uploads += 1
-        assert filename.endswith(".jpg")
-        assert content == b"image-bytes"
-        assert mime_type == "image/jpeg"
+        assert source == wxpost_wechat.WechatAssetSource(
+            object_key=IMAGE_OBJECT_KEY,
+            sha256=IMAGE_SHA256,
+            size_bytes=len(b"image-bytes"),
+        )
         return WECHAT_IMAGE_URL
 
-    async def upload_cover(self, filename: str, content: bytes, mime_type: str) -> str:
+    async def upload_cover(self, source: wxpost_wechat.WechatAssetSource) -> str:
         self.cover_uploads += 1
-        return "cover-media-id"
+        assert source.object_key == IMAGE_OBJECT_KEY
+        return "replacement-cover-media-id" if self.cover_uploads > 1 else "cover-media-id"
 
     async def add_draft(self, article: dict) -> str:
         self.adds += 1
+        if self.invalid_cover_once and article.get("thumb_media_id") == "cover-media-id":
+            raise wxpost_wechat.WechatDraftError(
+                "invalid media_id",
+                wechat_errcode=40007,
+            )
         if self.fail_add:
             if self.accept_on_timeout:
                 self.article = article
             raise wxpost_wechat.WechatDraftError("response lost", uncertain=True)
         self.article = article
-        return "wechat-draft-id"
+        self.current_media_id = "wechat-replacement-id" if self.adds > 1 else "wechat-draft-id"
+        self.remote_missing = False
+        return self.current_media_id
 
     async def update_draft(self, media_id: str, article: dict) -> None:
-        assert media_id == "wechat-draft-id"
+        assert media_id == self.current_media_id
         self.updates += 1
+        if self.invalid_cover_once and article.get("thumb_media_id") == "cover-media-id":
+            raise wxpost_wechat.WechatDraftError(
+                "invalid media_id",
+                wechat_errcode=40007,
+            )
+        if self.remote_missing:
+            raise wxpost_wechat.WechatDraftError(
+                "invalid media_id",
+                wechat_errcode=40007,
+            )
         self.article = article
 
     async def get_draft(self, media_id: str) -> dict:
-        assert media_id == "wechat-draft-id"
+        assert media_id == self.current_media_id
         self.readbacks += 1
+        if self.remote_missing:
+            raise wxpost_wechat.WechatDraftError(
+                "invalid media_id",
+                wechat_errcode=40007,
+            )
         if self.fail_first_readback and self.readbacks == 1:
             raise wxpost_wechat.WechatDraftError("readback unavailable")
         return {
@@ -134,7 +166,7 @@ class FakeWechatApi:
             return []
         return [
             {
-                "media_id": "wechat-draft-id",
+                "media_id": self.current_media_id,
                 "content": {"news_item": [self.article]},
             }
         ]
@@ -206,6 +238,48 @@ def projection_store(monkeypatch: pytest.MonkeyPatch) -> dict:
             {"add_started_at": datetime.now(timezone.utc).isoformat()},
         )
 
+    def mark_replacement_add_started(workspace_id, operation_id):
+        state["replacement_add_started_calls"] = state.get("replacement_add_started_calls", 0) + 1
+        return update_projection(
+            workspace_id,
+            operation_id,
+            {
+                "wechat_media_id": None,
+                "submitted_html_sha256": None,
+                "readback_html_sha256": None,
+                "readback_changed": None,
+                "add_started_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+    def clear_confirmed_missing_projection(
+        workspace_id,
+        *,
+        media_id,
+        projection_sha256,
+        asset_mappings,
+    ):
+        row = state.get("row")
+        if (
+            not row
+            or row["source_workspace_id"] != workspace_id
+            or row["state"] not in {"idle", "ready"}
+            or row.get("wechat_media_id") != media_id
+            or row.get("projection_sha256") != projection_sha256
+        ):
+            return None
+        row.update(
+            {
+                "state": "idle",
+                "wechat_media_id": None,
+                "submitted_html_sha256": None,
+                "readback_html_sha256": None,
+                "readback_changed": None,
+                "asset_mappings": asset_mappings,
+            }
+        )
+        return deepcopy(row)
+
     def recover_uncertain(workspace_id, values):
         assert state["row"]["state"] == "uncertain"
         state["row"].update({"state": "ready", **values})
@@ -214,30 +288,39 @@ def projection_store(monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setattr(wxpost_wechat.store, "claim_projection", claim_projection)
     monkeypatch.setattr(wxpost_wechat.store, "save_asset_mappings", save_asset_mappings)
     monkeypatch.setattr(wxpost_wechat.store, "mark_add_started", mark_add_started)
+    monkeypatch.setattr(
+        wxpost_wechat.store,
+        "mark_replacement_add_started",
+        mark_replacement_add_started,
+    )
+    monkeypatch.setattr(
+        wxpost_wechat.store,
+        "clear_confirmed_missing_projection",
+        clear_confirmed_missing_projection,
+    )
     monkeypatch.setattr(wxpost_wechat.store, "update_projection", update_projection)
     monkeypatch.setattr(wxpost_wechat.store, "mark_projection_ready", mark_ready)
     monkeypatch.setattr(wxpost_wechat.store, "mark_projection_failed", mark_failed)
     monkeypatch.setattr(wxpost_wechat.store, "recover_uncertain_projection", recover_uncertain)
     monkeypatch.setattr(wxpost_wechat.store, "get_projection", lambda workspace_id: deepcopy(state.get("row")))
-    return state
-
-
-def _download_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                200,
-                content=b"image-bytes",
-                headers={"content-type": "image/jpeg"},
-                request=request,
-            )
-        )
+    monkeypatch.setattr(
+        wxpost_wechat,
+        "get_ready_wxpost_assets",
+        lambda wxpost_id: [
+            {
+                "object_key": IMAGE_OBJECT_KEY,
+                "content_sha256": IMAGE_SHA256,
+                "size_bytes": len(b"image-bytes"),
+                "kind": "image",
+            }
+        ],
     )
+    monkeypatch.setattr(wxpost_wechat, "public_asset_url", lambda object_key: IMAGE_URL)
+    return state
 
 
 async def _publish(
     api: FakeWechatApi,
-    downloader: httpx.AsyncClient,
     *,
     html: str = (
         f'<article data-testid="article" data-wxpost-line="1" data-layout="brand-default" style="color:#123">'
@@ -255,7 +338,6 @@ async def _publish(
         presentation=Presentation.model_validate(_render_document().presentation.model_dump()),
         canonical_html=html,
         api=api,
-        download_client=downloader,
     )
 
 
@@ -267,8 +349,7 @@ def test_video_is_blocked_without_rewriting_content() -> None:
 
 async def test_create_uploads_media_replaces_oss_url_and_reads_back(projection_store: dict) -> None:
     api = FakeWechatApi()
-    async with _download_client() as downloader:
-        result = await _publish(api, downloader)
+    result = await _publish(api)
 
     assert result.action == "created"
     assert str(result.preview_url) == "https://mp.weixin.qq.com/s/example-preview"
@@ -293,12 +374,80 @@ async def test_create_uploads_media_replaces_oss_url_and_reads_back(projection_s
     assert projection_store["row"]["add_started_at"] is None
 
 
+async def test_publish_rejects_an_image_without_a_ready_public_asset(
+    projection_store: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(wxpost_wechat, "get_ready_wxpost_assets", lambda wxpost_id: [])
+
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="not backed by a ready public asset") as caught:
+        await _publish(FakeWechatApi())
+
+    assert caught.value.status_code == 409
+    assert "row" not in projection_store
+
+
+async def test_publish_rejects_incomplete_public_asset_metadata(
+    projection_store: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        wxpost_wechat,
+        "get_ready_wxpost_assets",
+        lambda wxpost_id: [
+            {
+                "object_key": IMAGE_OBJECT_KEY,
+                "content_sha256": "invalid",
+                "size_bytes": len(b"image-bytes"),
+                "kind": "image",
+            }
+        ],
+    )
+
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="incomplete asset metadata") as caught:
+        await _publish(FakeWechatApi())
+
+    assert caught.value.status_code == 409
+    assert "row" not in projection_store
+
+
+async def test_publish_ignores_invalid_metadata_for_an_unreferenced_ready_asset(
+    projection_store: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unrelated_key = f"public/wxposts/{WXPOST_ID}/assets/image/unrelated.jpg"
+    monkeypatch.setattr(
+        wxpost_wechat,
+        "get_ready_wxpost_assets",
+        lambda wxpost_id: [
+            {
+                "object_key": unrelated_key,
+                "content_sha256": "invalid",
+                "size_bytes": 0,
+                "kind": "image",
+            },
+            {
+                "object_key": IMAGE_OBJECT_KEY,
+                "content_sha256": IMAGE_SHA256,
+                "size_bytes": len(b"image-bytes"),
+                "kind": "image",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        wxpost_wechat,
+        "public_asset_url",
+        lambda object_key: IMAGE_URL if object_key == IMAGE_OBJECT_KEY else "https://cdn.example.com/unrelated.jpg",
+    )
+
+    assert (await _publish(FakeWechatApi())).action == "created"
+
+
 async def test_identical_retry_is_read_only_and_changed_projection_updates_same_draft(projection_store: dict) -> None:
     api = FakeWechatApi()
-    async with _download_client() as downloader:
-        first = await _publish(api, downloader)
-        unchanged = await _publish(api, downloader)
-        updated = await _publish(api, downloader, html=f'<p>Changed<img src="{IMAGE_URL}"></p>')
+    first = await _publish(api)
+    unchanged = await _publish(api)
+    updated = await _publish(api, html=f'<p>Changed<img src="{IMAGE_URL}"></p>')
 
     assert first.action == "created"
     assert unchanged.action == "unchanged"
@@ -309,12 +458,84 @@ async def test_identical_retry_is_read_only_and_changed_projection_updates_same_
     assert api.cover_uploads == 1
 
 
+async def test_changed_publish_replaces_a_draft_confirmed_deleted_in_wechat(
+    projection_store: dict,
+) -> None:
+    api = FakeWechatApi()
+    await _publish(api)
+    api.remote_missing = True
+
+    replaced = await _publish(
+        api,
+        html=f'<p>Changed<img src="{IMAGE_URL}"></p>',
+    )
+
+    assert replaced.action == "created"
+    assert api.updates == 1
+    assert api.adds == 2
+    assert api.body_uploads == 1
+    assert api.cover_uploads == 2
+    assert projection_store["replacement_add_started_calls"] == 1
+    assert projection_store["row"]["wechat_media_id"] == "wechat-replacement-id"
+    assert projection_store["row"]["state"] == "ready"
+
+
+async def test_update_refreshes_an_invalid_cover_when_the_draft_still_exists(
+    projection_store: dict,
+) -> None:
+    api = FakeWechatApi()
+    await _publish(api)
+    api.invalid_cover_once = True
+
+    updated = await _publish(
+        api,
+        html=f'<p>Changed<img src="{IMAGE_URL}"></p>',
+    )
+
+    assert updated.action == "updated"
+    assert api.updates == 2
+    assert api.adds == 1
+    assert api.cover_uploads == 2
+    assert projection_store["row"]["wechat_media_id"] == "wechat-draft-id"
+    assert projection_store["row"]["state"] == "ready"
+
+
+async def test_create_reuploads_a_cover_rejected_as_an_invalid_media_id(
+    projection_store: dict,
+) -> None:
+    api = FakeWechatApi(invalid_cover_once=True)
+
+    result = await _publish(api)
+
+    assert result.action == "created"
+    assert api.adds == 2
+    assert api.cover_uploads == 2
+    assert projection_store["row"]["state"] == "ready"
+
+
+async def test_identical_publish_replaces_a_draft_confirmed_deleted_in_wechat(
+    projection_store: dict,
+) -> None:
+    api = FakeWechatApi()
+    await _publish(api)
+    api.remote_missing = True
+
+    replaced = await _publish(api)
+
+    assert replaced.action == "created"
+    assert api.updates == 0
+    assert api.adds == 2
+    assert api.body_uploads == 1
+    assert api.cover_uploads == 2
+    assert projection_store["row"]["wechat_media_id"] == "wechat-replacement-id"
+    assert projection_store["row"]["state"] == "ready"
+
+
 async def test_retry_repairs_readback_after_add_succeeded(projection_store: dict) -> None:
     api = FakeWechatApi(fail_first_readback=True)
-    async with _download_client() as downloader:
-        with pytest.raises(wxpost_wechat.WechatDraftError, match="readback unavailable"):
-            await _publish(api, downloader)
-        recovered = await _publish(api, downloader)
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="readback unavailable"):
+        await _publish(api)
+    recovered = await _publish(api)
 
     assert recovered.action == "unchanged"
     assert recovered.readback_changed is False
@@ -327,11 +548,10 @@ async def test_retry_repairs_readback_after_add_succeeded(projection_store: dict
 
 async def test_ambiguous_add_is_not_retried(projection_store: dict) -> None:
     api = FakeWechatApi(fail_add=True)
-    async with _download_client() as downloader:
-        with pytest.raises(wxpost_wechat.WechatDraftError, match="response lost"):
-            await _publish(api, downloader)
-        with pytest.raises(wxpost_wechat.WechatDraftError, match="result is uncertain"):
-            await _publish(api, downloader)
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="response lost"):
+        await _publish(api)
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="result is uncertain"):
+        await _publish(api)
 
     assert api.adds == 1
     assert projection_store["row"]["state"] == "uncertain"
@@ -341,10 +561,9 @@ async def test_ambiguous_add_recovers_one_exact_remote_candidate_without_adding_
     projection_store: dict,
 ) -> None:
     api = FakeWechatApi(fail_add=True, accept_on_timeout=True)
-    async with _download_client() as downloader:
-        with pytest.raises(wxpost_wechat.WechatDraftError, match="response lost"):
-            await _publish(api, downloader)
-        recovered = await _publish(api, downloader)
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="response lost"):
+        await _publish(api)
+    recovered = await _publish(api)
 
     assert recovered.action == "unchanged"
     assert str(recovered.preview_url) == "https://mp.weixin.qq.com/s/example-preview"
@@ -357,23 +576,22 @@ async def test_ambiguous_add_does_not_recover_metadata_match_with_different_cont
     projection_store: dict,
 ) -> None:
     api = FakeWechatApi(fail_add=True, accept_on_timeout=True)
-    async with _download_client() as downloader:
-        with pytest.raises(wxpost_wechat.WechatDraftError, match="response lost"):
-            await _publish(api, downloader)
-        assert api.article is not None
-        decoy = deepcopy(api.article)
-        decoy["content"] = decoy["content"].replace(
-            WECHAT_IMAGE_URL,
-            "https://mmbiz.qpic.cn/example/different.jpg",
-        )
-        api.batch_items = [
-            {
-                "media_id": "unrelated-draft-id",
-                "content": {"news_item": [decoy]},
-            }
-        ]
-        with pytest.raises(wxpost_wechat.WechatDraftError, match="could not be uniquely recovered"):
-            await _publish(api, downloader)
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="response lost"):
+        await _publish(api)
+    assert api.article is not None
+    decoy = deepcopy(api.article)
+    decoy["content"] = decoy["content"].replace(
+        WECHAT_IMAGE_URL,
+        "https://mmbiz.qpic.cn/example/different.jpg",
+    )
+    api.batch_items = [
+        {
+            "media_id": "unrelated-draft-id",
+            "content": {"news_item": [decoy]},
+        }
+    ]
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="could not be uniquely recovered"):
+        await _publish(api)
 
     assert projection_store["row"]["state"] == "uncertain"
     assert projection_store["row"].get("wechat_media_id") is None
@@ -390,11 +608,10 @@ async def test_ambiguous_add_does_not_reconcile_against_a_changed_projection(
     projection_store: dict,
 ) -> None:
     api = FakeWechatApi(fail_add=True, accept_on_timeout=True)
-    async with _download_client() as downloader:
-        with pytest.raises(wxpost_wechat.WechatDraftError, match="response lost"):
-            await _publish(api, downloader)
-        with pytest.raises(wxpost_wechat.WechatDraftError, match="older Public Revision"):
-            await _publish(api, downloader, html=f'<p>Changed<img src="{IMAGE_URL}"></p>')
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="response lost"):
+        await _publish(api)
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="older Public Revision"):
+        await _publish(api, html=f'<p>Changed<img src="{IMAGE_URL}"></p>')
 
     assert api.adds == 1
     assert projection_store["row"]["state"] == "uncertain"
@@ -422,6 +639,50 @@ async def test_preview_accepts_official_wechat_urls_and_upgrades_http(
     api = FakeWechatApi(preview_url=wechat_url)
 
     assert await wxpost_wechat.get_preview_url("wxpost-test", api=api) == expected
+
+
+async def test_preview_clears_a_link_that_wechat_confirms_is_missing(
+    projection_store: dict,
+) -> None:
+    projection_store["row"] = {
+        "source_workspace_id": "wxpost-test",
+        "state": "ready",
+        "wechat_media_id": "wechat-draft-id",
+        "projection_sha256": "a" * 64,
+        "asset_mappings": {
+            "body:digest": "https://mmbiz.qpic.cn/body-image",
+            "cover:digest": "cover-media-id",
+        },
+    }
+    api = FakeWechatApi()
+    api.remote_missing = True
+
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="no longer exists") as caught:
+        await wxpost_wechat.get_preview_url("wxpost-test", api=api)
+
+    assert caught.value.status_code == 404
+    assert projection_store["row"]["wechat_media_id"] is None
+    assert projection_store["row"]["asset_mappings"] == {"body:digest": "https://mmbiz.qpic.cn/body-image"}
+
+
+async def test_preview_reports_a_concurrent_projection_change(
+    projection_store: dict,
+) -> None:
+    projection_store["row"] = {
+        "source_workspace_id": "wxpost-test",
+        "state": "creating",
+        "wechat_media_id": "wechat-draft-id",
+        "projection_sha256": "a" * 64,
+        "asset_mappings": {},
+    }
+    api = FakeWechatApi()
+    api.remote_missing = True
+
+    with pytest.raises(wxpost_wechat.WechatDraftError, match="link changed") as caught:
+        await wxpost_wechat.get_preview_url("wxpost-test", api=api)
+
+    assert caught.value.status_code == 409
+    assert projection_store["row"]["wechat_media_id"] == "wechat-draft-id"
 
 
 @pytest.mark.parametrize(
@@ -716,13 +977,20 @@ async def test_gateway_client_uses_only_typed_routes_and_its_bearer_token(
     monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_BASE_URL", "https://gateway.example/internal")
     monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_SERVICE_TOKEN", "gateway-secret")
     requests: list[httpx.Request] = []
+    source = wxpost_wechat.WechatAssetSource(
+        object_key=IMAGE_OBJECT_KEY,
+        sha256=IMAGE_SHA256,
+        size_bytes=len(b"image-bytes"),
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         assert request.headers["authorization"] == "Bearer gateway-secret"
         if request.url.path.endswith("/images/body"):
+            assert json.loads(request.content) == source.to_gateway_payload()
             return httpx.Response(200, json={"url": WECHAT_IMAGE_URL}, request=request)
         if request.url.path.endswith("/images/cover"):
+            assert json.loads(request.content) == source.to_gateway_payload()
             return httpx.Response(200, json={"mediaId": "cover-id"}, request=request)
         if request.method == "POST":
             assert json.loads(request.content) == {"article": {"title": "Created"}}
@@ -741,8 +1009,8 @@ async def test_gateway_client_uses_only_typed_routes_and_its_bearer_token(
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client = wxpost_wechat.WechatGatewayClient(http_client)
-        assert await client.upload_body_image("body.jpg", b"body", "image/jpeg") == WECHAT_IMAGE_URL
-        assert await client.upload_cover("cover.jpg", b"cover", "image/jpeg") == "cover-id"
+        assert await client.upload_body_image(source) == WECHAT_IMAGE_URL
+        assert await client.upload_cover(source) == "cover-id"
         assert await client.add_draft({"title": "Created"}) == "draft/id"
         await client.update_draft("draft/id", {"title": "Updated"})
         assert (await client.get_draft("draft/id"))["content"] == "<p>readback</p>"
@@ -754,6 +1022,33 @@ async def test_gateway_client_uses_only_typed_routes_and_its_bearer_token(
         "/internal/v1/drafts",
         "/internal/v1/drafts/draft/id",
     }
+
+
+async def test_gateway_client_preserves_wechat_error_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_BASE_URL", "https://gateway.example")
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_GATEWAY_SERVICE_TOKEN", "gateway-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502,
+            json={
+                "code": "wechat_api_error",
+                "message": "invalid media_id",
+                "uncertain": False,
+                "wechatErrcode": 40007,
+            },
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = wxpost_wechat.WechatGatewayClient(http_client)
+        with pytest.raises(wxpost_wechat.WechatDraftError) as caught:
+            await client.update_draft("missing-id", {"title": "Updated"})
+
+    assert caught.value.wechat_errcode == 40007
+    assert caught.value.uncertain is False
 
 
 @pytest.mark.parametrize(

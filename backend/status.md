@@ -395,6 +395,9 @@ Model for blog posts:
   - Content-addressed body-image and permanent-cover reuse, revision and
     presentation fingerprinting, update-in-place through the stored WeChat
     media ID, and no publication-time content generation or re-layout
+  - Backend sends immutable public-asset descriptors rather than image bytes;
+    the fixed-egress Gateway alone downloads validated `public/wxposts/*` OSS
+    objects and uploads them to the typed WeChat media endpoints
   - Atomic `creating`/`ready`/`uncertain` projection state with a 15-minute
     lease, safe retry of updates, and bounded recovery of an ambiguous first
     add without issuing a blind second `draft/add`
@@ -540,6 +543,33 @@ Validation recorded on 2026-08-06:
   a real Docker image build, and a locked-down container `/healthz` smoke. The
   13-test WxPost renderer/browser suite also passed without a frontend contract
   change.
+- direct OSS image transport validation passed the complete Backend suite at
+  679 tests with 23 intentionally deselected and the complete
+  Hermes/Controller/Gateway suite at 253 tests. A real local end-to-end smoke
+  created `gateway-oss-transport-smoke-test`: Gateway downloaded one immutable
+  public OSS object from its validated descriptor, uploaded it through both
+  typed WeChat image endpoints, created one Official Account draft, completed
+  readback and temporary-preview retrieval, then returned `unchanged` on an
+  identical retry without another image upload or draft mutation.
+- confirmed-missing WeChat drafts are now replaced instead of blocking a
+  publish. Backend preserves Gateway `wechatErrcode`, treats `40007` as safe to
+  replace only after `draft/get` confirms the stored ID is gone, clears that
+  stale reference atomically, refreshes the cover media ID, and creates one new
+  draft under the existing uncertainty recovery rules. A real smoke deleted
+  the linked diagnostic draft remotely, then republished it successfully with
+  one cover upload, one draft add, and successful readback. Local status remains
+  responsible only for publication and uncertainty-recovery state. The Revision
+  page keeps its Eye action available and performs the live `draft/get` through
+  the preview endpoint only when the member clicks it. A confirmed `40007`
+  clears the stale local ID and reports the missing remote draft, while transient
+  WeChat failures do not erase projection state. The complete Backend suite
+  passes at 688 tests with 23 intentionally deselected, plus Ruff, Ruff format,
+  and mypy.
+- direct OSS upload now keeps byte-size and SHA-256 verification authoritative
+  while deriving the WeChat multipart MIME type from the actual image
+  signature. This restores the previous successful behavior for an immutable
+  PNG whose legacy OSS metadata says JPEG without routing its bytes back
+  through Backend or weakening content-integrity checks.
 
 The real Supabase/OSS publication lifecycle has an opt-in destructive smoke
 test at `app/services/tests/test_wxpost_publication_live.py`. It creates only a

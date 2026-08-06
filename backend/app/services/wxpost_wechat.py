@@ -6,6 +6,7 @@ import hashlib
 import html as html_module
 import json
 import re
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Literal, Protocol
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -19,7 +20,9 @@ from ..config import (
     WECHAT_OFFICIAL_ACCOUNT_NAME,
 )
 from ..db import wxpost_wechat as store
+from ..db.wxpost import get_ready_wxpost_assets
 from ..models.wxpost import Presentation, WxPostRenderDocument, WxPostWechatDraftResult, WxPostWechatDraftStatus
+from .wxpost_publication import public_asset_url
 
 WECHAT_PROJECTION_VERSION = 14
 IMG_SRC_RE = re.compile(r'<img\b[^>]*\bsrc="([^"]+)"', re.IGNORECASE)
@@ -112,18 +115,40 @@ WECHAT_ROOT_SURFACE_PROPERTIES = {"background", "border", "box-shadow"}
 
 
 class WechatDraftError(Exception):
-    def __init__(self, message: str, *, status_code: int = 502, uncertain: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 502,
+        uncertain: bool = False,
+        wechat_errcode: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.uncertain = uncertain
+        self.wechat_errcode = wechat_errcode
+
+
+@dataclass(frozen=True)
+class WechatAssetSource:
+    object_key: str
+    sha256: str
+    size_bytes: int
+
+    def to_gateway_payload(self) -> dict[str, str | int]:
+        return {
+            "objectKey": self.object_key,
+            "sha256": self.sha256,
+            "sizeBytes": self.size_bytes,
+        }
 
 
 class WechatDraftApi(Protocol):
     async def close(self) -> None: ...
 
-    async def upload_body_image(self, filename: str, content: bytes, mime_type: str) -> str: ...
+    async def upload_body_image(self, source: WechatAssetSource) -> str: ...
 
-    async def upload_cover(self, filename: str, content: bytes, mime_type: str) -> str: ...
+    async def upload_cover(self, source: WechatAssetSource) -> str: ...
 
     async def add_draft(self, article: dict) -> str: ...
 
@@ -154,7 +179,6 @@ class WechatGatewayClient:
         path: str,
         *,
         json_body: dict | None = None,
-        files: dict | None = None,
         params: dict[str, str] | None = None,
         uncertain_on_transport: bool = False,
     ) -> dict:
@@ -170,7 +194,6 @@ class WechatGatewayClient:
                 },
                 params=params,
                 json=json_body,
-                files=files,
             )
             payload = response.json()
         except (httpx.HTTPError, ValueError) as error:
@@ -183,22 +206,30 @@ class WechatGatewayClient:
         if not response.is_success:
             message = payload.get("message")
             gateway_uncertain = payload.get("uncertain") is True
-            status_code = 503 if response.status_code in {401, 403} else 502
+            wechat_errcode = payload.get("wechatErrcode")
+            status_code = (
+                503
+                if response.status_code in {401, 403}
+                else response.status_code
+                if response.status_code in {409, 422}
+                else 502
+            )
             raise WechatDraftError(
                 message if isinstance(message, str) else "The WeChat API gateway rejected the request.",
                 status_code=status_code,
                 uncertain=uncertain_on_transport and gateway_uncertain,
+                wechat_errcode=wechat_errcode if isinstance(wechat_errcode, int) else None,
             )
         return payload
 
-    async def upload_body_image(self, filename: str, content: bytes, mime_type: str) -> str:
-        payload = await self._request("POST", "/v1/images/body", files={"media": (filename, content, mime_type)})
+    async def upload_body_image(self, source: WechatAssetSource) -> str:
+        payload = await self._request("POST", "/v1/images/body", json_body=source.to_gateway_payload())
         if not isinstance(payload.get("url"), str):
             raise WechatDraftError("The WeChat API gateway did not return a body-image URL.")
         return payload["url"]
 
-    async def upload_cover(self, filename: str, content: bytes, mime_type: str) -> str:
-        payload = await self._request("POST", "/v1/images/cover", files={"media": (filename, content, mime_type)})
+    async def upload_cover(self, source: WechatAssetSource) -> str:
+        payload = await self._request("POST", "/v1/images/cover", json_body=source.to_gateway_payload())
         if not isinstance(payload.get("mediaId"), str):
             raise WechatDraftError("The WeChat API gateway did not return a cover media ID.")
         return payload["mediaId"]
@@ -266,42 +297,51 @@ def validate_wechat_projection(render_document: WxPostRenderDocument) -> None:
         raise WechatDraftError("A cover image is required before publishing to WeChat Drafts.", status_code=422)
 
 
-async def _download_image(client: httpx.AsyncClient, url: str, *, body: bool) -> tuple[bytes, str, str]:
-    try:
-        response = await client.get(url)
-        response.raise_for_status()
-    except httpx.HTTPError as error:
-        raise WechatDraftError("A Public Revision image could not be downloaded.") from error
-    content = response.content
-    mime_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
-    allowed = (
-        {"image/jpeg": "jpg", "image/png": "png"}
-        if body
-        else {
-            "image/jpeg": "jpg",
-            "image/png": "png",
-            "image/gif": "gif",
-            "image/bmp": "bmp",
-        }
-    )
-    if mime_type not in allowed:
-        message = (
-            "WeChat body images must be JPG or PNG." if body else "WeChat cover images must be JPG, PNG, GIF, or BMP."
+def _asset_sources(
+    wxpost_id: UUID,
+    required_urls: set[str],
+) -> dict[str, WechatAssetSource]:
+    sources: dict[str, WechatAssetSource] = {}
+    for asset in get_ready_wxpost_assets(wxpost_id):
+        object_key = asset.get("object_key")
+        if not isinstance(object_key, str) or not object_key:
+            continue
+        url = public_asset_url(object_key)
+        if url not in required_urls:
+            continue
+        sha256 = asset.get("content_sha256")
+        size_bytes = asset.get("size_bytes")
+        if asset.get("kind") != "image":
+            continue
+        if (
+            not isinstance(sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+            or not isinstance(size_bytes, int)
+            or isinstance(size_bytes, bool)
+            or size_bytes <= 0
+        ):
+            raise WechatDraftError(
+                "A Public Revision image has incomplete asset metadata.",
+                status_code=409,
+            )
+        source = WechatAssetSource(
+            object_key=object_key,
+            sha256=sha256,
+            size_bytes=size_bytes,
         )
-        raise WechatDraftError(message, status_code=422)
-    if body and len(content) >= 1024 * 1024:
-        raise WechatDraftError("A WeChat body image is 1 MB or larger.", status_code=422)
-    if not body and len(content) > 10 * 1024 * 1024:
-        raise WechatDraftError("A WeChat cover image is larger than 10 MB.", status_code=422)
-    if not content:
-        raise WechatDraftError("A Public Revision image is empty.", status_code=422)
-    return content, mime_type, allowed[mime_type]
+        if url in sources and sources[url] != source:
+            raise WechatDraftError(
+                "A Public Revision image URL resolves to conflicting assets.",
+                status_code=409,
+            )
+        sources[url] = source
+    return sources
 
 
 def _replace_body_image_urls(
     canonical_html: str,
     body_urls: list[str],
-    images: dict[str, tuple[bytes, str, str, str]],
+    images: dict[str, WechatAssetSource],
     mappings: dict,
 ) -> str:
     replaced: set[str] = set()
@@ -315,7 +355,7 @@ def _replace_body_image_urls(
         image = images.get(source)
         if image is None:
             return tag
-        replacement = html_module.escape(mappings[f"body:{image[3]}"], quote=True)
+        replacement = html_module.escape(mappings[f"body:{image.sha256}"], quote=True)
         replaced.add(source)
         start, end = source_match.span(1)
         return f"{tag[:start]}{replacement}{tag[end:]}"
@@ -326,6 +366,14 @@ def _replace_body_image_urls(
     if len(submitted_html.encode()) >= 1_000_000 or len(submitted_html) >= 20_000:
         raise WechatDraftError("The rendered article exceeds WeChat's HTML size limit.", status_code=422)
     return submitted_html
+
+
+def _body_asset_mappings(mappings: dict) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in mappings.items()
+        if isinstance(key, str) and key.startswith("body:") and isinstance(value, str) and value
+    }
 
 
 def _map_wechat_appearance(rendered_html: str, presentation: Presentation) -> str:
@@ -477,6 +525,20 @@ def _draft_candidate_article(item: dict) -> tuple[str, dict] | None:
     return (media_id, article) if isinstance(article, dict) else None
 
 
+async def _read_draft_or_confirm_missing(
+    api: WechatDraftApi,
+    media_id: str,
+) -> dict | None:
+    """Return readback, or None only when WeChat confirms the ID is invalid."""
+
+    try:
+        return await api.get_draft(media_id)
+    except WechatDraftError as error:
+        if error.wechat_errcode == 40007:
+            return None
+        raise
+
+
 class _ContentSignatureParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -516,7 +578,6 @@ async def publish_wechat_draft(
     presentation: Presentation,
     canonical_html: str,
     api: WechatDraftApi | None = None,
-    download_client: httpx.AsyncClient | None = None,
 ) -> WxPostWechatDraftResult:
     validate_wechat_projection(render_document)
     workspace_id = row.get("source_workspace_id")
@@ -533,16 +594,15 @@ async def publish_wechat_draft(
     if cover is None or cover.kind != "image":
         raise WechatDraftError("The selected cover is not an available image.", status_code=422)
 
-    owns_download = download_client is None
-    downloader = download_client or httpx.AsyncClient(timeout=30, trust_env=False)
-    images: dict[str, tuple[bytes, str, str, str]] = {}
-    try:
-        for url in list(dict.fromkeys([*body_urls, str(cover.source_url)])):
-            content, mime_type, extension = await _download_image(downloader, url, body=url in body_urls)
-            images[url] = (content, mime_type, extension, _sha256(content))
-    finally:
-        if owns_download:
-            await downloader.aclose()
+    required_urls = list(dict.fromkeys([*body_urls, str(cover.source_url)]))
+    all_sources = _asset_sources(UUID(str(row["id"])), set(required_urls))
+    missing_urls = [url for url in required_urls if url not in all_sources]
+    if missing_urls:
+        raise WechatDraftError(
+            "A Public Revision image is not backed by a ready public asset.",
+            status_code=409,
+        )
+    images = {url: all_sources[url] for url in required_urls}
 
     projection_payload = {
         "workspace": workspace_id,
@@ -552,7 +612,7 @@ async def publish_wechat_draft(
         "renderVersion": render_document.render_version,
         "wechatProjectionVersion": WECHAT_PROJECTION_VERSION,
         "platformHtmlSha256": _sha256(platform_html),
-        "assets": [images[url][3] for url in [*body_urls, str(cover.source_url)]],
+        "assets": [images[url].sha256 for url in [*body_urls, str(cover.source_url)]],
     }
     projection_sha256 = _sha256(json.dumps(projection_payload, sort_keys=True, separators=(",", ":")))
     operation_id = uuid4()
@@ -566,7 +626,7 @@ async def publish_wechat_draft(
     )
     projection = claim["row"]
     mappings = dict(projection.get("asset_mappings") or {})
-    cover_digest = images[str(cover.source_url)][3]
+    cover_digest = images[str(cover.source_url)].sha256
     cover_key = f"cover:{cover_digest}"
     if not claim["acquired"]:
         reason = claim["reason"]
@@ -579,7 +639,7 @@ async def publish_wechat_draft(
                     "Resolve that draft before publishing the current Revision.",
                     status_code=409,
                 )
-            required_keys = {f"body:{images[url][3]}" for url in body_urls} | {cover_key}
+            required_keys = {f"body:{images[url].sha256}" for url in body_urls} | {cover_key}
             if not required_keys.issubset(mappings):
                 raise WechatDraftError(
                     "The previous WeChat draft creation result is uncertain. "
@@ -641,17 +701,36 @@ async def publish_wechat_draft(
         media_id = projection.get("wechat_media_id")
         if not media_id:
             raise WechatDraftError("The existing WeChat projection is incomplete.", status_code=409)
-        required_keys = {f"body:{images[url][3]}" for url in body_urls} | {cover_key}
+        required_keys = {f"body:{images[url].sha256}" for url in body_urls} | {cover_key}
         if not required_keys.issubset(mappings):
             raise WechatDraftError("The existing WeChat projection is incomplete.", status_code=409)
         submitted_html = _replace_body_image_urls(platform_html, body_urls, images, mappings)
         client = api or WechatGatewayClient()
         try:
-            readback = await client.get_draft(media_id)
+            existing_readback = await _read_draft_or_confirm_missing(client, media_id)
         finally:
             if api is None:
                 await client.close()
-        readback_content = readback.get("content")
+        if existing_readback is None:
+            cleared = store.clear_confirmed_missing_projection(
+                workspace_id,
+                media_id=media_id,
+                projection_sha256=projection_sha256,
+                asset_mappings=_body_asset_mappings(mappings),
+            )
+            if cleared is None:
+                raise WechatDraftError(
+                    "The linked WeChat draft changed while it was being replaced.",
+                    status_code=409,
+                )
+            return await publish_wechat_draft(
+                row=row,
+                render_document=render_document,
+                presentation=presentation,
+                canonical_html=canonical_html,
+                api=api,
+            )
+        readback_content = existing_readback.get("content")
         if not isinstance(readback_content, str):
             raise WechatDraftError("WeChat readback did not contain HTML content.")
         submitted_sha = _sha256(submitted_html)
@@ -680,20 +759,20 @@ async def publish_wechat_draft(
             presentation=Presentation.model_validate(projection["presentation"]),
             readback_changed=readback_changed,
             needs_update=False,
-            preview_url=readback.get("url"),
+            preview_url=existing_readback.get("url"),
         )
 
     client = api or WechatGatewayClient()
     try:
-        for index, url in enumerate(body_urls):
-            content, mime_type, extension, digest = images[url]
-            key = f"body:{digest}"
+        for url in body_urls:
+            source = images[url]
+            key = f"body:{source.sha256}"
             if key not in mappings:
-                mappings[key] = await client.upload_body_image(f"body-{index + 1}.{extension}", content, mime_type)
+                mappings[key] = await client.upload_body_image(source)
                 store.save_asset_mappings(workspace_id, operation_id, mappings)
-        cover_content, cover_mime, cover_extension, cover_digest = images[str(cover.source_url)]
+        cover_source = images[str(cover.source_url)]
         if cover_key not in mappings:
-            mappings[cover_key] = await client.upload_cover(f"cover.{cover_extension}", cover_content, cover_mime)
+            mappings[cover_key] = await client.upload_cover(cover_source)
             store.save_asset_mappings(workspace_id, operation_id, mappings)
 
         submitted_html = _replace_body_image_urls(platform_html, body_urls, images, mappings)
@@ -702,11 +781,52 @@ async def publish_wechat_draft(
         existing_media_id = projection.get("wechat_media_id")
         action: Literal["created", "updated"] = "updated" if existing_media_id else "created"
         if existing_media_id:
-            await client.update_draft(existing_media_id, article)
-            media_id = existing_media_id
+            try:
+                await client.update_draft(existing_media_id, article)
+            except WechatDraftError as update_error:
+                if update_error.wechat_errcode != 40007:
+                    raise
+                existing_readback = await _read_draft_or_confirm_missing(
+                    client,
+                    existing_media_id,
+                )
+                if existing_readback is None:
+                    store.mark_replacement_add_started(workspace_id, operation_id)
+                mappings[cover_key] = await client.upload_cover(cover_source)
+                store.save_asset_mappings(workspace_id, operation_id, mappings)
+                article = _article_payload(
+                    render_document,
+                    submitted_html,
+                    mappings[cover_key],
+                )
+                if existing_readback is None:
+                    media_id = await client.add_draft(article)
+                    store.update_projection(
+                        workspace_id,
+                        operation_id,
+                        {"wechat_media_id": media_id},
+                    )
+                    action = "created"
+                else:
+                    await client.update_draft(existing_media_id, article)
+                    media_id = existing_media_id
+            else:
+                media_id = existing_media_id
         else:
             store.mark_add_started(workspace_id, operation_id)
-            media_id = await client.add_draft(article)
+            try:
+                media_id = await client.add_draft(article)
+            except WechatDraftError as add_error:
+                if add_error.wechat_errcode != 40007:
+                    raise
+                mappings[cover_key] = await client.upload_cover(cover_source)
+                store.save_asset_mappings(workspace_id, operation_id, mappings)
+                article = _article_payload(
+                    render_document,
+                    submitted_html,
+                    mappings[cover_key],
+                )
+                media_id = await client.add_draft(article)
             store.update_projection(workspace_id, operation_id, {"wechat_media_id": media_id})
 
         submitted_sha = _sha256(submitted_html)
@@ -760,7 +880,26 @@ async def get_preview_url(workspace_id: str, api: WechatDraftApi | None = None) 
         raise WechatDraftError("No WeChat draft is linked to this Public Revision.", status_code=404)
     client = api or WechatGatewayClient()
     try:
-        readback = await client.get_draft(projection["wechat_media_id"])
+        try:
+            readback = await client.get_draft(projection["wechat_media_id"])
+        except WechatDraftError as error:
+            if error.wechat_errcode != 40007:
+                raise
+            cleared = store.clear_confirmed_missing_projection(
+                workspace_id,
+                media_id=projection["wechat_media_id"],
+                projection_sha256=projection["projection_sha256"],
+                asset_mappings=_body_asset_mappings(dict(projection.get("asset_mappings") or {})),
+            )
+            if cleared is None:
+                raise WechatDraftError(
+                    "The WeChat draft link changed while preview was being checked. Try again.",
+                    status_code=409,
+                ) from error
+            raise WechatDraftError(
+                "The linked WeChat draft no longer exists.",
+                status_code=404,
+            ) from error
     finally:
         if api is None:
             await client.close()

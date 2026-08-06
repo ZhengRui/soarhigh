@@ -77,7 +77,12 @@ from ...services.wxpost_publication import (
     publication_status,
     synchronize_workspace_publication,
 )
-from ...services.wxpost_wechat import WechatDraftError, get_preview_url, publish_wechat_draft, wechat_status
+from ...services.wxpost_wechat import (
+    WechatDraftError,
+    get_preview_url,
+    publish_wechat_draft,
+    wechat_status,
+)
 from .auth import get_current_user
 
 wxpost_router = r = APIRouter()
@@ -1049,7 +1054,10 @@ async def r_get_wxpost_wechat_draft(
 ) -> WxPostWechatDraftStatus:
     del user
     row = _ready_public_wxpost(wxpost_id)
-    return wechat_status(row, wxpost_wechat_store.get_projection(row["source_workspace_id"]))
+    return wechat_status(
+        row,
+        wxpost_wechat_store.get_projection(row["source_workspace_id"]),
+    )
 
 
 @r.post("/posts/wxposts/{wxpost_id}/wechat-draft", response_model=WxPostWechatDraftResult)

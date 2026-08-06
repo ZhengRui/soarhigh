@@ -1746,7 +1746,7 @@ def test_draft_proposal_is_assembled_from_manifest_in_editorial_media_order(
     assert document["sourceMeetingId"] == ("1cf40bec-f94d-45f4-b5df-18e3a9bffac8")
     assert document["presentation"] == {
         "layout": "brand-default",
-        "palette": "paper-neutral",
+        "palette": "fresh-sage",
         "appearance": "light",
         "typeface": "editorial-serif",
     }

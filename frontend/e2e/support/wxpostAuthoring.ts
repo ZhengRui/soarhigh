@@ -209,7 +209,7 @@ export function draftDocument(
     coverMediaId: null,
     presentation: {
       layout: 'brand-default',
-      palette: 'paper-neutral',
+      palette: 'fresh-sage',
       appearance: 'light',
       typeface: 'editorial-serif',
     },

@@ -1,17 +1,36 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
+import secrets
 import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Mapping, Protocol
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.parse import quote, urlencode, urlsplit
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 WECHAT_API_BASE = "https://api.weixin.qq.com"
 TOKEN_ERROR_CODES = {40014, 42001}
 TOKEN_EXPIRY_BUFFER_SECONDS = 300
+PUBLIC_ASSET_PREFIX = "public/wxposts/"
+BODY_IMAGE_MAX_BYTES = 1024 * 1024 - 1
+COVER_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+BODY_IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png"}
+COVER_IMAGE_TYPES = {
+    **BODY_IMAGE_TYPES,
+    "image/gif": "gif",
+    "image/bmp": "bmp",
+}
+IMAGE_SIGNATURES = {
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+    "image/bmp": (b"BM",),
+}
 
 
 def _encode_json(payload: object) -> bytes:
@@ -28,6 +47,90 @@ class TransportResponse:
 
 class TransportUnavailable(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class AssetSource:
+    object_key: str
+    sha256: str
+    size_bytes: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> AssetSource:
+        if set(payload) != {"objectKey", "sha256", "sizeBytes"}:
+            raise GatewayError(
+                "invalid_asset", "Asset source fields are invalid.", status=422
+            )
+        object_key = payload.get("objectKey")
+        sha256 = payload.get("sha256")
+        size_bytes = payload.get("sizeBytes")
+        if (
+            not isinstance(object_key, str)
+            or not object_key.startswith(PUBLIC_ASSET_PREFIX)
+            or object_key.startswith("/")
+            or "\\" in object_key
+            or any(part in {"", ".", ".."} for part in object_key.split("/"))
+            or not isinstance(sha256, str)
+            or SHA256_RE.fullmatch(sha256) is None
+            or not isinstance(size_bytes, int)
+            or isinstance(size_bytes, bool)
+            or size_bytes <= 0
+        ):
+            raise GatewayError(
+                "invalid_asset", "Asset source fields are invalid.", status=422
+            )
+        return cls(object_key, sha256, size_bytes)
+
+
+@dataclass(frozen=True)
+class AssetResponse:
+    status: int
+    body: bytes
+
+
+class AssetFetcher(Protocol):
+    def fetch(
+        self, url: str, *, maximum: int, timeout: float = 30
+    ) -> AssetResponse: ...
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
+class UrllibAssetFetcher:
+    def __init__(self) -> None:
+        self._opener = build_opener(ProxyHandler({}), _NoRedirectHandler())
+
+    def fetch(self, url: str, *, maximum: int, timeout: float = 30) -> AssetResponse:
+        request = Request(url, headers={"Accept": "image/*"}, method="GET")
+        try:
+            with self._opener.open(request, timeout=timeout) as response:
+                raw_length = response.headers.get("Content-Length")
+                try:
+                    content_length = int(raw_length) if raw_length is not None else None
+                except ValueError:
+                    content_length = None
+                if content_length is not None and content_length > maximum:
+                    raise GatewayError(
+                        "invalid_asset",
+                        "The OSS image exceeds the allowed size.",
+                        status=422,
+                    )
+                return AssetResponse(
+                    status=response.status,
+                    body=response.read(maximum + 1),
+                )
+        except HTTPError as error:
+            return AssetResponse(
+                status=error.code,
+                body=error.read(maximum + 1),
+            )
+        except GatewayError:
+            raise
+        except (OSError, URLError) as error:
+            raise TransportUnavailable from error
 
 
 class HttpTransport(Protocol):
@@ -88,14 +191,28 @@ class OfficialAccountGateway:
         *,
         app_id: str,
         app_secret: str,
+        asset_base_url: str,
         transport: HttpTransport | None = None,
+        asset_fetcher: AssetFetcher | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         if not app_id or not app_secret:
             raise ValueError("WeChat Official Account credentials are required.")
         self._app_id = app_id
         self._app_secret = app_secret
+        base = urlsplit(asset_base_url)
+        if (
+            base.scheme not in {"http", "https"}
+            or not base.netloc
+            or base.username is not None
+            or base.password is not None
+            or base.query
+            or base.fragment
+        ):
+            raise ValueError("WECHAT_ASSET_BASE_URL must be an HTTP(S) origin or path.")
+        self._asset_base_url = asset_base_url.rstrip("/") + "/"
         self._transport = transport or UrllibTransport()
+        self._asset_fetcher = asset_fetcher or UrllibAssetFetcher()
         self._clock = clock
         self._token: str | None = None
         self._token_expires_at = 0.0
@@ -252,7 +369,98 @@ class OfficialAccountGateway:
             )
         return payload
 
-    def upload_body_image(self, body: bytes, content_type: str) -> str:
+    def _asset_url(self, object_key: str) -> str:
+        return f"{self._asset_base_url}{quote(object_key, safe='/')}"
+
+    def _download_asset(
+        self,
+        source: AssetSource,
+        *,
+        allowed_types: Mapping[str, str],
+        maximum: int,
+    ) -> tuple[bytes, str, str]:
+        if source.size_bytes > maximum:
+            raise GatewayError(
+                "invalid_asset", "The OSS image exceeds the allowed size.", status=422
+            )
+        try:
+            response = self._asset_fetcher.fetch(
+                self._asset_url(source.object_key), maximum=maximum
+            )
+        except TransportUnavailable as error:
+            raise GatewayError(
+                "asset_unavailable", "The OSS image could not be downloaded."
+            ) from error
+        if not 200 <= response.status < 300:
+            raise GatewayError(
+                "asset_unavailable",
+                f"The OSS image returned HTTP {response.status}.",
+            )
+        if not response.body:
+            raise GatewayError("invalid_asset", "The OSS image is empty.", status=422)
+        if len(response.body) > maximum:
+            raise GatewayError(
+                "invalid_asset", "The OSS image exceeds the allowed size.", status=422
+            )
+        if len(response.body) != source.size_bytes:
+            raise GatewayError(
+                "asset_changed",
+                "The OSS image size no longer matches the Public Revision.",
+                status=409,
+            )
+        if hashlib.sha256(response.body).hexdigest() != source.sha256:
+            raise GatewayError(
+                "asset_changed",
+                "The OSS image content no longer matches the Public Revision.",
+                status=409,
+            )
+        detected_mime_type = next(
+            (
+                mime_type
+                for mime_type, signatures in IMAGE_SIGNATURES.items()
+                if any(response.body.startswith(signature) for signature in signatures)
+            ),
+            None,
+        )
+        if detected_mime_type not in allowed_types:
+            raise GatewayError(
+                "invalid_asset",
+                "The OSS image content is not a supported image type.",
+                status=422,
+            )
+        return (
+            response.body,
+            detected_mime_type,
+            allowed_types[detected_mime_type],
+        )
+
+    @staticmethod
+    def _multipart_image(
+        content: bytes, *, filename: str, mime_type: str
+    ) -> tuple[bytes, str]:
+        boundary = f"soarhigh-{secrets.token_hex(16)}"
+        body = b"".join(
+            [
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="media"; filename="{filename}"\r\n'.encode(),
+                f"Content-Type: {mime_type}\r\n\r\n".encode(),
+                content,
+                f"\r\n--{boundary}--\r\n".encode(),
+            ]
+        )
+        return body, f"multipart/form-data; boundary={boundary}"
+
+    def upload_body_image(self, source: AssetSource) -> str:
+        content, mime_type, extension = self._download_asset(
+            source,
+            allowed_types=BODY_IMAGE_TYPES,
+            maximum=BODY_IMAGE_MAX_BYTES,
+        )
+        body, content_type = self._multipart_image(
+            content,
+            filename=f"body.{extension}",
+            mime_type=mime_type,
+        )
         payload = self._wechat_request(
             "POST",
             "/cgi-bin/media/uploadimg",
@@ -266,7 +474,17 @@ class OfficialAccountGateway:
             )
         return url
 
-    def upload_cover(self, body: bytes, content_type: str) -> str:
+    def upload_cover(self, source: AssetSource) -> str:
+        content, mime_type, extension = self._download_asset(
+            source,
+            allowed_types=COVER_IMAGE_TYPES,
+            maximum=COVER_IMAGE_MAX_BYTES,
+        )
+        body, content_type = self._multipart_image(
+            content,
+            filename=f"cover.{extension}",
+            mime_type=mime_type,
+        )
         payload = self._wechat_request(
             "POST",
             "/cgi-bin/material/add_material",

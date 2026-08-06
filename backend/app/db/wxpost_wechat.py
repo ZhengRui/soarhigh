@@ -63,6 +63,55 @@ def mark_add_started(workspace_id: str, operation_id: UUID) -> dict:
     )
 
 
+def mark_replacement_add_started(workspace_id: str, operation_id: UUID) -> dict:
+    """Discard a confirmed-missing remote ID before replacing its draft."""
+
+    return update_projection(
+        workspace_id,
+        operation_id,
+        {
+            "wechat_media_id": None,
+            "submitted_html_sha256": None,
+            "readback_html_sha256": None,
+            "readback_changed": None,
+            "add_started_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+def clear_confirmed_missing_projection(
+    workspace_id: str,
+    *,
+    media_id: str,
+    projection_sha256: str,
+    asset_mappings: dict,
+) -> dict | None:
+    """Atomically clear a linked draft after WeChat confirms it is missing."""
+
+    response = (
+        supabase.table("wxpost_wechat_drafts")
+        .update(
+            {
+                "state": "idle",
+                "wechat_media_id": None,
+                "submitted_html_sha256": None,
+                "readback_html_sha256": None,
+                "readback_changed": None,
+                "asset_mappings": asset_mappings,
+                "add_started_at": None,
+                "last_error": None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        .eq("source_workspace_id", workspace_id)
+        .in_("state", ["idle", "ready"])
+        .eq("wechat_media_id", media_id)
+        .eq("projection_sha256", projection_sha256)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
 def mark_projection_ready(
     workspace_id: str,
     operation_id: UUID,

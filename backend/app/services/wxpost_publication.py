@@ -119,7 +119,7 @@ def _extension(mime_type: str) -> str:
         ) from error
 
 
-def _public_asset_url(object_key: str) -> str:
+def public_asset_url(object_key: str) -> str:
     endpoint = ALICLOUD_OSS_ENDPOINT.removeprefix("https://").removeprefix("http://")
     return f"https://{ALICLOUD_OSS_BUCKET}.{endpoint}/" f"{quote(object_key, safe='/')}"
 
@@ -160,7 +160,7 @@ def _upload_asset(wxpost_id: UUID, workspace_id: str, media: ResolvedMedia) -> s
         kind=media.kind,
     )
     if existing is not None:
-        return _public_asset_url(existing["object_key"])
+        return public_asset_url(existing["object_key"])
 
     asset_id = uuid4()
     extension = _extension(media.mime_type)
@@ -189,7 +189,7 @@ def _upload_asset(wxpost_id: UUID, workspace_id: str, media: ResolvedMedia) -> s
         }
     )
     if asset.get("status") == "ready":
-        return _public_asset_url(asset["object_key"])
+        return public_asset_url(asset["object_key"])
     if asset.get("status") in {"failed", "abandoned"}:
         asset = retry_inactive_wxpost_asset(UUID(asset["id"]))
 
@@ -213,7 +213,7 @@ def _upload_asset(wxpost_id: UUID, workspace_id: str, media: ResolvedMedia) -> s
             f"Material {media.source_id} could not be uploaded to public storage.",
             status=503,
         ) from error
-    return _public_asset_url(ready["object_key"])
+    return public_asset_url(ready["object_key"])
 
 
 def _delete_asset_objects(assets: list[dict]) -> None:

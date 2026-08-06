@@ -772,7 +772,7 @@ test('generates only saved Materials and previews the same local Draft working c
   expect(context.draft!.document.title).toBe('Generated draft v1');
   expect(context.draft!.document.presentation).toEqual({
     layout: 'brand-default',
-    palette: 'paper-neutral',
+    palette: 'fresh-sage',
     appearance: 'light',
     typeface: 'editorial-serif',
   });
