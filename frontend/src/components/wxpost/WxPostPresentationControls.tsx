@@ -20,6 +20,21 @@ export interface WxPostPresentationSelection extends WxPostPresentation {
   previewSize: WxPostPreviewSize;
 }
 
+export type WxPostRenderMode = 'canonical' | 'mini';
+
+export interface WxPostRenderModeControl {
+  renderMode: WxPostRenderMode;
+  onRenderModeChange: (mode: WxPostRenderMode) => void;
+  /** Rendered-HTML char counts of each export (pre WeChat URL swap). */
+  charCounts: { canonical: number; mini: number };
+}
+
+const RENDER_MODES = ['canonical', 'mini'] as const;
+const RENDER_MODE_LABELS: Record<WxPostRenderMode, string> = {
+  canonical: 'Canonical',
+  mini: 'Mini',
+};
+
 type WxPostPresentationOption =
   | WxPostLayout
   | WxPostPalette
@@ -123,17 +138,106 @@ function ControlGroup({
   );
 }
 
+// Desktop: compact segmented pill placed left of Reset in the controls header.
+function RendererSegmented({
+  renderMode,
+  onRenderModeChange,
+  charCounts,
+  disabled = false,
+}: WxPostRenderModeControl & { disabled?: boolean }) {
+  return (
+    <div
+      className='inline-flex shrink-0 overflow-hidden rounded-full border border-slate-200'
+      role='group'
+      aria-label='Renderer'
+    >
+      {RENDER_MODES.map((mode) => {
+        const selected = renderMode === mode;
+        return (
+          <button
+            key={mode}
+            type='button'
+            disabled={disabled}
+            aria-pressed={selected}
+            data-testid={`wxpost-render-mode-${mode}`}
+            className={`px-3 py-1.5 text-xs font-medium transition ${
+              selected
+                ? 'bg-blue-600 text-white'
+                : 'bg-white text-slate-600 hover:text-slate-900'
+            }`}
+            onClick={() => onRenderModeChange(mode)}
+          >
+            {RENDER_MODE_LABELS[mode]}
+            <span
+              className={`ml-1.5 tabular-nums ${
+                selected ? 'text-blue-100' : 'text-slate-400'
+              }`}
+            >
+              {charCounts[mode].toLocaleString()}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Mobile: a full control group (mirrors the Layout group) rendered above Layout
+// in the appearance drawer.
+export function WxPostRendererControlGroup({
+  renderMode,
+  onRenderModeChange,
+  charCounts,
+  className = '',
+}: WxPostRenderModeControl & { className?: string }) {
+  return (
+    <div className={className}>
+      <ControlGroup title='Renderer'>
+        <div className='grid grid-cols-2 gap-2'>
+          {RENDER_MODES.map((mode) => {
+            const selected = renderMode === mode;
+            return (
+              <button
+                key={mode}
+                type='button'
+                aria-pressed={selected}
+                data-testid={`wxpost-render-mode-${mode}`}
+                className={`rounded-xl border p-3 text-left transition ${
+                  selected
+                    ? 'border-blue-600 bg-blue-50 text-slate-950'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-900'
+                }`}
+                onClick={() => onRenderModeChange(mode)}
+              >
+                <span className='block text-sm font-semibold'>
+                  {RENDER_MODE_LABELS[mode]}
+                </span>
+                <span className='mt-1 block text-xs tabular-nums text-slate-500'>
+                  {charCounts[mode].toLocaleString()} chars
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </ControlGroup>
+    </div>
+  );
+}
+
 export function WxPostPresentationControls({
   value,
   disabled = false,
   onChange,
   onReset,
+  renderMode,
+  onRenderModeChange,
+  charCounts,
 }: {
   value: WxPostPresentationSelection;
   disabled?: boolean;
   onChange: (value: WxPostPresentationSelection) => void;
   onReset: () => void;
-}) {
+} & WxPostRenderModeControl) {
   return (
     <section
       className='mb-10 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6'
@@ -148,15 +252,23 @@ export function WxPostPresentationControls({
             These choices stay in your browser and do not change the article.
           </p>
         </div>
-        <button
-          className='inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-900'
-          type='button'
-          disabled={disabled}
-          onClick={onReset}
-        >
-          <RotateCcw className='h-3.5 w-3.5' />
-          Reset
-        </button>
+        <div className='flex shrink-0 items-center gap-2'>
+          <RendererSegmented
+            renderMode={renderMode}
+            onRenderModeChange={onRenderModeChange}
+            charCounts={charCounts}
+            disabled={disabled}
+          />
+          <button
+            className='inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-900'
+            type='button'
+            disabled={disabled}
+            onClick={onReset}
+          >
+            <RotateCcw className='h-3.5 w-3.5' />
+            Reset
+          </button>
+        </div>
       </div>
 
       <WxPostPresentationOptions

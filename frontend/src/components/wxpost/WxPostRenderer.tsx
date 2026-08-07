@@ -19,6 +19,13 @@ interface WxPostRendererProps {
   previewSize?: WxPostPreviewSize;
   context?: WxPostRenderContext;
   className?: string;
+  /**
+   * Pre-compiled HTML to render instead of compiling from `article`. The public
+   * preview page passes this so it can supply either the canonical or the mini
+   * export (and reuse the same strings for their char counts). Omitted by the
+   * authoring editor, which relies on the internal editable compile.
+   */
+  html?: string;
   editor?: {
     activeKey: string | null;
     onSelect: (key: string) => void;
@@ -44,21 +51,24 @@ export function WxPostRenderer({
   previewSize = 'mobile-390',
   context = {},
   className = '',
+  html,
   editor,
 }: WxPostRendererProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const editable = Boolean(editor);
   const compiled = useMemo(
     () =>
-      compileWxPost(
-        {
-          renderDocument: article,
-          presentation,
-          context,
-        },
-        { editable }
-      ),
-    [article, context, editable, presentation]
+      html !== undefined
+        ? { html }
+        : compileWxPost(
+            {
+              renderDocument: article,
+              presentation,
+              context,
+            },
+            { editable }
+          ),
+    [html, article, context, editable, presentation]
   );
 
   useEffect(() => {

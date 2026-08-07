@@ -4,17 +4,20 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, CalendarDays, Eye, Loader2, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog';
 import {
   WxPostPresentationControls,
   type WxPostPresentationSelection,
+  type WxPostRenderMode,
 } from '@/components/wxpost/WxPostPresentationControls';
 import { WxPostPresentationDrawer } from '@/components/wxpost/WxPostPresentationDrawer';
 import { WxPostRenderer } from '@/components/wxpost/WxPostRenderer';
+import { compileWxPost } from '@/components/wxpost/renderer/compiler';
 import { formatWxPostDisplayDate } from '@/components/wxpost/renderer/context';
+import { compileWxPostForWechat } from '@/components/wxpost/renderer/wechatMiniEmitter';
 import type {
   WxPostPresentation,
   WxPostPublicDetail,
@@ -90,12 +93,49 @@ function PublicWxPost({
   const [wechatPresentation, setWechatPresentation] =
     useState<WxPostPresentation | null>(null);
 
-  const selectedPresentation: WxPostPresentation = {
-    layout: selection.layout,
-    palette: selection.palette,
-    appearance: selection.appearance,
-    typeface: selection.typeface,
-  };
+  const [renderMode, setRenderMode] = useState<WxPostRenderMode>('canonical');
+  const selectedPresentation: WxPostPresentation = useMemo(
+    () => ({
+      layout: selection.layout,
+      palette: selection.palette,
+      appearance: selection.appearance,
+      typeface: selection.typeface,
+    }),
+    [
+      selection.layout,
+      selection.palette,
+      selection.appearance,
+      selection.typeface,
+    ]
+  );
+  const previewContext = useMemo(
+    () => ({
+      displayDate: formatWxPostDisplayDate(detail.created_at),
+      publisherName: 'SoarHigh Toastmasters',
+    }),
+    [detail.created_at]
+  );
+  // Both exports are compiled here so the counts shown on the toggle and the
+  // preview itself share one source; each is a cheap memoized string build.
+  const canonicalHtml = useMemo(
+    () =>
+      compileWxPost({
+        renderDocument: detail.render_document,
+        presentation: selectedPresentation,
+        context: previewContext,
+      }).html,
+    [detail.render_document, selectedPresentation, previewContext]
+  );
+  const miniHtml = useMemo(
+    () =>
+      compileWxPostForWechat({
+        renderDocument: detail.render_document,
+        presentation: selectedPresentation,
+        context: previewContext,
+      }).html,
+    [detail.render_document, selectedPresentation, previewContext]
+  );
+  const charCounts = { canonical: canonicalHtml.length, mini: miniHtml.length };
   const hasVideo = detail.render_document.body.some(
     (node) => node.kind === 'directive' && node.name === 'video'
   );
@@ -236,8 +276,14 @@ function PublicWxPost({
   return (
     <>
       <div className='relative mb-7' data-testid='public-wxpost-header'>
-        <div className={canDelete ? 'min-w-0 pr-36' : 'min-w-0'}>
-          <div className='mb-3 flex flex-wrap items-center gap-2'>
+        <div className='min-w-0'>
+          {/* Only the badge row aligns with the floating action buttons, so it
+              alone reserves clearance — the title keeps full width. */}
+          <div
+            className={`mb-3 flex flex-wrap items-center gap-2 ${
+              canDelete ? 'pr-36' : ''
+            }`}
+          >
             <span className='rounded-full bg-gradient-to-r from-blue-600 to-purple-600 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-white'>
               WxPost
             </span>
@@ -312,6 +358,9 @@ function PublicWxPost({
         value={selection}
         onChange={setSelection}
         onReset={() => setSelection(defaultSelection)}
+        renderMode={renderMode}
+        onRenderModeChange={setRenderMode}
+        charCounts={charCounts}
       />
 
       <div className='hidden sm:block'>
@@ -319,22 +368,16 @@ function PublicWxPost({
           value={selection}
           onChange={setSelection}
           onReset={() => setSelection(defaultSelection)}
+          renderMode={renderMode}
+          onRenderModeChange={setRenderMode}
+          charCounts={charCounts}
         />
       </div>
 
       <WxPostRenderer
         article={detail.render_document}
-        presentation={{
-          layout: selection.layout,
-          palette: selection.palette,
-          appearance: selection.appearance,
-          typeface: selection.typeface,
-        }}
         previewSize={selection.previewSize}
-        context={{
-          displayDate: formatWxPostDisplayDate(detail.created_at),
-          publisherName: 'SoarHigh Toastmasters',
-        }}
+        html={renderMode === 'mini' ? miniHtml : canonicalHtml}
       />
 
       <footer className='mx-auto mt-10 max-w-3xl border-t border-slate-200 py-6 text-center text-xs text-slate-500'>

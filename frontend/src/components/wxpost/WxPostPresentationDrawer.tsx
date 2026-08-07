@@ -8,17 +8,22 @@ import {
   formatWxPostPresentationSelection,
   type WxPostPresentationSelection,
   WxPostPresentationOptions,
+  type WxPostRenderModeControl,
+  WxPostRendererControlGroup,
 } from './WxPostPresentationControls';
 
 export function WxPostPresentationDrawer({
   value,
   onChange,
   onReset,
+  renderMode,
+  onRenderModeChange,
+  charCounts,
 }: {
   value: WxPostPresentationSelection;
   onChange: (value: WxPostPresentationSelection) => void;
   onReset: () => void;
-}) {
+} & WxPostRenderModeControl) {
   const [isOpen, setIsOpen] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -174,6 +179,12 @@ export function WxPostPresentationDrawer({
               </div>
 
               <div className='min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-5'>
+                <WxPostRendererControlGroup
+                  renderMode={renderMode}
+                  onRenderModeChange={onRenderModeChange}
+                  charCounts={charCounts}
+                  className='mb-6'
+                />
                 <WxPostPresentationOptions value={value} onChange={onChange} />
               </div>
 
