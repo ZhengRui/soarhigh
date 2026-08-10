@@ -185,12 +185,12 @@ export interface WorkspaceContext {
   } | null;
 }
 
-export interface WorkspaceDraftSession {
+export interface WorkspaceDraftConversation {
   workspaceId: string;
-  sessionId: string | null;
   messages: Array<{
     role: 'user' | 'assistant';
     text: string;
+    selectedText?: string;
     turnId?: string;
     steps?: WorkspaceDraftProgressActivity[];
   }>;
@@ -201,7 +201,6 @@ export interface WorkspaceDraftOperation {
   operationId: string;
   state: 'running' | 'completed' | 'failed';
   result: {
-    sessionId: string;
     reply: string;
     draftChanged: boolean;
     draftVersion: number;
@@ -225,7 +224,6 @@ export interface WorkspaceDraftProgressActivity {
 
 export interface WorkspaceDraftTurn {
   workspaceId: string;
-  sessionId: string;
   reply: string;
   context: WorkspaceContext;
   draftChanged: boolean;
@@ -355,6 +353,14 @@ export class WorkspaceApiError extends Error {
   }
 }
 
+export function draftAssistantErrorStatus(code: string | null | undefined) {
+  if (code === 'version_conflict') return 409;
+  if (code === 'hermes_unavailable' || code === 'draft_store_unavailable') {
+    return 503;
+  }
+  return 502;
+}
+
 function memberHeaders(headers?: HeadersInit) {
   const result = new Headers(headers);
   const token = localStorage.getItem('token');
@@ -477,9 +483,9 @@ export function syncWorkspacePublication(
   );
 }
 
-export function getWorkspaceDraftSession(workspaceId: string) {
-  return requestJson<WorkspaceDraftSession>(
-    `${workspacePath(workspaceId)}/draft/session`,
+export function getWorkspaceDraftConversation(workspaceId: string) {
+  return requestJson<WorkspaceDraftConversation>(
+    `${workspacePath(workspaceId)}/draft/conversation`,
     { cache: 'no-store' }
   );
 }
@@ -495,9 +501,9 @@ export function getWorkspaceDraftOperation(
   );
 }
 
-export function resetWorkspaceDraftSession(workspaceId: string) {
-  return requestJson<WorkspaceDraftSession>(
-    `${workspacePath(workspaceId)}/draft/session`,
+export function resetWorkspaceDraftConversation(workspaceId: string) {
+  return requestJson<WorkspaceDraftConversation>(
+    `${workspacePath(workspaceId)}/draft/conversation`,
     { method: 'DELETE' }
   );
 }
@@ -631,7 +637,9 @@ async function requestDraftChatStream(
         versionKind?: unknown;
       };
       throw new WorkspaceApiError(
-        error.code === 'version_conflict' ? 409 : 502,
+        draftAssistantErrorStatus(
+          typeof error.code === 'string' ? error.code : null
+        ),
         typeof error.message === 'string'
           ? error.message
           : 'The Draft Assistant could not complete the request.',

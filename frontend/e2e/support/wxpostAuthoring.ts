@@ -114,7 +114,7 @@ export type WorkspaceMock = {
   conflictNextPublication: boolean;
   failNextPublication: boolean;
   publicationStatusUnavailable: boolean;
-  draftSessionUnavailable: boolean;
+  draftStoreUnavailable: boolean;
   contextDelayMs: number;
   draftSaveDelayMs: number;
   draftChatDelayMs: number;
@@ -129,9 +129,13 @@ export type WorkspaceMock = {
   referencedSourceIds: Set<string>;
   draftMessages: Map<
     string,
-    Array<{ role: 'user' | 'assistant'; text: string; turnId?: string }>
+    Array<{
+      role: 'user' | 'assistant';
+      text: string;
+      selectedText?: string;
+      turnId?: string;
+    }>
   >;
-  draftSessionIds: Map<string, string | null>;
   draftOperations: Map<
     string,
     {
@@ -139,7 +143,6 @@ export type WorkspaceMock = {
       operationId: string;
       state: 'running' | 'completed' | 'failed';
       result: {
-        sessionId: string;
         reply: string;
         draftChanged: boolean;
         draftVersion: number;
@@ -153,7 +156,6 @@ export type WorkspaceMock = {
       error: { code: string; message: string } | null;
     }
   >;
-  nextDraftSessionNumber: number;
   publications: Map<string, WorkspacePublicationStatus>;
 };
 
@@ -290,7 +292,7 @@ export async function mockWxPostWorkspaceApi(
     conflictNextPublication: false,
     failNextPublication: false,
     publicationStatusUnavailable: false,
-    draftSessionUnavailable: false,
+    draftStoreUnavailable: false,
     contextDelayMs: 0,
     draftSaveDelayMs: 0,
     draftChatDelayMs: 0,
@@ -302,20 +304,8 @@ export async function mockWxPostWorkspaceApi(
     nextGeneratedDocument: null,
     referencedSourceIds: new Set(),
     draftMessages: new Map(),
-    draftSessionIds: new Map(),
     draftOperations: new Map(),
-    nextDraftSessionNumber: 1,
     publications: new Map(),
-  };
-
-  const activeDraftSessionId = (workspaceId: string) => {
-    let sessionId = mock.draftSessionIds.get(workspaceId) ?? null;
-    if (sessionId === null) {
-      sessionId = `session-${workspaceId}-${mock.nextDraftSessionNumber}`;
-      mock.nextDraftSessionNumber += 1;
-      mock.draftSessionIds.set(workspaceId, sessionId);
-    }
-    return sessionId;
   };
 
   const createWorkspaceContext = (
@@ -551,28 +541,30 @@ export async function mockWxPostWorkspaceApi(
       if (
         method === 'DELETE' &&
         parts[0] === 'draft' &&
-        parts[1] === 'session'
+        parts[1] === 'conversation'
       ) {
         mock.draftMessages.set(workspaceId, []);
-        mock.draftSessionIds.set(workspaceId, null);
         await route.fulfill({
           status: 200,
           json: {
             workspaceId,
-            sessionId: null,
             messages: [],
           },
         });
         return;
       }
-      if (method === 'GET' && parts[0] === 'draft' && parts[1] === 'session') {
-        if (mock.draftSessionUnavailable) {
+      if (
+        method === 'GET' &&
+        parts[0] === 'draft' &&
+        parts[1] === 'conversation'
+      ) {
+        if (mock.draftStoreUnavailable) {
           await route.fulfill({
             status: 503,
             json: {
               error: {
-                code: 'hermes_unavailable',
-                message: 'Hermes history is temporarily unavailable',
+                code: 'draft_store_unavailable',
+                message: 'Draft Controller state is temporarily unavailable',
               },
             },
           });
@@ -582,11 +574,6 @@ export async function mockWxPostWorkspaceApi(
           status: 200,
           json: {
             workspaceId,
-            sessionId: mock.draftSessionIds.has(workspaceId)
-              ? (mock.draftSessionIds.get(workspaceId) ?? null)
-              : context.draft
-                ? activeDraftSessionId(workspaceId)
-                : null,
             messages: mock.draftMessages.get(workspaceId) ?? [],
           },
         });
@@ -711,7 +698,6 @@ export async function mockWxPostWorkspaceApi(
           status: 200,
           json: {
             workspaceId,
-            sessionId: activeDraftSessionId(workspaceId),
             reply: `Generated draft version ${nextVersion}.`,
             context,
             draftChanged: true,
@@ -767,12 +753,17 @@ export async function mockWxPostWorkspaceApi(
           const messages = mock.draftMessages.get(workspaceId) ?? [];
           mock.draftMessages.set(workspaceId, [
             ...messages,
-            { role: 'user', text: input.message },
+            {
+              role: 'user',
+              text: input.message,
+              ...(input.selectedText
+                ? { selectedText: input.selectedText }
+                : {}),
+            },
             { role: 'assistant', text: reply },
           ]);
           await fulfillDraftChatStream(route, [{ stage: 'request_started' }], {
             workspaceId,
-            sessionId: activeDraftSessionId(workspaceId),
             reply,
             context,
             draftChanged: false,
@@ -806,7 +797,13 @@ export async function mockWxPostWorkspaceApi(
           const messages = mock.draftMessages.get(workspaceId) ?? [];
           mock.draftMessages.set(workspaceId, [
             ...messages,
-            { role: 'user', text: input.message },
+            {
+              role: 'user',
+              text: input.message,
+              ...(input.selectedText
+                ? { selectedText: input.selectedText }
+                : {}),
+            },
             { role: 'assistant', text: reply, turnId: input.operationId },
           ]);
           mock.draftOperations.set(input.operationId, {
@@ -814,7 +811,6 @@ export async function mockWxPostWorkspaceApi(
             operationId: input.operationId,
             state: 'completed',
             result: {
-              sessionId: activeDraftSessionId(workspaceId),
               reply,
               draftChanged: true,
               draftVersion: nextVersion,
@@ -883,7 +879,6 @@ export async function mockWxPostWorkspaceApi(
           ],
           {
             workspaceId,
-            sessionId: activeDraftSessionId(workspaceId),
             reply,
             context,
             draftChanged: true,

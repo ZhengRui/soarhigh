@@ -11,8 +11,10 @@ class HermesTurnFailed(WorkspaceError):
     code = "hermes_turn_failed"
 
 
-class DraftSessionStoreUnavailable(HermesTurnFailed):
-    """The Controller could not read or persist non-canonical session state."""
+class DraftStoreUnavailable(WorkspaceError):
+    """The Controller could not read or persist Draft Assistant state."""
+
+    code = "draft_store_unavailable"
 
 
 class DraftOperationNotFound(WorkspaceError):

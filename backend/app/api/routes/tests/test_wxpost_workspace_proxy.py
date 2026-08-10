@@ -862,8 +862,8 @@ def test_workspace_proxy_allows_only_the_scoped_draft_routes(
     _configure_controller(monkeypatch, handler)
 
     requests = [
-        ("GET", "/draft/session", None),
-        ("DELETE", "/draft/session", None),
+        ("GET", "/draft/conversation", None),
+        ("DELETE", "/draft/conversation", None),
         (
             "POST",
             "/draft/save",
@@ -906,8 +906,8 @@ def test_workspace_proxy_allows_only_the_scoped_draft_routes(
 
     assert rejected.status_code == 404
     assert [(request.method, request.url.path) for request in captured] == [
-        ("GET", "/workspaces/wxpost-abc/draft/session"),
-        ("DELETE", "/workspaces/wxpost-abc/draft/session"),
+        ("GET", "/workspaces/wxpost-abc/draft/conversation"),
+        ("DELETE", "/workspaces/wxpost-abc/draft/conversation"),
         ("POST", "/workspaces/wxpost-abc/draft/save"),
         ("POST", "/workspaces/wxpost-abc/draft/generate"),
         ("POST", "/workspaces/wxpost-abc/draft/chat"),

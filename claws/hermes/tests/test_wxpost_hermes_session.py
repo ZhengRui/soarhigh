@@ -2,30 +2,25 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 import pytest
-
 from wxpost_controller.core import InvalidRequest, VersionConflict
-from wxpost_controller.draft_session_store import (
-    HERMES_DRAFT_PROTOCOL_VERSION,
-    HermesDraftSessionStore,
-)
+from wxpost_controller.draft_store import HermesDraftStore
 from wxpost_controller.errors import (
-    DraftSessionStoreUnavailable,
     HermesTurnFailed,
     HermesUnavailable,
 )
 from wxpost_controller.hermes_session import (
+    DRAFT_CONVERSATION_CONTEXT_MAX_BYTES,
     HERMES_DRAFT_IDENTITY,
     HermesDescriptionService,
     HermesDraftService,
     HermesSessionClient,
-    HermesSessionHistory,
     HermesTurn,
+    _bounded_conversation_context,
     _draft_edit_activity,
 )
 
@@ -112,29 +107,8 @@ class _SessionClient:
     def __init__(self, controller: _Controller) -> None:
         self.controller = controller
         self.prompts: list[dict[str, str]] = []
-        self.history_session_ids: list[str | None] = []
         self.turn_session_ids: list[str | None] = []
         self.deleted_session_ids: list[str] = []
-
-    def history(
-        self,
-        *,
-        title: str,
-        session_id: str | None = None,
-    ) -> HermesSessionHistory:
-        assert title == "SoarHigh WxPost authoring v7 · wxpost-test"
-        self.history_session_ids.append(session_id)
-        return HermesSessionHistory(
-            session_id=session_id or "stored-session",
-            messages=[
-                {"role": "user", "text": "Tighten the opening."},
-                {
-                    "role": "assistant",
-                    "text": "Opening tightened.",
-                    "turnId": "draft-history",
-                },
-            ],
-        )
 
     def turn(
         self,
@@ -171,7 +145,6 @@ class _SessionClient:
 
     def delete(self, *, session_id: str) -> None:
         self.deleted_session_ids.append(session_id)
-        self.prompts.append({"title": session_id, "cwd": "", "prompt": "DELETE"})
 
 
 def _service(tmp_path: Path) -> tuple[HermesDraftService, _SessionClient]:
@@ -187,102 +160,113 @@ def _service(tmp_path: Path) -> tuple[HermesDraftService, _SessionClient]:
     )
 
 
-def test_draft_service_resumes_history_and_runs_one_versioned_turn(
+def _conversation_context(prompt: str) -> dict[str, Any]:
+    marker = "PRIOR_COMPLETED_TURNS_JSON:"
+    return json.loads(prompt.split(marker, 1)[1].splitlines()[0])
+
+
+def test_generate_uses_one_isolated_session_and_persists_controller_history(
     tmp_path: Path,
 ) -> None:
     service, session = _service(tmp_path)
 
-    history = service.history("wxpost-test")
     result = service.generate(
         "wxpost-test",
         expected_manifest_version=4,
         expected_draft_version=2,
     )
+    history = service.history("wxpost-test")
 
-    assert history == {
-        "workspaceId": "wxpost-test",
-        "sessionId": "stored-session",
-        "messages": [
-            {"role": "user", "text": "Tighten the opening."},
-            {
-                "role": "assistant",
-                "text": "Opening tightened.",
-                "turnId": "draft-history",
-            },
-        ],
-    }
     assert result["context"]["draft"]["draftVersion"] == 3
-    assert result["reply"] == ("Draft regenerated.\n\nDraft version: v2 → v3")
-    assert result["draftChanged"] is True
-    assert len(session.prompts) == 1
-    assert session.prompts[0]["title"] == "SoarHigh WxPost authoring v7 · wxpost-test"
+    assert result["reply"] == "Draft regenerated.\n\nDraft version: v2 → v3"
+    assert session.turn_session_ids == [None]
+    assert len(session.deleted_session_ids) == 1
+    assert session.prompts[0]["title"].startswith(
+        "SoarHigh WxPost Draft · wxpost-test · draft-"
+    )
     assert session.prompts[0]["cwd"].endswith("/inbox/wxpost-test")
     assert "Expected manifest version: 4" in session.prompts[0]["prompt"]
     assert "Expected draft version: 2" in session.prompts[0]["prompt"]
     assert "workspace_id=" not in session.prompts[0]["prompt"]
     assert "wxpost_get_current_context" in session.prompts[0]["prompt"]
     assert "wxpost_save_current_draft" in session.prompts[0]["prompt"]
-    assert "expected_manifest_version=4" in session.prompts[0]["prompt"]
-    assert "expected_draft_version=2" in session.prompts[0]["prompt"]
-    assert 'operation_id="draft-' in session.prompts[0]["prompt"]
     assert "refresh_from_materials=true" in session.prompts[0]["prompt"]
-    assert "Re-read and follow the current" in session.prompts[0]["prompt"]
-    assert (
-        "rather than preserving the prior Draft's structure"
-        in (session.prompts[0]["prompt"])
-    )
-    assert (
-        "make one replacement save call with the same versions"
-        in (session.prompts[0]["prompt"])
-    )
-    assert "Draft version: v2 → v3" in session.prompts[0]["prompt"]
     assert session.prompts[0]["prompt"].startswith(HERMES_DRAFT_IDENTITY)
-    assert session.history_session_ids == [None]
-    assert session.turn_session_ids == ["stored-session"]
-
-
-@pytest.mark.parametrize(
-    ("failing_method", "expected_log"),
-    [
-        ("set_session", "session metadata could not be stored"),
-        ("append_completed_progress", "progress metadata could not be stored"),
-    ],
-)
-def test_saved_draft_succeeds_when_session_metadata_cannot_be_persisted(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    failing_method: str,
-    expected_log: str,
-) -> None:
-    controller = _Controller(tmp_path)
-    session = _SessionClient(controller)
-    store = HermesDraftSessionStore(tmp_path)
-    service = HermesDraftService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=session,  # type: ignore[arg-type]
-        session_store=store,
-        cleanup_dispatch=lambda callback: callback(),
+    assert history["workspaceId"] == "wxpost-test"
+    assert history["messages"][0]["text"] == (
+        "Regenerate the English draft from saved Materials."
     )
+    assert history["messages"][1]["text"].endswith("Draft version: v2 → v3")
 
-    def fail_metadata_write(*_args: object, **_kwargs: object) -> None:
-        raise DraftSessionStoreUnavailable("session db unavailable")
 
-    monkeypatch.setattr(store, failing_method, fail_metadata_write)
-
-    result = service.generate(
+def test_generate_does_not_consume_prior_chat_context(tmp_path: Path) -> None:
+    service, session = _service(tmp_path)
+    service.chat(
         "wxpost-test",
         expected_manifest_version=4,
         expected_draft_version=2,
+        message="Remember this instruction.",
+        selected_text=None,
     )
 
-    assert result["draftChanged"] is True
-    assert result["context"]["draft"]["draftVersion"] == 3
-    assert result["reply"].endswith("Draft version: v2 → v3")
-    assert expected_log in caplog.text
+    service.generate(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=3,
+    )
+
+    assert "PRIOR_COMPLETED_TURNS_JSON:" in session.prompts[0]["prompt"]
+    assert "PRIOR_COMPLETED_TURNS_JSON:" not in session.prompts[1]["prompt"]
 
 
-def test_draft_session_store_survives_service_recreation(tmp_path: Path) -> None:
+def test_each_chat_turn_uses_a_fresh_hermes_session(tmp_path: Path) -> None:
+    service, session = _service(tmp_path)
+
+    service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="Tighten the opening.",
+        selected_text="The original opening.",
+    )
+    session.controller.context["manifest"]["manifestVersion"] = 5
+    service.chat(
+        "wxpost-test",
+        expected_manifest_version=5,
+        expected_draft_version=3,
+        message="Tighten the closing.",
+        selected_text=None,
+    )
+
+    assert session.turn_session_ids == [None, None]
+    assert session.prompts[0]["title"] != session.prompts[1]["title"]
+    assert len(session.deleted_session_ids) == 2
+    assert len(service.history("wxpost-test")["messages"]) == 4
+    assert _conversation_context(session.prompts[0]["prompt"]) == {
+        "olderTurnsOmitted": False,
+        "turns": [],
+    }
+    second_context = _conversation_context(session.prompts[1]["prompt"])
+    assert second_context["olderTurnsOmitted"] is False
+    assert len(second_context["turns"]) == 1
+    assert second_context["turns"][0]["memberMessage"] == "Tighten the opening."
+    assert second_context["turns"][0]["selectedText"] == "The original opening."
+    assert second_context["turns"][0]["assistantReply"].endswith(
+        "Draft version: v2 → v3"
+    )
+    assert second_context["turns"][0]["draftVersionAfter"] == 3
+    assert second_context["turns"][0]["actions"] == [
+        {"label": "Saving Draft v3", "toolName": "wxpost_save_draft"},
+        {"label": "Verifying the saved Draft"},
+    ]
+    assert "steps" not in second_context["turns"][0]
+    assert "activityId" not in session.prompts[1]["prompt"]
+    assert service.history("wxpost-test")["messages"][0]["selectedText"] == (
+        "The original opening."
+    )
+
+
+def test_controller_history_survives_service_recreation(tmp_path: Path) -> None:
     controller = _Controller(tmp_path)
     first_session = _SessionClient(controller)
     first_service = HermesDraftService(
@@ -290,8 +274,13 @@ def test_draft_session_store_survives_service_recreation(tmp_path: Path) -> None
         session_client=first_session,  # type: ignore[arg-type]
         cleanup_dispatch=lambda callback: callback(),
     )
-
-    first_service.history("wxpost-test")
+    first_service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="Tighten the opening.",
+        selected_text=None,
+    )
 
     second_session = _SessionClient(controller)
     second_service = HermesDraftService(
@@ -299,215 +288,104 @@ def test_draft_session_store_survives_service_recreation(tmp_path: Path) -> None
         session_client=second_session,  # type: ignore[arg-type]
         cleanup_dispatch=lambda callback: callback(),
     )
-    second_service.history("wxpost-test")
 
-    assert first_session.history_session_ids == [None]
-    assert second_session.history_session_ids == ["stored-session"]
-
-
-def test_draft_service_history_returns_restored_progress(tmp_path: Path) -> None:
-    store = HermesDraftSessionStore(tmp_path)
-    store.set_session("wxpost-test", "stored-session")
-    store.append_completed_progress(
-        "stored-session",
-        turn_id="draft-history",
-        steps=[
-            {
-                "activityId": "context-1",
-                "label": "Reading the saved Draft and media",
-                "toolName": "wxpost_get_context",
-                "completed": True,
-                "failed": False,
-            }
-        ],
+    assert second_service.history("wxpost-test")["messages"][0]["text"] == (
+        "Tighten the opening."
     )
-    service, _ = _service(tmp_path)
+    second_service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=3,
+        message="What did I just ask you to change?",
+        selected_text=None,
+    )
+    recreated_context = _conversation_context(second_session.prompts[0]["prompt"])
+    assert recreated_context["turns"][0]["memberMessage"] == ("Tighten the opening.")
 
-    history = service.history("wxpost-test")
 
-    assert history["messages"][1]["steps"] == [
+def test_reset_clears_only_controller_conversation(tmp_path: Path) -> None:
+    service, session = _service(tmp_path)
+    service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="Tighten the opening.",
+        selected_text=None,
+    )
+    before_reset = json.loads(json.dumps(session.controller.context))
+
+    result = service.reset("wxpost-test")
+
+    assert result == {"workspaceId": "wxpost-test", "messages": []}
+    assert service.history("wxpost-test")["messages"] == []
+    assert session.controller.context == before_reset
+    service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=3,
+        message="What happened before this message?",
+        selected_text=None,
+    )
+    assert _conversation_context(session.prompts[1]["prompt"]) == {
+        "olderTurnsOmitted": False,
+        "turns": [],
+    }
+
+
+def test_conversation_context_keeps_newest_complete_turns_within_budget() -> None:
+    turns = [
         {
-            "activityId": "context-1",
-            "label": "Reading the saved Draft and media",
-            "toolName": "wxpost_get_context",
-            "completed": True,
-            "failed": False,
+            "operationId": f"draft-{index:032x}",
+            "memberMessage": f"request-{index}-" + "x" * 700,
+            "assistantReply": f"reply-{index}-" + "y" * 500,
+            "expectedDraftVersion": index,
+            "draftChanged": True,
+            "draftVersionAfter": index + 1,
+            "steps": [],
         }
+        for index in range(3)
     ]
 
+    context = _bounded_conversation_context(reversed(turns), max_bytes=1_600)
+    encoded = json.dumps(context, ensure_ascii=False).encode("utf-8")
 
-def test_draft_session_store_retires_an_older_protocol_session(
-    tmp_path: Path,
-) -> None:
-    registry_directory = tmp_path / ".wxpost-controller"
-    registry_directory.mkdir()
-    (registry_directory / "draft-sessions.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "draftProtocolVersion": 5,
-                "sessions": {"wxpost-test": "protocol-5-session"},
-                "pendingDeletions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    service, session = _service(tmp_path)
-
-    history = service.history("wxpost-test")
-
-    assert session.deleted_session_ids == ["protocol-5-session"]
-    assert session.history_session_ids == [None]
-    assert history["sessionId"] == "stored-session"
-    store = HermesDraftSessionStore(tmp_path)
-    assert store.get("wxpost-test") == "stored-session"
-    assert store.pending_deletions() == []
+    assert len(encoded) <= 1_600
+    assert context["olderTurnsOmitted"] is True
+    assert [turn["operationId"] for turn in context["turns"]] == [
+        "draft-00000000000000000000000000000002"
+    ]
+    assert DRAFT_CONVERSATION_CONTEXT_MAX_BYTES == 48_000
 
 
-def test_history_schedules_session_cleanup_without_blocking_the_request(
-    tmp_path: Path,
-) -> None:
-    registry_directory = tmp_path / ".wxpost-controller"
-    registry_directory.mkdir()
-    (registry_directory / "draft-sessions.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "draftProtocolVersion": HERMES_DRAFT_PROTOCOL_VERSION,
-                "sessions": {},
-                "pendingDeletions": ["stale-session"],
-            }
-        ),
-        encoding="utf-8",
-    )
-    controller = _Controller(tmp_path)
-    session = _SessionClient(controller)
-    scheduled: list[Callable[[], None]] = []
-    service = HermesDraftService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=session,  # type: ignore[arg-type]
-        cleanup_dispatch=scheduled.append,
-    )
+def test_conversation_context_stops_reading_after_the_budget_is_full() -> None:
+    def newest_turns():
+        yield {
+            "operationId": "draft-00000000000000000000000000000002",
+            "memberMessage": "x" * 2_000,
+            "assistantReply": "Too large for this budget.",
+            "expectedDraftVersion": 2,
+            "draftChanged": False,
+            "draftVersionAfter": 2,
+            "actions": [],
+        }
+        raise AssertionError("older turns must not be loaded after the budget fills")
 
-    history = service.history("wxpost-test")
-
-    assert history["sessionId"] == "stored-session"
-    assert session.deleted_session_ids == []
-    assert len(scheduled) == 1
-
-    scheduled.pop()()
-
-    assert session.deleted_session_ids == ["stale-session"]
-    assert HermesDraftSessionStore(tmp_path).pending_deletions() == []
-
-
-def test_cleanup_dispatch_failure_does_not_fail_history(tmp_path: Path) -> None:
-    controller = _Controller(tmp_path)
-    session = _SessionClient(controller)
-
-    def unavailable_dispatch(_callback: Callable[[], None]) -> None:
-        raise RuntimeError("cannot start cleanup worker")
-
-    service = HermesDraftService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=session,  # type: ignore[arg-type]
-        cleanup_dispatch=unavailable_dispatch,
-    )
-
-    history = service.history("wxpost-test")
-
-    assert history["sessionId"] == "stored-session"
-
-
-def test_reset_replaces_only_the_active_draft_conversation(tmp_path: Path) -> None:
-    service, session = _service(tmp_path)
-    before = json.loads(json.dumps(session.controller.context))
-
-    service.history("wxpost-test")
-    store = HermesDraftSessionStore(tmp_path)
-    store.append_completed_progress(
-        "stored-session",
-        turn_id="draft-history",
-        steps=[
-            {
-                "activityId": "context-1",
-                "label": "Reading the saved Draft and media",
-                "toolName": "wxpost_get_context",
-                "completed": True,
-                "failed": False,
-            }
-        ],
-    )
-    result = service.reset("wxpost-test")
-
-    assert result == {
-        "workspaceId": "wxpost-test",
-        "sessionId": None,
-        "messages": [],
+    assert _bounded_conversation_context(newest_turns(), max_bytes=1_000) == {
+        "olderTurnsOmitted": True,
+        "turns": [],
     }
-    assert session.deleted_session_ids == ["stored-session"]
-    assert session.controller.context == before
-    assert (
-        "steps"
-        not in store.restore_completed_progress(
-            "stored-session",
-            [
-                {
-                    "role": "assistant",
-                    "text": "Opening tightened.",
-                    "turnId": "draft-history",
-                }
-            ],
-        )[0]
-    )
-    service.history("wxpost-test")
-    assert "conversation-" in (session.history_session_ids[-1] or "")
 
 
-def test_reset_keeps_fresh_pointer_when_old_session_cleanup_fails(
-    tmp_path: Path,
-) -> None:
-    controller = _Controller(tmp_path)
-
-    class CleanupFailureSession(_SessionClient):
-        def delete(self, *, session_id: str) -> None:
-            raise HermesTurnFailed("cleanup failed")
-
-    session = CleanupFailureSession(controller)
-    store = HermesDraftSessionStore(tmp_path)
-    service = HermesDraftService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=session,  # type: ignore[arg-type]
-        session_store=store,
-        cleanup_dispatch=lambda callback: callback(),
-    )
-
-    result = service.reset("wxpost-test")
-
-    assert result["sessionId"] is None
-    assert "conversation-" in (store.get("wxpost-test") or "")
-    legacy_title = "SoarHigh WxPost authoring v7 · wxpost-test"
-    assert store.pending_deletions() == [legacy_title]
-
-    retry_session = _SessionClient(controller)
-    retry_service = HermesDraftService(
-        controller=controller,  # type: ignore[arg-type]
-        session_client=retry_session,  # type: ignore[arg-type]
-        session_store=store,
-        cleanup_dispatch=lambda callback: callback(),
-    )
-    retry_service.history("wxpost-test")
-
-    assert retry_session.deleted_session_ids == [legacy_title]
-    assert store.pending_deletions() == []
-
-
-def test_workspace_delete_retires_its_persisted_draft_session(
-    tmp_path: Path,
-) -> None:
+def test_workspace_delete_removes_controller_conversation(tmp_path: Path) -> None:
     service, session = _service(tmp_path)
+    service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="Tighten the opening.",
+        selected_text=None,
+    )
 
-    service.history("wxpost-test")
     result = service.delete_workspace(
         "wxpost-test",
         expected_manifest_version=4,
@@ -515,18 +393,11 @@ def test_workspace_delete_retires_its_persisted_draft_session(
 
     assert result == {"workspaceId": "wxpost-test", "deleted": True}
     assert session.controller.deleted_workspace_ids == ["wxpost-test"]
-    assert session.deleted_session_ids == ["stored-session"]
-    store = HermesDraftSessionStore(tmp_path)
-    assert store.get("wxpost-test") is None
-    assert store.pending_deletions() == []
+    assert HermesDraftStore(tmp_path).history("wxpost-test") == []
 
 
-def test_retire_session_physically_deletes_without_changing_workspace_pointer(
-    tmp_path: Path,
-) -> None:
+def test_retire_session_still_cleans_native_feishu_sessions(tmp_path: Path) -> None:
     service, session = _service(tmp_path)
-    store = HermesDraftSessionStore(tmp_path)
-    store.set_session("wxpost-test", "web-session")
 
     result = service.retire_session("feishu-old-session")
 
@@ -535,25 +406,36 @@ def test_retire_session_physically_deletes_without_changing_workspace_pointer(
         "cleanupScheduled": True,
     }
     assert session.deleted_session_ids == ["feishu-old-session"]
-    assert store.get("wxpost-test") == "web-session"
-    assert store.pending_deletions() == []
+    assert HermesDraftStore(tmp_path).pending_deletions() == []
 
 
-def test_workspace_delete_retires_a_legacy_title_only_session(
-    tmp_path: Path,
-) -> None:
+def test_failed_draft_turn_retires_its_isolated_session(tmp_path: Path) -> None:
     service, session = _service(tmp_path)
+    operation_id = "draft-55555555555555555555555555555555"
 
-    result = service.delete_workspace(
-        "wxpost-test",
-        expected_manifest_version=4,
+    def fail_turn(**_kwargs: Any) -> HermesTurn:
+        raise HermesUnavailable("Hermes web session is unavailable")
+
+    session.turn = fail_turn  # type: ignore[method-assign]
+
+    with pytest.raises(HermesUnavailable):
+        service.chat(
+            "wxpost-test",
+            expected_manifest_version=4,
+            expected_draft_version=2,
+            operation_id=operation_id,
+            message="Tighten the opening.",
+            selected_text=None,
+        )
+
+    assert session.deleted_session_ids == [
+        f"SoarHigh WxPost Draft · wxpost-test · {operation_id}"
+    ]
+    assert HermesDraftStore(tmp_path).pending_deletions() == []
+    assert (
+        HermesDraftStore(tmp_path).get_operation("wxpost-test", operation_id)["state"]
+        == "failed"
     )
-
-    assert result == {"workspaceId": "wxpost-test", "deleted": True}
-    assert session.deleted_session_ids == ["SoarHigh WxPost authoring v7 · wxpost-test"]
-    store = HermesDraftSessionStore(tmp_path)
-    assert store.get("wxpost-test") is None
-    assert store.pending_deletions() == []
 
 
 def test_draft_service_accepts_a_successful_save_despite_manifest_drift(
@@ -1046,33 +928,19 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
         .splitlines()[0]
     )
     operation = service.operation("wxpost-test", operation_id)
-    operation_steps = operation["result"].pop("steps")
     assert operation == {
         "workspaceId": "wxpost-test",
         "operationId": operation_id,
         "state": "completed",
         "result": {
-            "sessionId": "stored-session",
             "reply": "Saved.\n\nDraft version: v2 → v3",
             "draftChanged": True,
             "draftVersion": 3,
+            "steps": operation["result"]["steps"],
         },
         "error": None,
     }
-    restored = HermesDraftSessionStore(tmp_path).restore_completed_progress(
-        "stored-session",
-        [
-            {
-                "role": "assistant",
-                "text": "Saved.",
-                "turnId": session.prompts[-1]["prompt"]
-                .split("Draft operation ID: ", 1)[1]
-                .splitlines()[0],
-            }
-        ],
-    )
-    assert operation_steps == restored[0]["steps"]
-    assert restored[0]["steps"][-2:] == [
+    assert operation["result"]["steps"][-2:] == [
         {
             "activityId": "save-1",
             "label": "Updating the Draft title",
@@ -1214,19 +1082,8 @@ def test_failed_draft_save_does_not_report_verification_success(
     ]
     assert result["reply"] == "Unable to save."
     assert result["draftChanged"] is False
-    restored = HermesDraftSessionStore(tmp_path).restore_completed_progress(
-        "stored-session",
-        [
-            {
-                "role": "assistant",
-                "text": "Unable to save.",
-                "turnId": session.prompts[-1]["prompt"]
-                .split("Draft operation ID: ", 1)[1]
-                .splitlines()[0],
-            }
-        ],
-    )
-    assert restored[0]["steps"] == [
+    history = service.history("wxpost-test")["messages"]
+    assert history[-1]["steps"] == [
         {
             "activityId": "save-1",
             "label": "Saving Draft v3",
@@ -1411,38 +1268,6 @@ def test_session_client_deletes_the_resolved_stored_session_id() -> None:
     assert calls == [
         ("session.close", {"session_id": "live-session"}),
         ("session.delete", {"session_id": "stored-session"}),
-    ]
-
-
-def test_visible_history_accepts_serve_text_messages_and_hides_tools() -> None:
-    assert HermesSessionClient._visible_messages(
-        [
-            {
-                "role": "user",
-                "text": (
-                    "hidden prompt\nDraft operation ID: draft-visible\n"
-                    'MEMBER_REQUEST_JSON:"Tighten it."'
-                ),
-            },
-            {"role": "tool", "name": "wxpost_get_context"},
-            {"role": "assistant", "text": "Draft tightened."},
-        ]
-    ) == [
-        {"role": "user", "text": "Tighten it."},
-        {
-            "role": "assistant",
-            "text": "Draft tightened.",
-            "turnId": "draft-visible",
-            "steps": [
-                {
-                    "activityId": "history-1-0",
-                    "label": "Reading the saved Draft and media",
-                    "toolName": "wxpost_get_context",
-                    "completed": True,
-                    "failed": False,
-                }
-            ],
-        },
     ]
 
 

@@ -1,11 +1,11 @@
 # SoarHigh Toastmasters Club - Frontend Status
 
-**Last updated:** 2026-08-06
+**Last updated:** 2026-08-11
 
 **WxPost checkpoint:** `46d8d7e` is the committed Phase 2 baseline. The Phase 3
 implementation described below completes WeChat Draft delivery. Slice 6
-established one workspace-scoped Hermes session and formal
-Skill generate and revise canonical Drafts through typed proposal schema v2,
+established the formal Skill that generates and revises canonical Drafts
+through typed proposal schema v2,
 while one pure TypeScript compiler renders the same backend-normalized input in
 the browser and in an authenticated, stateless Next server route. Draft owns
 Edit and Preview, in-place visual editing, explicit Save Draft, member-owned
@@ -23,9 +23,10 @@ Slice 7A adds explicit saved-Draft-to-public synchronization, one stable public
 WxPost per workspace, revision/freshness status in Draft and Workspaces, and
 atomic Supabase/OSS publication. Slice 7B adds explicit Hermes descriptions for
 selected workspace images. Slice 7C completes the dedicated WxPost Assistant
-runtime, observable persisted sessions, and deterministic fine-grained Draft
-edits. Slice 7D completes conversational Feishu workspace/material authoring
-with Feishu-only navigation and separate sessions. Phase 3 now publishes only
+runtime, Controller-owned operation history, isolated Hermes turns, and
+deterministic fine-grained Draft edits. Slice 7D completes conversational
+Feishu workspace/material authoring with Feishu-only navigation and its own
+persistent Hermes sessions. Phase 3 now publishes only
 from an authenticated Public Revision to one confirmed, idempotent Official
 Account draft; Hermes is not involved in that projection.
 
@@ -169,7 +170,7 @@ All routes in the (auth) group are protected by authentication middleware which 
 - Linked workspace cards resolve compact meeting metadata in one batch and
   remain usable if meeting metadata is temporarily unavailable
 - Generate Draft and Regenerate submit only the saved Materials state to one
-  persisted, workspace-scoped Hermes web session
+  isolated, operation-specific Hermes web session
 - The formal `soarhigh-wxpost-authoring` Skill reads and saves through the
   existing MCP controller; generated documents are normalized by Backend
   validation before they become canonical
@@ -185,10 +186,9 @@ All routes in the (auth) group are protected by authentication middleware which 
 - A successful Draft Assistant revision prepares the returned document while
   the current article remains visible, then updates the rendered Draft and
   version together without replacing the workbench with its initial loader
-- Entering `/new` and confirming starts a separate Draft Assistant
-  conversation without changing Materials or the saved Draft. Refreshing
-  before its first message keeps the new conversation empty; the old persisted
-  Hermes session is retired through durable cleanup
+- Entering `/new` and confirming clears the Controller-owned Draft Assistant
+  conversation without changing Materials or the saved Draft. Refreshing keeps
+  the new conversation empty until its first completed message
 - Draft and Materials retain separate browser-local working copies while their
   tabs remain mounted; a structural Materials update does not discard an
   unsaved Draft edit
@@ -604,13 +604,12 @@ Implemented contract:
   expose normalized tool and fine-grained edit names, collapse above the final
   response, follow the conversation while the member remains at the bottom,
   and survive refresh
-- `/new` atomically switches the workspace to a fresh future Hermes session,
-  retires the previous session asynchronously, and remains empty across a
-  refresh before the first new message
-- Hermes conversation history stays in the managed profile's `state.db`.
-  Controller stores only workspace/session pointers, retryable deletion work,
-  and exact UI milestone metadata in transactional SQLite; legacy JSON is
-  imported once and removed
+- `/new` atomically clears the Controller-owned conversation and remains empty
+  across a refresh before the first new completed message
+- Controller SQLite stores exact completed member messages, attached article
+  text, assistant replies, Draft outcomes, and UI milestones. Each web request
+  runs in a fresh Hermes session, whose locator enters the retryable deletion
+  queue when the operation ends
 - a successful canonical Draft save is not reported as failed merely because
   auxiliary session or milestone metadata could not be persisted
 - Draft updates replace the changed Draft data without blanking the workbench,
@@ -656,18 +655,19 @@ Implemented contract:
 - Feishu media-library requests display the complete catalog with stable M
   identifiers and state labels. Images use native image messages; videos use
   native video delivery and fall back to file attachments when needed
-- Feishu and web keep different Hermes sessions even when they address the same
-  workspace. Platform-specific tools cannot leak into the web session. Feishu
-  can send canonical authenticated Materials or Draft Edit links, but the
-  handoff explicitly warns that the web Draft Assistant does not inherit the
-  Feishu conversation
+- Feishu keeps its own persistent Hermes session, while each web Draft request
+  uses an isolated Hermes session with Controller-supplied conversation context.
+  Platform-specific tools cannot leak into web operations. Feishu can send
+  canonical authenticated Materials or Draft Edit links, but the handoff
+  explicitly warns that the web Draft Assistant does not inherit the Feishu
+  conversation
 - the integration uses the public Hermes profile/plugin lifecycle only; it does
   not patch the private Feishu adapter or restore the abandoned card flow
 
 Deployment remains split by responsibility. Frontend and Backend may run on
-Vercel; Backend reaches the Controller/Hermes deployment on DigitalOcean over
-HTTPS with the existing service token. The new report path uses that same
-contract and does not require these services to be deployed together.
+Vercel; Backend reaches the Controller/Hermes deployment on RackNerd over HTTPS
+with the existing service token. The report path uses that same contract and
+does not require these services to be deployed together.
 
 Acceptance completed on 2026-08-04:
 
@@ -881,7 +881,7 @@ The meeting management workflow is now fully implemented:
      presets, up to three selections, and optional custom profiles with a
      user-editable Hermes-proposed instruction
    - Generates or regenerates a strict editorial Draft proposal through one
-     workspace-scoped `hermes serve` session and the formal WxPost Skill;
+     isolated `hermes serve` operation and the formal WxPost Skill;
      Controller derives manifest-owned source fields and AI caption provenance
      before backend validation
    - Keeps material IDs independent from article position, assigns canonical

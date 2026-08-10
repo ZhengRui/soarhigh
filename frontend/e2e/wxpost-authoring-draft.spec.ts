@@ -63,6 +63,54 @@ test('keeps loaded Draft media stable when the assistant saves a revision', asyn
   ).toBeVisible();
 });
 
+test('preserves the attached Draft selection in assistant history', async ({
+  page,
+}) => {
+  const workspace = await createAndGenerateDraft(page);
+  const selectedText = await page
+    .getByTestId('wxpost-article')
+    .evaluate((article) => {
+      const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+      let textNode = walker.nextNode();
+      while (textNode && !textNode.textContent?.trim()) {
+        textNode = walker.nextNode();
+      }
+      if (!textNode?.textContent)
+        throw new Error('Draft has no selectable text');
+      const start = textNode.textContent.search(/\S/);
+      const end = Math.min(textNode.textContent.length, start + 18);
+      const range = document.createRange();
+      range.setStart(textNode, start);
+      range.setEnd(textNode, end);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      article.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      return selection?.toString().trim() ?? '';
+    });
+  expect(selectedText).not.toBe('');
+  await expect(page.getByText('Selection attached')).toBeVisible();
+
+  workspace.answerNextDraftChat = true;
+  const chatInput = page.getByPlaceholder('Ask about or revise the Draft…');
+  await chatInput.fill('What should change here?');
+  await chatInput.press('Enter');
+
+  const history = page.getByTestId('draft-chat-history');
+  await expect(history).toContainText(selectedText);
+  await expect(history).toContainText('What should change here?');
+
+  await page.reload();
+  await expect(page.getByTestId('materials-stage')).toBeVisible();
+  await page.getByRole('button', { name: /^3 Draft$/ }).click();
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    selectedText
+  );
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'What should change here?'
+  );
+});
+
 test('waits for and reconciles a Draft saved after its event stream disconnects', async ({
   page,
 }) => {
@@ -74,7 +122,7 @@ test('waits for and reconciles a Draft saved after its event stream disconnects'
   await chatInput.press('Enter');
 
   await expect(
-    page.getByText('Finishing the Draft update in the background')
+    page.getByText('Reconnecting to the Draft operation')
   ).toBeVisible();
   await expect(page.getByText('Draft · v2')).toBeVisible();
   await expect(page.getByTestId('draft-chat-history')).toContainText(
@@ -157,7 +205,6 @@ test('shows only milestones delivered by the live Draft chat stream', async ({
                 'complete',
                 {
                   workspaceId: 'wxpost-stream-test',
-                  sessionId: 'session-stream-test',
                   reply: 'I found the current club news.',
                   context: {},
                   draftChanged: false,
@@ -171,7 +218,6 @@ test('shows only milestones delivered by the live Draft chat stream', async ({
                   'complete',
                   {
                     workspaceId: 'wxpost-stream-test',
-                    sessionId: 'session-stream-test',
                     reply: 'I am the SoarHigh Club AI Assistant.',
                     context: {},
                     draftChanged: false,
@@ -287,14 +333,12 @@ test('starts a confirmed new Draft Assistant conversation without changing the D
   await expect(page.getByTestId('draft-chat-history')).toContainText(
     'The saved Draft has four main sections.'
   );
-  const workspaceId = Array.from(workspace.contexts.keys())[0];
-  const oldSessionId = workspace.draftSessionIds.get(workspaceId);
   const draftVersion = context.draft?.draftVersion;
   const manifestVersion = context.manifest.manifestVersion;
 
   await chatInput.fill('/new');
   await chatInput.press('Enter');
-  const dialog = page.getByTestId('draft-session-reset-dialog');
+  const dialog = page.getByTestId('draft-conversation-reset-dialog');
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText(
     'Your workspace, Materials, and saved Draft will not change.'
@@ -311,7 +355,7 @@ test('starts a confirmed new Draft Assistant conversation without changing the D
   );
 
   await chatInput.press('Enter');
-  const confirmation = page.getByTestId('draft-session-reset-dialog');
+  const confirmation = page.getByTestId('draft-conversation-reset-dialog');
   const geometry = await confirmation.evaluate((overlay) => {
     const dialogElement = overlay.firstElementChild;
     if (!(dialogElement instanceof HTMLElement)) return null;
@@ -339,10 +383,9 @@ test('starts a confirmed new Draft Assistant conversation without changing the D
     'Ask about the article or request a Draft edit.'
   );
   await expect(chatInput).toHaveValue('');
-  expect(workspace.requests).toContain('DELETE /draft/session');
+  expect(workspace.requests).toContain('DELETE /draft/conversation');
   expect(context.draft?.draftVersion).toBe(draftVersion);
   expect(context.manifest.manifestVersion).toBe(manifestVersion);
-  expect(workspace.draftSessionIds.get(workspaceId)).toBeNull();
 
   await page.reload();
   await expect(page.getByTestId('materials-stage')).toBeVisible();
@@ -363,9 +406,6 @@ test('starts a confirmed new Draft Assistant conversation without changing the D
   await expect(page.getByTestId('draft-chat-history')).toContainText(
     'The saved Draft has four main sections.'
   );
-  const newSessionId = workspace.draftSessionIds.get(workspaceId);
-  expect(newSessionId).not.toBeNull();
-  expect(newSessionId).not.toBe(oldSessionId);
 
   await page.reload();
   await expect(page.getByTestId('materials-stage')).toBeVisible();
@@ -390,7 +430,7 @@ test('keeps the new-conversation confirmation usable on a narrow mobile viewport
   await chatInput.fill('/new');
   await chatInput.press('Enter');
 
-  const overlay = page.getByTestId('draft-session-reset-dialog');
+  const overlay = page.getByTestId('draft-conversation-reset-dialog');
   await expect(overlay).toBeInViewport();
   await expect(overlay.getByRole('button', { name: 'Cancel' })).toBeVisible();
   await expect(
@@ -576,11 +616,11 @@ test('preserves the saved Draft across generation, chat, and conflict failures',
   await expect(page.getByTestId('materials-stage')).toBeVisible();
   expect(context.draft).toBeNull();
 
-  workspace.draftSessionUnavailable = true;
+  workspace.draftStoreUnavailable = true;
   await page.getByTestId('generate-draft').click();
   await expect(page.getByText('Draft · v1')).toBeVisible();
   await expect(page.getByText('Unavailable', { exact: true })).toBeVisible();
-  workspace.draftSessionUnavailable = false;
+  workspace.draftStoreUnavailable = false;
   const generatedTitle = context.draft!.document.title;
 
   workspace.failNextDraftGeneration = true;
@@ -620,7 +660,7 @@ test('preserves the saved Draft across generation, chat, and conflict failures',
   await expect(
     page.getByTestId('draft-workbench').getByRole('alert')
   ).toBeVisible();
-  await expect(page.getByText('Online', { exact: true })).toBeVisible();
+  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
   await expect(page.getByTestId('draft-workbench')).toContainText(
     'Hermes could not revise the draft'
   );
@@ -649,7 +689,7 @@ test('preserves the saved Draft across generation, chat, and conflict failures',
   ).toHaveCount(0);
   await expect(page.getByText('Draft · v2')).toBeVisible();
   workspace.draftChatDelayMs = 0;
-  await expect(page.getByText('Online', { exact: true })).toBeVisible();
+  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
   await expect(page.getByTestId('draft-chat-history')).toContainText(
     'Make the opening warmer.'
   );

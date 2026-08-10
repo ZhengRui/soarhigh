@@ -18,9 +18,12 @@ import {
   X,
 } from 'lucide-react';
 
-import type { WorkspaceDraftSession } from '@/utils/wxpostWorkspace';
+import type { WorkspaceDraftConversation } from '@/utils/wxpostWorkspace';
 
-import type { DraftProgressActivity } from './useWxPostDraftAssistant';
+import type {
+  DraftAssistantStatus,
+  DraftProgressActivity,
+} from './useWxPostDraftAssistant';
 
 function ActivityDetails({ step }: { step: DraftProgressActivity }) {
   if (!step.toolName && !step.operationNames?.length) return null;
@@ -88,8 +91,8 @@ function CompletedProgressDisclosure({
 
 export function WxPostHermesPanel({
   mobile,
-  session,
-  sessionStatus,
+  conversation,
+  assistantStatus,
   chatPending,
   progress,
   selectedText,
@@ -102,8 +105,8 @@ export function WxPostHermesPanel({
   onNewConversationRequest,
 }: {
   mobile: boolean;
-  session: WorkspaceDraftSession | null;
-  sessionStatus: 'connecting' | 'online' | 'unavailable';
+  conversation: WorkspaceDraftConversation | null;
+  assistantStatus: DraftAssistantStatus;
   chatPending: boolean;
   progress: DraftProgressActivity[];
   selectedText: string | null;
@@ -122,7 +125,7 @@ export function WxPostHermesPanel({
     scrollHeight: number;
   } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const messages = session?.messages ?? [];
+  const messages = conversation?.messages ?? [];
   const progressState = progress
     .map(
       ({ activityId, label, toolName, operationNames, completed, failed }) =>
@@ -217,15 +220,15 @@ export function WxPostHermesPanel({
         <div className='flex items-center gap-2'>
           <span
             className={`rounded-full px-2 py-1 text-[10px] font-semibold ${
-              sessionStatus === 'online'
+              assistantStatus === 'ready'
                 ? 'bg-emerald-50 text-emerald-700'
                 : 'bg-slate-100 text-slate-600'
             }`}
           >
-            {sessionStatus === 'connecting'
+            {assistantStatus === 'connecting'
               ? 'Connecting…'
-              : sessionStatus === 'online'
-                ? 'Online'
+              : assistantStatus === 'ready'
+                ? 'Ready'
                 : 'Unavailable'}
           </span>
           {mobile && (
@@ -272,7 +275,12 @@ export function WxPostHermesPanel({
                       : 'rounded-bl-md border border-slate-200 bg-white text-slate-700'
                   }`}
                 >
-                  {item.text}
+                  {item.role === 'user' && item.selectedText && (
+                    <span className='mb-1 block border-l-2 border-blue-200 pl-2 text-xs text-blue-100'>
+                      “{item.selectedText}”
+                    </span>
+                  )}
+                  <span>{item.text}</span>
                 </p>
                 {isPendingMessage && (
                   <div

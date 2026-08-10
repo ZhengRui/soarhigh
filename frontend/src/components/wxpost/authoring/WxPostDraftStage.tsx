@@ -718,8 +718,8 @@ export function WxPostDraftStage({
           mode={mode}
           portalReady={portalReady}
           mobileOpen={mobileHermesOpen}
-          session={assistant.session}
-          sessionStatus={assistant.status}
+          conversation={assistant.conversation}
+          assistantStatus={assistant.status}
           chatPending={assistant.pending}
           resetPending={assistant.resetPending}
           progress={assistant.progress}

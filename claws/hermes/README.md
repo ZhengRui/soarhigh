@@ -3,7 +3,7 @@
 This directory runs the Hermes Gateway, WxPost HTTP controller, and fixed-egress
 WeChat API gateway as three isolated services in one Compose project. The
 Hermes Gateway exposes its authenticated Agent API for focused editorial
-suggestions and `hermes serve` for persisted workspace-scoped Draft sessions.
+suggestions and `hermes serve` for isolated Draft operations.
 The WeChat gateway has no Hermes, workspace, or database access. Hermes state
 and article working files remain in two separate host directories:
 
@@ -421,15 +421,17 @@ operation ID, so a concurrent direct save cannot be adopted as Hermes output.
 Turns are serialized per workspace; unrelated workspaces do not wait behind
 one another.
 
-Draft Assistant chat uses the same session but does not force every message
-through a save. A general question may be answered without reading the
+Each Draft Assistant chat request uses a fresh isolated Hermes session. The
+Controller supplies only the newest whole completed conversation turns that fit
+the explicit context budget, and records the new result independently of the
+Hermes runtime. A general question may be answered without reading the
 workspace; a question about the article reads `wxpost_get_context` and answers
 without saving. A small editorial request uses `wxpost_edit_draft` with typed,
 version-bound node, directive, media, description, or cover edits; a genuine
 whole-article restructure or rewrite still uses `wxpost_save_draft`. The
 controller reports whether the Draft changed and accepts only an unchanged
-version or one operation-ID-matched increment. A chat failure does not make the
-Hermes connection unavailable.
+version or one operation-ID-matched increment. A failed turn does not by itself
+make the Draft Assistant unavailable.
 
 `wxpost_get_context` exposes a Draft-only `editContext.body` to Hermes. Its
 ordered node indexes belong to the returned Draft version and are never stored
@@ -694,8 +696,8 @@ POST   /workspaces
 PATCH  /workspaces/{workspaceId}
 DELETE /workspaces/{workspaceId}
 GET    /workspaces/{workspaceId}/context
-GET    /workspaces/{workspaceId}/draft/session
-DELETE /workspaces/{workspaceId}/draft/session
+GET    /workspaces/{workspaceId}/draft/conversation
+DELETE /workspaces/{workspaceId}/draft/conversation
 POST   /workspaces/{workspaceId}/draft/save
 POST   /workspaces/{workspaceId}/draft/generate
 POST   /workspaces/{workspaceId}/draft/chat
@@ -723,29 +725,34 @@ preflight. A member must remove the media block in Draft Edit, save the new
 Draft version, and then delete the Materials file.
 
 The HTTP controller is connected to the authoring page's Materials and Draft
-stages. Draft contains both Edit and Preview modes; Generate and Chat resume a
-workspace-scoped `hermes serve` session. Generate requires one version-checked
-MCP save, while Chat may answer without saving or perform one verified focused
-revision. The deterministic workspace core remains the only writer.
+stages. Draft contains both Edit and Preview modes. Every Generate or Chat
+request creates one operation-specific `hermes serve` session and retires it
+after the result, so tool output and compaction state never accumulate across
+member turns. Generate requires one version-checked MCP save, while Chat may
+answer without saving or perform one verified focused revision. The
+deterministic workspace core remains the only writer.
 
-Entering `/new` in Draft Assistant and confirming atomically points the
-workspace at a fresh conversation before retiring the previous persisted
-Hermes session. The new session is created by Hermes only when its first
-message is sent; refreshing before that message keeps the new conversation
-empty. Draft, Materials, and workspace files are unaffected. Session pointers
-also record the Draft protocol version so a future protocol bump retires an
-incompatible conversation instead of resuming it by stored ID.
+The Controller owns Draft Assistant conversation history in
+`/workspace/.wxpost-controller/controller.sqlite3`. Each operation records the
+member message, terminal result, and exact completed steps. The browser can
+therefore recover an interrupted event stream by operation ID without reading
+Hermes history or guessing from Draft versions. Entering `/new` clears these
+operation records without changing Draft, Materials, or workspace files.
 
-Hermes and the Controller own separate persistent databases. Hermes keeps the
-conversation itself in the dedicated profile's `state.db`. The Controller
-keeps only workspace-to-session pointers, retryable session deletions, and the
-web UI's exact completed-step metadata in
-`/workspace/.wxpost-controller/controller.sqlite3`. Completed steps are keyed
-by the existing turn-specific Draft operation ID, not matched by reply text.
-The Controller database uses WAL transactions and never copies chat messages
-or Draft content. On first startup after this change it transactionally imports
-the former `draft-sessions.json`, reconciles its legacy completed steps when
-that Hermes history is next opened, then removes the JSON file.
+Each isolated Chat operation receives the newest whole completed turns that
+fit a 48 KB Controller context budget. That structured context contains member
+messages, any article text attached to those requests, assistant replies,
+verified Draft version outcomes, and sanitized product actions, but never
+Hermes tool output or session internals. It exists only to resolve
+conversational references; current Draft and Materials claims must still come
+from the current-workspace tools. Generate and Regenerate do not consume
+conversation context.
+
+Hermes sessions remain implementation details. Their locators enter a durable
+cleanup queue as soon as each operation ends; failed deletions are retried by a
+later Controller request. Upgrading from the former session schema queues all
+workspace-scoped sessions for deletion and intentionally discards their old
+Hermes-owned chat history.
 
 The remaining implementation order preserves the existing plan. Phase 2 Slice
 7A public synchronization is complete: Backend projects one saved Draft into
@@ -761,7 +768,7 @@ exposes derived publication status to Draft and Workspaces.
 2. **Phase 2, Slice 7C - Draft Assistant and Controller hardening (complete):**
    use the managed fast WxPost profile, route general/read-only/editorial turns
    deliberately, expose and persist genuine tool milestones, support atomic
-   `/new`, keep session metadata in Controller SQLite, and apply small Draft
+   `/new`, keep operation history in Controller SQLite, and apply small Draft
    changes through typed version-bound operations without conflating Materials
    inclusion, Draft body media, or cover state.
 3. **Phase 2, Slice 7D - conversational Feishu integration (complete):** keep

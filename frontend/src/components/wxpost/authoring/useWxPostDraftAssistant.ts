@@ -4,18 +4,27 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import {
+  draftAssistantErrorStatus,
   getWorkspaceContext,
   getWorkspaceDraftOperation,
-  getWorkspaceDraftSession,
+  getWorkspaceDraftConversation,
   chatWithWorkspaceDraft,
-  resetWorkspaceDraftSession,
+  resetWorkspaceDraftConversation,
   WorkspaceApiError,
   type WorkspaceContext,
   type WorkspaceDraftProgressActivity,
-  type WorkspaceDraftSession,
+  type WorkspaceDraftConversation,
 } from '@/utils/wxpostWorkspace';
 
 export type DraftProgressActivity = WorkspaceDraftProgressActivity;
+export type DraftAssistantStatus = 'connecting' | 'ready' | 'unavailable';
+
+function isAssistantUnavailable(error: unknown) {
+  return (
+    error instanceof WorkspaceApiError &&
+    draftAssistantErrorStatus(error.code) === 503
+  );
+}
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -31,7 +40,6 @@ function isRecoverableStreamFailure(error: unknown) {
   );
 }
 
-const DRAFT_RECOVERY_TIMEOUT_MS = 330_000;
 const DRAFT_RECOVERY_POLL_MS = 1_000;
 
 function waitForRecoveryPoll(signal: AbortSignal) {
@@ -57,13 +65,12 @@ async function waitForDraftOperation(
   operationId: string,
   signal: AbortSignal
 ) {
-  const deadline = Date.now() + DRAFT_RECOVERY_TIMEOUT_MS;
   let operation = await getWorkspaceDraftOperation(
     workspaceId,
     operationId,
     signal
   );
-  while (operation.state === 'running' && Date.now() < deadline) {
+  while (operation.state === 'running') {
     await waitForRecoveryPoll(signal);
     operation = await getWorkspaceDraftOperation(
       workspaceId,
@@ -71,19 +78,13 @@ async function waitForDraftOperation(
       signal
     );
   }
-  if (operation.state === 'running') {
-    throw new WorkspaceApiError(
-      504,
-      'The Draft Assistant is still working. Please try again shortly.',
-      'operation_timeout'
-    );
-  }
   if (operation.state === 'failed') {
+    const errorCode = operation.error?.code ?? 'operation_failed';
     throw new WorkspaceApiError(
-      operation.error?.code === 'version_conflict' ? 409 : 502,
+      draftAssistantErrorStatus(errorCode),
       operation.error?.message ??
         'The Draft Assistant could not complete the request.',
-      operation.error?.code ?? 'operation_failed',
+      errorCode,
       operation.error?.versionKind ?? null
     );
   }
@@ -118,10 +119,9 @@ export function useWxPostDraftAssistant({
   onConflict: () => void;
   onError: (message: string | null) => void;
 }) {
-  const [session, setSession] = useState<WorkspaceDraftSession | null>(null);
-  const [status, setStatus] = useState<'connecting' | 'online' | 'unavailable'>(
-    'connecting'
-  );
+  const [conversation, setConversation] =
+    useState<WorkspaceDraftConversation | null>(null);
+  const [status, setStatus] = useState<DraftAssistantStatus>('connecting');
   const [message, setMessage] = useState('');
   const [pending, setPending] = useState(false);
   const [resetPending, setResetPending] = useState(false);
@@ -138,17 +138,17 @@ export function useWxPostDraftAssistant({
   );
 
   useEffect(() => {
-    if (!active || session) return;
+    if (!active || conversation) return;
     const requestId = ++historyRequestIdRef.current;
-    void getWorkspaceDraftSession(workspaceId)
+    void getWorkspaceDraftConversation(workspaceId)
       .then((history) => {
         if (historyRequestIdRef.current !== requestId) return;
-        setSession(history);
-        setStatus('online');
+        setConversation(history);
+        setStatus('ready');
       })
       .catch(() => {
         if (historyRequestIdRef.current !== requestId) return;
-        setSession({ workspaceId, sessionId: null, messages: [] });
+        setConversation({ workspaceId, messages: [] });
         setStatus('unavailable');
       });
     return () => {
@@ -156,7 +156,7 @@ export function useWxPostDraftAssistant({
         historyRequestIdRef.current += 1;
       }
     };
-  }, [active, session, workspaceId]);
+  }, [active, conversation, workspaceId]);
 
   const send = useCallback(async () => {
     const request = message.trim();
@@ -168,10 +168,16 @@ export function useWxPostDraftAssistant({
     setProgress([]);
     progressRef.current = [];
     onError(null);
-    setSession((current) => ({
+    setConversation((current) => ({
       workspaceId,
-      sessionId: current?.sessionId ?? null,
-      messages: [...(current?.messages ?? []), { role: 'user', text: request }],
+      messages: [
+        ...(current?.messages ?? []),
+        {
+          role: 'user',
+          text: request,
+          ...(selectedText ? { selectedText } : {}),
+        },
+      ],
     }));
     setMessage('');
     try {
@@ -227,7 +233,7 @@ export function useWxPostDraftAssistant({
           },
         }
       );
-      setStatus('online');
+      setStatus('ready');
       if (result.draftChanged) {
         try {
           await onDraftChanged(result.context);
@@ -243,9 +249,8 @@ export function useWxPostDraftAssistant({
       const finishedSteps = progressRef.current.filter(
         (step) => step.completed || step.failed
       );
-      setSession((current) => ({
+      setConversation((current) => ({
         workspaceId,
-        sessionId: result.sessionId,
         messages: [
           ...(current?.messages ?? []),
           {
@@ -265,7 +270,7 @@ export function useWxPostDraftAssistant({
           // disconnected turn is still running.
           const recoveryActivity: DraftProgressActivity = {
             activityId: 'recover-disconnected-turn',
-            label: 'Finishing the Draft update in the background',
+            label: 'Reconnecting to the Draft operation',
             completed: false,
             failed: false,
           };
@@ -294,10 +299,9 @@ export function useWxPostDraftAssistant({
               'draft'
             );
           }
-          setStatus('online');
-          setSession((current) => ({
+          setStatus('ready');
+          setConversation((current) => ({
             workspaceId,
-            sessionId: recovered.sessionId,
             messages: [
               ...(current?.messages ?? []),
               {
@@ -333,7 +337,7 @@ export function useWxPostDraftAssistant({
         }
       }
       setMessage(request);
-      setSession((current) =>
+      setConversation((current) =>
         current
           ? { ...current, messages: current.messages.slice(0, -1) }
           : current
@@ -346,10 +350,7 @@ export function useWxPostDraftAssistant({
         onConflict();
         return;
       }
-      if (
-        failureCause instanceof WorkspaceApiError &&
-        failureCause.code === 'hermes_unavailable'
-      ) {
+      if (isAssistantUnavailable(failureCause)) {
         setStatus('unavailable');
       }
       const failure = errorMessage(
@@ -384,12 +385,13 @@ export function useWxPostDraftAssistant({
     setResetPending(true);
     onError(null);
     try {
-      const nextSession = await resetWorkspaceDraftSession(workspaceId);
-      setSession(nextSession);
+      const nextConversation =
+        await resetWorkspaceDraftConversation(workspaceId);
+      setConversation(nextConversation);
       setMessage('');
       setProgress([]);
       progressRef.current = [];
-      setStatus('online');
+      setStatus('ready');
       toast.success('Started a new Draft Assistant conversation.');
       return true;
     } catch (caught) {
@@ -406,7 +408,7 @@ export function useWxPostDraftAssistant({
   }, [onError, pending, resetPending, workspaceId]);
 
   return {
-    session,
+    conversation,
     status,
     message,
     pending,

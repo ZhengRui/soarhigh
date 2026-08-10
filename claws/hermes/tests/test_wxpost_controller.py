@@ -39,6 +39,7 @@ from wxpost_controller.core import (  # noqa: E402
     VersionConflict,
     WorkspaceController,
 )
+from wxpost_controller.errors import DraftStoreUnavailable  # noqa: E402
 from wxpost_controller.http_server import build_server  # noqa: E402
 
 from app.models.wxpost import (  # noqa: E402
@@ -470,7 +471,6 @@ def test_http_draft_chat_streams_progress_before_the_complete_result(
             )
             return {
                 "workspaceId": workspace_id,
-                "sessionId": "session-stream",
                 "reply": "Saved.",
                 "context": {"workspaceId": workspace_id},
                 "draftChanged": True,
@@ -535,7 +535,6 @@ def test_http_draft_chat_sends_heartbeats_while_hermes_is_quiet(
                 assert release_operation.wait(timeout=5)
                 return {
                     "workspaceId": workspace_id,
-                    "sessionId": "session-heartbeat",
                     "reply": "Saved.",
                     "context": {"workspaceId": workspace_id},
                     "draftChanged": True,
@@ -722,7 +721,7 @@ def test_http_voice_tone_suggestion_uses_tool_free_hermes_oneshot(
         thread.join(timeout=5)
 
 
-def test_http_draft_session_delete_resets_only_the_assistant_history(
+def test_http_draft_conversation_delete_resets_only_the_assistant_history(
     tmp_path: Path,
 ) -> None:
     class DraftService:
@@ -733,7 +732,6 @@ def test_http_draft_session_delete_resets_only_the_assistant_history(
             self.workspace_ids.append(workspace_id)
             return {
                 "workspaceId": workspace_id,
-                "sessionId": None,
                 "messages": [],
             }
 
@@ -747,7 +745,7 @@ def test_http_draft_session_delete_resets_only_the_assistant_history(
     server.draft_service = draft_service  # type: ignore[assignment]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    url = f"http://127.0.0.1:{server.server_port}/workspaces/wxpost-reset/draft/session"
+    url = f"http://127.0.0.1:{server.server_port}/workspaces/wxpost-reset/draft/conversation"
     try:
         unauthorized, _ = _json_request(url, method="DELETE", token="wrong")
         status, result = _json_request(url, method="DELETE")
@@ -756,10 +754,44 @@ def test_http_draft_session_delete_resets_only_the_assistant_history(
         assert status == HTTPStatus.OK
         assert result == {
             "workspaceId": "wxpost-reset",
-            "sessionId": None,
             "messages": [],
         }
         assert draft_service.workspace_ids == ["wxpost-reset"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_draft_conversation_reports_controller_store_unavailable(
+    tmp_path: Path,
+) -> None:
+    class DraftService:
+        @staticmethod
+        def history(_workspace_id: str) -> dict[str, Any]:
+            raise DraftStoreUnavailable("Draft Controller state is unavailable")
+
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.draft_service = DraftService()  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = (
+        f"http://127.0.0.1:{server.server_port}/workspaces/"
+        "wxpost-store-error/draft/conversation"
+    )
+    try:
+        status, result = _json_request(url)
+
+        assert status == HTTPStatus.SERVICE_UNAVAILABLE
+        assert result["error"] == {
+            "code": "draft_store_unavailable",
+            "message": "Draft Controller state is unavailable",
+        }
     finally:
         server.shutdown()
         server.server_close()

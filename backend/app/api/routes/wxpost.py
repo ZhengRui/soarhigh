@@ -86,8 +86,8 @@ workspace_source_route = re.compile(
     r"^sources/M(?:0[1-9]|[1-9][0-9]+)" r"(?:/(?:import|inclusion|content|delete-preflight|description-suggestion))?$"
 )
 workspace_draft_routes = {
-    ("GET", "draft/session"),
-    ("DELETE", "draft/session"),
+    ("GET", "draft/conversation"),
+    ("DELETE", "draft/conversation"),
     ("POST", "draft/save"),
     ("POST", "draft/generate"),
     ("POST", "draft/chat"),
@@ -557,7 +557,7 @@ async def _proxy_workspace_request(
         expected_manifest_version=request.headers.get("X-Expected-Manifest-Version"),
         timeout=(
             330
-            if controller_path in {"draft/generate", "draft/chat", "draft/session"}
+            if controller_path in {"draft/generate", "draft/chat"}
             or controller_path.endswith("/description-suggestion")
             else 30
         ),

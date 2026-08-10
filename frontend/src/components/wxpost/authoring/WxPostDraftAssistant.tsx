@@ -4,11 +4,14 @@ import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
-import type { WorkspaceDraftSession } from '@/utils/wxpostWorkspace';
+import type { WorkspaceDraftConversation } from '@/utils/wxpostWorkspace';
 
 import type { DraftMode } from './WxPostDraftControls';
 import { WxPostHermesPanel } from './WxPostHermesPanel';
-import type { DraftProgressActivity } from './useWxPostDraftAssistant';
+import type {
+  DraftAssistantStatus,
+  DraftProgressActivity,
+} from './useWxPostDraftAssistant';
 import { WorkspaceConflictDialog } from './WorkspaceConflictDialog';
 
 type AssistantProps = {
@@ -16,8 +19,8 @@ type AssistantProps = {
   mode: DraftMode;
   portalReady: boolean;
   mobileOpen: boolean;
-  session: WorkspaceDraftSession | null;
-  sessionStatus: 'connecting' | 'online' | 'unavailable';
+  conversation: WorkspaceDraftConversation | null;
+  assistantStatus: DraftAssistantStatus;
   chatPending: boolean;
   resetPending: boolean;
   progress: DraftProgressActivity[];
@@ -35,8 +38,8 @@ export function WxPostDraftAssistant(props: AssistantProps) {
   const [resetConfirming, setResetConfirming] = useState(false);
   if (props.mode !== 'edit') return null;
   const panelProps = {
-    session: props.session,
-    sessionStatus: props.sessionStatus,
+    conversation: props.conversation,
+    assistantStatus: props.assistantStatus,
     chatPending: props.chatPending,
     progress: props.progress,
     selectedText: props.selectedText,
@@ -115,7 +118,7 @@ export function WxPostDraftAssistant(props: AssistantProps) {
           title='Start a new conversation?'
           error={null}
           pending={props.resetPending}
-          testId='draft-session-reset-dialog'
+          testId='draft-conversation-reset-dialog'
           keepLabel='Cancel'
           loadLabel='Start new conversation'
           pendingLabel='Starting…'

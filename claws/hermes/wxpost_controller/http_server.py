@@ -26,7 +26,12 @@ from .core import (
     WorkspaceNotFound,
     error_response,
 )
-from .errors import DraftOperationNotFound, HermesTurnFailed, HermesUnavailable
+from .errors import (
+    DraftOperationNotFound,
+    DraftStoreUnavailable,
+    HermesTurnFailed,
+    HermesUnavailable,
+)
 from .hermes_editorial import (
     HermesEditorialClient,
     MainRuntimeResolver,
@@ -53,10 +58,8 @@ SOURCE_DESCRIPTION_PATH = re.compile(
 )
 SOURCE_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)$")
 UPLOADS_PATH = re.compile(r"^/workspaces/([^/]+)/uploads$")
-DRAFT_SESSION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/session$")
-DRAFT_OPERATION_PATH = re.compile(
-    r"^/workspaces/([^/]+)/draft/operations/([^/]+)$"
-)
+DRAFT_CONVERSATION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/conversation$")
+DRAFT_OPERATION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/operations/([^/]+)$")
 DRAFT_SAVE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/save$")
 DRAFT_GENERATE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/generate$")
 DRAFT_CHAT_PATH = re.compile(r"^/workspaces/([^/]+)/draft/chat$")
@@ -119,10 +122,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 lambda: self.server.controller.get_context(context_match.group(1))
             )
             return
-        draft_session_match = DRAFT_SESSION_PATH.fullmatch(path)
-        if draft_session_match is not None:
+        draft_conversation_match = DRAFT_CONVERSATION_PATH.fullmatch(path)
+        if draft_conversation_match is not None:
             self._run_controller(
-                lambda: self.server.draft_service.history(draft_session_match.group(1))
+                lambda: self.server.draft_service.history(
+                    draft_conversation_match.group(1)
+                )
             )
             return
         draft_operation_match = DRAFT_OPERATION_PATH.fullmatch(path)
@@ -543,10 +548,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         path = urlsplit(self.path).path
-        draft_session_match = DRAFT_SESSION_PATH.fullmatch(path)
-        if draft_session_match is not None:
+        draft_conversation_match = DRAFT_CONVERSATION_PATH.fullmatch(path)
+        if draft_conversation_match is not None:
             self._run_controller(
-                lambda: self.server.draft_service.reset(draft_session_match.group(1))
+                lambda: self.server.draft_service.reset(
+                    draft_conversation_match.group(1)
+                )
             )
             return
         workspace_match = WORKSPACE_PATH.fullmatch(path)
@@ -694,6 +701,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 (
                     ValidationUnavailable,
                     UpstreamUnavailable,
+                    DraftStoreUnavailable,
                     HermesUnavailable,
                 ),
             ):

@@ -131,10 +131,10 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
   workspace
 - **/posts/wxposts/workspaces/{id}/...** - Authenticated proxy for the
   controller's context, material, import, upload, content, delete, Draft
-  session, Draft save, Draft generation, and Draft chat operations
+  conversation, Draft save, Draft generation, and Draft chat operations
 
 Frontend and Backend may remain on Vercel while Controller and Hermes run on a
-DigitalOcean VPS. Backend proxies canonical workspace operations over HTTPS
+RackNerd VPS. Backend proxies canonical workspace operations over HTTPS
 using `WXPOST_SERVICE_TOKEN`; no feature requires the processes to share a
 host. Their checked API contracts must remain compatible.
 
@@ -352,7 +352,7 @@ Model for blog posts:
     operations through the containerized controller
   - Bounded compact meeting metadata for selectors and workspace cards
   - Controller-side ArticleDocument validation and Draft persistence with
-    workspace-scoped Hermes Generate, Regenerate, and focused revision
+    isolated Hermes Generate, Regenerate, and focused-revision operations
   - Strict typed Draft proposal schema v2 with controller-owned directive
     serialization, one bounded formal pre-save correction, and no YAML repair
     or runtime/version retry heuristic
