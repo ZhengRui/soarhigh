@@ -201,9 +201,9 @@ Production rollout order:
    `docker compose --env-file claws/hermes/.env.local -f claws/hermes/compose.yaml up -d --build wechat-gateway`.
 3. Configure the host's existing HTTPS reverse proxy and verify `/healthz`.
 4. Add the VPS public egress IPv4 to the Official Account API IP allowlist.
-5. Set Vercel Backend `WECHAT_GATEWAY_BASE_URL`,
-   `WECHAT_GATEWAY_SERVICE_TOKEN`, and the non-secret
-   `WECHAT_OFFICIAL_ACCOUNT_NAME`; deploy Backend and verify an authenticated
+5. Set Vercel Backend `WECHAT_GATEWAY_BASE_URL` and
+   `WECHAT_GATEWAY_SERVICE_TOKEN`; optionally override the non-secret
+   `WECHAT_ARTICLE_AUTHOR` (defaults to `Soarhigh TMC`), deploy Backend, and verify an authenticated
    `GET /v1/drafts?limit=1` through the public HTTPS URL.
 6. Create or update one existing diagnostic WeChat draft and confirm that its
    media ID is reused, `draft/get` succeeds, and the official temporary preview

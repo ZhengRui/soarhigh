@@ -168,12 +168,121 @@ def get_ready_wxpost_assets(wxpost_id: UUID) -> list[dict]:
 
     response = (
         supabase.table("wxpost_assets")
-        .select("object_key,content_sha256,size_bytes,kind")
+        .select("id,object_key,original_filename,mime_type,content_sha256,size_bytes,kind,source_metadata")
         .eq("wxpost_id", str(wxpost_id))
         .eq("status", "ready")
         .execute()
     )
+    assets = response.data or []
+    variants = get_wxpost_asset_variants(
+        [asset["id"] for asset in assets],
+        statuses=["ready"],
+    )
+    by_asset: dict[str, list[dict]] = {}
+    for variant in variants:
+        by_asset.setdefault(variant["asset_id"], []).append(variant)
+    for asset in assets:
+        asset["variants"] = by_asset.get(asset["id"], [])
+    return assets
+
+
+def get_wxpost_asset_variants(
+    asset_ids: list[str],
+    *,
+    statuses: list[str] | None = None,
+) -> list[dict]:
+    if not asset_ids:
+        return []
+    query = supabase.table("wxpost_asset_variants").select("*").in_("asset_id", asset_ids)
+    if statuses is not None:
+        query = query.in_("status", statuses)
+    response = query.execute()
     return response.data or []
+
+
+def get_wxpost_asset_variant(asset_id: UUID, *, profile: str) -> dict | None:
+    response = (
+        supabase.table("wxpost_asset_variants")
+        .select("*")
+        .eq("asset_id", str(asset_id))
+        .eq("profile", profile)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def create_pending_wxpost_asset_variant(values: dict) -> dict:
+    try:
+        response = supabase.table("wxpost_asset_variants").insert(values).execute()
+    except APIError as error:
+        if not _is_unique_violation(error):
+            raise
+        current = get_wxpost_asset_variant(UUID(values["asset_id"]), profile=values["profile"])
+        if current is None:
+            raise
+        immutable_fields = ("object_key", "mime_type", "size_bytes", "content_sha256")
+        if any(current.get(field) != values.get(field) for field in immutable_fields):
+            raise WxPostAssetConflictError from error
+        return current
+    if not response.data:
+        raise RuntimeError("Supabase did not return the pending WXPost asset variant.")
+    return response.data[0]
+
+
+def mark_wxpost_asset_variant_ready(variant_id: UUID, *, etag: str) -> dict:
+    response = (
+        supabase.table("wxpost_asset_variants")
+        .update(
+            {
+                "status": "ready",
+                "etag": etag,
+                "ready_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        .eq("id", str(variant_id))
+        .eq("status", "pending")
+        .execute()
+    )
+    if response.data:
+        return response.data[0]
+    current = supabase.table("wxpost_asset_variants").select("*").eq("id", str(variant_id)).execute()
+    if current.data and current.data[0].get("status") == "ready":
+        return current.data[0]
+    raise RuntimeError("WXPost asset variant could not be marked ready.")
+
+
+def mark_wxpost_asset_variant_failed(variant_id: UUID) -> None:
+    (
+        supabase.table("wxpost_asset_variants")
+        .update({"status": "failed", "updated_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", str(variant_id))
+        .eq("status", "pending")
+        .execute()
+    )
+
+
+def retry_failed_wxpost_asset_variant(variant_id: UUID) -> dict:
+    response = (
+        supabase.table("wxpost_asset_variants")
+        .update(
+            {
+                "status": "pending",
+                "etag": None,
+                "ready_at": None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        .eq("id", str(variant_id))
+        .eq("status", "failed")
+        .execute()
+    )
+    if response.data:
+        return response.data[0]
+    current = supabase.table("wxpost_asset_variants").select("*").eq("id", str(variant_id)).execute()
+    if current.data and current.data[0].get("status") in {"pending", "ready"}:
+        return current.data[0]
+    raise RuntimeError("Failed WXPost asset variant could not be retried.")
 
 
 def create_pending_wxpost_asset(values: dict) -> dict:

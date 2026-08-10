@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+from io import BytesIO
 from typing import Any
 from uuid import UUID, uuid4
 
 import oss2  # type: ignore
 import pytest
+from PIL import Image
 
 from app.config import (
     ALICLOUD_ACCESS_KEY_ID,
@@ -50,7 +52,7 @@ def _document(title: str, media: list[dict[str, Any]]) -> dict[str, Any]:
             "appearance": "light",
             "typeface": "editorial-serif",
         },
-        "bodyMarkdown": "Temporary live publication smoke test.",
+        "bodyMarkdown": (':::image\n{"media": "M01"}\n:::' if media else "Temporary live publication smoke test."),
     }
 
 
@@ -62,7 +64,9 @@ async def test_real_publication_storage_lifecycle() -> None:
     _require_explicit_live_target()
     workspace_id = f"wxpost-live-storage-{uuid4().hex}"
     title = f"WxPost live storage smoke {uuid4().hex[:8]}"
-    media_bytes = b"\x89PNG\r\n\x1a\nsoarhigh-wxpost-live-smoke"
+    media_buffer = BytesIO()
+    Image.new("RGB", (64, 64), "navy").save(media_buffer, format="PNG")
+    media_bytes = media_buffer.getvalue()
     media = [
         {
             "id": "M01",
@@ -110,6 +114,7 @@ async def test_real_publication_storage_lifecycle() -> None:
         ALICLOUD_OSS_BUCKET,
     )
     object_key: str | None = None
+    variant_object_key: str | None = None
     try:
         first = await synchronize_workspace_publication(
             workspace_id,
@@ -125,12 +130,28 @@ async def test_real_publication_storage_lifecycle() -> None:
         assert row is not None
         wxpost_id = UUID(row["id"])
         assets = (
-            supabase.table("wxpost_assets").select("object_key,status").eq("wxpost_id", str(wxpost_id)).execute().data
+            supabase.table("wxpost_assets")
+            .select("id,object_key,status")
+            .eq("wxpost_id", str(wxpost_id))
+            .execute()
+            .data
         )
         assert len(assets) == 1
         object_key = assets[0]["object_key"]
         assert assets[0]["status"] == "ready"
         assert bucket.object_exists(object_key)
+        variants = (
+            supabase.table("wxpost_asset_variants")
+            .select("object_key,status,profile")
+            .eq("asset_id", assets[0]["id"])
+            .execute()
+            .data
+        )
+        assert len(variants) == 1
+        assert variants[0]["status"] == "ready"
+        assert variants[0]["profile"] == "wechat-body-v1"
+        variant_object_key = variants[0]["object_key"]
+        assert bucket.object_exists(variant_object_key)
 
         repeated = await synchronize_workspace_publication(
             workspace_id,
@@ -144,6 +165,10 @@ async def test_real_publication_storage_lifecycle() -> None:
             compile_render=compile_render,
         )
         assert repeated.public_revision == 1
+        repeated_variants = (
+            supabase.table("wxpost_asset_variants").select("id").eq("asset_id", assets[0]["id"]).execute().data
+        )
+        assert len(repeated_variants) == 1
 
         context["manifest"] = {"manifestVersion": 2, "sources": []}
         context["draft"] = {"draftVersion": 2, "document": _document(title, [])}
@@ -160,8 +185,13 @@ async def test_real_publication_storage_lifecycle() -> None:
         )
         assert replaced.public_revision == 2
         assert not bucket.object_exists(object_key)
+        assert not bucket.object_exists(variant_object_key)
         remaining_assets = supabase.table("wxpost_assets").select("id").eq("wxpost_id", str(wxpost_id)).execute().data
         assert remaining_assets == []
+        remaining_variants = (
+            supabase.table("wxpost_asset_variants").select("id").eq("asset_id", assets[0]["id"]).execute().data
+        )
+        assert remaining_variants == []
 
         deleted_workspace_id = await delete_public_wxpost(wxpost_id, expected_revision=2)
         assert deleted_workspace_id == workspace_id
@@ -172,3 +202,5 @@ async def test_real_publication_storage_lifecycle() -> None:
             await delete_public_wxpost(UUID(row["id"]), expected_revision=row["article_revision"])
         if object_key is not None and bucket.object_exists(object_key):
             bucket.delete_object(object_key)
+        if variant_object_key is not None and bucket.object_exists(variant_object_key):
+            bucket.delete_object(variant_object_key)

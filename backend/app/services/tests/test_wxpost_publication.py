@@ -7,8 +7,10 @@ import pytest
 import app.services.wxpost_publication as publication
 from app.db.wxpost import WxPostRevisionConflictError
 from app.models.wxpost import WxPostPublicationSyncRequest
+from app.services.wxpost_image_variants import ImageVariant
 
 WXPOST_ID = UUID("00000000-0000-4000-8000-000000000777")
+ENSURE_WECHAT_BODY_VARIANT = publication._ensure_wechat_body_variant
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +25,20 @@ def _avoid_public_asset_database(monkeypatch: pytest.MonkeyPatch) -> None:
         publication,
         "has_abandoned_wxpost_assets",
         lambda wxpost_id: False,
+    )
+    monkeypatch.setattr(publication, "get_wxpost_asset_variants", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        publication,
+        "get_ready_wxpost_asset",
+        lambda wxpost_id, **kwargs: {
+            "id": "00000000-0000-4000-8000-000000000999",
+            "object_key": f"public/wxposts/{wxpost_id}/assets/test/original.jpg",
+        },
+    )
+    monkeypatch.setattr(
+        publication,
+        "_ensure_wechat_body_variant",
+        lambda asset, media: {"status": "ready", "profile": "wechat-body-v1"},
     )
 
 
@@ -625,6 +641,210 @@ async def test_identical_concurrent_finalize_returns_completed_revision(
     assert result.public_revision == 1
 
 
+@pytest.mark.asyncio
+async def test_same_public_revision_reconciles_variant_without_new_revision_or_original_upload(
+    monkeypatch,
+) -> None:
+    bundle_hash = _bundle_hash()
+    reconciled: list[str] = []
+    monkeypatch.setattr(
+        publication,
+        "get_wxpost_by_workspace_id",
+        lambda workspace_id: _row(revision=6, draft_sha256=bundle_hash),
+    )
+    monkeypatch.setattr(
+        publication,
+        "_upload_asset",
+        lambda *args, **kwargs: pytest.fail("same revision uploaded its original again"),
+    )
+    monkeypatch.setattr(
+        publication,
+        "_ensure_wechat_body_variant",
+        lambda asset, media: reconciled.append(media.source_id),
+    )
+
+    result = await publication.synchronize_workspace_publication(
+        "wxpost-abc",
+        _request(public_revision=6),
+        load_context=_load_context,
+        load_source=_load_source,
+        compile_render=_compile,
+    )
+
+    assert result.public_revision == 6
+    assert reconciled == ["M01"]
+
+
+def test_variant_upload_is_idempotent_and_records_actual_descriptor(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source.jpg"
+    source.write_bytes(b"source")
+    rendered = ImageVariant(
+        content=b"encoded",
+        mime_type="image/jpeg",
+        extension="jpg",
+        size_bytes=7,
+        sha256=hashlib.sha256(b"encoded").hexdigest(),
+    )
+    created: list[dict] = []
+    uploaded: list[tuple[str, bytes, dict]] = []
+    ready: list[tuple[UUID, str]] = []
+    stored: list[dict] = []
+    monkeypatch.setattr(
+        publication,
+        "get_wxpost_asset_variant",
+        lambda *args, **kwargs: stored[0] if stored else None,
+    )
+    monkeypatch.setattr(publication, "render_wechat_body_variant", lambda *args, **kwargs: rendered)
+
+    def create(values):
+        created.append(values)
+        return {**values, "status": "pending"}
+
+    monkeypatch.setattr(publication, "create_pending_wxpost_asset_variant", create)
+    monkeypatch.setattr(publication.oss2, "Auth", lambda *args: object())
+
+    class Bucket:
+        def put_object(self, key, content, headers):
+            uploaded.append((key, content, headers))
+            return type("Result", (), {"etag": "variant-etag"})()
+
+    monkeypatch.setattr(publication.oss2, "Bucket", lambda *args: Bucket())
+
+    def mark_ready(variant_id, *, etag):
+        ready.append((variant_id, etag))
+        result = {**created[0], "status": "ready", "etag": etag}
+        stored.append(result)
+        return result
+
+    monkeypatch.setattr(publication, "mark_wxpost_asset_variant_ready", mark_ready)
+    asset_id = UUID("00000000-0000-4000-8000-000000000998")
+    asset = {
+        "id": str(asset_id),
+        "object_key": f"public/wxposts/{WXPOST_ID}/assets/{asset_id}/original.jpg",
+    }
+    media = publication.ResolvedMedia(
+        source_id="M01",
+        kind="image",
+        filename="poster.jpg",
+        mime_type="image/jpeg",
+        content_path=source,
+        size_bytes=6,
+        sha256=hashlib.sha256(b"source").hexdigest(),
+        md5="unused",
+    )
+
+    first = ENSURE_WECHAT_BODY_VARIANT(asset, media)
+    second = ENSURE_WECHAT_BODY_VARIANT(asset, media)
+
+    assert first == second
+    assert first["status"] == "ready"
+    assert created[0]["content_sha256"] == rendered.sha256
+    assert created[0]["object_key"].endswith("/variants/wechat-body-v1.jpg")
+    assert uploaded == [
+        (
+            created[0]["object_key"],
+            b"encoded",
+            {"Content-Type": "image/jpeg"},
+        )
+    ]
+    assert ready == [(UUID(created[0]["id"]), "variant-etag")]
+
+
+def test_variant_upload_failure_is_recorded_for_safe_retry(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source.jpg"
+    source.write_bytes(b"source")
+    rendered = ImageVariant(
+        content=b"encoded",
+        mime_type="image/jpeg",
+        extension="jpg",
+        size_bytes=7,
+        sha256=hashlib.sha256(b"encoded").hexdigest(),
+    )
+    variant_id = UUID("00000000-0000-4000-8000-000000000997")
+    failed: list[UUID] = []
+    monkeypatch.setattr(publication, "get_wxpost_asset_variant", lambda *args, **kwargs: None)
+    monkeypatch.setattr(publication, "render_wechat_body_variant", lambda *args, **kwargs: rendered)
+    monkeypatch.setattr(
+        publication,
+        "create_pending_wxpost_asset_variant",
+        lambda values: {**values, "id": str(variant_id), "status": "pending"},
+    )
+    monkeypatch.setattr(publication, "mark_wxpost_asset_variant_failed", failed.append)
+    monkeypatch.setattr(publication.oss2, "Auth", lambda *args: object())
+
+    class Bucket:
+        def put_object(self, *args, **kwargs):
+            raise OSError("OSS unavailable")
+
+    monkeypatch.setattr(publication.oss2, "Bucket", lambda *args: Bucket())
+    asset = {
+        "id": "00000000-0000-4000-8000-000000000998",
+        "object_key": f"public/wxposts/{WXPOST_ID}/assets/source/original.jpg",
+    }
+    media = publication.ResolvedMedia(
+        source_id="M01",
+        kind="image",
+        filename="poster.jpg",
+        mime_type="image/jpeg",
+        content_path=source,
+        size_bytes=6,
+        sha256=hashlib.sha256(b"source").hexdigest(),
+        md5="unused",
+    )
+
+    with pytest.raises(publication.PublicationError) as raised:
+        ENSURE_WECHAT_BODY_VARIANT(asset, media)
+
+    assert raised.value.code == "asset_variant_upload_failed"
+    assert failed == [variant_id]
+
+
+def test_variant_retry_returns_concurrent_ready_result_without_reupload(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source.jpg"
+    source.write_bytes(b"source")
+    variant_id = UUID("00000000-0000-4000-8000-000000000996")
+    failed = {"id": str(variant_id), "status": "failed"}
+    ready = {"id": str(variant_id), "status": "ready"}
+    monkeypatch.setattr(publication, "get_wxpost_asset_variant", lambda *args, **kwargs: failed)
+    monkeypatch.setattr(
+        publication,
+        "render_wechat_body_variant",
+        lambda *args, **kwargs: ImageVariant(
+            content=b"encoded",
+            mime_type="image/jpeg",
+            extension="jpg",
+            size_bytes=7,
+            sha256=hashlib.sha256(b"encoded").hexdigest(),
+        ),
+    )
+    monkeypatch.setattr(publication, "create_pending_wxpost_asset_variant", lambda values: failed)
+    monkeypatch.setattr(publication, "retry_failed_wxpost_asset_variant", lambda found_id: ready)
+    monkeypatch.setattr(
+        publication.oss2,
+        "Auth",
+        lambda *args: pytest.fail("ready variant was uploaded again"),
+    )
+
+    result = ENSURE_WECHAT_BODY_VARIANT(
+        {
+            "id": "00000000-0000-4000-8000-000000000998",
+            "object_key": f"public/wxposts/{WXPOST_ID}/assets/source/original.jpg",
+        },
+        publication.ResolvedMedia(
+            source_id="M01",
+            kind="image",
+            filename="poster.jpg",
+            mime_type="image/jpeg",
+            content_path=source,
+            size_bytes=6,
+            sha256=hashlib.sha256(b"source").hexdigest(),
+            md5="unused",
+        ),
+    )
+
+    assert result == ready
+
+
 def test_unused_ready_assets_are_deleted_from_oss_and_database(
     monkeypatch,
 ) -> None:
@@ -661,6 +881,163 @@ def test_unused_ready_assets_are_deleted_from_oss_and_database(
 
     assert deleted_objects == [["public/wxposts/old/original.jpg"]]
     assert deleted_rows == ["asset-old"]
+
+
+def test_asset_object_cleanup_includes_variants_before_database_cascade(monkeypatch) -> None:
+    deleted: list[list[str]] = []
+    monkeypatch.setattr(
+        publication,
+        "get_wxpost_asset_variants",
+        lambda *args, **kwargs: [
+            {
+                "asset_id": "asset-old",
+                "object_key": "public/wxposts/post/assets/asset-old/variants/wechat-body-v1.jpg",
+            }
+        ],
+    )
+    monkeypatch.setattr(publication.oss2, "Auth", lambda *args: object())
+
+    class Bucket:
+        def batch_delete_objects(self, keys):
+            deleted.append(keys)
+
+    monkeypatch.setattr(publication.oss2, "Bucket", lambda *args: Bucket())
+
+    publication._delete_asset_objects(
+        [
+            {
+                "id": "asset-old",
+                "object_key": "public/wxposts/post/assets/asset-old/original.jpg",
+                "poster_object_key": None,
+            }
+        ]
+    )
+
+    assert deleted == [
+        [
+            "public/wxposts/post/assets/asset-old/original.jpg",
+            "public/wxposts/post/assets/asset-old/variants/wechat-body-v1.jpg",
+        ]
+    ]
+
+
+def test_asset_cleanup_failure_keeps_database_rows_for_retry(monkeypatch) -> None:
+    stale = [{"id": "asset-old", "object_key": "old.jpg", "poster_object_key": None}]
+    deleted_rows: list[str] = []
+    monkeypatch.setattr(publication, "abandon_unreferenced_wxpost_assets", lambda *args, **kwargs: stale)
+    monkeypatch.setattr(
+        publication,
+        "_delete_asset_objects",
+        lambda assets: (_ for _ in ()).throw(OSError("OSS unavailable")),
+    )
+    monkeypatch.setattr(publication, "delete_wxpost_assets", lambda ids: deleted_rows.extend(ids))
+
+    with pytest.raises(OSError, match="OSS unavailable"):
+        publication._remove_unreferenced_assets(WXPOST_ID, keep_content_sha256=set())
+
+    assert deleted_rows == []
+
+
+def test_backfill_creates_missing_variant_without_changing_public_revision(monkeypatch, tmp_path) -> None:
+    source_content = b"immutable-public-original"
+    source_sha = hashlib.sha256(source_content).hexdigest()
+    source_asset = {
+        "id": "00000000-0000-4000-8000-000000000996",
+        "object_key": f"public/wxposts/{WXPOST_ID}/assets/source/original.jpg",
+        "original_filename": "poster.jpg",
+        "mime_type": "image/jpeg",
+        "content_sha256": source_sha,
+        "size_bytes": len(source_content),
+        "source_metadata": {"sourceId": "M01"},
+        "variants": [],
+    }
+    row = _row(revision=6)
+    document = publication.ArticleDocument.model_validate(_document())
+    ensured: list[tuple[dict, publication.ResolvedMedia]] = []
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: row)
+    monkeypatch.setattr(publication, "article_document_from_row", lambda found: document)
+    monkeypatch.setattr(publication, "get_ready_wxpost_assets", lambda wxpost_id: [source_asset])
+    monkeypatch.setattr(publication.oss2, "Auth", lambda *args: object())
+
+    class Bucket:
+        def get_object_to_file(self, key, path):
+            assert key == source_asset["object_key"]
+            publication.Path(path).write_bytes(source_content)
+
+    monkeypatch.setattr(publication.oss2, "Bucket", lambda *args: Bucket())
+    monkeypatch.setattr(
+        publication,
+        "_ensure_wechat_body_variant",
+        lambda asset, media: ensured.append((asset, media)),
+    )
+
+    report = publication.reconcile_publication_wechat_variants(WXPOST_ID)
+
+    assert report == {
+        "wxpostId": str(WXPOST_ID),
+        "revision": 6,
+        "profile": "wechat-body-v1",
+        "missing": ["M01"],
+        "created": ["M01"],
+        "dryRun": False,
+    }
+    assert ensured[0][0] == source_asset
+    assert ensured[0][1].sha256 == source_sha
+    assert row["article_revision"] == 6
+
+
+def test_backfill_reuses_one_public_asset_for_multiple_media_ids(monkeypatch) -> None:
+    source_content = b"shared-immutable-public-original"
+    source_sha = hashlib.sha256(source_content).hexdigest()
+    object_key = f"public/wxposts/{WXPOST_ID}/assets/shared/original.jpg"
+    source_asset = {
+        "id": "00000000-0000-4000-8000-000000000995",
+        "object_key": object_key,
+        "original_filename": "shared.jpg",
+        "mime_type": "image/jpeg",
+        "content_sha256": source_sha,
+        "size_bytes": len(source_content),
+        "source_metadata": {"sourceId": "M01"},
+        "variants": [],
+    }
+    public_url = publication.public_asset_url(object_key)
+    document_values = _document()
+    document_values["media"][0]["sourceUrl"] = public_url
+    document_values["media"].append(
+        {
+            **document_values["media"][0],
+            "id": "M02",
+            "order": 1,
+            "sourceUrl": public_url,
+        }
+    )
+    document_values["bodyMarkdown"] += '\n\n:::image\n{"media": "M02"}\n:::'
+    document = publication.ArticleDocument.model_validate(document_values)
+    downloads: list[str] = []
+    ensured: list[str] = []
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row(revision=6))
+    monkeypatch.setattr(publication, "article_document_from_row", lambda found: document)
+    monkeypatch.setattr(publication, "get_ready_wxpost_assets", lambda wxpost_id: [source_asset])
+    monkeypatch.setattr(publication.oss2, "Auth", lambda *args: object())
+
+    class Bucket:
+        def get_object_to_file(self, key, path):
+            downloads.append(key)
+            publication.Path(path).write_bytes(source_content)
+
+    monkeypatch.setattr(publication.oss2, "Bucket", lambda *args: Bucket())
+    monkeypatch.setattr(
+        publication,
+        "_ensure_wechat_body_variant",
+        lambda asset, media: ensured.append(media.source_id),
+    )
+
+    report = publication.reconcile_publication_wechat_variants(WXPOST_ID)
+
+    assert report["missing"] == ["M01", "M02"]
+    assert report["created"] == ["M01", "M02"]
+    assert downloads == [source_asset["object_key"]]
+    assert ensured == ["M01"]
 
 
 @pytest.mark.asyncio

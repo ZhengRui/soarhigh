@@ -335,6 +335,43 @@ CREATE TABLE wxpost_assets (
         UNIQUE (wxpost_id, upload_idempotency_key_hash)
 );
 
+-- Deterministic platform renditions owned by one immutable WXPost asset
+CREATE TABLE wxpost_asset_variants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    asset_id UUID NOT NULL REFERENCES wxpost_assets(id) ON DELETE CASCADE,
+    profile TEXT NOT NULL
+        CONSTRAINT wxpost_asset_variants_profile_valid
+        CHECK (profile IN ('wechat-body-v1')),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CONSTRAINT wxpost_asset_variants_status_valid
+        CHECK (status IN ('pending', 'ready', 'failed')),
+    object_key TEXT NOT NULL UNIQUE
+        CONSTRAINT wxpost_asset_variants_object_key_not_blank
+        CHECK (object_key ~ '[^[:space:]]'),
+    mime_type TEXT NOT NULL
+        CONSTRAINT wxpost_asset_variants_mime_valid
+        CHECK (mime_type IN ('image/jpeg', 'image/png')),
+    size_bytes BIGINT NOT NULL
+        CONSTRAINT wxpost_asset_variants_size_positive
+        CHECK (size_bytes > 0),
+    content_sha256 TEXT NOT NULL
+        CONSTRAINT wxpost_asset_variants_sha256_valid
+        CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+    etag TEXT,
+    ready_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT wxpost_asset_variants_asset_profile_unique
+        UNIQUE (asset_id, profile),
+    CONSTRAINT wxpost_asset_variants_ready_fields_valid CHECK (
+        status <> 'ready'
+        OR (
+            ready_at IS NOT NULL
+            AND COALESCE(etag ~ '[^[:space:]]', FALSE)
+        )
+    )
+);
+
 -- Votes table - stores votes
 CREATE TABLE votes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -422,6 +459,9 @@ CREATE UNIQUE INDEX wxposts_prepare_idempotency_key_hash_idx
 CREATE INDEX wxpost_assets_wxpost_id_idx
     ON wxpost_assets (wxpost_id);
 
+CREATE INDEX wxpost_asset_variants_asset_id_idx
+    ON wxpost_asset_variants (asset_id);
+
 CREATE UNIQUE INDEX wxposts_source_workspace_id_idx
     ON wxposts (source_workspace_id)
     WHERE source_workspace_id IS NOT NULL;
@@ -485,6 +525,7 @@ ALTER TABLE segments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wxposts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wxpost_assets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wxpost_asset_variants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE votes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE votes_status ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feedbacks ENABLE ROW LEVEL SECURITY;
@@ -669,6 +710,9 @@ GRANT ALL ON TABLE wxposts TO service_role;
 
 REVOKE ALL ON TABLE wxpost_assets FROM PUBLIC, anon, authenticated;
 GRANT ALL ON TABLE wxpost_assets TO service_role;
+
+REVOKE ALL ON TABLE wxpost_asset_variants FROM PUBLIC, anon, authenticated;
+GRANT ALL ON TABLE wxpost_asset_variants TO service_role;
 
 REVOKE ALL ON FUNCTION block_wxpost_finalize_with_pending_assets()
 FROM PUBLIC;

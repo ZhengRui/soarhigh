@@ -411,8 +411,8 @@ Phase 3 projection persistence is installed through Supabase migrations
 `20260806000000` through `20260806000002`. Migration `20260806000003` removes
 the obsolete service-role token table after Backend transport moves to the VPS
 gateway; it does not touch draft projections. Configure Backend with
-`WECHAT_GATEWAY_BASE_URL`, `WECHAT_GATEWAY_SERVICE_TOKEN`, and
-`WECHAT_OFFICIAL_ACCOUNT_NAME`. AppID/AppSecret live only on the gateway; none
+`WECHAT_GATEWAY_BASE_URL`, `WECHAT_GATEWAY_SERVICE_TOKEN`, and optionally
+`WECHAT_ARTICLE_AUTHOR` (defaults to `Soarhigh TMC`). AppID/AppSecret live only on the gateway; none
 of these server settings are sent to the browser.
 
 Validation recorded on 2026-08-06:

@@ -55,7 +55,7 @@ class FakeSupabase:
 
 class FakeAnyTableSupabase(FakeSupabase):
     def table(self, name: str):
-        assert name in {"wxposts", "wxpost_assets"}
+        assert name in {"wxposts", "wxpost_assets", "wxpost_asset_variants"}
         return self.queries.pop(0)
 
 
@@ -328,6 +328,7 @@ def test_unreferenced_ready_assets_are_abandoned_and_deletable(monkeypatch) -> N
 def test_ready_asset_descriptor_lookup_is_scoped_to_one_public_wxpost(monkeypatch) -> None:
     rows = [
         {
+            "id": "asset-image",
             "object_key": "public/wxposts/post/assets/image/original.jpg",
             "content_sha256": "a" * 64,
             "size_bytes": 123,
@@ -335,13 +336,33 @@ def test_ready_asset_descriptor_lookup_is_scoped_to_one_public_wxpost(monkeypatc
         }
     ]
     query = FakeQuery(data=rows)
-    monkeypatch.setattr(wxpost_db, "supabase", FakeAnyTableSupabase([query]))
+    variants_query = FakeQuery(data=[])
+    monkeypatch.setattr(wxpost_db, "supabase", FakeAnyTableSupabase([query, variants_query]))
 
-    assert wxpost_db.get_ready_wxpost_assets(WXPOST_ID) == rows
+    assert wxpost_db.get_ready_wxpost_assets(WXPOST_ID) == [{**rows[0], "variants": []}]
     assert query.filters == [
         ("wxpost_id", str(WXPOST_ID)),
         ("status", "ready"),
     ]
+    assert variants_query.filters == [
+        ("asset_id", ["asset-image"]),
+        ("status", ["ready"]),
+    ]
+
+
+def test_variant_retry_recovers_a_concurrent_pending_transition(monkeypatch) -> None:
+    variant_id = UUID("00000000-0000-4000-8000-000000000998")
+    update_query = FakeQuery(data=[])
+    pending = {"id": str(variant_id), "status": "pending"}
+    current_query = FakeQuery(data=[pending])
+    monkeypatch.setattr(wxpost_db, "supabase", FakeAnyTableSupabase([update_query, current_query]))
+
+    assert wxpost_db.retry_failed_wxpost_asset_variant(variant_id) == pending
+    assert update_query.filters == [
+        ("id", str(variant_id)),
+        ("status", "failed"),
+    ]
+    assert current_query.filters == [("id", str(variant_id))]
 
 
 def test_batch_publication_lookup_uses_one_query(monkeypatch) -> None:

@@ -312,6 +312,14 @@ def projection_store(monkeypatch: pytest.MonkeyPatch) -> dict:
                 "content_sha256": IMAGE_SHA256,
                 "size_bytes": len(b"image-bytes"),
                 "kind": "image",
+                "variants": [
+                    {
+                        "profile": wxpost_wechat.WECHAT_BODY_PROFILE,
+                        "object_key": IMAGE_OBJECT_KEY,
+                        "content_sha256": IMAGE_SHA256,
+                        "size_bytes": len(b"image-bytes"),
+                    }
+                ],
             }
         ],
     )
@@ -322,29 +330,244 @@ def projection_store(monkeypatch: pytest.MonkeyPatch) -> dict:
 async def _publish(
     api: FakeWechatApi,
     *,
+    render_document: WxPostRenderDocument | None = None,
     html: str = (
         f'<article data-testid="article" data-wxpost-line="1" data-layout="brand-default" style="color:#123">'
         f'<p contenteditable="true"><a href="{IMAGE_URL}">Source</a>'
         f'<img src="{IMAGE_URL}"></p></article>'
     ),
 ):
+    document = render_document or _render_document()
     return await wxpost_wechat.publish_wechat_draft(
         row={
             "id": str(WXPOST_ID),
             "source_workspace_id": "wxpost-test",
             "article_revision": 3,
         },
-        render_document=_render_document(),
-        presentation=Presentation.model_validate(_render_document().presentation.model_dump()),
+        render_document=document,
+        presentation=Presentation.model_validate(document.presentation.model_dump()),
         canonical_html=html,
         api=api,
     )
+
+
+async def test_missing_variant_fails_before_projection_claim_or_remote_upload(
+    projection_store: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        wxpost_wechat,
+        "get_ready_wxpost_assets",
+        lambda wxpost_id: [
+            {
+                "id": "asset-image",
+                "object_key": IMAGE_OBJECT_KEY,
+                "original_filename": "poster.jpg",
+                "content_sha256": IMAGE_SHA256,
+                "size_bytes": len(b"image-bytes"),
+                "kind": "image",
+                "source_metadata": {"sourceId": "M01"},
+                "variants": [],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        wxpost_wechat.store,
+        "claim_projection",
+        lambda **kwargs: pytest.fail("projection was claimed before image preflight"),
+    )
+    api = FakeWechatApi()
+
+    with pytest.raises(wxpost_wechat.WechatDraftError, match=r"M01 / poster.jpg.*missing") as raised:
+        await _publish(api)
+
+    assert raised.value.status_code == 409
+    assert api.body_uploads == 0
+    assert api.cover_uploads == 0
+    assert projection_store == {}
+
+
+async def test_oversized_variant_fails_before_projection_claim(
+    projection_store: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        wxpost_wechat,
+        "get_ready_wxpost_assets",
+        lambda wxpost_id: [
+            {
+                "object_key": IMAGE_OBJECT_KEY,
+                "original_filename": "poster.jpg",
+                "content_sha256": IMAGE_SHA256,
+                "size_bytes": len(b"image-bytes"),
+                "kind": "image",
+                "source_metadata": {"sourceId": "M01"},
+                "variants": [
+                    {
+                        "profile": wxpost_wechat.WECHAT_BODY_PROFILE,
+                        "object_key": f"{IMAGE_OBJECT_KEY}.wechat.jpg",
+                        "content_sha256": "b" * 64,
+                        "size_bytes": wxpost_wechat.WECHAT_BODY_HARD_MAX_BYTES + 1,
+                    }
+                ],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        wxpost_wechat.store,
+        "claim_projection",
+        lambda **kwargs: pytest.fail("projection was claimed before size preflight"),
+    )
+
+    with pytest.raises(wxpost_wechat.WechatDraftError, match=r"M01 / poster.jpg.*exceeds") as raised:
+        await _publish(FakeWechatApi())
+
+    assert raised.value.status_code == 422
+    assert projection_store == {}
+
+
+async def test_body_uses_variant_descriptor_while_cover_keeps_original(
+    projection_store: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    variant_content = b"wechat-variant"
+    variant_sha = hashlib.sha256(variant_content).hexdigest()
+    variant_key = f"public/wxposts/{WXPOST_ID}/assets/image/variants/wechat-body-v1.jpg"
+    monkeypatch.setattr(
+        wxpost_wechat,
+        "get_ready_wxpost_assets",
+        lambda wxpost_id: [
+            {
+                "id": "asset-image",
+                "object_key": IMAGE_OBJECT_KEY,
+                "original_filename": "poster.jpg",
+                "content_sha256": IMAGE_SHA256,
+                "size_bytes": len(b"image-bytes"),
+                "kind": "image",
+                "source_metadata": {"sourceId": "M01"},
+                "variants": [
+                    {
+                        "profile": wxpost_wechat.WECHAT_BODY_PROFILE,
+                        "object_key": variant_key,
+                        "content_sha256": variant_sha,
+                        "size_bytes": len(variant_content),
+                    }
+                ],
+            }
+        ],
+    )
+
+    class VariantApi(FakeWechatApi):
+        async def upload_body_image(self, source):
+            self.body_uploads += 1
+            assert source == wxpost_wechat.WechatAssetSource(
+                object_key=variant_key,
+                sha256=variant_sha,
+                size_bytes=len(variant_content),
+            )
+            return WECHAT_IMAGE_URL
+
+    api = VariantApi()
+    result = await _publish(api)
+
+    assert result.action == "created"
+    assert api.body_uploads == 1
+    assert api.cover_uploads == 1
+    assert projection_store["row"]["asset_mappings"] == {
+        f"body:{variant_sha}": WECHAT_IMAGE_URL,
+        f"cover:{IMAGE_SHA256}": "cover-media-id",
+    }
+
+
+async def test_oversized_original_cover_uses_the_safe_variant(
+    projection_store: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    variant_content = b"wechat-variant"
+    variant_sha = hashlib.sha256(variant_content).hexdigest()
+    variant_key = f"public/wxposts/{WXPOST_ID}/assets/image/variants/wechat-body-v1.jpg"
+    monkeypatch.setattr(
+        wxpost_wechat,
+        "get_ready_wxpost_assets",
+        lambda wxpost_id: [
+            {
+                "object_key": IMAGE_OBJECT_KEY,
+                "content_sha256": IMAGE_SHA256,
+                "size_bytes": wxpost_wechat.WECHAT_COVER_HARD_MAX_BYTES + 1,
+                "kind": "image",
+                "variants": [
+                    {
+                        "profile": wxpost_wechat.WECHAT_BODY_PROFILE,
+                        "object_key": variant_key,
+                        "content_sha256": variant_sha,
+                        "size_bytes": len(variant_content),
+                    }
+                ],
+            }
+        ],
+    )
+
+    class VariantCoverApi(FakeWechatApi):
+        async def upload_body_image(self, source):
+            self.body_uploads += 1
+            assert source.object_key == variant_key
+            return WECHAT_IMAGE_URL
+
+        async def upload_cover(self, source):
+            self.cover_uploads += 1
+            assert source.object_key == variant_key
+            return "cover-media-id"
+
+    result = await _publish(VariantCoverApi())
+
+    assert result.action == "created"
+    assert projection_store["row"]["asset_mappings"] == {
+        f"body:{variant_sha}": WECHAT_IMAGE_URL,
+        f"cover:{variant_sha}": "cover-media-id",
+    }
 
 
 def test_video_is_blocked_without_rewriting_content() -> None:
     with pytest.raises(wxpost_wechat.WechatDraftError, match="Video block") as caught:
         wxpost_wechat.validate_wechat_projection(_render_document(video=True))
     assert caught.value.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("byline", "expected_author"),
+    [(None, "Soarhigh TMC"), ("Guest Editor", "Guest Editor")],
+)
+def test_article_author_defaults_without_overriding_an_explicit_byline(
+    monkeypatch: pytest.MonkeyPatch,
+    byline: str | None,
+    expected_author: str,
+) -> None:
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_ARTICLE_AUTHOR", "Soarhigh TMC")
+    render_document = _render_document().model_copy(update={"byline": byline})
+
+    article = wxpost_wechat._article_payload(render_document, "<p>Body</p>", "cover-media-id")
+
+    assert article["author"] == expected_author
+
+
+async def test_default_author_change_updates_the_existing_projection(
+    projection_store: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    render_document = _render_document().model_copy(update={"byline": None})
+    api = FakeWechatApi()
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_ARTICLE_AUTHOR", "Soarhigh TMC")
+
+    created = await _publish(api, render_document=render_document)
+    first_projection = projection_store["row"]["projection_sha256"]
+    monkeypatch.setattr(wxpost_wechat, "WECHAT_ARTICLE_AUTHOR", "Soarhigh TMC 2")
+    updated = await _publish(api, render_document=render_document)
+
+    assert created.action == "created"
+    assert updated.action == "updated"
+    assert projection_store["row"]["projection_sha256"] != first_projection
+    assert api.article is not None
+    assert api.article["author"] == "Soarhigh TMC 2"
 
 
 async def test_create_uploads_media_replaces_oss_url_and_reads_back(projection_store: dict) -> None:
@@ -431,6 +654,14 @@ async def test_publish_ignores_invalid_metadata_for_an_unreferenced_ready_asset(
                 "content_sha256": IMAGE_SHA256,
                 "size_bytes": len(b"image-bytes"),
                 "kind": "image",
+                "variants": [
+                    {
+                        "profile": wxpost_wechat.WECHAT_BODY_PROFILE,
+                        "object_key": IMAGE_OBJECT_KEY,
+                        "content_sha256": IMAGE_SHA256,
+                        "size_bytes": len(b"image-bytes"),
+                    }
+                ],
             },
         ],
     )
