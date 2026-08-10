@@ -141,12 +141,14 @@ export function useWxPostDraftMedia({
   );
 
   useEffect(() => {
+    const controllers = controllersRef.current;
+    const objectUrls = objectUrlsRef.current;
     generationRef.current += 1;
     const generation = generationRef.current;
-    controllersRef.current.forEach((controller) => controller.abort());
-    controllersRef.current.clear();
-    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-    objectUrlsRef.current.clear();
+    controllers.forEach((controller) => controller.abort());
+    controllers.clear();
+    objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    objectUrls.clear();
     setAssetUrls(Object.fromEntries(planRef.current.map(({ id }) => [id, ''])));
     setAssetStates(
       Object.fromEntries(planRef.current.map(({ id }) => [id, 'loading']))
@@ -154,10 +156,10 @@ export function useWxPostDraftMedia({
     planRef.current.forEach((item) => void loadMedia(item, generation));
     return () => {
       generationRef.current += 1;
-      controllersRef.current.forEach((controller) => controller.abort());
-      controllersRef.current.clear();
-      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      objectUrlsRef.current.clear();
+      controllers.forEach((controller) => controller.abort());
+      controllers.clear();
+      objectUrls.forEach((url) => URL.revokeObjectURL(url));
+      objectUrls.clear();
     };
   }, [loadMedia, planKey]);
 
