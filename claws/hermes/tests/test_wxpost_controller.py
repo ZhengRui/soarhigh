@@ -611,6 +611,11 @@ def test_http_voice_tone_suggestion_uses_tool_free_hermes_oneshot(
         host="127.0.0.1",
         port=0,
         editorial_runner=editorial_runner,
+        editorial_runtime_resolver=lambda: {
+            "provider": "openai-codex",
+            "model": "gpt-5.6-luna",
+            "api_key": "test-token",
+        },
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -629,6 +634,7 @@ def test_http_voice_tone_suggestion_uses_tool_free_hermes_oneshot(
         assert len(requests) == 1
         assert requests[0]["task"] == "title_generation"
         assert requests[0]["max_tokens"] == 256
+        assert requests[0]["main_runtime"]["provider"] == "openai-codex"
         assert "model" not in requests[0]
         assert "tools" not in requests[0]
         source = json.loads(requests[0]["user_input"].split("\n", 1)[1])

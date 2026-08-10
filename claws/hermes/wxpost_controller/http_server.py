@@ -27,7 +27,11 @@ from .core import (
     error_response,
 )
 from .errors import HermesTurnFailed, HermesUnavailable
-from .hermes_editorial import HermesEditorialClient, OneShotRunner
+from .hermes_editorial import (
+    HermesEditorialClient,
+    MainRuntimeResolver,
+    OneShotRunner,
+)
 from .hermes_session import (
     HermesDescriptionService,
     HermesDraftService,
@@ -809,6 +813,7 @@ def build_server(
     port: int = 8787,
     hermes_serve_url: str = "ws://127.0.0.1:9119/api/ws",
     editorial_runner: OneShotRunner | None = None,
+    editorial_runtime_resolver: MainRuntimeResolver | None = None,
     draft_heartbeat_seconds: float = 15,
 ) -> ControllerHTTPServer:
     if not bearer_token:
@@ -830,7 +835,10 @@ def build_server(
         session_client=session_client,
         retire_session=server.draft_service.retire_session,
     )
-    server.editorial_client = HermesEditorialClient(runner=editorial_runner)
+    server.editorial_client = HermesEditorialClient(
+        runner=editorial_runner,
+        runtime_resolver=editorial_runtime_resolver,
+    )
     server.bearer_token = bearer_token
     server.draft_heartbeat_seconds = draft_heartbeat_seconds
     return server

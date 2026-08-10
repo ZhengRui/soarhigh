@@ -7,12 +7,37 @@ from typing import Any
 from .errors import HermesTurnFailed, HermesUnavailable
 
 OneShotRunner = Callable[..., str]
+MainRuntimeResolver = Callable[[], dict[str, Any]]
 
 
 def _run_oneshot(**kwargs: Any) -> str:
     from agent.oneshot import run_oneshot  # type: ignore[import-not-found]
 
     return run_oneshot(**kwargs)
+
+
+def _resolve_main_runtime() -> dict[str, Any]:
+    from hermes_cli.config import (  # type: ignore[import-not-found]
+        load_config_readonly,
+    )
+    from hermes_cli.runtime_provider import (  # type: ignore[import-not-found]
+        resolve_runtime_provider,
+    )
+
+    config = load_config_readonly()
+    model_config = config.get("model")
+    if not isinstance(model_config, dict):
+        raise RuntimeError("Hermes main model is not configured")
+    model = str(model_config.get("default") or model_config.get("model") or "").strip()
+    if not model:
+        raise RuntimeError("Hermes main model is not configured")
+    provider = str(model_config.get("provider") or "").strip() or None
+    runtime = resolve_runtime_provider(
+        requested=provider,
+        target_model=model,
+    )
+    runtime["model"] = model
+    return runtime
 
 
 class HermesEditorialClient:
@@ -22,9 +47,11 @@ class HermesEditorialClient:
         self,
         *,
         runner: OneShotRunner | None = None,
+        runtime_resolver: MainRuntimeResolver | None = None,
         timeout: float = 90,
     ) -> None:
         self._runner = runner or _run_oneshot
+        self._runtime_resolver = runtime_resolver or _resolve_main_runtime
         self._timeout = timeout
 
     def suggest_voice_tone_instruction(
@@ -57,6 +84,7 @@ class HermesEditorialClient:
                 max_tokens=256,
                 temperature=0.3,
                 timeout=self._timeout,
+                main_runtime=self._runtime_resolver(),
             )
         except Exception as error:
             # Provider SDKs use different exception hierarchies. This adapter turns
