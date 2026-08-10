@@ -412,13 +412,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 "draft revision",
             ):
                 return
-            if "operationId" not in payload:
-                self._send_error(
-                    HTTPStatus.UNPROCESSABLE_ENTITY,
-                    "invalid_request",
-                    "Draft operation identifier is required",
-                )
-                return
             self._run_draft_stream(
                 lambda on_progress: self.server.draft_service.chat(
                     draft_chat_match.group(1),

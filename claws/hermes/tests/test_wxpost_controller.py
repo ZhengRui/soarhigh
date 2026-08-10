@@ -559,7 +559,6 @@ def test_http_draft_chat_sends_heartbeats_while_hermes_is_quiet(
             {
                 "expectedManifestVersion": 4,
                 "expectedDraftVersion": 2,
-                "operationId": "draft-fedcba9876543210fedcba9876543210",
                 "message": "Tighten it.",
                 "selectedText": None,
             }
