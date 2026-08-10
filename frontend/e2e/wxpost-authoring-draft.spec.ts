@@ -63,16 +63,23 @@ test('keeps loaded Draft media stable when the assistant saves a revision', asyn
   ).toBeVisible();
 });
 
-test('reconciles a saved Draft turn when its event stream disconnects', async ({
+test('waits for and reconciles a Draft saved after its event stream disconnects', async ({
   page,
 }) => {
   const workspace = await createAndGenerateDraft(page);
   const chatInput = page.getByPlaceholder('Ask about or revise the Draft…');
+  const contextReadsBefore = workspace.requests.filter(
+    (item) => item === 'GET /context'
+  ).length;
 
-  workspace.disconnectNextDraftChatAfterCompletion = true;
+  workspace.disconnectNextDraftChatBeforeCompletion = true;
+  workspace.draftChatCompletionDelayAfterDisconnectMs = 1_500;
   await chatInput.fill('Make the title more concise.');
   await chatInput.press('Enter');
 
+  await expect(
+    page.getByText('Finishing the Draft update in the background')
+  ).toBeVisible();
   await expect(page.getByText('Draft · v2')).toBeVisible();
   await expect(page.getByTestId('draft-chat-history')).toContainText(
     'I revised the saved draft and kept the request focused.'
@@ -89,6 +96,9 @@ test('reconciles a saved Draft turn when its event stream disconnects', async ({
   expect(
     workspace.requests.filter((item) => item === 'POST /draft/chat')
   ).toHaveLength(2);
+  expect(
+    workspace.requests.filter((item) => item === 'GET /context').length
+  ).toBeGreaterThanOrEqual(contextReadsBefore + 2);
 });
 
 test('shows only milestones delivered by the live Draft chat stream', async ({

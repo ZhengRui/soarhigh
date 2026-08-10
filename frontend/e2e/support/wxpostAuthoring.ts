@@ -107,7 +107,8 @@ export type WorkspaceMock = {
   failDraftValidation: boolean;
   failSourceContent: boolean;
   failNextDraftChat: boolean;
-  disconnectNextDraftChatAfterCompletion: boolean;
+  disconnectNextDraftChatBeforeCompletion: boolean;
+  draftChatCompletionDelayAfterDisconnectMs: number;
   answerNextDraftChat: boolean;
   failNextDescriptionSuggestion: boolean;
   conflictNextPublication: boolean;
@@ -261,7 +262,8 @@ export async function mockWxPostWorkspaceApi(
     failDraftValidation: false,
     failSourceContent: false,
     failNextDraftChat: false,
-    disconnectNextDraftChatAfterCompletion: false,
+    disconnectNextDraftChatBeforeCompletion: false,
+    draftChatCompletionDelayAfterDisconnectMs: 0,
     answerNextDraftChat: false,
     failNextDescriptionSuggestion: false,
     conflictNextPublication: false,
@@ -732,28 +734,35 @@ export async function mockWxPostWorkspaceApi(
           ...(context.draft?.document as unknown as DraftDocument),
           title: `Hermes revision v${nextVersion}`,
         };
-        context.draft = {
-          draftVersion: nextVersion,
-          document: nextDocument,
-        };
-        syncDraftMediaReferences(mock, nextDocument);
-        context.manifest.draft = {
-          version: nextVersion,
-          sourceManifestVersion: context.manifest.manifestVersion,
-          sha256: `draft-${nextVersion}`,
-        };
         const reply = 'I revised the saved draft and kept the request focused.';
-        const messages = mock.draftMessages.get(workspaceId) ?? [];
-        mock.draftMessages.set(workspaceId, [
-          ...messages,
-          { role: 'user', text: input.message },
-          { role: 'assistant', text: reply },
-        ]);
-        if (mock.disconnectNextDraftChatAfterCompletion) {
-          mock.disconnectNextDraftChatAfterCompletion = false;
+        const completeDraftChat = () => {
+          context.draft = {
+            draftVersion: nextVersion,
+            document: nextDocument,
+          };
+          syncDraftMediaReferences(mock, nextDocument);
+          context.manifest.draft = {
+            version: nextVersion,
+            sourceManifestVersion: context.manifest.manifestVersion,
+            sha256: `draft-${nextVersion}`,
+          };
+          const messages = mock.draftMessages.get(workspaceId) ?? [];
+          mock.draftMessages.set(workspaceId, [
+            ...messages,
+            { role: 'user', text: input.message },
+            { role: 'assistant', text: reply },
+          ]);
+        };
+        if (mock.disconnectNextDraftChatBeforeCompletion) {
+          mock.disconnectNextDraftChatBeforeCompletion = false;
           await route.abort('connectionrefused');
+          setTimeout(
+            completeDraftChat,
+            mock.draftChatCompletionDelayAfterDisconnectMs
+          );
           return;
         }
+        completeDraftChat();
         await fulfillDraftChatStream(
           route,
           [

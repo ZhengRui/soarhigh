@@ -28,6 +28,44 @@ function isRecoverableStreamFailure(error: unknown) {
   );
 }
 
+const DRAFT_RECOVERY_TIMEOUT_MS = 90_000;
+const DRAFT_RECOVERY_POLL_MS = 1_000;
+
+function waitForRecoveryPoll(signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(timeout);
+      reject(signal.reason);
+    };
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, DRAFT_RECOVERY_POLL_MS);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function waitForRecoveredDraftContext(
+  workspaceId: string,
+  expectedDraftVersion: number,
+  signal: AbortSignal
+) {
+  const deadline = Date.now() + DRAFT_RECOVERY_TIMEOUT_MS;
+  let context = await getWorkspaceContext(workspaceId);
+  while (
+    (context.draft?.draftVersion ?? 0) === expectedDraftVersion &&
+    Date.now() < deadline
+  ) {
+    await waitForRecoveryPoll(signal);
+    context = await getWorkspaceContext(workspaceId);
+  }
+  return context;
+}
+
 export function useWxPostDraftAssistant({
   active,
   workspaceId,
@@ -190,14 +228,28 @@ export function useWxPostDraftAssistant({
       if (isRecoverableStreamFailure(caught)) {
         try {
           // The Controller deliberately finishes a Draft turn after a browser
-          // disconnect. Reconcile its durable session and Draft before telling
-          // the member that a completed edit failed.
-          // Session history takes the same per-workspace turn lock as chat,
-          // so it also waits for an in-flight disconnected turn to finish.
-          // Read context afterwards to avoid reconciling against a pre-save
-          // snapshot returned while that turn was still running.
+          // disconnect. Context reads do not take the per-workspace turn lock,
+          // so poll the saved Draft first instead of blocking recovery on
+          // session history while the disconnected turn is still running.
+          const recoveryActivity: DraftProgressActivity = {
+            activityId: 'recover-disconnected-turn',
+            label: 'Finishing the Draft update in the background',
+            completed: false,
+            failed: false,
+          };
+          progressRef.current = [
+            ...progressRef.current.filter(
+              (item) => item.activityId !== recoveryActivity.activityId
+            ),
+            recoveryActivity,
+          ];
+          setProgress(progressRef.current);
+          const context = await waitForRecoveredDraftContext(
+            workspaceId,
+            expectedDraftVersion,
+            requestController.signal
+          );
           const history = await getWorkspaceDraftSession(workspaceId);
-          const context = await getWorkspaceContext(workspaceId);
           const completedTurn = history.messages.slice(previousMessageCount);
           const recoveredUser = completedTurn[0];
           const recoveredAssistant = completedTurn[1];
