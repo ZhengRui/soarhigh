@@ -25,10 +25,10 @@ WEB_IMAGE_ID = "M03"
 
 @pytest.fixture
 def manifest_data() -> dict[str, Any]:
-    return json.loads((FIXTURES / "source-manifest-v4.json").read_text())
+    return json.loads((FIXTURES / "source-manifest-v5.json").read_text())
 
 
-def test_source_manifest_v4_fixture_is_complete(
+def test_source_manifest_v5_fixture_is_complete(
     manifest_data: dict[str, Any],
 ) -> None:
     manifest = SourceManifest.model_validate(manifest_data)
@@ -50,8 +50,8 @@ def test_source_manifest_v4_fixture_is_complete(
     }
 
 
-@pytest.mark.parametrize("invalid_version", [None, 3, True, 4.0, "4"])
-def test_manifest_requires_strict_schema_version_4(
+@pytest.mark.parametrize("invalid_version", [None, 4, True, 5.0, "5"])
+def test_manifest_requires_strict_schema_version_5(
     manifest_data: dict[str, Any],
     invalid_version: object,
 ) -> None:
@@ -166,6 +166,24 @@ def test_draft_cannot_claim_a_future_manifest_snapshot(
                 included=False,
             ),
             "direct uploads",
+        ),
+        (
+            lambda data: data["sources"][2].update(contentSha256=None),
+            "require contentSha256",
+        ),
+        (
+            lambda data: data["sources"][2].update(dimensions=None),
+            "require dimensions",
+        ),
+        (
+            lambda data: data["sources"][0].update(contentSha256="0" * 64),
+            "cannot declare contentSha256",
+        ),
+        (
+            lambda data: data["sources"][3].update(
+                dimensions={"width": 1, "height": 1}
+            ),
+            "only image sources",
         ),
         (
             lambda data: data.pop("meetingId"),

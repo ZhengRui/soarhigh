@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import threading
 from collections.abc import Generator
@@ -32,6 +33,9 @@ EDITORIAL = {
     "voiceTone": {"presets": [], "customProfiles": []},
 }
 CREATOR = {"id": "member-123", "name": "Test Member"}
+RED_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADElEQVR4nGP8zwACAAYIAQFazwZIAAAAAElFTkSuQmCC"
+)
 
 
 class _MeetingMediaHandler(BaseHTTPRequestHandler):
@@ -52,14 +56,14 @@ class _MeetingMediaHandler(BaseHTTPRequestHandler):
                             "fileKey": "meetings/462/photo.jpg",
                             "uploadedAt": "2026-07-20T09:00:00Z",
                             "mimeType": "image/jpeg",
-                            "sizeBytes": 5,
+                            "sizeBytes": len(RED_PNG),
                         }
                     ]
                 }
             )
             return
         if self.path == "/assets/photo.jpg":
-            body = b"photo"
+            body = RED_PNG
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -133,7 +137,7 @@ def test_workspace_report_and_display_media_use_one_canonical_catalog(
         _media(
             "meetings/462/first.jpg",
             "first.jpg",
-            size=5,
+            size=len(RED_PNG),
             uploaded_at="2026-07-20T09:00:00Z",
         ),
         _media(
@@ -145,7 +149,7 @@ def test_workspace_report_and_display_media_use_one_canonical_catalog(
         ),
     ]
     files = {
-        "https://assets.example/first.jpg": b"first",
+        "https://assets.example/first.jpg": RED_PNG,
         "https://assets.example/second.mp4": b"video",
     }
     controller = WorkspaceController(
@@ -216,7 +220,7 @@ def test_workspace_report_and_display_media_use_one_canonical_catalog(
     }
     assert report["publication"]["state"] == "unavailable"
     assert [item["source"]["id"] for item in displayed] == ["M01", "M02"]
-    assert [item["data"] for item in displayed] == [b"first", b"video"]
+    assert [item["data"] for item in displayed] == [RED_PNG, b"video"]
 
 
 def _bootstrap(
@@ -310,7 +314,7 @@ def test_workspace_list_and_delete_expose_collaboration_metadata(
     workspace_id = "shared-workspace"
 
     created = _bootstrap(controller, workspace_id)["manifest"]
-    assert created["schemaVersion"] == 4
+    assert created["schemaVersion"] == 5
     assert created["createdBy"] == CREATOR
     assert created["createdAt"] == created["updatedAt"]
 
@@ -491,7 +495,7 @@ def test_workspace_update_rejects_fixed_setup_changes_and_preserves_uploads(
             _media(
                 "meetings/462/photo.jpg",
                 "photo.jpg",
-                size=5,
+                size=len(RED_PNG),
                 uploaded_at="2026-07-20T09:00:00Z",
             )
         ],
@@ -510,7 +514,7 @@ def test_workspace_update_rejects_fixed_setup_changes_and_preserves_uploads(
         meeting_media_loader=lambda meeting_id: list(
             media_by_meeting.get(meeting_id, [])
         ),
-        source_loader=lambda url: {"https://assets.example/photo.jpg": b"photo"}[url],
+        source_loader=lambda url: {"https://assets.example/photo.jpg": RED_PNG}[url],
     )
     created = _bootstrap(controller)["manifest"]
     assert created["workspaceId"] == "material-workspace"
@@ -526,7 +530,7 @@ def test_workspace_update_rejects_fixed_setup_changes_and_preserves_uploads(
         origin="web-upload",
         filename="member-note.png",
         mime_type="image/png",
-        data=b"member-note",
+        data=RED_PNG,
     )
     assert [source["id"] for source in uploaded["sources"]] == ["M01", "M02"]
 
@@ -550,8 +554,8 @@ def test_workspace_update_rejects_fixed_setup_changes_and_preserves_uploads(
     assert manifest["manifestVersion"] == 3
     assert manifest["nextMaterialNumber"] == 3
     workspace = tmp_path / "inbox" / "material-workspace"
-    assert (workspace / "sources" / "M01.jpg").read_bytes() == b"photo"
-    assert (workspace / "sources" / "M02.png").read_bytes() == b"member-note"
+    assert (workspace / "sources" / "M01.jpg").read_bytes() == RED_PNG
+    assert (workspace / "sources" / "M02.png").read_bytes() == RED_PNG
 
 
 def test_workspace_update_is_version_checked_and_idempotent(
@@ -602,7 +606,7 @@ def test_stale_materials_save_conflicts_before_a_deleted_source_is_applied(
         origin="web-upload",
         filename="temporary.png",
         mime_type="image/png",
-        data=b"temporary",
+        data=RED_PNG,
     )
     source_id = uploaded["sources"][0]["id"]
     controller.delete_source(
@@ -639,7 +643,7 @@ def test_stale_materials_save_conflicts_before_a_deleted_source_is_applied(
 def test_import_and_include_materialize_exactly_once(
     tmp_path: Path,
 ) -> None:
-    photo = b"photo"
+    photo = RED_PNG
     media = [
         _media(
             "meetings/462/photo.jpg",
@@ -693,7 +697,7 @@ def test_import_and_include_materialize_exactly_once(
 def test_source_description_context_exposes_one_ready_image_and_meeting_facts(
     tmp_path: Path,
 ) -> None:
-    photo = b"photo"
+    photo = RED_PNG
     controller = WorkspaceController(
         tmp_path,
         article_validator=lambda document: document,
@@ -797,7 +801,7 @@ def test_real_media_transport_scopes_service_token_to_the_backend(
     assert imported["sources"][0]["workspaceReady"] is True
     assert (
         tmp_path / "inbox/material-workspace/sources/M01.jpg"
-    ).read_bytes() == b"photo"
+    ).read_bytes() == RED_PNG
     assert _MeetingMediaHandler.authorizations == [
         (f"/meetings/{MEETING_ID}/media", "Bearer service-token"),
         (f"/meetings/{MEETING_ID}/media", "Bearer service-token"),
@@ -808,7 +812,7 @@ def test_real_media_transport_scopes_service_token_to_the_backend(
 def test_include_nonready_source_downloads_and_includes_in_one_version(
     tmp_path: Path,
 ) -> None:
-    photo = b"photo"
+    photo = RED_PNG
     media = [
         _media(
             "meetings/462/photo.jpg",
@@ -911,6 +915,8 @@ def test_web_and_feishu_uploads_use_high_water_ids_and_canonical_paths(
         "filename": "notes.txt",
         "mimeType": "text/plain",
         "sizeBytes": 5,
+        "contentSha256": "ab5aa97074c454a0632057e704220d9a6678fbf773a0a5806fc09b8173b07309",
+        "dimensions": None,
         "workspaceReady": True,
         "included": False,
         "description": "",
@@ -963,19 +969,19 @@ def test_workspace_ready_source_can_be_read_with_its_declared_mime_type(
 ) -> None:
     controller = _controller(tmp_path, [], {})
     _bootstrap(controller)
-    controller.upload_source(
+    uploaded = controller.upload_source(
         "material-workspace",
         expected_manifest_version=1,
         origin="web-upload",
         filename="cover.jpg",
         mime_type="image/jpeg",
-        data=b"cover",
+        data=RED_PNG,
     )
 
     assert controller.read_source(
         "material-workspace",
         source_id="M01",
-    ) == (b"cover", "image/jpeg")
+    ) == (RED_PNG, "image/jpeg", uploaded["sources"][0]["contentSha256"])
 
     manifest = json.loads(
         (tmp_path / "inbox/material-workspace/source-manifest.json").read_text()
@@ -1017,7 +1023,7 @@ def test_delete_requires_confirmation_and_preserves_draft(
         origin="web-upload",
         filename="cover.jpg",
         mime_type="image/jpeg",
-        data=b"cover",
+        data=RED_PNG,
         description="A confirmed photo.",
         description_source="user",
         description_status="confirmed",
@@ -1076,7 +1082,7 @@ def test_delete_ignores_material_id_used_as_plain_article_text(
         origin="web-upload",
         filename="source.jpg",
         mime_type="image/jpeg",
-        data=b"source",
+        data=RED_PNG,
         description="A confirmed photo.",
         description_source="user",
         description_status="confirmed",
@@ -1111,7 +1117,7 @@ def test_delete_ignores_material_id_used_as_plain_article_text(
 def test_meeting_source_delete_keeps_reference_and_can_reimport(
     tmp_path: Path,
 ) -> None:
-    photo = b"photo"
+    photo = RED_PNG
     media = [
         _media(
             "meetings/462/photo.jpg",
@@ -1180,14 +1186,14 @@ def test_upload_manifest_failure_never_leaves_an_invalid_workspace(
             origin="web-upload",
             filename="photo.jpg",
             mime_type="image/jpeg",
-            data=b"photo",
+            data=RED_PNG,
         )
 
     context = _controller(tmp_path, [], {}).get_context("material-workspace")
     source_path = tmp_path / "inbox/material-workspace/sources/M01.jpg"
     if manifest_replaced:
         assert context["manifest"]["sources"][0]["id"] == "M01"
-        assert source_path.read_bytes() == b"photo"
+        assert source_path.read_bytes() == RED_PNG
     else:
         assert context["manifest"]["sources"] == []
         assert not source_path.exists()

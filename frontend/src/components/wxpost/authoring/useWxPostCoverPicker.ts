@@ -47,12 +47,16 @@ export function useWxPostCoverPicker({
   sources,
   document,
   renderDocument,
+  draftAssetUrls,
+  draftAssetStates,
   onApply,
 }: {
   workspaceId: string;
   sources: WorkspaceSource[];
   document: WxPostArticleDocument | null;
   renderDocument: WxPostRenderDocument | null;
+  draftAssetUrls: Record<string, string>;
+  draftAssetStates: Record<string, 'loading' | 'ready' | 'failed'>;
   onApply: (
     document: WxPostArticleDocument,
     renderDocument: WxPostRenderDocument
@@ -61,8 +65,10 @@ export function useWxPostCoverPicker({
   const [open, setOpen] = useState(false);
   const [selectedCoverId, setSelectedCoverId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
-  const objectUrlsRef = useRef<string[]>([]);
+  const [previewUrls, setPreviewUrls] = useState<
+    Record<string, { contentSha256: string; url: string }>
+  >({});
+  const objectUrlsRef = useRef(new Map<string, string>());
   const coverSources = useMemo(
     () =>
       sources.filter(
@@ -76,45 +82,61 @@ export function useWxPostCoverPicker({
       renderDocument ? wxPostBodyMediaIds(renderDocument) : new Set<string>(),
     [renderDocument]
   );
+  const draftManagedIds = useMemo(
+    () => new Set(Object.keys(draftAssetStates)),
+    [draftAssetStates]
+  );
   const candidates = useMemo(
     () =>
       coverSources.map((source) => {
-        const draftMedia = renderDocument?.media.find(
-          (media) => media.id === source.id
-        );
+        const localPreview = previewUrls[source.id];
         return {
           id: source.id,
           filename: source.filename,
-          previewUrl: draftMedia?.sourceUrl || previewUrls[source.id] || null,
+          previewUrl:
+            draftAssetUrls[source.id] ||
+            (localPreview?.contentSha256 === source.contentSha256
+              ? localPreview.url
+              : null),
           inArticle: bodyMediaIds.has(source.id),
         };
       }),
-    [bodyMediaIds, coverSources, previewUrls, renderDocument?.media]
+    [bodyMediaIds, coverSources, draftAssetUrls, previewUrls]
   );
 
   useEffect(
     () => () => {
       objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      objectUrlsRef.current.clear();
     },
     []
   );
 
   useEffect(() => {
     if (!open) return;
-    const loadedIds = new Set([
-      ...Object.keys(previewUrls),
-      ...(renderDocument?.media
-        .filter((media) => media.sourceUrl)
-        .map((media) => media.id) ?? []),
-    ]);
-    const missing = coverSources.filter((source) => !loadedIds.has(source.id));
+    const missing = coverSources.filter(
+      (source) =>
+        !draftManagedIds.has(source.id) &&
+        previewUrls[source.id]?.contentSha256 !== source.contentSha256
+    );
     if (missing.length === 0) return;
     let active = true;
     setLoading(true);
     void Promise.allSettled(
       missing.map(async (source) => {
-        const blob = await getWorkspaceSourceContent(workspaceId, source.id);
-        return [source.id, URL.createObjectURL(blob)] as const;
+        if (!source.contentSha256) {
+          throw new Error(`Source ${source.id} has no content version.`);
+        }
+        const blob = await getWorkspaceSourceContent(
+          workspaceId,
+          source.id,
+          source.contentSha256
+        );
+        return [
+          source.id,
+          source.contentSha256,
+          URL.createObjectURL(blob),
+        ] as const;
       })
     )
       .then((results) => {
@@ -122,13 +144,22 @@ export function useWxPostCoverPicker({
           result.status === 'fulfilled' ? [result.value] : []
         );
         if (!active) {
-          entries.forEach(([, url]) => URL.revokeObjectURL(url));
+          entries.forEach(([, , url]) => URL.revokeObjectURL(url));
           return;
         }
-        objectUrlsRef.current.push(...entries.map(([, url]) => url));
+        entries.forEach(([id, , url]) => {
+          const previousUrl = objectUrlsRef.current.get(id);
+          if (previousUrl) URL.revokeObjectURL(previousUrl);
+          objectUrlsRef.current.set(id, url);
+        });
         setPreviewUrls((current) => ({
           ...current,
-          ...Object.fromEntries(entries),
+          ...Object.fromEntries(
+            entries.map(([id, contentSha256, url]) => [
+              id,
+              { contentSha256, url },
+            ])
+          ),
         }));
       })
       .finally(() => {
@@ -137,7 +168,7 @@ export function useWxPostCoverPicker({
     return () => {
       active = false;
     };
-  }, [coverSources, open, previewUrls, renderDocument?.media, workspaceId]);
+  }, [coverSources, draftManagedIds, open, previewUrls, workspaceId]);
 
   const show = useCallback(() => {
     setSelectedCoverId(document?.coverMediaId ?? null);
@@ -165,7 +196,9 @@ export function useWxPostCoverPicker({
               ),
               renderMedia: coverMediaFromSource(
                 source,
-                previewUrls[source.id] ?? ''
+                previewUrls[source.id]?.contentSha256 === source.contentSha256
+                  ? previewUrls[source.id].url
+                  : ''
               ),
             }
           : undefined;
@@ -193,7 +226,12 @@ export function useWxPostCoverPicker({
   return {
     open,
     selectedCoverId,
-    loading,
+    loading:
+      loading ||
+      (open &&
+        coverSources.some(
+          (source) => draftAssetStates[source.id] === 'loading'
+        )),
     candidates,
     show,
     close: () => setOpen(false),

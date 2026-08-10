@@ -54,11 +54,22 @@ function MaterialImage({
     height: number;
   } | null>(null);
   const contentQuery = useQuery({
-    queryKey: ['wxpost-source-content', workspaceId, material.sourceId],
-    queryFn: () => getWorkspaceSourceContent(workspaceId, material.sourceId),
+    queryKey: [
+      'wxpost-source-content',
+      workspaceId,
+      material.sourceId,
+      material.contentSha256,
+    ],
+    queryFn: () =>
+      getWorkspaceSourceContent(
+        workspaceId,
+        material.sourceId,
+        material.contentSha256!
+      ),
     enabled:
       material.kind === 'image' &&
       material.workspaceReady &&
+      Boolean(material.contentSha256) &&
       !material.previewUrl,
     staleTime: 0,
   });

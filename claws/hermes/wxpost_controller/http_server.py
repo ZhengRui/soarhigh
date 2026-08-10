@@ -142,10 +142,23 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             return
         content_match = SOURCE_CONTENT_PATH.fullmatch(path)
         if content_match is not None:
+            query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+            if (
+                set(query) != {"v"}
+                or len(query["v"]) != 1
+                or not re.fullmatch(r"[0-9a-f]{64}", query["v"][0])
+            ):
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_request",
+                    "source content requires one valid v parameter",
+                )
+                return
             self._run_source_read(
                 lambda: self.server.controller.read_source(
                     content_match.group(1),
                     source_id=content_match.group(2),
+                    content_sha256=query["v"][0],
                 )
             )
             return
@@ -797,7 +810,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
     def _run_source_read(self, operation) -> None:
         try:
-            data, mime_type = operation()
+            data, mime_type, content_sha256 = operation()
         except WorkspaceError as exc:
             if isinstance(exc, WorkspaceNotFound):
                 status = HTTPStatus.NOT_FOUND
@@ -816,7 +829,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", mime_type)
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "private, no-store")
+            self.send_header(
+                "Cache-Control",
+                "private, max-age=31536000, immutable",
+            )
+            self.send_header("ETag", f'"{content_sha256}"')
+            self.send_header("Vary", "Authorization")
             self.end_headers()
             self.wfile.write(data)
 

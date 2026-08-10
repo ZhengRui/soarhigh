@@ -86,6 +86,7 @@ def _context(*, manifest_version: int = 4, draft_version: int = 2) -> dict:
                     "filename": "round-table.jpg",
                     "mimeType": "image/jpeg",
                     "workspaceReady": True,
+                    "contentSha256": hashlib.sha256(b"public image bytes").hexdigest(),
                 }
             ],
         },
@@ -131,8 +132,13 @@ async def _load_context(workspace_id: str) -> dict:
     return _context()
 
 
-async def _load_source(workspace_id: str, source_id: str) -> tuple[bytes, str]:
+async def _load_source(
+    workspace_id: str,
+    source_id: str,
+    content_sha256: str,
+) -> tuple[bytes, str]:
     assert (workspace_id, source_id) == ("wxpost-abc", "M01")
+    assert content_sha256 == hashlib.sha256(b"public image bytes").hexdigest()
     return b"public image bytes", "image/jpeg"
 
 
@@ -221,6 +227,31 @@ async def test_sync_rejects_missing_saved_material(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_sync_rejects_source_bytes_that_do_not_match_manifest(
+    monkeypatch,
+) -> None:
+    async def load_source(
+        workspace_id: str,
+        source_id: str,
+        content_sha256: str,
+    ) -> tuple[bytes, str]:
+        return b"different bytes", "image/jpeg"
+
+    monkeypatch.setattr(publication, "get_wxpost_by_workspace_id", lambda workspace_id: None)
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.synchronize_workspace_publication(
+            "wxpost-abc",
+            _request(),
+            load_context=_load_context,
+            load_source=load_source,
+            compile_render=_compile,
+        )
+
+    assert raised.value.code == "missing_publication_media"
+    assert "does not match its version" in str(raised.value)
+
+
+@pytest.mark.asyncio
 async def test_public_revision_conflict_stops_before_media_download(
     monkeypatch,
 ) -> None:
@@ -234,6 +265,7 @@ async def test_public_revision_conflict_stops_before_media_download(
     async def load_source(
         workspace_id: str,
         source_id: str,
+        content_sha256: str,
     ) -> tuple[bytes, str]:
         nonlocal downloaded
         downloaded = True
@@ -304,6 +336,7 @@ async def test_sync_spools_media_without_retaining_all_source_bytes(
     monkeypatch,
 ) -> None:
     context = _context()
+    context["manifest"]["sources"][0]["contentSha256"] = hashlib.sha256(b"first image").hexdigest()
     context["manifest"]["sources"].append(
         {
             "id": "M02",
@@ -311,6 +344,7 @@ async def test_sync_spools_media_without_retaining_all_source_bytes(
             "filename": "second.jpg",
             "mimeType": "image/jpeg",
             "workspaceReady": True,
+            "contentSha256": hashlib.sha256(b"second image").hexdigest(),
         }
     )
     context["draft"]["document"]["media"].append(
@@ -332,7 +366,12 @@ async def test_sync_spools_media_without_retaining_all_source_bytes(
 
     source_bytes = {"M01": b"first image", "M02": b"second image"}
 
-    async def load_source(workspace_id: str, source_id: str) -> tuple[bytes, str]:
+    async def load_source(
+        workspace_id: str,
+        source_id: str,
+        content_sha256: str,
+    ) -> tuple[bytes, str]:
+        assert content_sha256 == context["manifest"]["sources"][0 if source_id == "M01" else 1]["contentSha256"]
         return source_bytes[source_id], "image/jpeg"
 
     spooled_paths: list[publication.Path] = []

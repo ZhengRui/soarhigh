@@ -218,6 +218,7 @@ export function WxPostMaterialsStage({
         description:
           workingCopy.sources[source.id]?.description ?? source.description,
         workspaceReady: source.workspaceReady,
+        contentSha256: source.contentSha256,
         included: workingCopy.sources[source.id]?.included ?? source.included,
       }));
   }, [

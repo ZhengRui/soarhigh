@@ -32,6 +32,9 @@ test('keeps loaded Draft media stable when the assistant saves a revision', asyn
   const context = Array.from(workspace.contexts.values())[0];
   context.manifest.sources.forEach((source) => {
     source.workspaceReady = true;
+    source.contentSha256 = 'a'.repeat(64);
+    source.dimensions =
+      source.kind === 'image' ? { width: 1, height: 1 } : null;
     source.included = true;
   });
   workspace.nextGeneratedDocument = completeDraftDocument();
@@ -41,6 +44,14 @@ test('keeps loaded Draft media stable when the assistant saves a revision', asyn
   await expect(firstImage).toBeVisible();
   const sourceBeforeRevision = await firstImage.getAttribute('src');
   expect(sourceBeforeRevision).toMatch(/^blob:/);
+  await page.getByTestId('open-cover-picker').click();
+  await expect(
+    page.getByTestId('cover-candidate-M01').locator('img')
+  ).toHaveAttribute('src', sourceBeforeRevision!);
+  await page
+    .getByTestId('cover-picker-dialog')
+    .getByRole('button', { name: 'Cancel' })
+    .click();
 
   const chatInput = page.getByPlaceholder('Ask about or revise the Draft…');
   await chatInput.fill('Make the title more concise.');
@@ -48,9 +59,7 @@ test('keeps loaded Draft media stable when the assistant saves a revision', asyn
 
   await expect(page.getByText('Draft · v2')).toBeVisible();
   await expect(firstImage).toHaveAttribute('src', sourceBeforeRevision!);
-  await expect(
-    page.getByText('Preparing Draft preview and media…')
-  ).toHaveCount(0);
+  await expect(page.getByText('Preparing Draft preview…')).toHaveCount(0);
   const completedSteps = page.getByText('4 steps completed', { exact: true });
   await completedSteps.click();
   const history = page.getByTestId('draft-chat-history');
@@ -908,6 +917,8 @@ test('does not revalidate an unchanged Draft after a Materials-only save', async
   await page.getByTestId('create-workspace').click();
   const context = Array.from(workspace.contexts.values())[0];
   context.manifest.sources[0].workspaceReady = true;
+  context.manifest.sources[0].contentSha256 = 'a'.repeat(64);
+  context.manifest.sources[0].dimensions = { width: 1, height: 1 };
   context.manifest.sources[0].included = true;
   const mediaDraft = draftDocument(
     'One material Draft',
@@ -948,7 +959,7 @@ test('does not revalidate an unchanged Draft after a Materials-only save', async
   expect(workspace.draftValidationRequests).toBe(validationCount);
 });
 
-test('reports a media download failure instead of rendering a missing-material placeholder', async ({
+test('keeps the Draft usable and retries a failed image independently', async ({
   page,
 }) => {
   const workspace = await openAuthoringPage(page);
@@ -956,6 +967,9 @@ test('reports a media download failure instead of rendering a missing-material p
   const context = Array.from(workspace.contexts.values())[0];
   context.manifest.sources.forEach((source) => {
     source.workspaceReady = true;
+    source.contentSha256 = 'a'.repeat(64);
+    source.dimensions =
+      source.kind === 'image' ? { width: 1, height: 1 } : null;
     source.included = true;
   });
   workspace.nextGeneratedDocument = completeDraftDocument();
@@ -963,21 +977,104 @@ test('reports a media download failure instead of rendering a missing-material p
 
   await page.getByTestId('generate-draft').click();
 
+  await expect(page.getByTestId('draft-workbench')).toBeVisible();
   await expect(
-    page.getByText('Draft media is temporarily unavailable', { exact: true })
+    page.getByRole('heading', { name: 'Draft Assistant' })
   ).toBeVisible();
-  await expect(page.getByText(/Missing (?:image|video) M0[1-3]/)).toHaveCount(
-    0
-  );
-  await expect(page.getByTestId('draft-workbench')).toBeHidden();
+  const retry = page.getByRole('button', { name: 'Retry image' }).first();
+  await expect(retry).toBeVisible();
 
   workspace.failSourceContent = false;
-  await page.reload();
-  await page.getByRole('button', { name: /^3 Draft$/ }).click();
+  await retry.click();
+  await expect(
+    page.getByTestId('wxpost-article').locator('img').first()
+  ).toBeVisible();
+});
+
+test('renders text and exact-ratio skeletons before delayed images without layout shift', async ({
+  page,
+}) => {
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  const context = Array.from(workspace.contexts.values())[0];
+  context.manifest.sources.forEach((source) => {
+    source.workspaceReady = true;
+    source.contentSha256 = 'a'.repeat(64);
+    source.dimensions =
+      source.kind === 'image' ? { width: 1, height: 1 } : null;
+    source.included = true;
+  });
+  workspace.nextGeneratedDocument = completeDraftDocument();
+  workspace.sourceContentDelayMs = 2_000;
+
+  await page.getByTestId('generate-draft').click();
+
   await expect(page.getByTestId('draft-workbench')).toBeVisible();
-  await expect(page.getByText(/Missing (?:image|video) M0[1-3]/)).toHaveCount(
-    0
-  );
+  await expect(
+    page.getByRole('heading', { name: 'Draft Assistant' })
+  ).toBeVisible();
+  const skeleton = page
+    .locator('[data-wxpost-media-state="loading"][data-wxpost-media-id="M01"]')
+    .first();
+  await expect(skeleton).toBeVisible();
+  const desktopSkeletonBox = await skeleton.boundingBox();
+  expect(desktopSkeletonBox).not.toBeNull();
+
+  await page.getByRole('button', { name: 'Mobile canvas' }).click();
+  const mobileSkeletonBox = await skeleton.boundingBox();
+  expect(mobileSkeletonBox).not.toBeNull();
+
+  const image = page.locator('[data-wxpost-media-frame="M01"] img').first();
+  await expect(image).toBeVisible();
+  const mobileImageBox = await image.boundingBox();
+  expect(
+    Math.abs(mobileImageBox!.height - mobileSkeletonBox!.height)
+  ).toBeLessThan(1);
+
+  await page.getByRole('button', { name: 'Desktop canvas' }).click();
+  const desktopImageBox = await image.boundingBox();
+  expect(
+    Math.abs(desktopImageBox!.height - desktopSkeletonBox!.height)
+  ).toBeLessThan(1);
+});
+
+test('aborts a hanging image after fifteen seconds without blocking the Draft', async ({
+  page,
+}) => {
+  test.setTimeout(25_000);
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  const context = Array.from(workspace.contexts.values())[0];
+  const source = context.manifest.sources[0];
+  source.workspaceReady = true;
+  source.contentSha256 = 'a'.repeat(64);
+  source.dimensions = { width: 1, height: 1 };
+  source.included = true;
+  const document = draftDocument('Hanging image', ':::image\nmedia: M01\n:::');
+  document.media = [
+    {
+      id: 'M01',
+      kind: 'image',
+      sourceUrl: 'https://workspace.invalid/M01.jpg',
+      posterUrl: null,
+      description: 'A delayed image.',
+      include: true,
+      order: 1,
+      descriptionSource: 'user',
+      descriptionStatus: 'confirmed',
+    },
+  ];
+  workspace.nextGeneratedDocument = document;
+  workspace.sourceContentDelayMs = 16_500;
+
+  await page.getByTestId('generate-draft').click();
+  await expect(page.getByTestId('draft-workbench')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Draft Assistant' })
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry image' })).toBeVisible({
+    timeout: 17_000,
+  });
 });
 
 test('shows a renderer failure instead of leaving Draft loading forever', async ({

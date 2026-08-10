@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
@@ -28,6 +29,9 @@ GROUP_PHOTO_ID = "M01"
 SPEAKER_ID = "M02"
 WEB_IMAGE_ID = "M03"
 FEISHU_VIDEO_ID = "M04"
+PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
@@ -55,7 +59,7 @@ from app.services.wxpost_document import (  # noqa: E402
 
 
 def _manifest_fixture() -> dict[str, Any]:
-    return json.loads((FIXTURES / "source-manifest-v4.json").read_text())
+    return json.loads((FIXTURES / "source-manifest-v5.json").read_text())
 
 
 def _seed_workspace(root: Path, workspace_id: str) -> None:
@@ -1284,7 +1288,7 @@ def test_manifest_and_draft_versions_advance_independently(
     controller = _controller(root)
 
     context = controller.get_context(workspace_id)
-    assert context["manifest"]["schemaVersion"] == 4
+    assert context["manifest"]["schemaVersion"] == 5
     assert context["manifest"]["manifestVersion"] == 1
     assert context["manifest"]["draft"] is None
     assert context["draft"] is None
@@ -2476,7 +2480,7 @@ def test_v1_manifest_is_rejected_without_runtime_compatibility(
     manifest["schemaVersion"] = 1
     path.write_text(json.dumps(manifest))
 
-    with pytest.raises(InvalidWorkspace, match="source-manifest v4"):
+    with pytest.raises(InvalidWorkspace, match="source-manifest v5"):
         _controller(root).get_context(workspace_id)
 
 
@@ -2777,22 +2781,28 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
             f"{base_url}/workspaces/{workspace_id}/uploads",
             filename="网页照片.jpg",
             expected_manifest_version=1,
-            data=b"web-photo",
+            data=PNG_BYTES,
             mime_type="image/jpeg",
         )
-        assert status == 200
+        assert status == 200, uploaded
         assert uploaded["sources"][0]["id"] == "M01"
         assert uploaded["sources"][0]["origin"] == {"type": "web-upload"}
 
         request = urllib.request.Request(
-            f"{base_url}/workspaces/{workspace_id}/sources/M01/content",
+            f"{base_url}/workspaces/{workspace_id}/sources/M01/content"
+            f"?v={uploaded['sources'][0]['contentSha256']}",
             headers={"Authorization": f"Bearer {TOKEN}"},
         )
         with urllib.request.urlopen(request, timeout=5) as response:
             assert response.status == 200
             assert response.headers["Content-Type"] == "image/jpeg"
-            assert response.headers["Cache-Control"] == "private, no-store"
-            assert response.read() == b"web-photo"
+            assert response.headers["Cache-Control"] == (
+                "private, max-age=31536000, immutable"
+            )
+            assert response.headers["ETag"] == (
+                f'"{uploaded["sources"][0]["contentSha256"]}"'
+            )
+            assert response.read() == PNG_BYTES
 
         status, saved = _json_request(
             f"{base_url}/workspaces/{workspace_id}",

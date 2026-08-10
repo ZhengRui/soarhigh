@@ -343,7 +343,7 @@ test('does not substitute the first meeting when a resumed source is unavailable
   workspace.contexts.set('wxpost-missing-meeting', {
     workspaceId: 'wxpost-missing-meeting',
     manifest: {
-      schemaVersion: 4,
+      schemaVersion: 5,
       workspaceId: 'wxpost-missing-meeting',
       manifestVersion: 3,
       nextMaterialNumber: 1,

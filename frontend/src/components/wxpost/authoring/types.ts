@@ -16,6 +16,7 @@ export interface WxPostMaterial {
   filename: string;
   description: string;
   workspaceReady: boolean;
+  contentSha256: string | null;
   included: boolean;
 }
 

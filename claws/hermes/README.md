@@ -331,9 +331,9 @@ operations, direct Draft saves, and focused Hermes Draft requests needed by the
 authoring page; MCP exposes the canonical operations used by the formal
 `soarhigh-wxpost-authoring` Skill.
 
-`contracts.py` defines the single supported `source-manifest v4` shape plus the
+`contracts.py` defines the single supported `source-manifest v5` shape plus the
 operation inputs. A complete manifest example lives at
-`tests/fixtures/source-manifest-v4.json`. Important invariants include:
+`tests/fixtures/source-manifest-v5.json`. Important invariants include:
 
 - each collected source receives the next workspace-local material ID
   (`M01`, `M02`, and so on) when it enters the manifest; the ID is persisted,
@@ -341,6 +341,11 @@ operation inputs. A complete manifest example lives at
   `nextMaterialNumber` persists that high-water mark;
 - meeting-library provenance keeps the backend `fileKey`, while the local file
   path is derived as `sources/{sourceId}{originalSuffix}`;
+- every workspace-ready source stores a SHA-256 content version, and images
+  also store trusted EXIF-oriented display dimensions. Existing v4 manifests
+  must be migrated offline with
+  `python -m wxpost_controller.migrate_manifest_v5` before the v5 controller
+  starts;
 - Hermes submits strict Draft proposal schema v2 containing only editorial
   fields, ordered typed content blocks, media references, and an optional cover
   reference. Generate and Regenerate derive source-owned fields from current
@@ -705,7 +710,7 @@ POST   /workspaces/{workspaceId}/voice-tone/suggestion
 PATCH  /workspaces/{workspaceId}/sources
 POST   /workspaces/{workspaceId}/sources/{sourceId}/import
 PUT    /workspaces/{workspaceId}/sources/{sourceId}/inclusion
-GET    /workspaces/{workspaceId}/sources/{sourceId}/content
+GET    /workspaces/{workspaceId}/sources/{sourceId}/content?v={contentSha256}
 POST   /workspaces/{workspaceId}/uploads?filename=...
 GET    /workspaces/{workspaceId}/sources/{sourceId}/delete-preflight
 DELETE /workspaces/{workspaceId}/sources/{sourceId}
@@ -717,6 +722,10 @@ move cards, while each summary still exposes `updatedAt` for display.
 The upload route accepts the source bytes as its body, the MIME type in
 `Content-Type`, and the compare-and-swap version in
 `X-Expected-Manifest-Version`.
+
+Source content requires the exact SHA-256 version stored in the manifest and
+returns a private immutable cache contract plus an ETag. Authentication remains
+required, and a stale or missing version is rejected.
 
 Source deletion is dependency-safe. The preflight reports
 `blockedByDraft: true` when the saved Draft still references the source, and

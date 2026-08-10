@@ -163,6 +163,9 @@ test('removes only the selected occurrence when one image is reused', async ({
   const context = Array.from(workspace.contexts.values())[0];
   context.manifest.sources.forEach((source) => {
     source.workspaceReady = true;
+    source.contentSha256 = 'a'.repeat(64);
+    source.dimensions =
+      source.kind === 'image' ? { width: 1, height: 1 } : null;
     source.included = true;
   });
   workspace.nextGeneratedDocument = completeDraftDocument();
@@ -210,6 +213,9 @@ test('edits every Draft text source precisely and persists it without changing M
   const context = Array.from(workspace.contexts.values())[0];
   context.manifest.sources.forEach((source, index) => {
     source.workspaceReady = true;
+    source.contentSha256 = 'a'.repeat(64);
+    source.dimensions =
+      source.kind === 'image' ? { width: 1, height: 1 } : null;
     source.included = true;
     source.description = `Saved Materials description ${index + 1}`;
     source.descriptionSource = 'user';

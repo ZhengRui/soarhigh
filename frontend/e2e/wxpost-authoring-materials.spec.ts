@@ -5,6 +5,7 @@ import {
   FIRST_SOURCE_KEY,
   MEETING_462,
   MEETING_OPTIONS,
+  draftDocument,
   mockAuthenticatedMember,
   mockWxPostReadApis,
   mockWxPostWorkspaceApi,
@@ -113,12 +114,13 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
   }).toPass({ timeout: 15_000 });
 
   const context = Array.from(workspace.contexts.values())[0];
+  const savedDraftDocument = draftDocument(
+    'Previously saved draft',
+    'This must not change.'
+  );
   const savedDraft = {
     draftVersion: 7,
-    document: {
-      title: 'Previously saved draft',
-      bodyMarkdown: 'This must not change.',
-    },
+    document: savedDraftDocument,
   };
   context.manifest.draft = {
     version: 7,
@@ -226,10 +228,7 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
     description: '',
   });
   expect(context.draft).toBe(savedDraft);
-  expect(context.draft.document).toEqual({
-    title: 'Previously saved draft',
-    bodyMarkdown: 'This must not change.',
-  });
+  expect(context.draft.document).toEqual(savedDraftDocument);
   expect(workspace.requests).not.toContain('PATCH /sources');
   expect(workspace.requests).not.toContain('PUT /sources/M01/inclusion');
   expect(workspace.requests).not.toContain('PATCH /');
@@ -256,10 +255,7 @@ test('keeps Materials edits local and isolated from the saved Draft', async ({
     descriptionStatus: 'confirmed',
   });
   expect(context.draft).toBe(savedDraft);
-  expect(context.draft.document).toEqual({
-    title: 'Previously saved draft',
-    bodyMarkdown: 'This must not change.',
-  });
+  expect(context.draft.document).toEqual(savedDraftDocument);
   expect(
     workspace.requests.filter((request) => request === 'PATCH /')
   ).toHaveLength(1);

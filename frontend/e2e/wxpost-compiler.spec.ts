@@ -375,3 +375,27 @@ test('renders a single image without gallery chrome or duplicate captions', () =
     `>${input.renderDocument.media[0].description}</p>`
   );
 });
+
+test('reserves trusted image geometry while Draft media loads or fails', () => {
+  const input = request();
+  const mediaId = input.renderDocument.media.find(
+    (media) => media.kind === 'image'
+  )!.id;
+  input.context.assetUrls = { ...input.context.assetUrls, [mediaId]: '' };
+  input.context.assetDimensions = {
+    [mediaId]: { width: 1200, height: 800 },
+  };
+  input.context.assetStates = { [mediaId]: 'loading' };
+
+  const loading = compileWxPost(input, { editable: true }).html;
+  expect(loading).toContain(`data-wxpost-media-state="loading"`);
+  expect(loading).toContain('aspect-ratio:1200 / 800');
+  expect(loading).not.toContain(
+    `src="${input.renderDocument.media[0].sourceUrl}"`
+  );
+
+  input.context.assetStates[mediaId] = 'failed';
+  const failed = compileWxPost(input, { editable: true }).html;
+  expect(failed).toContain(`data-wxpost-retry-media="${mediaId}"`);
+  expect(failed).toContain('aspect-ratio:1200 / 800');
+});

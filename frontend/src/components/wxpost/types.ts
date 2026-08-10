@@ -82,6 +82,8 @@ export interface WxPostRenderDocument extends WxPostArticleMetadata {
 
 export interface WxPostRenderContext {
   assetUrls?: Record<string, string>;
+  assetDimensions?: Record<string, { width: number; height: number } | null>;
+  assetStates?: Record<string, 'loading' | 'ready' | 'failed'>;
   contextLabel?: string | null;
   displayDate?: string | null;
   publisherName?: string | null;

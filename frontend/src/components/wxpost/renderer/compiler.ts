@@ -297,6 +297,40 @@ function mediaPlaceholder(label: string, tokens: PresentationTokens) {
   ])}>${escapeHtml(label)}</div>`;
 }
 
+function draftMediaPlaceholder(
+  mediaId: string,
+  kind: 'image' | 'video',
+  state: 'loading' | 'failed',
+  dimensions: { width: number; height: number } | null,
+  tokens: PresentationTokens,
+  layout: WxPostCompileRequest['presentation']['layout']
+) {
+  const retry =
+    state === 'failed'
+      ? `<button type="button" data-wxpost-retry-media="${escapeAttribute(
+          mediaId
+        )}" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50" contenteditable="false">Retry ${kind}</button>`
+      : `<span class="sr-only">Loading ${kind}</span>`;
+  return `<div data-wxpost-media-state="${state}" data-wxpost-media-id="${escapeAttribute(
+    mediaId
+  )}" class="${state === 'loading' ? 'animate-pulse motion-reduce:animate-none' : ''}" ${styleAttribute(
+    [
+      ['display', 'grid'],
+      ['width', '100%'],
+      ...(dimensions
+        ? ([
+            ['aspect-ratio', `${dimensions.width} / ${dimensions.height}`],
+          ] as Array<[string, string]>)
+        : ([['min-height', '192px']] as Array<[string, string]>)),
+      ['place-items', 'center'],
+      ['border', `1px solid ${tokens.border}`],
+      ['border-radius', layout === 'brand-default' ? '8px' : '0'],
+      ['background', tokens.soft],
+      ['color', tokens.muted],
+    ]
+  )}>${retry}</div>`;
+}
+
 function imageMarkup(
   media: WxPostMediaAsset | undefined,
   context: WxPostRenderContext,
@@ -306,15 +340,40 @@ function imageMarkup(
 ) {
   const url = mediaUrl(media, context);
   if (!url || media?.kind !== 'image') {
+    const state = media ? context.assetStates?.[media.id] : undefined;
+    const dimensions = media ? context.assetDimensions?.[media.id] : undefined;
+    if (
+      media?.kind === 'image' &&
+      (state === 'loading' || state === 'failed') &&
+      dimensions
+    ) {
+      return draftMediaPlaceholder(
+        media.id,
+        'image',
+        state,
+        dimensions,
+        tokens,
+        layout
+      );
+    }
     return mediaPlaceholder(missingLabel, tokens);
   }
+  const dimensions = context.assetDimensions?.[media.id];
+  const dimensionAttributes = dimensions
+    ? ` width="${dimensions.width}" height="${dimensions.height}"`
+    : '';
   return `<img src="${escapeAttribute(url)}" alt="${escapeAttribute(
     media.description
-  )}" loading="lazy" ${styleAttribute([
+  )}" loading="lazy"${dimensionAttributes} ${styleAttribute([
     ['display', 'block'],
     ['width', '100%'],
     ['max-width', '100%'],
     ['height', 'auto'],
+    ...(dimensions
+      ? ([
+          ['aspect-ratio', `${dimensions.width} / ${dimensions.height}`],
+        ] as Array<[string, string]>)
+      : []),
     ['margin', '0 auto'],
     ['border', `1px solid ${tokens.border}`],
     ['border-radius', layout === 'brand-default' ? '8px' : '0'],
@@ -542,9 +601,13 @@ const DIRECTIVE_RENDERERS = {
       editable,
       nodeIndex
     ),
-  video: (node, { mediaById, context, tokens, editable, nodeIndex }) => {
+  video: (
+    node,
+    { mediaById, context, tokens, layout, editable, nodeIndex }
+  ) => {
     const media = mediaById.get(node.payload.media);
     const url = mediaUrl(media, context);
+    const state = media ? context.assetStates?.[media.id] : undefined;
     const video =
       media?.kind === 'video' && url
         ? `<video data-testid="wxpost-video" controls preload="metadata"${
@@ -559,7 +622,16 @@ const DIRECTIVE_RENDERERS = {
               ['background', '#000000'],
             ]
           )}><source src="${escapeAttribute(url)}"></video>`
-        : mediaPlaceholder(`Missing video ${node.payload.media}`, tokens);
+        : media?.kind === 'video' && (state === 'loading' || state === 'failed')
+          ? draftMediaPlaceholder(
+              media.id,
+              'video',
+              state,
+              null,
+              tokens,
+              layout
+            )
+          : mediaPlaceholder(`Missing video ${node.payload.media}`, tokens);
     const heading = node.payload.caption
       ? `${moduleLabel('Video', tokens)}${moduleHeading(
           node.payload.caption,

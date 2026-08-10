@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -17,6 +18,12 @@ from wxpost_controller.feishu_state_store import FeishuStateStore
 DM_SCOPE = "agent:wxpost:feishu:dm:oc_dm"
 GROUP_MEMBER_SCOPE = "agent:wxpost:feishu:group:oc_group:ou_member"
 THREAD_SCOPE = "agent:wxpost:feishu:group:oc_group:omt_thread"
+RED_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADElEQVR4nGP8zwACAAYIAQFazwZIAAAAAElFTkSuQmCC"
+)
+BLUE_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAD0lEQVR4nGNkYPjPwMAAAAQKAQHOAd3hAAAAAElFTkSuQmCC"
+)
 
 
 def _navigation(root: Path, monkeypatch: pytest.MonkeyPatch) -> FeishuNavigation:
@@ -346,7 +353,7 @@ def test_feishu_image_description_requires_confirmation_before_materials_save(
         origin="feishu-upload",
         filename="members.jpg",
         mime_type="image/jpeg",
-        data=b"members",
+        data=RED_PNG,
     )
     captured: list[dict[str, object]] = []
 
@@ -766,9 +773,9 @@ def test_feishu_attachment_import_is_idempotent_per_message_and_content(
     navigation = _navigation(tmp_path, monkeypatch)
     cache = tmp_path / "feishu-cache"
     first_path = cache / "photo.jpg"
-    first_path.write_bytes(b"first photo")
+    first_path.write_bytes(RED_PNG)
     second_path = cache / "same-name.jpg"
-    second_path.write_bytes(b"different photo")
+    second_path.write_bytes(BLUE_PNG)
 
     with pytest.raises(InvalidRequest, match="select or create"):
         navigation.import_attachments(
@@ -817,7 +824,7 @@ def test_feishu_attachment_import_validates_metadata_and_scopes_deduplication(
     navigation = _navigation(tmp_path, monkeypatch)
     cache = tmp_path / "feishu-cache"
     source_path = cache / "photo.jpg"
-    source_path.write_bytes(b"same photo")
+    source_path.write_bytes(RED_PNG)
     _create_independent(navigation)
     navigation._store.set_interaction_mode(DM_SCOPE, FeishuStateStore.EDITING)
 
@@ -851,7 +858,7 @@ def test_material_library_rejects_a_report_and_media_version_mismatch(
     workspace_id = str(created["activeWorkspaceId"])
     navigation._store.set_interaction_mode(DM_SCOPE, FeishuStateStore.EDITING)
     source_path = tmp_path / "feishu-cache" / "concurrent.jpg"
-    source_path.write_bytes(b"concurrent photo")
+    source_path.write_bytes(RED_PNG)
     original_get_report = navigation._controller.get_workspace_report
 
     def get_report_then_change_manifest(target_workspace_id: str) -> dict[str, object]:

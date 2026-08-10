@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-MANIFEST_SCHEMA_VERSION: Literal[4] = 4
+MANIFEST_SCHEMA_VERSION: Literal[5] = 5
 DRAFT_PROPOSAL_SCHEMA_VERSION: Literal[2] = 2
 
 TrimmedText = Annotated[
@@ -210,6 +210,11 @@ class EditorialSettings(ContractModel):
         return self
 
 
+class SourceDimensions(ContractModel):
+    width: int = Field(gt=0, strict=True)
+    height: int = Field(gt=0, strict=True)
+
+
 class SourceRecord(ContractModel):
     id: SourceId
     kind: SourceKind
@@ -217,6 +222,14 @@ class SourceRecord(ContractModel):
     filename: TrimmedText
     mime_type: TrimmedText
     size_bytes: int = Field(gt=0, strict=True)
+    content_sha256: (
+        Annotated[
+            str,
+            StringConstraints(pattern=r"^[0-9a-f]{64}$"),
+        ]
+        | None
+    ) = None
+    dimensions: SourceDimensions | None = None
     workspace_ready: bool = Field(strict=True)
     included: bool = Field(strict=True)
     description: str = ""
@@ -239,6 +252,17 @@ class SourceRecord(ContractModel):
             and not self.workspace_ready
         ):
             raise ValueError("direct uploads must be workspace-ready")
+        if self.workspace_ready and self.content_sha256 is None:
+            raise ValueError("workspace-ready sources require contentSha256")
+        if not self.workspace_ready and self.content_sha256 is not None:
+            raise ValueError("candidate sources cannot declare contentSha256")
+        if self.kind == SourceKind.IMAGE:
+            if self.workspace_ready and self.dimensions is None:
+                raise ValueError("workspace-ready images require dimensions")
+            if not self.workspace_ready and self.dimensions is not None:
+                raise ValueError("candidate images cannot declare dimensions")
+        elif self.dimensions is not None:
+            raise ValueError("only image sources may declare dimensions")
 
         _validate_description_state(
             self.description,
@@ -264,7 +288,7 @@ class WorkspaceCreator(ContractModel):
 
 
 class SourceManifest(ContractModel):
-    schema_version: Literal[4]
+    schema_version: Literal[5]
     workspace_id: TrimmedText
     manifest_version: int = Field(ge=1, strict=True)
     next_material_number: int = Field(ge=1, strict=True)
@@ -284,7 +308,7 @@ class SourceManifest(ContractModel):
             or isinstance(value, bool)
             or value != MANIFEST_SCHEMA_VERSION
         ):
-            raise ValueError("schemaVersion must be the integer 4")
+            raise ValueError("schemaVersion must be the integer 5")
         return value
 
     @model_validator(mode="after")

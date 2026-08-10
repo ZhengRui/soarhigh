@@ -24,7 +24,7 @@ export {
 } from './wxpostFixtures';
 
 export type WorkspaceManifest = {
-  schemaVersion: 4;
+  schemaVersion: 5;
   workspaceId: string;
   manifestVersion: number;
   nextMaterialNumber: number;
@@ -73,6 +73,8 @@ export type WorkspaceManifest = {
     filename: string;
     mimeType: string;
     sizeBytes: number;
+    contentSha256: string | null;
+    dimensions: { width: number; height: number } | null;
     workspaceReady: boolean;
     included: boolean;
     description: string;
@@ -106,6 +108,7 @@ export type WorkspaceMock = {
   failNextDraftGeneration: boolean;
   failDraftValidation: boolean;
   failSourceContent: boolean;
+  sourceContentDelayMs: number;
   failNextDraftChat: boolean;
   disconnectNextDraftChatBeforeCompletion: boolean;
   draftChatCompletionDelayAfterDisconnectMs: number;
@@ -264,6 +267,8 @@ export function meetingSources(
     filename,
     mimeType: kind === 'image' ? 'image/jpeg' : 'video/mp4',
     sizeBytes: 100 + index,
+    contentSha256: null,
+    dimensions: null,
     workspaceReady: false,
     included: false,
     description: '',
@@ -284,6 +289,7 @@ export async function mockWxPostWorkspaceApi(
     failNextDraftGeneration: false,
     failDraftValidation: false,
     failSourceContent: false,
+    sourceContentDelayMs: 0,
     failNextDraftChat: false,
     disconnectNextDraftChatBeforeCompletion: false,
     draftChatCompletionDelayAfterDisconnectMs: 0,
@@ -318,7 +324,7 @@ export async function mockWxPostWorkspaceApi(
     ({
       workspaceId,
       manifest: {
-        schemaVersion: 4,
+        schemaVersion: 5,
         workspaceId,
         manifestVersion: 1,
         nextMaterialNumber: meetingSources(input.meetingId).length + 1,
@@ -350,6 +356,7 @@ export async function mockWxPostWorkspaceApi(
         document,
         renderDocument: {
           ...document,
+          media: document.media ?? [],
           renderVersion: 1,
           body: renderBody(document.bodyMarkdown),
         },
@@ -397,7 +404,7 @@ export async function mockWxPostWorkspaceApi(
         context = {
           workspaceId,
           manifest: {
-            schemaVersion: 4,
+            schemaVersion: 5,
             workspaceId,
             manifestVersion: 4,
             nextMaterialNumber: 4,
@@ -956,6 +963,25 @@ export async function mockWxPostWorkspaceApi(
         return;
       }
       if (method === 'GET' && parts[2] === 'content') {
+        const source = context.manifest.sources.find(
+          (item) => item.id === parts[1]
+        );
+        if (
+          !source?.contentSha256 ||
+          url.searchParams.get('v') !== source.contentSha256 ||
+          url.searchParams.size !== 1
+        ) {
+          await route.fulfill({
+            status: 422,
+            json: { detail: 'Source content requires its exact version.' },
+          });
+          return;
+        }
+        if (mock.sourceContentDelayMs) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, mock.sourceContentDelayMs)
+          );
+        }
         if (mock.failSourceContent) {
           await route.fulfill({
             status: 503,
@@ -1112,6 +1138,9 @@ export async function mockWxPostWorkspaceApi(
       if (method === 'POST' && parts[2] === 'import') {
         const source = manifest.sources.find((item) => item.id === parts[1])!;
         source.workspaceReady = true;
+        source.contentSha256 = 'a'.repeat(64);
+        source.dimensions =
+          source.kind === 'image' ? { width: 1, height: 1 } : null;
       } else if (method === 'POST' && parts[0] === 'uploads') {
         const id = `M${String(manifest.nextMaterialNumber).padStart(2, '0')}`;
         const filename = url.searchParams.get('filename')!;
@@ -1123,6 +1152,10 @@ export async function mockWxPostWorkspaceApi(
           filename,
           mimeType,
           sizeBytes: request.postDataBuffer()?.length ?? 1,
+          contentSha256: 'b'.repeat(64),
+          dimensions: mimeType.startsWith('video/')
+            ? null
+            : { width: 1, height: 1 },
           workspaceReady: true,
           included: false,
           description: '',
@@ -1141,6 +1174,8 @@ export async function mockWxPostWorkspaceApi(
         const source = manifest.sources.find((item) => item.id === parts[1])!;
         if (source.origin.type === 'meeting-library') {
           source.workspaceReady = false;
+          source.contentSha256 = null;
+          source.dimensions = null;
           source.included = false;
         } else {
           manifest.sources = manifest.sources.filter(

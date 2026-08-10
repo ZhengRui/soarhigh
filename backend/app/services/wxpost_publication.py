@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,7 +65,7 @@ from .wxpost_image_variants import (
 )
 
 LoadContext = Callable[[str], Awaitable[dict[str, Any]]]
-LoadSource = Callable[[str, str], Awaitable[tuple[bytes, str]]]
+LoadSource = Callable[[str, str, str], Awaitable[tuple[bytes, str]]]
 CompileRender = Callable[[dict[str, Any]], Awaitable[str]]
 _PUBLIC_MEDIA_PREFIX = "public/wxposts"
 
@@ -549,7 +550,25 @@ async def synchronize_workspace_publication(
                     f"Material {item.id} is not available for public synchronization.",
                     status=422,
                 )
-            content, response_mime = await load_source(workspace_id, item.id)
+            content_sha256 = source.get("contentSha256")
+            if not isinstance(content_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", content_sha256) is None:
+                raise PublicationError(
+                    "missing_publication_media",
+                    f"Material {item.id} has no valid content version.",
+                    status=422,
+                )
+            content, response_mime = await load_source(
+                workspace_id,
+                item.id,
+                content_sha256,
+            )
+            source_content_sha256 = hashlib.sha256(content).hexdigest()
+            if source_content_sha256 != content_sha256:
+                raise PublicationError(
+                    "missing_publication_media",
+                    f"Material {item.id} content does not match its version.",
+                    status=422,
+                )
             mime_type = str(source.get("mimeType") or response_mime)
             content_path = Path(spool_directory, item.id)
             content_path.write_bytes(content)
@@ -561,7 +580,7 @@ async def synchronize_workspace_publication(
                     mime_type=mime_type,
                     content_path=content_path,
                     size_bytes=len(content),
-                    sha256=hashlib.sha256(content).hexdigest(),
+                    sha256=source_content_sha256,
                     md5=base64.b64encode(hashlib.md5(content).digest()).decode(),
                 )
             )

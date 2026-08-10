@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from io import BytesIO
 from typing import Any
@@ -90,6 +91,7 @@ async def test_real_publication_storage_lifecycle() -> None:
                     "filename": "live-smoke.png",
                     "mimeType": "image/png",
                     "workspaceReady": True,
+                    "contentSha256": hashlib.sha256(media_bytes).hexdigest(),
                 }
             ],
         },
@@ -100,8 +102,13 @@ async def test_real_publication_storage_lifecycle() -> None:
         assert requested_workspace_id == workspace_id
         return context
 
-    async def load_source(requested_workspace_id: str, source_id: str) -> tuple[bytes, str]:
+    async def load_source(
+        requested_workspace_id: str,
+        source_id: str,
+        content_sha256: str,
+    ) -> tuple[bytes, str]:
         assert (requested_workspace_id, source_id) == (workspace_id, "M01")
+        assert content_sha256 == hashlib.sha256(media_bytes).hexdigest()
         return media_bytes, "image/png"
 
     async def compile_render(render_document: dict[str, Any]) -> str:

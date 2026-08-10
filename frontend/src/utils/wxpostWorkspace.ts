@@ -145,6 +145,8 @@ export interface WorkspaceSource {
   filename: string;
   mimeType: string;
   sizeBytes: number;
+  contentSha256: string | null;
+  dimensions: { width: number; height: number } | null;
   workspaceReady: boolean;
   included: boolean;
   description: string;
@@ -158,7 +160,7 @@ export interface WorkspaceCreator {
 }
 
 export interface WorkspaceManifest {
-  schemaVersion: 4;
+  schemaVersion: 5;
   workspaceId: string;
   manifestVersion: number;
   nextMaterialNumber: number;
@@ -820,11 +822,13 @@ export function deleteWorkspaceSource(
 
 export async function getWorkspaceSourceContent(
   workspaceId: string,
-  sourceId: string
+  sourceId: string,
+  contentSha256: string,
+  signal?: AbortSignal
 ) {
   const response = await fetch(
-    `${apiEndpoint}${workspacePath(workspaceId)}/sources/${encodeURIComponent(sourceId)}/content`,
-    { headers: memberHeaders() }
+    `${apiEndpoint}${workspacePath(workspaceId)}/sources/${encodeURIComponent(sourceId)}/content?v=${contentSha256}`,
+    { headers: memberHeaders(), signal }
   );
   if (!response.ok) throw await errorFromResponse(response);
   return response.blob();

@@ -86,11 +86,15 @@ def test_service_can_issue_and_read_a_version_bound_private_draft_preview(
                 200,
                 json={
                     "workspaceId": "wxpost-abc",
-                    "manifest": {"manifestVersion": 7},
+                    "manifest": {
+                        "manifestVersion": 7,
+                        "sources": [{"id": "M01", "contentSha256": "a" * 64}],
+                    },
                     "draft": {"draftVersion": 4, "document": article},
                 },
             )
         if request.url.path.endswith("/sources/M01/content"):
+            assert request.url.params["v"] == "a" * 64
             return httpx.Response(
                 200,
                 content=b"draft-image",
@@ -703,7 +707,9 @@ def test_material_proxy_preserves_version_and_binary_contracts(
             content=b"photo",
             headers={
                 "Content-Type": "image/jpeg",
-                "Cache-Control": "private, no-store",
+                "Cache-Control": "private, max-age=31536000, immutable",
+                "ETag": f'"{"a" * 64}"',
+                "Vary": "Authorization",
             },
         )
 
@@ -719,6 +725,11 @@ def test_material_proxy_preserves_version_and_binary_contracts(
         content=b"photo",
     )
     content = client.get(
+        "/posts/wxposts/workspaces/wxpost-abc/sources/M01/content",
+        params={"v": "a" * 64},
+        headers={"Authorization": "Bearer member-token"},
+    )
+    missing_version = client.get(
         "/posts/wxposts/workspaces/wxpost-abc/sources/M01/content",
         headers={"Authorization": "Bearer member-token"},
     )
@@ -737,7 +748,11 @@ def test_material_proxy_preserves_version_and_binary_contracts(
     assert content.status_code == 200
     assert content.content == b"photo"
     assert content.headers["Content-Type"] == "image/jpeg"
-    assert content.headers["Cache-Control"] == "private, no-store"
+    assert content.headers["Cache-Control"] == ("private, max-age=31536000, immutable")
+    assert content.headers["ETag"] == f'"{"a" * 64}"'
+    assert content.headers["Vary"] == "Authorization"
+    assert captured[1].url.params["v"] == "a" * 64
+    assert missing_version.status_code == 422
     assert preflight.status_code == 200
     assert preflight.json()["manifestVersion"] == 2
     assert captured[2].headers["X-Expected-Manifest-Version"] == "2"

@@ -21,7 +21,6 @@ import type {
 } from '@/components/wxpost/types';
 import {
   getWorkspaceContext,
-  getWorkspaceSourceContent,
   saveWorkspaceDraft,
   validateWorkspaceDraft,
   WorkspaceApiError,
@@ -34,40 +33,11 @@ import { WxPostDraftDialogs } from './WxPostDraftDialogs';
 import { WxPostPublicationControls } from './WxPostPublicationControls';
 import { useWxPostCoverPicker } from './useWxPostCoverPicker';
 import { useWxPostDraftAssistant } from './useWxPostDraftAssistant';
+import { useWxPostDraftMedia } from './useWxPostDraftMedia';
 import { useWxPostPublication } from './useWxPostPublication';
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
-}
-
-async function hydrateMedia(
-  workspaceId: string,
-  readyIds: ReadonlySet<string>,
-  renderDocument: WxPostRenderDocument,
-  cachedUrls: Map<string, string>
-) {
-  const createdUrls = new Map<string, string>();
-  try {
-    const hydrated = await Promise.all(
-      renderDocument.media.map(async (media) => {
-        if (!media.include) return media;
-        if (!readyIds.has(media.id)) return { ...media, sourceUrl: '' };
-        const cachedUrl = cachedUrls.get(media.id);
-        if (cachedUrl) return { ...media, sourceUrl: cachedUrl };
-        const blob = await getWorkspaceSourceContent(workspaceId, media.id);
-        const sourceUrl = URL.createObjectURL(blob);
-        createdUrls.set(media.id, sourceUrl);
-        return { ...media, sourceUrl };
-      })
-    );
-    return {
-      renderDocument: { ...renderDocument, media: hydrated },
-      createdUrls,
-    };
-  } catch (error) {
-    createdUrls.forEach((url) => URL.revokeObjectURL(url));
-    throw error;
-  }
 }
 
 export function WxPostDraftStage({
@@ -116,7 +86,6 @@ export function WxPostDraftStage({
     string | null
   >(null);
   const articleRef = useRef<HTMLDivElement>(null);
-  const mediaObjectUrlsRef = useRef(new Map<string, string>());
   const loadedDraftVersionRef = useRef<number | null>(null);
   const documentRef = useRef<WxPostArticleDocument | null>(
     savedDraft?.document ?? null
@@ -132,23 +101,6 @@ export function WxPostDraftStage({
   const savedDocumentJson = useMemo(
     () => JSON.stringify(savedDraft?.document ?? null),
     [savedDraft?.document]
-  );
-  const availableMediaKey = useMemo(
-    () =>
-      context.manifest.sources
-        .filter(
-          (source) =>
-            source.workspaceReady &&
-            (source.kind === 'image' || source.kind === 'video')
-        )
-        .map((source) => source.id)
-        .sort()
-        .join('|'),
-    [context.manifest.sources]
-  );
-  const availableMediaIds = useMemo(
-    () => new Set(availableMediaKey ? availableMediaKey.split('|') : []),
-    [availableMediaKey]
   );
   const dirty =
     document !== null && JSON.stringify(document) !== savedDocumentJson;
@@ -178,19 +130,12 @@ export function WxPostDraftStage({
   const loadDocument = useCallback(
     async (nextDocument: WxPostArticleDocument) => {
       const validated = await validateWorkspaceDraft(nextDocument);
-      const hydrated = await hydrateMedia(
-        workspaceId,
-        availableMediaIds,
-        validated.renderDocument,
-        mediaObjectUrlsRef.current
-      );
       return {
         nextDocument,
-        renderDocument: hydrated.renderDocument,
-        createdUrls: hydrated.createdUrls,
+        renderDocument: validated.renderDocument,
       };
     },
-    [availableMediaIds, workspaceId]
+    []
   );
 
   useEffect(() => {
@@ -213,13 +158,7 @@ export function WxPostDraftStage({
     setError(null);
     void loadDocument(nextDocument)
       .then((loaded) => {
-        if (!activeEffect) {
-          loaded.createdUrls.forEach((url) => URL.revokeObjectURL(url));
-          return;
-        }
-        loaded.createdUrls.forEach((url, mediaId) => {
-          mediaObjectUrlsRef.current.set(mediaId, url);
-        });
+        if (!activeEffect) return;
         documentRef.current = loaded.nextDocument;
         renderDocumentRef.current = loaded.renderDocument;
         savedRenderDocumentRef.current = loaded.renderDocument;
@@ -239,14 +178,6 @@ export function WxPostDraftStage({
       activeEffect = false;
     };
   }, [loadDocument, savedDraft]);
-
-  useEffect(
-    () => () => {
-      mediaObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      mediaObjectUrlsRef.current.clear();
-    },
-    []
-  );
 
   const selectText = useCallback((key: string) => {
     const currentDocument = documentRef.current;
@@ -397,11 +328,18 @@ export function WxPostDraftStage({
     },
     []
   );
+  const draftMedia = useWxPostDraftMedia({
+    workspaceId,
+    renderDocument,
+    sources: context.manifest.sources,
+  });
   const coverPicker = useWxPostCoverPicker({
     workspaceId,
     sources: context.manifest.sources,
     document,
     renderDocument,
+    draftAssetUrls: draftMedia.assetUrls,
+    draftAssetStates: draftMedia.assetStates,
     onApply: applyCoverUpdate,
   });
   const publication = useWxPostPublication({
@@ -423,9 +361,6 @@ export function WxPostDraftStage({
         // be prepared. The normal version effect will surface the load error.
         onContextChange(nextContext);
         throw caught;
-      });
-      loaded.createdUrls.forEach((url, mediaId) => {
-        mediaObjectUrlsRef.current.set(mediaId, url);
       });
       documentRef.current = loaded.nextDocument;
       renderDocumentRef.current = loaded.renderDocument;
@@ -467,9 +402,6 @@ export function WxPostDraftStage({
         throw new Error('The latest workspace no longer contains a Draft.');
       }
       const loaded = await loadDocument(latest.draft.document);
-      loaded.createdUrls.forEach((url, mediaId) => {
-        mediaObjectUrlsRef.current.set(mediaId, url);
-      });
       documentRef.current = loaded.nextDocument;
       renderDocumentRef.current = loaded.renderDocument;
       savedRenderDocumentRef.current = loaded.renderDocument;
@@ -550,6 +482,17 @@ export function WxPostDraftStage({
     setDiscardConfirming(false);
   }, [dirty, savedDraft]);
 
+  const renderContext = useMemo(
+    () => ({
+      contextLabel,
+      publisherName: 'SoarHigh Toastmasters',
+      assetUrls: draftMedia.assetUrls,
+      assetStates: draftMedia.assetStates,
+      assetDimensions: draftMedia.assetDimensions,
+    }),
+    [contextLabel, draftMedia]
+  );
+
   if (!savedDraft || !document) return null;
   const savedVersionPending =
     loadedDraftVersionRef.current !== savedDraft.draftVersion;
@@ -574,7 +517,7 @@ export function WxPostDraftStage({
           aria-hidden='true'
         />
         <span className='text-sm font-medium text-slate-500'>
-          Preparing Draft preview and media…
+          Preparing Draft preview…
         </span>
       </div>
     );
@@ -694,10 +637,8 @@ export function WxPostDraftStage({
             article={renderDocument}
             presentation={document.presentation}
             previewSize={previewSize}
-            context={{
-              contextLabel,
-              publisherName: 'SoarHigh Toastmasters',
-            }}
+            context={renderContext}
+            onRetryMedia={draftMedia.retryMedia}
             editor={
               mode === 'edit'
                 ? {

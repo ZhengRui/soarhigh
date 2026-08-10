@@ -50,6 +50,11 @@ from .contracts import (
     UpdateWorkspaceRequest,
     WorkspaceReport,
 )
+from .source_metadata import (
+    InvalidSourceImage,
+    SourceTechnicalMetadata,
+    inspect_source_bytes,
+)
 
 WORKSPACE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 MAX_SOURCE_BYTES = 50 * 1024 * 1024
@@ -697,7 +702,8 @@ class WorkspaceController:
         workspace_id: str,
         *,
         source_id: str,
-    ) -> tuple[bytes, str]:
+        content_sha256: str | None = None,
+    ) -> tuple[bytes, str, str]:
         request = self._validate_request(
             SourceLookupRequest,
             {"sourceId": source_id},
@@ -711,6 +717,10 @@ class WorkspaceController:
                 raise InvalidRequest(
                     f"source is not available in the workspace: {source.id}"
                 )
+            if content_sha256 is not None and content_sha256 != source.content_sha256:
+                raise InvalidRequest(
+                    f"source content version does not match: {source.id}"
+                )
             source_path = self._ready_source_path(workspace, source)
             try:
                 data = source_path.read_bytes()
@@ -720,7 +730,10 @@ class WorkspaceController:
                 ) from exc
             if len(data) != source.size_bytes:
                 raise InvalidWorkspace(f"source file size is invalid: {source.id}")
-        return data, source.mime_type
+            actual_sha256 = hashlib.sha256(data).hexdigest()
+            if actual_sha256 != source.content_sha256:
+                raise InvalidWorkspace(f"source file hash is invalid: {source.id}")
+        return data, source.mime_type, actual_sha256
 
     def get_source_description_context(
         self,
@@ -926,6 +939,11 @@ class WorkspaceController:
             raise InvalidRequest("uploaded source must not be empty")
         if len(data) > MAX_SOURCE_BYTES:
             raise InvalidRequest(f"uploaded source exceeds {MAX_SOURCE_BYTES} bytes")
+        source_kind = self._source_kind(request.mime_type)
+        try:
+            metadata = inspect_source_bytes(data, kind=source_kind)
+        except InvalidSourceImage as error:
+            raise InvalidRequest(str(error)) from error
 
         workspace = self._resolve_workspace(workspace_id)
         with self._workspace_lock(workspace):
@@ -938,11 +956,12 @@ class WorkspaceController:
             source = SourceRecord.model_validate(
                 {
                     "id": source_id,
-                    "kind": self._source_kind(request.mime_type),
+                    "kind": source_kind,
                     "origin": {"type": request.origin},
                     "filename": request.filename,
                     "mimeType": request.mime_type,
                     "sizeBytes": len(data),
+                    **metadata.to_wire(),
                     "workspaceReady": True,
                     "included": False,
                     "description": request.description,
@@ -987,7 +1006,9 @@ class WorkspaceController:
         message_id = message_id.strip()
         if not message_id:
             raise InvalidRequest("Feishu messageId is required")
-        prepared: list[tuple[str, str, bytes, str]] = []
+        prepared: list[
+            tuple[str, str, SourceKind, bytes, str, SourceTechnicalMetadata]
+        ] = []
         seen_hashes: set[str] = set()
         for attachment in attachments:
             source_path = attachment.get("sourcePath")
@@ -1000,11 +1021,25 @@ class WorkspaceController:
             mime_type = attachment.get("mimeType") or mimetypes.guess_type(filename)[0]
             if not isinstance(mime_type, str) or not mime_type:
                 mime_type = "application/octet-stream"
-            digest = hashlib.sha256(data).hexdigest()
+            source_kind = self._source_kind(mime_type)
+            try:
+                metadata = inspect_source_bytes(data, kind=source_kind)
+            except InvalidSourceImage as error:
+                raise InvalidRequest(str(error)) from error
+            digest = metadata.content_sha256
             if digest in seen_hashes:
                 continue
             seen_hashes.add(digest)
-            prepared.append((filename, mime_type, data, digest))
+            prepared.append(
+                (
+                    filename,
+                    mime_type,
+                    source_kind,
+                    data,
+                    digest,
+                    metadata,
+                )
+            )
 
         workspace = self._resolve_workspace(workspace_id)
         with self._workspace_lock(workspace):
@@ -1031,7 +1066,14 @@ class WorkspaceController:
                 and source.origin.content_sha256 is not None
             }
             try:
-                for filename, mime_type, data, digest in prepared:
+                for (
+                    filename,
+                    mime_type,
+                    source_kind,
+                    data,
+                    digest,
+                    metadata,
+                ) in prepared:
                     if digest in existing_hashes:
                         continue
                     source = SourceRecord.model_validate(
@@ -1039,7 +1081,7 @@ class WorkspaceController:
                             "id": self._material_id(
                                 int(manifest_data["nextMaterialNumber"])
                             ),
-                            "kind": self._source_kind(mime_type),
+                            "kind": source_kind,
                             "origin": {
                                 "type": "feishu-upload",
                                 "messageId": message_id,
@@ -1048,6 +1090,7 @@ class WorkspaceController:
                             "filename": filename,
                             "mimeType": mime_type,
                             "sizeBytes": len(data),
+                            **metadata.to_wire(),
                             "workspaceReady": True,
                             "included": include,
                             "description": "",
@@ -1175,6 +1218,8 @@ class WorkspaceController:
             if meeting_reference:
                 source_data["workspaceReady"] = False
                 source_data["included"] = False
+                source_data["contentSha256"] = None
+                source_data["dimensions"] = None
             else:
                 manifest_data["sources"].remove(source_data)
             manifest = self._write_changed_manifest(
@@ -1773,14 +1818,20 @@ class WorkspaceController:
                 f"meeting-library source is no longer available: {source.id}"
             )
         data = self._download_source(media)
+        source_kind = self._meeting_source_kind(media.mime_type)
+        try:
+            metadata = inspect_source_bytes(data, kind=source_kind)
+        except InvalidSourceImage as error:
+            raise UpstreamUnavailable(str(error)) from error
         sources_root = self._ensure_sources_directory(workspace)
         updated = SourceRecord.model_validate(
             {
                 **source.to_wire(),
-                "kind": self._meeting_source_kind(media.mime_type),
+                "kind": source_kind,
                 "filename": media.filename,
                 "mimeType": media.mime_type,
-                "sizeBytes": media.size_bytes,
+                "sizeBytes": len(data),
+                **metadata.to_wire(),
                 "workspaceReady": True,
                 "included": include,
             }
@@ -2235,7 +2286,7 @@ class WorkspaceController:
         except ValidationError as exc:
             error_type = InvalidRequest if request_error else InvalidWorkspace
             raise error_type(
-                f"{label} does not satisfy source-manifest v4: "
+                f"{label} does not satisfy source-manifest v5: "
                 f"{cls._validation_message(exc)}"
             ) from exc
 

@@ -26,6 +26,7 @@ interface WxPostRendererProps {
    * authoring editor, which relies on the internal editable compile.
    */
   html?: string;
+  onRetryMedia?: (mediaId: string) => void;
   editor?: {
     activeKey: string | null;
     onSelect: (key: string) => void;
@@ -53,6 +54,7 @@ export function WxPostRenderer({
   className = '',
   html,
   editor,
+  onRetryMedia,
 }: WxPostRendererProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const editable = Boolean(editor);
@@ -119,7 +121,7 @@ export function WxPostRenderer({
         if (!editor) return;
         if (
           (event.target as Element).closest(
-            '[data-wxpost-delete-media],[data-wxpost-delete-item]'
+            '[data-wxpost-delete-media],[data-wxpost-delete-item],[data-wxpost-retry-media]'
           )
         ) {
           event.preventDefault();
@@ -144,8 +146,17 @@ export function WxPostRenderer({
         });
       }}
       onClick={(event) => {
-        if (!editor) return;
         const target = event.target as Element;
+        const retryButton = target.closest<HTMLElement>(
+          '[data-wxpost-retry-media]'
+        );
+        if (retryButton?.dataset.wxpostRetryMedia && onRetryMedia) {
+          event.preventDefault();
+          event.stopPropagation();
+          onRetryMedia(retryButton.dataset.wxpostRetryMedia);
+          return;
+        }
+        if (!editor) return;
         const deleteButton = target.closest<HTMLElement>(
           '[data-wxpost-delete-media]'
         );

@@ -183,7 +183,7 @@ def _decode_draft_preview_token(token: str) -> tuple[str, int]:
 
 async def _load_versioned_draft_preview(
     token: str,
-) -> tuple[str, int, ArticleDocument]:
+) -> tuple[str, int, ArticleDocument, dict[str, Any]]:
     workspace_id, expected_draft_version = _decode_draft_preview_token(token)
     context = await _load_workspace_context(workspace_id)
     draft = context.get("draft")
@@ -200,7 +200,7 @@ async def _load_versioned_draft_preview(
             status_code=422,
             detail="The saved Draft cannot be previewed.",
         ) from error
-    return workspace_id, expected_draft_version, document
+    return workspace_id, expected_draft_version, document, context
 
 
 async def require_wxpost_service(
@@ -331,6 +331,10 @@ async def _proxy_workspace_controller(
         response_headers["Content-Type"] = upstream_content_type
     if cache_control := upstream.headers.get("Cache-Control"):
         response_headers["Cache-Control"] = cache_control
+    if etag := upstream.headers.get("ETag"):
+        response_headers["ETag"] = etag
+    if vary := upstream.headers.get("Vary"):
+        response_headers["Vary"] = vary
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,
@@ -493,10 +497,14 @@ async def _load_workspace_context(workspace_id: str) -> dict[str, Any]:
 async def _load_workspace_source(
     workspace_id: str,
     source_id: str,
+    content_sha256: str,
 ) -> tuple[bytes, str]:
     upstream = await _request_workspace_controller(
         "GET",
-        (f"/workspaces/{quote(workspace_id, safe='')}/sources/{quote(source_id, safe='')}/content"),
+        (
+            f"/workspaces/{quote(workspace_id, safe='')}/sources/"
+            f"{quote(source_id, safe='')}/content?v={content_sha256}"
+        ),
     )
     if upstream.status_code != 200:
         raise _upstream_error(upstream)
@@ -539,7 +547,22 @@ async def _proxy_workspace_request(
 ) -> Response:
     if not _workspace_route_allowed(request.method, controller_path):
         raise HTTPException(status_code=404, detail="Workspace route not found.")
-    query = f"?{request.url.query}" if controller_path == "uploads" else ""
+    if controller_path.endswith("/content"):
+        versions = request.query_params.getlist("v")
+        if (
+            set(request.query_params) != {"v"}
+            or len(versions) != 1
+            or re.fullmatch(r"[0-9a-f]{64}", versions[0]) is None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Source content requires one valid v parameter.",
+            )
+        query = f"?v={versions[0]}"
+    elif controller_path == "uploads":
+        query = f"?{request.url.query}" if request.url.query else ""
+    else:
+        query = ""
     body = await _read_limited_workspace_upload(request) if controller_path == "uploads" else await request.body()
     if controller_path == "draft/chat":
         return await _stream_workspace_controller(
@@ -923,7 +946,7 @@ async def r_get_wxpost_workspace_editor_links(
 async def r_get_wxpost_draft_preview(token: str) -> dict[str, Any]:
     """Return canonical render input for a valid temporary Draft link."""
 
-    workspace_id, draft_version, document = await _load_versioned_draft_preview(token)
+    workspace_id, draft_version, document, _ = await _load_versioned_draft_preview(token)
     render_document = (
         validate_and_parse(document)
         .render_document(document)
@@ -949,10 +972,23 @@ async def r_get_wxpost_draft_preview(token: str) -> dict[str, Any]:
 async def r_get_wxpost_draft_preview_media(token: str, source_id: str) -> Response:
     """Serve only media referenced by the exact Draft bound to the link."""
 
-    workspace_id, _draft_version, document = await _load_versioned_draft_preview(token)
+    workspace_id, _draft_version, document, context = await _load_versioned_draft_preview(token)
     if source_id not in {media.id for media in document.media}:
         raise HTTPException(status_code=404, detail="Draft media is unavailable.")
-    content, mime_type = await _load_workspace_source(workspace_id, source_id)
+    manifest = context.get("manifest")
+    sources = manifest.get("sources", []) if isinstance(manifest, dict) else []
+    source = next(
+        (candidate for candidate in sources if isinstance(candidate, dict) and candidate.get("id") == source_id),
+        None,
+    )
+    content_sha256 = source.get("contentSha256") if source else None
+    if not isinstance(content_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", content_sha256) is None:
+        raise HTTPException(status_code=404, detail="Draft media is unavailable.")
+    content, mime_type = await _load_workspace_source(
+        workspace_id,
+        source_id,
+        content_sha256,
+    )
     return Response(
         content=content,
         media_type=mime_type,
