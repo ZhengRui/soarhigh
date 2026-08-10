@@ -191,8 +191,27 @@ export interface WorkspaceDraftSession {
   messages: Array<{
     role: 'user' | 'assistant';
     text: string;
+    turnId?: string;
     steps?: WorkspaceDraftProgressActivity[];
   }>;
+}
+
+export interface WorkspaceDraftOperation {
+  workspaceId: string;
+  operationId: string;
+  state: 'running' | 'completed' | 'failed';
+  result: {
+    sessionId: string;
+    reply: string;
+    draftChanged: boolean;
+    draftVersion: number;
+    steps: WorkspaceDraftProgressActivity[];
+  } | null;
+  error: {
+    code: string;
+    message: string;
+    versionKind?: string;
+  } | null;
 }
 
 export interface WorkspaceDraftProgressActivity {
@@ -424,8 +443,14 @@ export function createWorkspace(input: {
   });
 }
 
-export function getWorkspaceContext(workspaceId: string) {
-  return requestJson<WorkspaceContext>(`${workspacePath(workspaceId)}/context`);
+export function getWorkspaceContext(workspaceId: string, signal?: AbortSignal) {
+  return requestJson<WorkspaceContext>(
+    `${workspacePath(workspaceId)}/context`,
+    {
+      cache: 'no-store',
+      signal,
+    }
+  );
 }
 
 export function getWorkspacePublication(workspaceId: string) {
@@ -454,7 +479,19 @@ export function syncWorkspacePublication(
 
 export function getWorkspaceDraftSession(workspaceId: string) {
   return requestJson<WorkspaceDraftSession>(
-    `${workspacePath(workspaceId)}/draft/session`
+    `${workspacePath(workspaceId)}/draft/session`,
+    { cache: 'no-store' }
+  );
+}
+
+export function getWorkspaceDraftOperation(
+  workspaceId: string,
+  operationId: string,
+  signal?: AbortSignal
+) {
+  return requestJson<WorkspaceDraftOperation>(
+    `${workspacePath(workspaceId)}/draft/operations/${encodeURIComponent(operationId)}`,
+    { cache: 'no-store', signal }
   );
 }
 
@@ -513,6 +550,7 @@ export function chatWithWorkspaceDraft(
   input: {
     expectedManifestVersion: number;
     expectedDraftVersion: number;
+    operationId: string;
     message: string;
     selectedText: string | null;
   },
@@ -529,6 +567,7 @@ async function requestDraftChatStream(
   input: {
     expectedManifestVersion: number;
     expectedDraftVersion: number;
+    operationId: string;
     message: string;
     selectedText: string | null;
   },

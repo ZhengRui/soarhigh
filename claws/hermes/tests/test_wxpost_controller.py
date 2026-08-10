@@ -491,6 +491,7 @@ def test_http_draft_chat_streams_progress_before_the_complete_result(
             {
                 "expectedManifestVersion": 4,
                 "expectedDraftVersion": 2,
+                "operationId": "draft-0123456789abcdef0123456789abcdef",
                 "message": "Tighten it.",
                 "selectedText": None,
             }
@@ -558,6 +559,7 @@ def test_http_draft_chat_sends_heartbeats_while_hermes_is_quiet(
             {
                 "expectedManifestVersion": 4,
                 "expectedDraftVersion": 2,
+                "operationId": "draft-fedcba9876543210fedcba9876543210",
                 "message": "Tighten it.",
                 "selectedText": None,
             }
@@ -584,6 +586,46 @@ def test_http_draft_chat_sends_heartbeats_while_hermes_is_quiet(
         assert '"reply": "Saved."' in body
     finally:
         release_operation.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_exposes_non_cached_draft_operation_status(tmp_path: Path) -> None:
+    operation_id = "draft-0123456789abcdef0123456789abcdef"
+
+    class DraftService:
+        def operation(self, workspace_id: str, requested_id: str):
+            assert workspace_id == "wxpost-stream"
+            assert requested_id == operation_id
+            return {
+                "workspaceId": workspace_id,
+                "operationId": operation_id,
+                "state": "running",
+                "result": None,
+                "error": None,
+            }
+
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.draft_service = DraftService()  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_port}/workspaces/"
+        f"wxpost-stream/draft/operations/{operation_id}",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read())
+            assert response.headers["Cache-Control"] == "private, no-store"
+        assert payload["state"] == "running"
+    finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)

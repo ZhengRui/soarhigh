@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 
 import {
   getWorkspaceContext,
+  getWorkspaceDraftOperation,
   getWorkspaceDraftSession,
   chatWithWorkspaceDraft,
   resetWorkspaceDraftSession,
@@ -24,11 +25,13 @@ function isRecoverableStreamFailure(error: unknown) {
   return (
     error instanceof TypeError ||
     (error instanceof WorkspaceApiError &&
-      (error.code === 'incomplete_stream' || error.code === 'invalid_stream'))
+      (error.code === 'incomplete_stream' ||
+        error.code === 'invalid_stream' ||
+        (error.code === null && [502, 503, 504].includes(error.status))))
   );
 }
 
-const DRAFT_RECOVERY_TIMEOUT_MS = 90_000;
+const DRAFT_RECOVERY_TIMEOUT_MS = 330_000;
 const DRAFT_RECOVERY_POLL_MS = 1_000;
 
 function waitForRecoveryPoll(signal: AbortSignal) {
@@ -49,21 +52,49 @@ function waitForRecoveryPoll(signal: AbortSignal) {
   });
 }
 
-async function waitForRecoveredDraftContext(
+async function waitForDraftOperation(
   workspaceId: string,
-  expectedDraftVersion: number,
+  operationId: string,
   signal: AbortSignal
 ) {
   const deadline = Date.now() + DRAFT_RECOVERY_TIMEOUT_MS;
-  let context = await getWorkspaceContext(workspaceId);
-  while (
-    (context.draft?.draftVersion ?? 0) === expectedDraftVersion &&
-    Date.now() < deadline
-  ) {
+  let operation = await getWorkspaceDraftOperation(
+    workspaceId,
+    operationId,
+    signal
+  );
+  while (operation.state === 'running' && Date.now() < deadline) {
     await waitForRecoveryPoll(signal);
-    context = await getWorkspaceContext(workspaceId);
+    operation = await getWorkspaceDraftOperation(
+      workspaceId,
+      operationId,
+      signal
+    );
   }
-  return context;
+  if (operation.state === 'running') {
+    throw new WorkspaceApiError(
+      504,
+      'The Draft Assistant is still working. Please try again shortly.',
+      'operation_timeout'
+    );
+  }
+  if (operation.state === 'failed') {
+    throw new WorkspaceApiError(
+      operation.error?.code === 'version_conflict' ? 409 : 502,
+      operation.error?.message ??
+        'The Draft Assistant could not complete the request.',
+      operation.error?.code ?? 'operation_failed',
+      operation.error?.versionKind ?? null
+    );
+  }
+  if (!operation.result) {
+    throw new WorkspaceApiError(
+      502,
+      'The Draft Assistant returned an invalid operation result.',
+      'invalid_operation'
+    );
+  }
+  return operation.result;
 }
 
 export function useWxPostDraftAssistant({
@@ -131,8 +162,7 @@ export function useWxPostDraftAssistant({
     const request = message.trim();
     if (!request || !savedDraft || dirty) return;
     const requestController = new AbortController();
-    const previousMessageCount = session?.messages.length ?? 0;
-    const expectedDraftVersion = savedDraft.draftVersion;
+    const operationId = `draft-${crypto.randomUUID().replaceAll('-', '')}`;
     requestControllerRef.current = requestController;
     setPending(true);
     setProgress([]);
@@ -150,6 +180,7 @@ export function useWxPostDraftAssistant({
         {
           expectedManifestVersion: manifestVersion,
           expectedDraftVersion: savedDraft.draftVersion,
+          operationId,
           message: request,
           selectedText,
         },
@@ -225,12 +256,13 @@ export function useWxPostDraftAssistant({
         ],
       }));
     } catch (caught) {
+      let failureCause = caught;
       if (isRecoverableStreamFailure(caught)) {
         try {
           // The Controller deliberately finishes a Draft turn after a browser
-          // disconnect. Context reads do not take the per-workspace turn lock,
-          // so poll the saved Draft first instead of blocking recovery on
-          // session history while the disconnected turn is still running.
+          // disconnect. Its durable operation record is independent of the
+          // workspace turn and file locks, so it remains readable while the
+          // disconnected turn is still running.
           const recoveryActivity: DraftProgressActivity = {
             activityId: 'recover-disconnected-turn',
             label: 'Finishing the Draft update in the background',
@@ -244,42 +276,60 @@ export function useWxPostDraftAssistant({
             recoveryActivity,
           ];
           setProgress(progressRef.current);
-          const context = await waitForRecoveredDraftContext(
+          const recovered = await waitForDraftOperation(
             workspaceId,
-            expectedDraftVersion,
+            operationId,
             requestController.signal
           );
-          const history = await getWorkspaceDraftSession(workspaceId);
-          const completedTurn = history.messages.slice(previousMessageCount);
-          const recoveredUser = completedTurn[0];
-          const recoveredAssistant = completedTurn[1];
+          const context = await getWorkspaceContext(
+            workspaceId,
+            requestController.signal
+          );
           const actualDraftVersion = context.draft?.draftVersion ?? 0;
-          const draftChanged = actualDraftVersion === expectedDraftVersion + 1;
-          if (
-            recoveredUser?.role === 'user' &&
-            recoveredUser.text === request &&
-            recoveredAssistant?.role === 'assistant' &&
-            (actualDraftVersion === expectedDraftVersion || draftChanged)
-          ) {
-            setStatus('online');
-            setSession(history);
-            if (draftChanged) {
-              try {
-                await onDraftChanged(context);
-              } catch (recoveryError) {
-                const failure = errorMessage(
-                  recoveryError,
-                  'The Draft was saved, but the updated preview could not be loaded.'
-                );
-                onError(failure);
-                toast.error(failure);
-              }
-            }
-            return;
+          if (actualDraftVersion !== recovered.draftVersion) {
+            throw new WorkspaceApiError(
+              409,
+              'The saved Draft changed again before recovery completed.',
+              'version_conflict',
+              'draft'
+            );
           }
-        } catch {
-          // Preserve the original transport error when reconciliation cannot
-          // prove that this exact turn completed.
+          setStatus('online');
+          setSession((current) => ({
+            workspaceId,
+            sessionId: recovered.sessionId,
+            messages: [
+              ...(current?.messages ?? []),
+              {
+                role: 'assistant',
+                text: recovered.reply,
+                turnId: operationId,
+                steps: recovered.steps,
+              },
+            ],
+          }));
+          if (recovered.draftChanged) {
+            try {
+              await onDraftChanged(context);
+            } catch (recoveryError) {
+              const failure = errorMessage(
+                recoveryError,
+                'The Draft was saved, but the updated preview could not be loaded.'
+              );
+              onError(failure);
+              toast.error(failure);
+            }
+          }
+          return;
+        } catch (recoveryError) {
+          if (
+            !(
+              recoveryError instanceof WorkspaceApiError &&
+              recoveryError.code === 'draft_operation_not_found'
+            )
+          ) {
+            failureCause = recoveryError;
+          }
         }
       }
       setMessage(request);
@@ -289,21 +339,21 @@ export function useWxPostDraftAssistant({
           : current
       );
       if (
-        caught instanceof WorkspaceApiError &&
-        caught.code === 'version_conflict' &&
-        caught.versionKind === 'draft'
+        failureCause instanceof WorkspaceApiError &&
+        failureCause.code === 'version_conflict' &&
+        failureCause.versionKind === 'draft'
       ) {
         onConflict();
         return;
       }
       if (
-        caught instanceof WorkspaceApiError &&
-        caught.code === 'hermes_unavailable'
+        failureCause instanceof WorkspaceApiError &&
+        failureCause.code === 'hermes_unavailable'
       ) {
         setStatus('unavailable');
       }
       const failure = errorMessage(
-        caught,
+        failureCause,
         'The Draft Assistant could not complete the request.'
       );
       onError(failure);
@@ -325,7 +375,6 @@ export function useWxPostDraftAssistant({
     onError,
     savedDraft,
     selectedText,
-    session,
     workspaceId,
   ]);
 

@@ -92,6 +92,7 @@ workspace_draft_routes = {
     ("POST", "draft/generate"),
     ("POST", "draft/chat"),
 }
+workspace_draft_operation_route = re.compile(r"^draft/operations/draft-[0-9a-f]{32}$")
 
 
 class VoiceToneSuggestionRequest(BaseModel):
@@ -516,6 +517,8 @@ def _workspace_route_allowed(method: str, path: str) -> bool:
         ("PATCH", "sources"),
         ("POST", "uploads"),
     } | workspace_draft_routes:
+        return True
+    if method == "GET" and workspace_draft_operation_route.fullmatch(path):
         return True
     if not workspace_source_route.fullmatch(path):
         return False

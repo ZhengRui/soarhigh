@@ -797,6 +797,37 @@ def test_workspace_proxy_reports_missing_or_unavailable_controller(
     assert response.json()["detail"] == ("WxPost workspace controller is unavailable.")
 
 
+def test_workspace_proxy_exposes_private_draft_operation_status(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation_id = "draft-0123456789abcdef0123456789abcdef"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith(f"/draft/operations/{operation_id}")
+        return httpx.Response(
+            200,
+            headers={"Cache-Control": "private, no-store"},
+            json={
+                "workspaceId": "wxpost-abc",
+                "operationId": operation_id,
+                "state": "running",
+                "result": None,
+                "error": None,
+            },
+        )
+
+    _configure_controller(monkeypatch, handler)
+    response = client.get(
+        f"/posts/wxposts/workspaces/wxpost-abc/draft/operations/{operation_id}",
+        headers={"Authorization": "Bearer member-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "private, no-store"
+    assert response.json()["state"] == "running"
+
+
 def test_workspace_proxy_rejects_operations_outside_the_materials_slice(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

@@ -26,7 +26,7 @@ from .core import (
     WorkspaceNotFound,
     error_response,
 )
-from .errors import HermesTurnFailed, HermesUnavailable
+from .errors import DraftOperationNotFound, HermesTurnFailed, HermesUnavailable
 from .hermes_editorial import (
     HermesEditorialClient,
     MainRuntimeResolver,
@@ -54,6 +54,9 @@ SOURCE_DESCRIPTION_PATH = re.compile(
 SOURCE_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)$")
 UPLOADS_PATH = re.compile(r"^/workspaces/([^/]+)/uploads$")
 DRAFT_SESSION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/session$")
+DRAFT_OPERATION_PATH = re.compile(
+    r"^/workspaces/([^/]+)/draft/operations/([^/]+)$"
+)
 DRAFT_SAVE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/save$")
 DRAFT_GENERATE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/generate$")
 DRAFT_CHAT_PATH = re.compile(r"^/workspaces/([^/]+)/draft/chat$")
@@ -120,6 +123,16 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if draft_session_match is not None:
             self._run_controller(
                 lambda: self.server.draft_service.history(draft_session_match.group(1))
+            )
+            return
+        draft_operation_match = DRAFT_OPERATION_PATH.fullmatch(path)
+        if draft_operation_match is not None:
+            self._run_controller(
+                lambda: self.server.draft_service.operation(
+                    draft_operation_match.group(1),
+                    draft_operation_match.group(2),
+                ),
+                cache_control="private, no-store",
             )
             return
         content_match = SOURCE_CONTENT_PATH.fullmatch(path)
@@ -392,11 +405,19 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 {
                     "expectedManifestVersion",
                     "expectedDraftVersion",
+                    "operationId",
                     "message",
                     "selectedText",
                 },
                 "draft revision",
             ):
+                return
+            if "operationId" not in payload:
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_request",
+                    "Draft operation identifier is required",
+                )
                 return
             self._run_draft_stream(
                 lambda on_progress: self.server.draft_service.chat(
@@ -409,6 +430,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         int,
                         payload.get("expectedDraftVersion"),
                     ),
+                    operation_id=cast(str, payload.get("operationId")),
                     message=cast(str, payload.get("message")),
                     selected_text=cast(
                         str | None,
@@ -652,7 +674,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         )
         return False
 
-    def _run_controller(self, operation) -> None:
+    def _run_controller(self, operation, *, cache_control: str | None = None) -> None:
         try:
             result = operation()
         except WorkspaceError as exc:
@@ -665,7 +687,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 ),
             ):
                 status = HTTPStatus.CONFLICT
-            elif isinstance(exc, WorkspaceNotFound):
+            elif isinstance(exc, (WorkspaceNotFound, DraftOperationNotFound)):
                 status = HTTPStatus.NOT_FOUND
             elif isinstance(
                 exc,
@@ -690,7 +712,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 "controller operation failed",
             )
         else:
-            self._send_json(HTTPStatus.OK, result)
+            self._send_json(HTTPStatus.OK, result, cache_control=cache_control)
 
     def _run_draft_stream(self, operation) -> None:
         connected = True
@@ -793,11 +815,19 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
     def _send_error(self, status: HTTPStatus, code: str, message: str) -> None:
         self._send_json(status, {"error": {"code": code, "message": message}})
 
-    def _send_json(self, status: HTTPStatus, payload: Any) -> None:
+    def _send_json(
+        self,
+        status: HTTPStatus,
+        payload: Any,
+        *,
+        cache_control: str | None = None,
+    ) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
         self.end_headers()
         self.wfile.write(body)
 

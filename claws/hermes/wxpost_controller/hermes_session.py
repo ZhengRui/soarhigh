@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
@@ -18,18 +20,22 @@ from .core import (
     InvalidRequest,
     VersionConflict,
     WorkspaceController,
+    WorkspaceError,
+    error_response,
 )
 from .draft_session_store import (
     HERMES_DRAFT_PROTOCOL_VERSION,
     HermesDraftSessionStore,
 )
 from .errors import (
+    DraftOperationNotFound,
     DraftSessionStoreUnavailable,
     HermesTurnFailed,
     HermesUnavailable,
 )
 
 HERMES_DESCRIPTION_PROTOCOL_VERSION = 3
+_DRAFT_OPERATION_ID = re.compile(r"^draft-[0-9a-f]{32}$")
 HERMES_DRAFT_IDENTITY = (
     "You are SoarHigh Club's AI Assistant "
     "(SoarHigh 俱乐部的 AI 助手). In this workspace, your role is to help "
@@ -711,6 +717,7 @@ class HermesDraftService:
         expected_draft_version: int,
         message: str,
         selected_text: str | None,
+        operation_id: str | None = None,
         on_progress: DraftProgressCallback | None = None,
     ) -> dict[str, Any]:
         self._validate_versions(
@@ -721,11 +728,30 @@ class HermesDraftService:
             raise InvalidRequest("Draft Assistant request must be text")
         if selected_text is not None and not isinstance(selected_text, str):
             raise InvalidRequest("Selected article text must be text or null")
+        operation_id = operation_id or f"draft-{uuid4().hex}"
+        if not _DRAFT_OPERATION_ID.fullmatch(operation_id):
+            raise InvalidRequest("Draft operation identifier is invalid")
         request = message.strip()
         if not request:
             raise HermesTurnFailed("Draft Assistant request must not be empty")
         selection = (selected_text or "").strip()
-        operation_id = f"draft-{uuid4().hex}"
+        request_fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "message": request,
+                    "selectedText": selection,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        self._session_store.start_draft_operation(
+            workspace_id,
+            operation_id,
+            request_fingerprint=request_fingerprint,
+            expected_manifest_version=expected_manifest_version,
+            expected_draft_version=expected_draft_version,
+        )
         selection_line = (
             "Selected article text: " + json.dumps(selection)
             if selection
@@ -778,15 +804,53 @@ class HermesDraftService:
                 "MEMBER_REQUEST_JSON:" + json.dumps(request, ensure_ascii=False),
             ]
         )
-        return self._run_draft_turn(
-            workspace_id,
-            expected_manifest_version=expected_manifest_version,
-            expected_draft_version=expected_draft_version,
-            operation_id=operation_id,
-            prompt=prompt,
-            save_required=False,
-            on_progress=on_progress,
+        try:
+            result = self._run_draft_turn(
+                workspace_id,
+                expected_manifest_version=expected_manifest_version,
+                expected_draft_version=expected_draft_version,
+                operation_id=operation_id,
+                prompt=prompt,
+                save_required=False,
+                on_progress=on_progress,
+            )
+        except WorkspaceError as error:
+            self._session_store.fail_draft_operation(
+                operation_id,
+                error=error_response(error)["error"],
+            )
+            raise
+        except Exception:
+            self._session_store.fail_draft_operation(
+                operation_id,
+                error={
+                    "code": "internal_error",
+                    "message": "controller operation failed",
+                },
+            )
+            raise
+        self._session_store.complete_draft_operation(
+            operation_id,
+            result={
+                "sessionId": result["sessionId"],
+                "reply": result["reply"],
+                "draftChanged": result["draftChanged"],
+                "draftVersion": self._draft_version(result["context"]),
+                "steps": result["steps"],
+            },
         )
+        return result
+
+    def operation(self, workspace_id: str, operation_id: str) -> dict[str, Any]:
+        if not _DRAFT_OPERATION_ID.fullmatch(operation_id):
+            raise InvalidRequest("Draft operation identifier is invalid")
+        operation = self._session_store.get_draft_operation(
+            workspace_id,
+            operation_id,
+        )
+        if operation is None:
+            raise DraftOperationNotFound("Draft operation does not exist")
+        return operation
 
     def _run_draft_turn(
         self,
@@ -1031,6 +1095,7 @@ class HermesDraftService:
                 "reply": reply,
                 "context": context,
                 "draftChanged": draft_changed,
+                "steps": final_steps,
             }
 
     def _schedule_session_cleanup(self) -> None:

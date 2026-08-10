@@ -129,9 +129,30 @@ export type WorkspaceMock = {
   referencedSourceIds: Set<string>;
   draftMessages: Map<
     string,
-    Array<{ role: 'user' | 'assistant'; text: string }>
+    Array<{ role: 'user' | 'assistant'; text: string; turnId?: string }>
   >;
   draftSessionIds: Map<string, string | null>;
+  draftOperations: Map<
+    string,
+    {
+      workspaceId: string;
+      operationId: string;
+      state: 'running' | 'completed' | 'failed';
+      result: {
+        sessionId: string;
+        reply: string;
+        draftChanged: boolean;
+        draftVersion: number;
+        steps: Array<{
+          activityId: string;
+          label: string;
+          completed: boolean;
+          failed: boolean;
+        }>;
+      } | null;
+      error: { code: string; message: string } | null;
+    }
+  >;
   nextDraftSessionNumber: number;
   publications: Map<string, WorkspacePublicationStatus>;
 };
@@ -282,6 +303,7 @@ export async function mockWxPostWorkspaceApi(
     referencedSourceIds: new Set(),
     draftMessages: new Map(),
     draftSessionIds: new Map(),
+    draftOperations: new Map(),
     nextDraftSessionNumber: 1,
     publications: new Map(),
   };
@@ -411,6 +433,19 @@ export async function mockWxPostWorkspaceApi(
       }
 
       if (method === 'GET' && parts[0] === 'context') {
+        if (
+          [...mock.draftOperations.values()].some(
+            (operation) =>
+              operation.workspaceId === workspaceId &&
+              operation.state === 'running'
+          )
+        ) {
+          await route.fulfill({
+            status: 503,
+            json: { detail: 'Workspace write is still active.' },
+          });
+          return;
+        }
         if (mock.contextDelayMs > 0) {
           await new Promise((resolve) =>
             setTimeout(resolve, mock.contextDelayMs)
@@ -557,6 +592,20 @@ export async function mockWxPostWorkspaceApi(
         });
         return;
       }
+      if (
+        method === 'GET' &&
+        parts[0] === 'draft' &&
+        parts[1] === 'operations' &&
+        parts[2]
+      ) {
+        const operation = mock.draftOperations.get(parts[2]);
+        if (!operation || operation.workspaceId !== workspaceId) {
+          await route.fulfill({ status: 404, json: { detail: 'Not found' } });
+          return;
+        }
+        await route.fulfill({ status: 200, json: operation });
+        return;
+      }
       if (method === 'POST' && parts[0] === 'draft' && parts[1] === 'save') {
         const input = request.postDataJSON() as {
           expectedManifestVersion: number;
@@ -692,6 +741,7 @@ export async function mockWxPostWorkspaceApi(
         const input = request.postDataJSON() as {
           expectedManifestVersion: number;
           expectedDraftVersion: number;
+          operationId: string;
           message: string;
           selectedText: string | null;
         };
@@ -735,6 +785,13 @@ export async function mockWxPostWorkspaceApi(
           title: `Hermes revision v${nextVersion}`,
         };
         const reply = 'I revised the saved draft and kept the request focused.';
+        mock.draftOperations.set(input.operationId, {
+          workspaceId,
+          operationId: input.operationId,
+          state: 'running',
+          result: null,
+          error: null,
+        });
         const completeDraftChat = () => {
           context.draft = {
             draftVersion: nextVersion,
@@ -750,8 +807,21 @@ export async function mockWxPostWorkspaceApi(
           mock.draftMessages.set(workspaceId, [
             ...messages,
             { role: 'user', text: input.message },
-            { role: 'assistant', text: reply },
+            { role: 'assistant', text: reply, turnId: input.operationId },
           ]);
+          mock.draftOperations.set(input.operationId, {
+            workspaceId,
+            operationId: input.operationId,
+            state: 'completed',
+            result: {
+              sessionId: activeDraftSessionId(workspaceId),
+              reply,
+              draftChanged: true,
+              draftVersion: nextVersion,
+              steps: [],
+            },
+            error: null,
+          });
         };
         if (mock.disconnectNextDraftChatBeforeCompletion) {
           mock.disconnectNextDraftChatBeforeCompletion = false;

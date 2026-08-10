@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -1038,6 +1040,25 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
         "label": "Verifying the saved Draft",
     }
     assert result["draftChanged"] is True
+    operation_id = (
+        session.prompts[-1]["prompt"]
+        .split("Draft operation ID: ", 1)[1]
+        .splitlines()[0]
+    )
+    operation = service.operation("wxpost-test", operation_id)
+    operation_steps = operation["result"].pop("steps")
+    assert operation == {
+        "workspaceId": "wxpost-test",
+        "operationId": operation_id,
+        "state": "completed",
+        "result": {
+            "sessionId": "stored-session",
+            "reply": "Saved.\n\nDraft version: v2 → v3",
+            "draftChanged": True,
+            "draftVersion": 3,
+        },
+        "error": None,
+    }
     restored = HermesDraftSessionStore(tmp_path).restore_completed_progress(
         "stored-session",
         [
@@ -1050,6 +1071,7 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
             }
         ],
     )
+    assert operation_steps == restored[0]["steps"]
     assert restored[0]["steps"][-2:] == [
         {
             "activityId": "save-1",
@@ -1066,6 +1088,71 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
             "failed": False,
         },
     ]
+
+
+def test_chat_records_failed_operation_for_exact_recovery(tmp_path: Path) -> None:
+    service, session = _service(tmp_path)
+    operation_id = "draft-0123456789abcdef0123456789abcdef"
+
+    def unavailable_turn(**_kwargs: Any) -> HermesTurn:
+        raise HermesUnavailable("Hermes web session is unavailable")
+
+    session.turn = unavailable_turn  # type: ignore[method-assign]
+
+    with pytest.raises(HermesUnavailable):
+        service.chat(
+            "wxpost-test",
+            expected_manifest_version=4,
+            expected_draft_version=2,
+            operation_id=operation_id,
+            message="Tighten the opening.",
+            selected_text=None,
+        )
+
+    assert service.operation("wxpost-test", operation_id) == {
+        "workspaceId": "wxpost-test",
+        "operationId": operation_id,
+        "state": "failed",
+        "result": None,
+        "error": {
+            "code": "hermes_unavailable",
+            "message": "Hermes web session is unavailable",
+        },
+    }
+
+
+def test_operation_status_remains_readable_while_turn_is_running(
+    tmp_path: Path,
+) -> None:
+    service, session = _service(tmp_path)
+    operation_id = "draft-fedcba9876543210fedcba9876543210"
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_turn(**_kwargs: Any) -> HermesTurn:
+        started.set()
+        assert release.wait(timeout=5)
+        return HermesTurn(session_id="stored-session", reply="No change needed.")
+
+    session.turn = slow_turn  # type: ignore[method-assign]
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            service.chat,
+            "wxpost-test",
+            expected_manifest_version=4,
+            expected_draft_version=2,
+            operation_id=operation_id,
+            message="Does this opening read clearly?",
+            selected_text=None,
+        )
+        assert started.wait(timeout=1)
+        assert service.operation("wxpost-test", operation_id)["state"] == "running"
+        release.set()
+        assert future.result(timeout=5)["draftChanged"] is False
+
+    completed = service.operation("wxpost-test", operation_id)
+    assert completed["state"] == "completed"
+    assert completed["result"]["reply"] == "No change needed."
 
 
 def test_failed_draft_save_does_not_report_verification_success(

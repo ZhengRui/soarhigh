@@ -14,6 +14,87 @@ from wxpost_controller.draft_session_store import (
 from wxpost_controller.errors import HermesTurnFailed
 
 
+def test_draft_operation_lifecycle_is_durable_and_request_bound(
+    tmp_path: Path,
+) -> None:
+    store = HermesDraftSessionStore(tmp_path)
+    operation_id = "draft-0123456789abcdef0123456789abcdef"
+    store.start_draft_operation(
+        "wxpost-test",
+        operation_id,
+        request_fingerprint="request-hash",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+    )
+
+    assert HermesDraftSessionStore(tmp_path).get_draft_operation(
+        "wxpost-test", operation_id
+    ) == {
+        "workspaceId": "wxpost-test",
+        "operationId": operation_id,
+        "state": "running",
+        "result": None,
+        "error": None,
+    }
+
+    store.complete_draft_operation(
+        operation_id,
+        result={
+            "sessionId": "stored-session",
+            "reply": "Saved.",
+            "draftChanged": True,
+            "draftVersion": 3,
+        },
+    )
+    completed = HermesDraftSessionStore(tmp_path).get_draft_operation(
+        "wxpost-test", operation_id
+    )
+    assert completed is not None
+    assert completed["state"] == "completed"
+    assert completed["result"]["draftVersion"] == 3
+
+    with pytest.raises(HermesTurnFailed, match="already been submitted"):
+        store.start_draft_operation(
+            "wxpost-test",
+            operation_id,
+            request_fingerprint="request-hash",
+            expected_manifest_version=4,
+            expected_draft_version=2,
+        )
+    with pytest.raises(HermesTurnFailed, match="different request"):
+        store.start_draft_operation(
+            "wxpost-test",
+            operation_id,
+            request_fingerprint="different-hash",
+            expected_manifest_version=4,
+            expected_draft_version=2,
+        )
+
+
+def test_failed_draft_operation_records_transport_error(tmp_path: Path) -> None:
+    store = HermesDraftSessionStore(tmp_path)
+    operation_id = "draft-fedcba9876543210fedcba9876543210"
+    store.start_draft_operation(
+        "wxpost-test",
+        operation_id,
+        request_fingerprint="request-hash",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+    )
+    store.fail_draft_operation(
+        operation_id,
+        error={"code": "hermes_unavailable", "message": "Hermes is offline"},
+    )
+
+    failed = store.get_draft_operation("wxpost-test", operation_id)
+    assert failed is not None
+    assert failed["state"] == "failed"
+    assert failed["error"] == {
+        "code": "hermes_unavailable",
+        "message": "Hermes is offline",
+    }
+
+
 def test_draft_session_store_restores_completed_progress_by_turn_id(
     tmp_path: Path,
 ) -> None:

@@ -100,6 +100,10 @@ class HermesDraftSessionStore:
                     "DELETE FROM workspace_sessions WHERE workspace_id = ?",
                     (workspace_id,),
                 )
+                connection.execute(
+                    "DELETE FROM draft_operations WHERE workspace_id = ?",
+                    (workspace_id,),
+                )
                 if previous:
                     self._retire_session(connection, previous)
                 connection.commit()
@@ -133,6 +137,134 @@ class HermesDraftSessionStore:
                     json.dumps(steps, ensure_ascii=False, sort_keys=True),
                 ),
             )
+
+    def start_draft_operation(
+        self,
+        workspace_id: str,
+        operation_id: str,
+        *,
+        request_fingerprint: str,
+        expected_manifest_version: int,
+        expected_draft_version: int,
+    ) -> None:
+        with self._connect() as connection:
+            self._begin_immediate(connection)
+            try:
+                existing = connection.execute(
+                    """
+                    SELECT workspace_id, request_fingerprint,
+                           expected_manifest_version, expected_draft_version
+                    FROM draft_operations
+                    WHERE operation_id = ?
+                    """,
+                    (operation_id,),
+                ).fetchone()
+                identity = (
+                    workspace_id,
+                    request_fingerprint,
+                    expected_manifest_version,
+                    expected_draft_version,
+                )
+                if existing is not None:
+                    if tuple(existing) != identity:
+                        raise HermesTurnFailed(
+                            "Draft operation identifier was reused for a different request"
+                        )
+                    raise HermesTurnFailed("Draft operation has already been submitted")
+                connection.execute(
+                    """
+                    INSERT INTO draft_operations(
+                        operation_id, workspace_id, request_fingerprint,
+                        expected_manifest_version, expected_draft_version, state
+                    ) VALUES (?, ?, ?, ?, ?, 'running')
+                    """,
+                    (operation_id, *identity),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    def complete_draft_operation(
+        self,
+        operation_id: str,
+        *,
+        result: dict[str, Any],
+    ) -> None:
+        self._finish_draft_operation(
+            operation_id,
+            state="completed",
+            payload_column="result_json",
+            payload=result,
+        )
+
+    def fail_draft_operation(
+        self,
+        operation_id: str,
+        *,
+        error: dict[str, Any],
+    ) -> None:
+        self._finish_draft_operation(
+            operation_id,
+            state="failed",
+            payload_column="error_json",
+            payload=error,
+        )
+
+    def get_draft_operation(
+        self,
+        workspace_id: str,
+        operation_id: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT state, result_json, error_json
+                FROM draft_operations
+                WHERE workspace_id = ? AND operation_id = ?
+                """,
+                (workspace_id, operation_id),
+            ).fetchone()
+        if row is None:
+            return None
+        result = json.loads(str(row[1])) if row[1] is not None else None
+        error = json.loads(str(row[2])) if row[2] is not None else None
+        return {
+            "workspaceId": workspace_id,
+            "operationId": operation_id,
+            "state": str(row[0]),
+            "result": result,
+            "error": error,
+        }
+
+    def _finish_draft_operation(
+        self,
+        operation_id: str,
+        *,
+        state: str,
+        payload_column: str,
+        payload: dict[str, Any],
+    ) -> None:
+        if state not in {"completed", "failed"} or payload_column not in {
+            "result_json",
+            "error_json",
+        }:
+            raise HermesTurnFailed("Draft operation result is invalid")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE draft_operations
+                SET state = ?, {payload_column} = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE operation_id = ? AND state = 'running'
+                """,
+                (
+                    state,
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                    operation_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise HermesTurnFailed("Draft operation is not running")
 
     def restore_completed_progress(
         self,
@@ -240,6 +372,20 @@ class HermesDraftSessionStore:
                     steps_json TEXT NOT NULL,
                     UNIQUE(session_id, turn_sequence)
                 );
+                CREATE TABLE IF NOT EXISTS draft_operations (
+                    operation_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    request_fingerprint TEXT NOT NULL,
+                    expected_manifest_version INTEGER NOT NULL,
+                    expected_draft_version INTEGER NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('running', 'completed', 'failed')),
+                    result_json TEXT,
+                    error_json TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS draft_operations_workspace
+                ON draft_operations(workspace_id, created_at);
                     """
                 )
                 connection.execute(
@@ -432,6 +578,7 @@ class HermesDraftSessionStore:
                     connection.execute("DELETE FROM workspace_sessions")
                     connection.execute("DELETE FROM turn_progress")
                     connection.execute("DELETE FROM legacy_turn_progress")
+                    connection.execute("DELETE FROM draft_operations")
                 connection.execute(
                     """
                     INSERT INTO metadata(key, value) VALUES ('draft_protocol_version', ?)

@@ -68,10 +68,6 @@ test('waits for and reconciles a Draft saved after its event stream disconnects'
 }) => {
   const workspace = await createAndGenerateDraft(page);
   const chatInput = page.getByPlaceholder('Ask about or revise the Draft…');
-  const contextReadsBefore = workspace.requests.filter(
-    (item) => item === 'GET /context'
-  ).length;
-
   workspace.disconnectNextDraftChatBeforeCompletion = true;
   workspace.draftChatCompletionDelayAfterDisconnectMs = 1_500;
   await chatInput.fill('Make the title more concise.');
@@ -97,8 +93,10 @@ test('waits for and reconciles a Draft saved after its event stream disconnects'
     workspace.requests.filter((item) => item === 'POST /draft/chat')
   ).toHaveLength(2);
   expect(
-    workspace.requests.filter((item) => item === 'GET /context').length
-  ).toBeGreaterThanOrEqual(contextReadsBefore + 2);
+    workspace.requests.filter((item) =>
+      item.startsWith('GET /draft/operations/')
+    ).length
+  ).toBeGreaterThanOrEqual(2);
 });
 
 test('shows only milestones delivered by the live Draft chat stream', async ({
