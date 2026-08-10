@@ -727,6 +727,12 @@ Source content requires the exact SHA-256 version stored in the manifest and
 returns a private immutable cache contract plus an ETag. Authentication remains
 required, and a stale or missing version is rejected.
 
+The controller service has its own thin image layer declared by
+`wxpost_controller/Dockerfile`. It installs the pinned image-inspection runtime
+from `wxpost_controller/requirements.txt` on top of the configured Hermes base
+image, so source metadata support does not depend on packages that happen to be
+present in an upstream `latest` image.
+
 Source deletion is dependency-safe. The preflight reports
 `blockedByDraft: true` when the saved Draft still references the source, and
 the delete route rejects the same condition even if it changes after

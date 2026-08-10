@@ -86,7 +86,7 @@ export function completeDraftDocument(): DraftDocument {
       {
         id: 'M01',
         kind: 'image',
-        sourceUrl: '',
+        sourceUrl: 'https://workspace.invalid/materials/M01',
         description: 'Portrait of Jamie at the lectern.',
         include: true,
         order: 1,
@@ -96,7 +96,7 @@ export function completeDraftDocument(): DraftDocument {
       {
         id: 'M02',
         kind: 'image',
-        sourceUrl: '',
+        sourceUrl: 'https://workspace.invalid/materials/M02',
         description: 'Members listening together.',
         include: true,
         order: 2,
@@ -106,7 +106,7 @@ export function completeDraftDocument(): DraftDocument {
       {
         id: 'M03',
         kind: 'video',
-        sourceUrl: '',
+        sourceUrl: 'https://workspace.invalid/materials/M03',
         description: 'Closing applause on video.',
         include: true,
         order: 3,

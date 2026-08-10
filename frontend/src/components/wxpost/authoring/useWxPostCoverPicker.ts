@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import {
@@ -12,10 +12,9 @@ import type {
   WxPostMediaAsset,
   WxPostRenderDocument,
 } from '@/components/wxpost/types';
-import {
-  getWorkspaceSourceContent,
-  type WorkspaceSource,
-} from '@/utils/wxpostWorkspace';
+import type { WorkspaceSource } from '@/utils/wxpostWorkspace';
+
+import { useWorkspaceMediaResources } from './useWorkspaceMediaResources';
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
@@ -64,11 +63,6 @@ export function useWxPostCoverPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [selectedCoverId, setSelectedCoverId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [previewUrls, setPreviewUrls] = useState<
-    Record<string, { contentSha256: string; url: string }>
-  >({});
-  const objectUrlsRef = useRef(new Map<string, string>());
   const coverSources = useMemo(
     () =>
       sources.filter(
@@ -82,93 +76,47 @@ export function useWxPostCoverPicker({
       renderDocument ? wxPostBodyMediaIds(renderDocument) : new Set<string>(),
     [renderDocument]
   );
+  const draftManagedKey = Object.keys(draftAssetStates).sort().join('|');
   const draftManagedIds = useMemo(
-    () => new Set(Object.keys(draftAssetStates)),
-    [draftAssetStates]
+    () => new Set(draftManagedKey ? draftManagedKey.split('|') : []),
+    [draftManagedKey]
   );
+  const coverOnlyResources = useMemo(
+    () =>
+      coverSources.flatMap((source) =>
+        !draftManagedIds.has(source.id) && source.contentSha256
+          ? [
+              {
+                id: source.id,
+                kind: 'image' as const,
+                contentSha256: source.contentSha256,
+                dimensions: source.dimensions,
+              },
+            ]
+          : []
+      ),
+    [coverSources, draftManagedIds]
+  );
+  const coverResources = useWorkspaceMediaResources({
+    workspaceId,
+    items: coverOnlyResources,
+    enabled: open,
+  });
   const candidates = useMemo(
     () =>
       coverSources.map((source) => {
-        const localPreview = previewUrls[source.id];
         return {
           id: source.id,
           filename: source.filename,
           previewUrl:
             draftAssetUrls[source.id] ||
-            (localPreview?.contentSha256 === source.contentSha256
-              ? localPreview.url
-              : null),
+            coverResources.assetUrls[source.id] ||
+            null,
           inArticle: bodyMediaIds.has(source.id),
         };
       }),
-    [bodyMediaIds, coverSources, draftAssetUrls, previewUrls]
+    [bodyMediaIds, coverResources.assetUrls, coverSources, draftAssetUrls]
   );
-
-  useEffect(
-    () => () => {
-      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      objectUrlsRef.current.clear();
-    },
-    []
-  );
-
-  useEffect(() => {
-    if (!open) return;
-    const missing = coverSources.filter(
-      (source) =>
-        !draftManagedIds.has(source.id) &&
-        previewUrls[source.id]?.contentSha256 !== source.contentSha256
-    );
-    if (missing.length === 0) return;
-    let active = true;
-    setLoading(true);
-    void Promise.allSettled(
-      missing.map(async (source) => {
-        if (!source.contentSha256) {
-          throw new Error(`Source ${source.id} has no content version.`);
-        }
-        const blob = await getWorkspaceSourceContent(
-          workspaceId,
-          source.id,
-          source.contentSha256
-        );
-        return [
-          source.id,
-          source.contentSha256,
-          URL.createObjectURL(blob),
-        ] as const;
-      })
-    )
-      .then((results) => {
-        const entries = results.flatMap((result) =>
-          result.status === 'fulfilled' ? [result.value] : []
-        );
-        if (!active) {
-          entries.forEach(([, , url]) => URL.revokeObjectURL(url));
-          return;
-        }
-        entries.forEach(([id, , url]) => {
-          const previousUrl = objectUrlsRef.current.get(id);
-          if (previousUrl) URL.revokeObjectURL(previousUrl);
-          objectUrlsRef.current.set(id, url);
-        });
-        setPreviewUrls((current) => ({
-          ...current,
-          ...Object.fromEntries(
-            entries.map(([id, contentSha256, url]) => [
-              id,
-              { contentSha256, url },
-            ])
-          ),
-        }));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [coverSources, draftManagedIds, open, previewUrls, workspaceId]);
 
   const show = useCallback(() => {
     setSelectedCoverId(document?.coverMediaId ?? null);
@@ -196,9 +144,9 @@ export function useWxPostCoverPicker({
               ),
               renderMedia: coverMediaFromSource(
                 source,
-                previewUrls[source.id]?.contentSha256 === source.contentSha256
-                  ? previewUrls[source.id].url
-                  : ''
+                draftAssetUrls[source.id] ||
+                  coverResources.assetUrls[source.id] ||
+                  ''
               ),
             }
           : undefined;
@@ -215,9 +163,10 @@ export function useWxPostCoverPicker({
     }
   }, [
     coverSources,
+    coverResources.assetUrls,
+    draftAssetUrls,
     document,
     onApply,
-    previewUrls,
     renderDocument,
     selectedCoverId,
     workspaceId,
@@ -227,11 +176,12 @@ export function useWxPostCoverPicker({
     open,
     selectedCoverId,
     loading:
-      loading ||
-      (open &&
-        coverSources.some(
-          (source) => draftAssetStates[source.id] === 'loading'
-        )),
+      open &&
+      coverSources.some(
+        (source) =>
+          draftAssetStates[source.id] === 'loading' ||
+          coverResources.assetStates[source.id] === 'loading'
+      ),
     candidates,
     show,
     close: () => setOpen(false),

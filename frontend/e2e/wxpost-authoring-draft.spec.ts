@@ -693,9 +693,7 @@ test('preserves the saved Draft across generation, chat, and conflict failures',
   await expect(page.getByTestId('wxpost-article')).toContainText(
     generatedTitle
   );
-  await expect(
-    page.getByText('Preparing Draft preview and media…')
-  ).toHaveCount(0);
+  await expect(page.getByText('Preparing Draft preview…')).toHaveCount(0);
   await expect(page.getByText('Draft · v2')).toBeVisible();
   workspace.draftChatDelayMs = 0;
   await expect(page.getByText('Ready', { exact: true })).toBeVisible();
@@ -928,7 +926,7 @@ test('does not revalidate an unchanged Draft after a Materials-only save', async
     {
       id: 'M01',
       kind: 'image',
-      sourceUrl: '',
+      sourceUrl: 'https://workspace.invalid/materials/M01',
       description: 'A generated article caption.',
       include: true,
       order: 0,
@@ -984,11 +982,18 @@ test('keeps the Draft usable and retries a failed image independently', async ({
   const retry = page.getByRole('button', { name: 'Retry image' }).first();
   await expect(retry).toBeVisible();
 
+  const article = page.getByTestId('wxpost-article');
+  await article.locator('[data-wxpost-edit-label="draft title"]').click();
+  await expect(
+    page.getByRole('textbox', { name: 'Edit draft title' })
+  ).toBeVisible();
+
   workspace.failSourceContent = false;
   await retry.click();
   await expect(
-    page.getByTestId('wxpost-article').locator('img').first()
-  ).toBeVisible();
+    page.getByRole('textbox', { name: 'Edit draft title' })
+  ).toHaveCount(0);
+  await expect(article.locator('img').first()).toBeVisible();
 });
 
 test('renders text and exact-ratio skeletons before delayed images without layout shift', async ({
@@ -1017,6 +1022,8 @@ test('renders text and exact-ratio skeletons before delayed images without layou
     .locator('[data-wxpost-media-state="loading"][data-wxpost-media-id="M01"]')
     .first();
   await expect(skeleton).toBeVisible();
+  await expect(skeleton).toHaveClass(/animate-pulse/);
+  await expect(skeleton).toHaveCSS('animation-name', 'pulse');
   const desktopSkeletonBox = await skeleton.boundingBox();
   expect(desktopSkeletonBox).not.toBeNull();
 
@@ -1041,7 +1048,7 @@ test('renders text and exact-ratio skeletons before delayed images without layou
 test('aborts a hanging image after fifteen seconds without blocking the Draft', async ({
   page,
 }) => {
-  test.setTimeout(25_000);
+  test.setTimeout(32_000);
   const workspace = await openAuthoringPage(page);
   await page.getByTestId('create-workspace').click();
   const context = Array.from(workspace.contexts.values())[0];
@@ -1055,7 +1062,7 @@ test('aborts a hanging image after fifteen seconds without blocking the Draft', 
     {
       id: 'M01',
       kind: 'image',
-      sourceUrl: 'https://workspace.invalid/M01.jpg',
+      sourceUrl: 'https://workspace.invalid/materials/M01',
       posterUrl: null,
       description: 'A delayed image.',
       include: true,
@@ -1065,12 +1072,19 @@ test('aborts a hanging image after fifteen seconds without blocking the Draft', 
     },
   ];
   workspace.nextGeneratedDocument = document;
-  workspace.sourceContentDelayMs = 16_500;
+  workspace.sourceContentDelayMs = 25_000;
 
   await page.getByTestId('generate-draft').click();
   await expect(page.getByTestId('draft-workbench')).toBeVisible();
   await expect(
     page.getByRole('heading', { name: 'Draft Assistant' })
+  ).toBeVisible();
+  await expect(
+    page
+      .locator(
+        '[data-wxpost-media-state="loading"][data-wxpost-media-id="M01"]'
+      )
+      .first()
   ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Retry image' })).toBeVisible({
     timeout: 17_000,
@@ -1088,7 +1102,5 @@ test('shows a renderer failure instead of leaving Draft loading forever', async 
   await expect(
     page.getByText('Canonical renderer is unavailable', { exact: true })
   ).toBeVisible();
-  await expect(
-    page.getByText('Preparing Draft preview and media…')
-  ).toBeHidden();
+  await expect(page.getByText('Preparing Draft preview…')).toBeHidden();
 });

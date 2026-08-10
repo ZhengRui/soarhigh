@@ -381,7 +381,9 @@ test('reserves trusted image geometry while Draft media loads or fails', () => {
   const mediaId = input.renderDocument.media.find(
     (media) => media.kind === 'image'
   )!.id;
-  input.context.assetUrls = { ...input.context.assetUrls, [mediaId]: '' };
+  input.renderDocument.media.find((media) => media.id === mediaId)!.sourceUrl =
+    `https://workspace.invalid/materials/${mediaId}`;
+  delete input.context.assetUrls![mediaId];
   input.context.assetDimensions = {
     [mediaId]: { width: 1200, height: 800 },
   };

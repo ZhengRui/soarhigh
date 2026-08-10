@@ -655,3 +655,43 @@ test('selects, saves, and removes a cover-only workspace image', async ({
     .click();
   await expect(page.getByTestId(`material-${coverId}`)).toHaveCount(0);
 });
+
+test('attempts a failed cover-only preview once per dialog opening', async ({
+  page,
+}) => {
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  await page.getByTestId('material-file-input').setInputFiles({
+    name: 'cover-only.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from('cover-only'),
+  });
+  await expect(page.getByText('cover-only.png', { exact: true })).toBeVisible();
+  const context = Array.from(workspace.contexts.values())[0];
+  const coverSource = context.manifest.sources.find(
+    (source) => source.filename === 'cover-only.png'
+  );
+  expect(coverSource).toBeDefined();
+  workspace.nextGeneratedDocument = draftDocument(
+    'Cover preview failure',
+    'The Draft remains usable without body media.'
+  );
+  workspace.failSourceContent = true;
+  await page.getByTestId('generate-draft').click();
+
+  const requestName = `GET /sources/${coverSource!.id}/content`;
+  const requestCount = () =>
+    workspace.requests.filter((request) => request === requestName).length;
+  const requestsBeforeOpening = requestCount();
+  await page.getByTestId('open-cover-picker').click();
+  await expect.poll(requestCount).toBe(requestsBeforeOpening + 1);
+  await page.waitForTimeout(300);
+  expect(requestCount()).toBe(requestsBeforeOpening + 1);
+
+  const dialog = page.getByTestId('cover-picker-dialog');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByTestId('open-cover-picker').click();
+  await expect.poll(requestCount).toBe(requestsBeforeOpening + 2);
+  await page.waitForTimeout(300);
+  expect(requestCount()).toBe(requestsBeforeOpening + 2);
+});

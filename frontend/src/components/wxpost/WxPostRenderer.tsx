@@ -153,6 +153,7 @@ export function WxPostRenderer({
         if (retryButton?.dataset.wxpostRetryMedia && onRetryMedia) {
           event.preventDefault();
           event.stopPropagation();
+          editor?.onBlur();
           onRetryMedia(retryButton.dataset.wxpostRetryMedia);
           return;
         }

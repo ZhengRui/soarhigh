@@ -51,7 +51,11 @@ function mediaUrl(
   context: WxPostRenderContext
 ) {
   if (!media) return '';
-  return safeAssetUrl(context.assetUrls?.[media.id] ?? media.sourceUrl);
+  return safeAssetUrl(
+    context.assetUrls === undefined
+      ? media.sourceUrl
+      : context.assetUrls[media.id]
+  );
 }
 
 function moduleLabel(label: string, tokens: PresentationTokens) {

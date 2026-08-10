@@ -265,7 +265,7 @@ compose config --quiet
 
 case "${action}" in
   up)
-    compose up --detach
+    compose up --detach --build
     ;;
   down)
     compose down

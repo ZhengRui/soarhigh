@@ -85,7 +85,11 @@ services:
           create_host_path: false
 
   controller:
-    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+    build:
+      context: .
+      dockerfile: wxpost_controller/Dockerfile
+      args:
+        HERMES_IMAGE: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
     restart: unless-stopped
     working_dir: /workspace
     command:
