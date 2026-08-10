@@ -43,15 +43,10 @@ services:
       WXPOST_PREVIEW_BROWSER_BASE_URL: "${WXPOST_PREVIEW_BROWSER_BASE_URL:-http://host.docker.internal:3000}"
       WXPOST_SERVICE_TOKEN: "${SOARHIGH_WXPOST_SERVICE_TOKEN:?Set SOARHIGH_WXPOST_SERVICE_TOKEN in .env.local}"
       HERMES_DASHBOARD_SESSION_TOKEN: "${SOARHIGH_WXPOST_SERVICE_TOKEN:?Set SOARHIGH_WXPOST_SERVICE_TOKEN in .env.local}"
-      API_SERVER_ENABLED: "true"
-      API_SERVER_KEY: "${SOARHIGH_WXPOST_SERVICE_TOKEN:?Set SOARHIGH_WXPOST_SERVICE_TOKEN in .env.local}"
-      API_SERVER_HOST: "0.0.0.0"
-      API_SERVER_PORT: "8642"
       TAVILY_API_KEY: "${TAVILY_API_KEY:-}"
       PYTHONPATH: /opt/soarhigh
       WXPOST_UPLOAD_CACHE_ROOTS: /opt/data/profiles/wxpost/cache
     ports:
-      - "127.0.0.1:8642:8642"
       - "127.0.0.1:8787:8787"
     volumes:
       - type: bind
@@ -108,11 +103,17 @@ services:
       SOARHIGH_API_BASE_URL: "${SOARHIGH_API_BASE_URL:-http://host.docker.internal:5000}"
       WXPOST_SERVICE_TOKEN: "${SOARHIGH_WXPOST_SERVICE_TOKEN:?Set SOARHIGH_WXPOST_SERVICE_TOKEN in .env.local}"
       WXPOST_WORKSPACE_ROOT: /workspace
+      HERMES_HOME: /opt/data/profiles/wxpost
       HERMES_SERVE_URL: ws://127.0.0.1:9119/api/ws
     network_mode: service:gateway
     depends_on:
       - gateway
     volumes:
+      - type: bind
+        source: ${HERMES_HOME_DIR:?Set HERMES_HOME_DIR in .env.local}
+        target: /opt/data
+        bind:
+          create_host_path: false
       - type: bind
         source: ${HERMES_WORKSPACE_DIR:?Set HERMES_WORKSPACE_DIR in .env.local}
         target: /workspace

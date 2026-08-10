@@ -63,6 +63,34 @@ test('keeps loaded Draft media stable when the assistant saves a revision', asyn
   ).toBeVisible();
 });
 
+test('reconciles a saved Draft turn when its event stream disconnects', async ({
+  page,
+}) => {
+  const workspace = await createAndGenerateDraft(page);
+  const chatInput = page.getByPlaceholder('Ask about or revise the Draft…');
+
+  workspace.disconnectNextDraftChatAfterCompletion = true;
+  await chatInput.fill('Make the title more concise.');
+  await chatInput.press('Enter');
+
+  await expect(page.getByText('Draft · v2')).toBeVisible();
+  await expect(page.getByTestId('draft-chat-history')).toContainText(
+    'I revised the saved draft and kept the request focused.'
+  );
+  await expect(chatInput).toHaveValue('');
+  await expect(
+    page.getByTestId('draft-workbench').getByRole('alert')
+  ).toHaveCount(0);
+
+  await chatInput.fill('Make the title even shorter.');
+  await chatInput.press('Enter');
+
+  await expect(page.getByText('Draft · v3')).toBeVisible();
+  expect(
+    workspace.requests.filter((item) => item === 'POST /draft/chat')
+  ).toHaveLength(2);
+});
+
 test('shows only milestones delivered by the live Draft chat stream', async ({
   page,
 }) => {

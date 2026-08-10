@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import {
+  getWorkspaceContext,
   getWorkspaceDraftSession,
   chatWithWorkspaceDraft,
   resetWorkspaceDraftSession,
@@ -17,6 +18,14 @@ export type DraftProgressActivity = WorkspaceDraftProgressActivity;
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
+}
+
+function isRecoverableStreamFailure(error: unknown) {
+  return (
+    error instanceof TypeError ||
+    (error instanceof WorkspaceApiError &&
+      (error.code === 'incomplete_stream' || error.code === 'invalid_stream'))
+  );
 }
 
 export function useWxPostDraftAssistant({
@@ -84,6 +93,8 @@ export function useWxPostDraftAssistant({
     const request = message.trim();
     if (!request || !savedDraft || dirty) return;
     const requestController = new AbortController();
+    const previousMessageCount = session?.messages.length ?? 0;
+    const expectedDraftVersion = savedDraft.draftVersion;
     requestControllerRef.current = requestController;
     setPending(true);
     setProgress([]);
@@ -176,6 +187,49 @@ export function useWxPostDraftAssistant({
         ],
       }));
     } catch (caught) {
+      if (isRecoverableStreamFailure(caught)) {
+        try {
+          // The Controller deliberately finishes a Draft turn after a browser
+          // disconnect. Reconcile its durable session and Draft before telling
+          // the member that a completed edit failed.
+          // Session history takes the same per-workspace turn lock as chat,
+          // so it also waits for an in-flight disconnected turn to finish.
+          // Read context afterwards to avoid reconciling against a pre-save
+          // snapshot returned while that turn was still running.
+          const history = await getWorkspaceDraftSession(workspaceId);
+          const context = await getWorkspaceContext(workspaceId);
+          const completedTurn = history.messages.slice(previousMessageCount);
+          const recoveredUser = completedTurn[0];
+          const recoveredAssistant = completedTurn[1];
+          const actualDraftVersion = context.draft?.draftVersion ?? 0;
+          const draftChanged = actualDraftVersion === expectedDraftVersion + 1;
+          if (
+            recoveredUser?.role === 'user' &&
+            recoveredUser.text === request &&
+            recoveredAssistant?.role === 'assistant' &&
+            (actualDraftVersion === expectedDraftVersion || draftChanged)
+          ) {
+            setStatus('online');
+            setSession(history);
+            if (draftChanged) {
+              try {
+                await onDraftChanged(context);
+              } catch (recoveryError) {
+                const failure = errorMessage(
+                  recoveryError,
+                  'The Draft was saved, but the updated preview could not be loaded.'
+                );
+                onError(failure);
+                toast.error(failure);
+              }
+            }
+            return;
+          }
+        } catch {
+          // Preserve the original transport error when reconciliation cannot
+          // prove that this exact turn completed.
+        }
+      }
       setMessage(request);
       setSession((current) =>
         current
@@ -219,6 +273,7 @@ export function useWxPostDraftAssistant({
     onError,
     savedDraft,
     selectedText,
+    session,
     workspaceId,
   ]);
 

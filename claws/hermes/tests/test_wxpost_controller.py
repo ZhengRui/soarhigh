@@ -520,6 +520,160 @@ def test_http_draft_chat_streams_progress_before_the_complete_result(
         thread.join(timeout=5)
 
 
+def test_http_draft_chat_sends_heartbeats_while_hermes_is_quiet(
+    tmp_path: Path,
+) -> None:
+    operation_started = threading.Event()
+    release_operation = threading.Event()
+    operation_finished = threading.Event()
+
+    class DraftService:
+        def chat(self, workspace_id: str, *, on_progress, **kwargs):
+            operation_started.set()
+            try:
+                assert release_operation.wait(timeout=5)
+                return {
+                    "workspaceId": workspace_id,
+                    "sessionId": "session-heartbeat",
+                    "reply": "Saved.",
+                    "context": {"workspaceId": workspace_id},
+                    "draftChanged": True,
+                }
+            finally:
+                operation_finished.set()
+
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+        draft_heartbeat_seconds=0.01,
+    )
+    server.draft_service = DraftService()  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_port}/workspaces/wxpost-stream/draft/chat",
+        data=json.dumps(
+            {
+                "expectedManifestVersion": 4,
+                "expectedDraftVersion": 2,
+                "message": "Tighten it.",
+                "selectedText": None,
+            }
+        ).encode(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.readline() == b"event: progress\n"
+            assert b'"stage": "request_started"' in response.readline()
+            assert response.readline() == b"\n"
+            assert operation_started.wait(timeout=1)
+            assert response.readline() == b": keep-alive\n"
+            assert response.readline() == b"\n"
+            assert not operation_finished.is_set()
+            release_operation.set()
+            body = response.read().decode()
+
+        assert "event: complete" in body
+        assert '"reply": "Saved."' in body
+    finally:
+        release_operation.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_voice_tone_suggestion_uses_tool_free_hermes_oneshot(
+    seeded_workspace: tuple[Path, str],
+) -> None:
+    root, workspace_id = seeded_workspace
+    requests: list[dict[str, Any]] = []
+
+    def editorial_runner(**kwargs: Any) -> str:
+        requests.append(kwargs)
+        source = json.loads(kwargs["user_input"].split("\n", 1)[1])
+        profile_name = source["profileName"]
+        if profile_name == "Unavailable":
+            raise RuntimeError("provider unavailable")
+        if profile_name == "Invalid":
+            return ""
+        return "Use warm details and restrained wit."
+
+    server = build_server(
+        workspace_root=str(root),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+        editorial_runner=editorial_runner,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, result = _json_request(
+            (
+                f"http://127.0.0.1:{server.server_port}/workspaces/"
+                f"{workspace_id}/voice-tone/suggestion"
+            ),
+            method="POST",
+            payload={"name": "  Warmly funny  "},
+        )
+
+        assert status == HTTPStatus.OK
+        assert result == {"instruction": "Use warm details and restrained wit."}
+        assert len(requests) == 1
+        assert requests[0]["task"] == "title_generation"
+        assert requests[0]["max_tokens"] == 256
+        assert "model" not in requests[0]
+        assert "tools" not in requests[0]
+        source = json.loads(requests[0]["user_input"].split("\n", 1)[1])
+        assert source["profileName"] == "Warmly funny"
+        assert source["workspaceEditorialContext"]["articleType"] == "meeting-recap"
+
+        missing, missing_body = _json_request(
+            (
+                f"http://127.0.0.1:{server.server_port}/workspaces/"
+                "wxpost-missing/voice-tone/suggestion"
+            ),
+            method="POST",
+            payload={"name": "Warm"},
+        )
+        assert missing == HTTPStatus.NOT_FOUND
+        assert missing_body["error"]["code"] == "workspace_not_found"
+        assert len(requests) == 1
+
+        unavailable, unavailable_body = _json_request(
+            (
+                f"http://127.0.0.1:{server.server_port}/workspaces/"
+                f"{workspace_id}/voice-tone/suggestion"
+            ),
+            method="POST",
+            payload={"name": "Unavailable"},
+        )
+        invalid, invalid_body = _json_request(
+            (
+                f"http://127.0.0.1:{server.server_port}/workspaces/"
+                f"{workspace_id}/voice-tone/suggestion"
+            ),
+            method="POST",
+            payload={"name": "Invalid"},
+        )
+
+        assert unavailable == HTTPStatus.SERVICE_UNAVAILABLE
+        assert unavailable_body["error"]["code"] == "hermes_unavailable"
+        assert invalid == HTTPStatus.BAD_GATEWAY
+        assert invalid_body["error"]["code"] == "hermes_turn_failed"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_http_draft_session_delete_resets_only_the_assistant_history(
     tmp_path: Path,
 ) -> None:

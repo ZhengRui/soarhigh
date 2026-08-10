@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -5,6 +6,7 @@ from uuid import UUID
 
 import httpx
 import pytest
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from postgrest.exceptions import APIError
 
@@ -38,7 +40,7 @@ def _configure_controller(
     transport = httpx.MockTransport(handler)
 
     def client_factory(*, timeout: int, trust_env: bool) -> httpx.AsyncClient:
-        assert timeout in {30, 330}
+        assert timeout in {30, 100, 330}
         assert trust_env is False
         return real_client(transport=transport)
 
@@ -621,39 +623,20 @@ def test_member_can_delete_a_public_wxpost_revision(
     assert calls == [(wxpost_id, 3)]
 
 
-def test_voice_tone_suggestion_uses_workspace_context_and_existing_token(
+def test_voice_tone_suggestion_uses_the_controller_boundary(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[httpx.Request] = []
-    hermes_calls: list[dict] = []
-    workspace_context = {
-        "workspaceId": "wxpost-abc",
-        "manifest": {
-            "editorial": {
-                "articleType": "meeting-recap",
-                "customArticleType": None,
-                "writingGuidance": "Keep it vivid.",
-                "voiceTone": {
-                    "presets": ["reflective"],
-                    "customProfiles": [],
-                },
-            }
-        },
-        "draft": None,
-    }
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.append(request)
-        return httpx.Response(200, json=workspace_context)
-
-    async def suggest(**kwargs) -> str:
-        hermes_calls.append(kwargs)
-        return "Use lively details and restrained wit."
+        return httpx.Response(
+            200,
+            json={"instruction": "Use lively details and restrained wit."},
+        )
 
     _configure_controller(monkeypatch, handler)
-    monkeypatch.setattr(wxpost_route, "WXPOST_HERMES_URL", "http://hermes")
-    monkeypatch.setattr(wxpost_route, "suggest_voice_tone_instruction", suggest)
 
     response = client.post(
         "/posts/wxposts/workspaces/wxpost-abc/voice-tone/suggestion",
@@ -663,18 +646,13 @@ def test_voice_tone_suggestion_uses_workspace_context_and_existing_token(
 
     assert response.status_code == 200
     assert response.json() == {"instruction": "Use lively details and restrained wit."}
-    assert [(request.method, request.url.path) for request in captured] == [("GET", "/workspaces/wxpost-abc/context")]
-    assert hermes_calls == [
-        {
-            "hermes_url": "http://hermes",
-            "service_token": "controller-secret",
-            "profile_name": "Dry humour",
-            "workspace_context": workspace_context,
-        }
+    assert [(request.method, request.url.path) for request in captured] == [
+        ("POST", "/workspaces/wxpost-abc/voice-tone/suggestion")
     ]
+    assert json.loads(captured[0].content) == {"name": "Dry humour"}
 
 
-def test_voice_tone_suggestion_does_not_run_when_workspace_is_missing(
+def test_voice_tone_suggestion_preserves_the_missing_workspace_response(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -689,15 +667,7 @@ def test_voice_tone_suggestion_does_not_run_when_workspace_is_missing(
             },
         )
 
-    async def should_not_run(**kwargs) -> str:
-        raise AssertionError("Hermes should not run for an unknown workspace")
-
     _configure_controller(monkeypatch, handler)
-    monkeypatch.setattr(
-        wxpost_route,
-        "suggest_voice_tone_instruction",
-        should_not_run,
-    )
 
     response = client.post(
         "/posts/wxposts/workspaces/wxpost-missing/voice-tone/suggestion",
@@ -919,6 +889,7 @@ def test_workspace_draft_chat_preserves_the_controller_event_stream(
 ) -> None:
     stream = (
         'event: progress\ndata: {"stage":"request_started"}\n\n'
+        ": keep-alive\n\n"
         'event: progress\ndata: {"stage":"activity_started",'
         '"activityId":"context-1","label":"Reading the saved Draft"}\n\n'
         'event: complete\ndata: {"reply":"Done."}\n\n'
@@ -947,7 +918,61 @@ def test_workspace_draft_chat_preserves_the_controller_event_stream(
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.headers["cache-control"] == "private, no-store, no-transform"
     assert response.text == stream
+
+
+@pytest.mark.asyncio
+async def test_workspace_draft_stream_forwards_heartbeat_before_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_completion = asyncio.Event()
+    stream_closed = asyncio.Event()
+
+    class BlockingControllerStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b": keep-alive\n\n"
+            await release_completion.wait()
+            yield b'event: complete\ndata: {"reply":"Done."}\n\n'
+
+        async def aclose(self) -> None:
+            stream_closed.set()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/workspaces/wxpost-abc/draft/chat"
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream; charset=utf-8"},
+            stream=BlockingControllerStream(),
+        )
+
+    _configure_controller(monkeypatch, handler)
+    response = await wxpost_route._stream_workspace_controller(
+        "POST",
+        "/workspaces/wxpost-abc/draft/chat",
+        body=b"{}",
+        content_type="application/json",
+        timeout=330,
+    )
+    assert isinstance(response, StreamingResponse)
+    iterator = aiter(response.body_iterator)
+    try:
+        first_chunk = await anext(iterator)
+
+        assert first_chunk == b": keep-alive\n\n"
+        assert not release_completion.is_set()
+
+        release_completion.set()
+        assert await anext(iterator) == (b'event: complete\ndata: {"reply":"Done."}\n\n')
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+        assert stream_closed.is_set()
+    finally:
+        release_completion.set()
+        close_iterator = getattr(iterator, "aclose", None)
+        if close_iterator is not None:
+            await close_iterator()
 
 
 def test_member_reads_the_wechat_projection_status_from_the_public_revision(

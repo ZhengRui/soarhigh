@@ -4,7 +4,9 @@ import argparse
 import hmac
 import json
 import os
+import queue
 import re
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, cast
@@ -24,12 +26,13 @@ from .core import (
     WorkspaceNotFound,
     error_response,
 )
+from .errors import HermesTurnFailed, HermesUnavailable
+from .hermes_editorial import HermesEditorialClient, OneShotRunner
 from .hermes_session import (
     HermesDescriptionService,
     HermesDraftService,
     HermesSessionClient,
 )
-from .errors import HermesTurnFailed, HermesUnavailable
 
 WORKSPACE_PATH = re.compile(r"^/workspaces/([^/]+)$")
 WORKSPACES_PATH = "/workspaces"
@@ -50,6 +53,7 @@ DRAFT_SESSION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/session$")
 DRAFT_SAVE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/save$")
 DRAFT_GENERATE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/generate$")
 DRAFT_CHAT_PATH = re.compile(r"^/workspaces/([^/]+)/draft/chat$")
+VOICE_TONE_SUGGESTION_PATH = re.compile(r"^/workspaces/([^/]+)/voice-tone/suggestion$")
 SESSION_RETIRE_PATH = "/sessions/retire"
 MAX_REQUEST_BYTES = 1_000_000
 
@@ -58,7 +62,9 @@ class ControllerHTTPServer(ThreadingHTTPServer):
     controller: WorkspaceController
     description_service: HermesDescriptionService
     draft_service: HermesDraftService
+    editorial_client: HermesEditorialClient
     bearer_token: str
+    draft_heartbeat_seconds: float
 
 
 class ControllerRequestHandler(BaseHTTPRequestHandler):
@@ -409,6 +415,35 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        voice_tone_match = VOICE_TONE_SUGGESTION_PATH.fullmatch(parsed.path)
+        if voice_tone_match is not None:
+            payload = self._read_json_body()
+            if payload is None or not self._accept_fields(
+                payload,
+                {"name"},
+                "voice and tone suggestion",
+            ):
+                return
+            name = payload.get("name")
+            if not isinstance(name, str) or not name.strip() or len(name.strip()) > 64:
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_request",
+                    "voice and tone name must contain 1 to 64 characters",
+                )
+                return
+            self._run_controller(
+                lambda: {
+                    "instruction": self.server.editorial_client.suggest_voice_tone_instruction(
+                        profile_name=name.strip(),
+                        workspace_context=self.server.controller.get_context(
+                            voice_tone_match.group(1)
+                        ),
+                    )
+                }
+            )
+            return
+
         import_match = SOURCE_IMPORT_PATH.fullmatch(parsed.path)
         if import_match is not None:
             payload = self._read_json_body()
@@ -669,27 +704,62 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 connected = False
 
+        def send_heartbeat() -> None:
+            nonlocal connected
+            if not connected:
+                return
+            try:
+                self.wfile.write(b": keep-alive\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                connected = False
+
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "private, no-store")
+        self.send_header("Cache-Control", "private, no-store, no-transform")
+        self.send_header("X-Accel-Buffering", "no")
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
         send_event("progress", {"stage": "request_started"})
-        try:
-            result = operation(lambda progress: send_event("progress", progress))
-        except WorkspaceError as exc:
-            send_event("error", error_response(exc)["error"])
-        except Exception:
-            send_event(
-                "error",
-                {
-                    "code": "internal_error",
-                    "message": "controller operation failed",
-                },
-            )
-        else:
-            send_event("complete", result)
+        outcomes: queue.Queue[tuple[str, Any]] = queue.Queue()
+
+        def run_operation() -> None:
+            try:
+                result = operation(
+                    lambda progress: outcomes.put(("progress", progress))
+                )
+            except WorkspaceError as exc:
+                outcomes.put(("error", error_response(exc)["error"]))
+            except Exception:
+                outcomes.put(
+                    (
+                        "error",
+                        {
+                            "code": "internal_error",
+                            "message": "controller operation failed",
+                        },
+                    )
+                )
+            else:
+                outcomes.put(("complete", result))
+
+        threading.Thread(
+            target=run_operation,
+            name="wxpost-draft-stream",
+            daemon=True,
+        ).start()
+        while True:
+            try:
+                event, payload = outcomes.get(
+                    timeout=self.server.draft_heartbeat_seconds
+                )
+            except queue.Empty:
+                send_heartbeat()
+                continue
+            send_event(event, payload)
+            if event in {"complete", "error"}:
+                return
 
     def _run_source_read(self, operation) -> None:
         try:
@@ -738,9 +808,13 @@ def build_server(
     host: str = "127.0.0.1",
     port: int = 8787,
     hermes_serve_url: str = "ws://127.0.0.1:9119/api/ws",
+    editorial_runner: OneShotRunner | None = None,
+    draft_heartbeat_seconds: float = 15,
 ) -> ControllerHTTPServer:
     if not bearer_token:
         raise ValueError("controller bearer token must not be empty")
+    if draft_heartbeat_seconds <= 0:
+        raise ValueError("Draft heartbeat interval must be positive")
     server = ControllerHTTPServer((host, port), ControllerRequestHandler)
     server.controller = WorkspaceController(workspace_root)
     session_client = HermesSessionClient(
@@ -756,7 +830,9 @@ def build_server(
         session_client=session_client,
         retire_session=server.draft_service.retire_session,
     )
+    server.editorial_client = HermesEditorialClient(runner=editorial_runner)
     server.bearer_token = bearer_token
+    server.draft_heartbeat_seconds = draft_heartbeat_seconds
     return server
 
 

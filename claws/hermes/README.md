@@ -607,9 +607,9 @@ Linked workspaces read `/meetings/{meetingId}/media` from
 `SOARHIGH_API_BASE_URL`. Compose maps
 `SOARHIGH_WXPOST_SERVICE_TOKEN` to `WXPOST_SERVICE_TOKEN` inside both
 containers; its value must equal Backend's existing `WXPOST_SERVICE_TOKEN`.
-The same value is also mapped to the Gateway's `API_SERVER_KEY` and
-`HERMES_DASHBOARD_SESSION_TOKEN`; it is sent only from Backend to the
-controller or Hermes, never to the browser or an asset URL.
+The same value is also mapped to `HERMES_DASHBOARD_SESSION_TOKEN`; it is sent
+only from Backend to the controller or Hermes, never to the browser or an
+asset URL.
 
 Feishu Draft replies use a temporary preview flow rather than a public WxPost
 revision. Backend signs a 24-hour link bound to the selected workspace and the
@@ -671,11 +671,14 @@ the same workspace at `/workspace`, and publishes it only on
 with its existing `WXPOST_SERVICE_TOKEN`; no separate controller credential is
 configured.
 
-The Gateway's OpenAI-compatible Agent API is enabled on
-`127.0.0.1:8642`. Backend uses it for the editable custom Voice & tone
-instruction proposal and authenticates with that same existing token. The
-controller remains deterministic and never invokes a model. No Hermes
-credential is returned to the frontend.
+For the editable custom Voice & tone instruction proposal, the Controller uses
+Hermes' official stateless one-shot helper with the existing `wxpost` profile.
+That path calls the configured model directly: it does not create an Agent
+session and cannot invoke Agent tools. Backend reaches the fixed-purpose
+operation through the existing Controller boundary, so neither a Hermes
+address nor credential is returned to the frontend or required in the
+deployed Backend. The Controller mounts the same Hermes home as the Gateway;
+there is no separate model or provider configuration or Agent API listener.
 
 Workspace manifests use schema version 4. Editorial settings include up to
 three selected Voice & tone profiles. Custom profile names, instructions, and
@@ -696,6 +699,7 @@ DELETE /workspaces/{workspaceId}/draft/session
 POST   /workspaces/{workspaceId}/draft/save
 POST   /workspaces/{workspaceId}/draft/generate
 POST   /workspaces/{workspaceId}/draft/chat
+POST   /workspaces/{workspaceId}/voice-tone/suggestion
 PATCH  /workspaces/{workspaceId}/sources
 POST   /workspaces/{workspaceId}/sources/{sourceId}/import
 PUT    /workspaces/{workspaceId}/sources/{sourceId}/inclusion

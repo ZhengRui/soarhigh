@@ -107,6 +107,7 @@ export type WorkspaceMock = {
   failDraftValidation: boolean;
   failSourceContent: boolean;
   failNextDraftChat: boolean;
+  disconnectNextDraftChatAfterCompletion: boolean;
   answerNextDraftChat: boolean;
   failNextDescriptionSuggestion: boolean;
   conflictNextPublication: boolean;
@@ -149,6 +150,7 @@ async function fulfillDraftChatStream(
     headers: { 'Cache-Control': 'private, no-store' },
     body: [
       ...progress.map((item) => event('progress', item)),
+      ': keep-alive\n\n',
       event('complete', result),
     ].join(''),
   });
@@ -259,6 +261,7 @@ export async function mockWxPostWorkspaceApi(
     failDraftValidation: false,
     failSourceContent: false,
     failNextDraftChat: false,
+    disconnectNextDraftChatAfterCompletion: false,
     answerNextDraftChat: false,
     failNextDescriptionSuggestion: false,
     conflictNextPublication: false,
@@ -746,6 +749,11 @@ export async function mockWxPostWorkspaceApi(
           { role: 'user', text: input.message },
           { role: 'assistant', text: reply },
         ]);
+        if (mock.disconnectNextDraftChatAfterCompletion) {
+          mock.disconnectNextDraftChatAfterCompletion = false;
+          await route.abort('connectionrefused');
+          return;
+        }
         await fulfillDraftChatStream(
           route,
           [
