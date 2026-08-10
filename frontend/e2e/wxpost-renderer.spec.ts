@@ -208,6 +208,9 @@ test('lets a signed-in member delete the public revision and its media', async (
   const deleteButton = await page
     .getByTestId('delete-public-wxpost')
     .boundingBox();
+  const previewButton = await page
+    .getByTestId('preview-wechat-draft')
+    .boundingBox();
   const contextLabel = await page
     .getByTestId('public-wxpost-context')
     .boundingBox();
@@ -215,6 +218,7 @@ test('lets a signed-in member delete the public revision and its media', async (
   expect(header).not.toBeNull();
   expect(metadata).not.toBeNull();
   expect(deleteButton).not.toBeNull();
+  expect(previewButton).not.toBeNull();
   expect(contextLabel).not.toBeNull();
   expect(title).not.toBeNull();
   expect(deleteButton!.x + deleteButton!.width).toBeCloseTo(
@@ -223,9 +227,13 @@ test('lets a signed-in member delete the public revision and its media', async (
   );
   expect(deleteButton!.y).toBeCloseTo(header!.y, 0);
   expect(contextLabel!.x + contextLabel!.width).toBeLessThanOrEqual(
-    deleteButton!.x
+    previewButton!.x
   );
-  expect(title!.x + title!.width).toBeLessThanOrEqual(deleteButton!.x);
+  expect(title!.x).toBeCloseTo(header!.x, 0);
+  expect(title!.x + title!.width).toBeCloseTo(header!.x + header!.width, 0);
+  expect(title!.y).toBeGreaterThanOrEqual(
+    deleteButton!.y + deleteButton!.height
+  );
   expect(metadata!.y).toBeGreaterThan(deleteButton!.y);
   await page.getByTestId('delete-public-wxpost').click();
   const dialog = page.getByTestId('delete-public-wxpost-dialog');

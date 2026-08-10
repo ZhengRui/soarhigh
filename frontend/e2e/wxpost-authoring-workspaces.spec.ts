@@ -340,8 +340,11 @@ test('lists shared WxPost workspaces and lets any member delete one', async ({
     .getByText('#462', { exact: true })
     .boundingBox();
   expect(navigationBox?.y).toBeGreaterThan(referenceBox?.y ?? 0);
-  const materialsY = (await continueWorkspace.boundingBox())?.y ?? 0;
-  const draftY = (await previewDraft.boundingBox())?.y ?? 0;
+  const [materialsY, draftY] = await navigationGroup
+    .getByRole('link')
+    .evaluateAll((links) =>
+      links.map((link) => link.getBoundingClientRect().y)
+    );
   expect(Math.abs(materialsY - draftY)).toBeLessThan(1);
   expect(
     (
