@@ -92,14 +92,8 @@ services:
         HERMES_IMAGE: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
     restart: unless-stopped
     working_dir: /workspace
-    command:
-      - /opt/hermes/.venv/bin/python
-      - -m
-      - wxpost_controller.http_server
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8787"
+    entrypoint:
+      - /opt/soarhigh/controller_entrypoint.sh
     environment:
       HERMES_UID: "${HERMES_UID:-10000}"
       HERMES_GID: "${HERMES_GID:-10000}"
