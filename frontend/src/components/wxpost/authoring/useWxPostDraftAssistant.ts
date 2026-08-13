@@ -8,7 +8,7 @@ import {
   getWorkspaceContext,
   getWorkspaceDraftOperation,
   getWorkspaceDraftConversation,
-  chatWithWorkspaceDraft,
+  submitWorkspaceDraftChat,
   resetWorkspaceDraftConversation,
   WorkspaceApiError,
   type WorkspaceContext,
@@ -18,6 +18,9 @@ import {
 
 export type DraftProgressActivity = WorkspaceDraftProgressActivity;
 export type DraftAssistantStatus = 'connecting' | 'ready' | 'unavailable';
+
+const DRAFT_POLL_MS = 1_000;
+const MAX_CONSECUTIVE_POLL_FAILURES = 30;
 
 function isAssistantUnavailable(error: unknown) {
   return (
@@ -30,19 +33,15 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
-function isRecoverableStreamFailure(error: unknown) {
+function isTransientPollFailure(error: unknown) {
   return (
     error instanceof TypeError ||
     (error instanceof WorkspaceApiError &&
-      (error.code === 'incomplete_stream' ||
-        error.code === 'invalid_stream' ||
-        (error.code === null && [502, 503, 504].includes(error.status))))
+      [502, 503, 504].includes(error.status))
   );
 }
 
-const DRAFT_RECOVERY_POLL_MS = 1_000;
-
-function waitForRecoveryPoll(signal: AbortSignal) {
+function waitForPollInterval(signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal.aborted) {
       reject(signal.reason);
@@ -55,47 +54,62 @@ function waitForRecoveryPoll(signal: AbortSignal) {
     const timeout = window.setTimeout(() => {
       signal.removeEventListener('abort', onAbort);
       resolve();
-    }, DRAFT_RECOVERY_POLL_MS);
+    }, DRAFT_POLL_MS);
     signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
-async function waitForDraftOperation(
+// The primary transport: the turn runs server-side against the Controller's
+// durable operation record, and the browser observes it with short polls.
+// Completion truth lives in that record, never in a connection's lifetime, so
+// transient poll failures are retried instead of being treated as terminal.
+async function pollDraftOperation(
   workspaceId: string,
   operationId: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  onSteps: (steps: DraftProgressActivity[]) => void
 ) {
-  let operation = await getWorkspaceDraftOperation(
-    workspaceId,
-    operationId,
-    signal
-  );
-  while (operation.state === 'running') {
-    await waitForRecoveryPoll(signal);
-    operation = await getWorkspaceDraftOperation(
-      workspaceId,
-      operationId,
-      signal
-    );
+  let consecutiveFailures = 0;
+  while (true) {
+    let operation;
+    try {
+      operation = await getWorkspaceDraftOperation(
+        workspaceId,
+        operationId,
+        signal
+      );
+      consecutiveFailures = 0;
+    } catch (caught) {
+      if (signal.aborted || !isTransientPollFailure(caught)) throw caught;
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) throw caught;
+      await waitForPollInterval(signal);
+      continue;
+    }
+    if (operation.state === 'running') {
+      onSteps(operation.steps);
+      await waitForPollInterval(signal);
+      continue;
+    }
+    if (operation.state === 'failed') {
+      const errorCode = operation.error?.code ?? 'operation_failed';
+      throw new WorkspaceApiError(
+        draftAssistantErrorStatus(errorCode),
+        operation.error?.message ??
+          'The Draft Assistant could not complete the request.',
+        errorCode,
+        operation.error?.versionKind ?? null
+      );
+    }
+    if (!operation.result) {
+      throw new WorkspaceApiError(
+        502,
+        'The Draft Assistant returned an invalid operation result.',
+        'invalid_operation'
+      );
+    }
+    return operation.result;
   }
-  if (operation.state === 'failed') {
-    const errorCode = operation.error?.code ?? 'operation_failed';
-    throw new WorkspaceApiError(
-      draftAssistantErrorStatus(errorCode),
-      operation.error?.message ??
-        'The Draft Assistant could not complete the request.',
-      errorCode,
-      operation.error?.versionKind ?? null
-    );
-  }
-  if (!operation.result) {
-    throw new WorkspaceApiError(
-      502,
-      'The Draft Assistant returned an invalid operation result.',
-      'invalid_operation'
-    );
-  }
-  return operation.result;
 }
 
 export function useWxPostDraftAssistant({
@@ -129,6 +143,12 @@ export function useWxPostDraftAssistant({
   const progressRef = useRef<DraftProgressActivity[]>([]);
   const requestControllerRef = useRef<AbortController | null>(null);
   const historyRequestIdRef = useRef(0);
+  // The completion handler needs the dirty state at completion time, not the
+  // value captured when the turn was submitted.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const savedDraftVersionRef = useRef(savedDraft?.draftVersion ?? 0);
+  savedDraftVersionRef.current = savedDraft?.draftVersion ?? 0;
 
   useEffect(
     () => () => {
@@ -137,14 +157,177 @@ export function useWxPostDraftAssistant({
     []
   );
 
+  const applyOperationResult = useCallback(
+    async (operationId: string, controller: AbortController) => {
+      const result = await pollDraftOperation(
+        workspaceId,
+        operationId,
+        controller.signal,
+        (steps) => {
+          progressRef.current = steps;
+          setProgress(steps);
+        }
+      );
+      setStatus('ready');
+      if (result.draftChanged) {
+        if (dirtyRef.current) {
+          // Conflict beats clobber: never overwrite live local edits with
+          // the assistant's result. The saved version is on the server; the
+          // member's next Save resolves through the existing conflict flow.
+          toast(
+            `The assistant saved Draft v${result.draftVersion}. Your ` +
+              'unsaved edits are untouched; save or discard them to load it.'
+          );
+        } else {
+          const context = await getWorkspaceContext(
+            workspaceId,
+            controller.signal
+          );
+          const actualDraftVersion = context.draft?.draftVersion ?? 0;
+          if (actualDraftVersion !== result.draftVersion) {
+            throw new WorkspaceApiError(
+              409,
+              'The saved Draft changed again before it could be loaded.',
+              'version_conflict',
+              'draft'
+            );
+          }
+          try {
+            await onDraftChanged(context);
+          } catch (caught) {
+            const failure = errorMessage(
+              caught,
+              'The Draft was saved, but the updated preview could not be loaded.'
+            );
+            onError(failure);
+            toast.error(failure);
+          }
+        }
+      }
+      setConversation((current) => ({
+        workspaceId,
+        messages: [
+          ...(current?.messages ?? []),
+          {
+            role: 'assistant',
+            text: result.reply,
+            turnId: operationId,
+            ...(result.steps.length > 0 ? { steps: result.steps } : {}),
+          },
+        ],
+      }));
+    },
+    [onDraftChanged, onError, workspaceId]
+  );
+
+  const resumeOperation = useCallback(
+    (operationId: string, initialSteps: DraftProgressActivity[]) => {
+      const controller = new AbortController();
+      requestControllerRef.current = controller;
+      setPending(true);
+      progressRef.current = initialSteps;
+      setProgress(initialSteps);
+      onError(null);
+      void (async () => {
+        try {
+          await applyOperationResult(operationId, controller);
+        } catch (caught) {
+          if (controller.signal.aborted) return;
+          if (
+            caught instanceof WorkspaceApiError &&
+            caught.code === 'version_conflict' &&
+            caught.versionKind === 'draft'
+          ) {
+            onConflict();
+            return;
+          }
+          if (isAssistantUnavailable(caught)) {
+            setStatus('unavailable');
+          }
+          const failure = errorMessage(
+            caught,
+            'The Draft Assistant could not complete the request.'
+          );
+          onError(failure);
+          toast.error(failure);
+        } finally {
+          if (requestControllerRef.current === controller) {
+            requestControllerRef.current = null;
+          }
+          setProgress([]);
+          progressRef.current = [];
+          setPending(false);
+        }
+      })();
+    },
+    [applyOperationResult, onConflict, onError]
+  );
+
+  // A turn can complete while nobody is polling (mid-turn refresh, another
+  // tab, a stage switch): the ledger then shows the result, but the editor
+  // still holds the context loaded before the save. Converge it to the
+  // saved Draft the turn produced.
+  const settleSavedDraft = useCallback(
+    (serverDraftVersion: number | undefined) => {
+      if (
+        typeof serverDraftVersion !== 'number' ||
+        serverDraftVersion <= savedDraftVersionRef.current
+      ) {
+        return;
+      }
+      if (dirtyRef.current) {
+        // Conflict beats clobber, same as the live completion path.
+        toast(
+          `The assistant saved Draft v${serverDraftVersion}. Your ` +
+            'unsaved edits are untouched; save or discard them to load it.'
+        );
+        return;
+      }
+      void getWorkspaceContext(workspaceId)
+        .then((context) => onDraftChanged(context))
+        .catch((caught) => {
+          const failure = errorMessage(
+            caught,
+            'The assistant saved a new Draft, but it could not be loaded.'
+          );
+          onError(failure);
+          toast.error(failure);
+        });
+    },
+    [onDraftChanged, onError, workspaceId]
+  );
+
   useEffect(() => {
     if (!active || conversation) return;
     const requestId = ++historyRequestIdRef.current;
     void getWorkspaceDraftConversation(workspaceId)
       .then((history) => {
         if (historyRequestIdRef.current !== requestId) return;
-        setConversation(history);
+        const running = history.activeOperation;
+        if (!running) {
+          setConversation(history);
+          setStatus('ready');
+          settleSavedDraft(history.draftVersion);
+          return;
+        }
+        // A turn is still running server-side (this tab refreshed, or it was
+        // submitted from another tab). Show its user message and reattach by
+        // polling — never resubmit.
+        setConversation({
+          workspaceId,
+          messages: [
+            ...history.messages,
+            {
+              role: 'user',
+              text: running.memberMessage,
+              ...(running.selectedText
+                ? { selectedText: running.selectedText }
+                : {}),
+            },
+          ],
+        });
         setStatus('ready');
+        resumeOperation(running.operationId, running.steps);
       })
       .catch(() => {
         if (historyRequestIdRef.current !== requestId) return;
@@ -156,7 +339,7 @@ export function useWxPostDraftAssistant({
         historyRequestIdRef.current += 1;
       }
     };
-  }, [active, conversation, workspaceId]);
+  }, [active, conversation, resumeOperation, settleSavedDraft, workspaceId]);
 
   const send = useCallback(async () => {
     const request = message.trim();
@@ -181,161 +364,36 @@ export function useWxPostDraftAssistant({
     }));
     setMessage('');
     try {
-      const result = await chatWithWorkspaceDraft(
-        workspaceId,
-        {
-          expectedManifestVersion: manifestVersion,
-          expectedDraftVersion: savedDraft.draftVersion,
-          operationId,
-          message: request,
-          selectedText,
-        },
-        {
-          signal: requestController.signal,
-          onProgress: (next) => {
-            if (next.stage === 'request_started') {
-              return;
-            }
-            const activityId = next.activityId;
-            const label = next.label;
-            if (!activityId || !label) return;
-            const existingIndex = progressRef.current.findIndex(
-              (item) => item.activityId === activityId
-            );
-            if (existingIndex < 0) {
-              progressRef.current = [
-                ...progressRef.current,
-                {
-                  activityId,
-                  label,
-                  toolName: next.toolName,
-                  operationNames: next.operationNames,
-                  completed: next.stage === 'activity_completed',
-                  failed: next.stage === 'activity_failed',
-                },
-              ];
-            } else {
-              progressRef.current = progressRef.current.map((item, index) =>
-                index === existingIndex
-                  ? {
-                      ...item,
-                      label,
-                      toolName: next.toolName ?? item.toolName,
-                      operationNames:
-                        next.operationNames ?? item.operationNames,
-                      completed: next.stage === 'activity_completed',
-                      failed: next.stage === 'activity_failed',
-                    }
-                  : item
-              );
-            }
-            setProgress(progressRef.current);
-          },
-        }
-      );
-      setStatus('ready');
-      if (result.draftChanged) {
-        try {
-          await onDraftChanged(result.context);
-        } catch (caught) {
-          const failure = errorMessage(
-            caught,
-            'The Draft was saved, but the updated preview could not be loaded.'
-          );
-          onError(failure);
-          toast.error(failure);
-        }
-      }
-      const finishedSteps = progressRef.current.filter(
-        (step) => step.completed || step.failed
-      );
-      setConversation((current) => ({
-        workspaceId,
-        messages: [
-          ...(current?.messages ?? []),
+      try {
+        await submitWorkspaceDraftChat(
+          workspaceId,
           {
-            role: 'assistant',
-            text: result.reply,
-            ...(finishedSteps.length > 0 ? { steps: finishedSteps } : {}),
-          },
-        ],
-      }));
-    } catch (caught) {
-      let failureCause = caught;
-      if (isRecoverableStreamFailure(caught)) {
-        try {
-          // The Controller deliberately finishes a Draft turn after a browser
-          // disconnect. Its durable operation record is independent of the
-          // workspace turn and file locks, so it remains readable while the
-          // disconnected turn is still running.
-          const recoveryActivity: DraftProgressActivity = {
-            activityId: 'recover-disconnected-turn',
-            label: 'Reconnecting to the Draft operation',
-            completed: false,
-            failed: false,
-          };
-          progressRef.current = [
-            ...progressRef.current.filter(
-              (item) => item.activityId !== recoveryActivity.activityId
-            ),
-            recoveryActivity,
-          ];
-          setProgress(progressRef.current);
-          const recovered = await waitForDraftOperation(
-            workspaceId,
+            expectedManifestVersion: manifestVersion,
+            expectedDraftVersion: savedDraft.draftVersion,
             operationId,
-            requestController.signal
-          );
-          const context = await getWorkspaceContext(
-            workspaceId,
-            requestController.signal
-          );
-          const actualDraftVersion = context.draft?.draftVersion ?? 0;
-          if (actualDraftVersion !== recovered.draftVersion) {
-            throw new WorkspaceApiError(
-              409,
-              'The saved Draft changed again before recovery completed.',
-              'version_conflict',
-              'draft'
-            );
-          }
-          setStatus('ready');
-          setConversation((current) => ({
-            workspaceId,
-            messages: [
-              ...(current?.messages ?? []),
-              {
-                role: 'assistant',
-                text: recovered.reply,
-                turnId: operationId,
-                steps: recovered.steps,
-              },
-            ],
-          }));
-          if (recovered.draftChanged) {
-            try {
-              await onDraftChanged(context);
-            } catch (recoveryError) {
-              const failure = errorMessage(
-                recoveryError,
-                'The Draft was saved, but the updated preview could not be loaded.'
-              );
-              onError(failure);
-              toast.error(failure);
-            }
-          }
+            message: request,
+            selectedText,
+          },
+          requestController.signal
+        );
+      } catch (submitError) {
+        // A network failure may have lost only the response: if the submit
+        // reached the Controller the operation exists, so try to attach to
+        // it before reporting the failure.
+        if (!(submitError instanceof TypeError)) throw submitError;
+        try {
+          await applyOperationResult(operationId, requestController);
           return;
-        } catch (recoveryError) {
-          if (
-            !(
-              recoveryError instanceof WorkspaceApiError &&
-              recoveryError.code === 'draft_operation_not_found'
-            )
-          ) {
-            failureCause = recoveryError;
-          }
+        } catch (pollError) {
+          throw pollError instanceof WorkspaceApiError &&
+            pollError.code === 'draft_operation_not_found'
+            ? submitError
+            : pollError;
         }
       }
+      await applyOperationResult(operationId, requestController);
+    } catch (caught) {
+      if (requestController.signal.aborted) return;
       setMessage(request);
       setConversation((current) =>
         current
@@ -343,18 +401,18 @@ export function useWxPostDraftAssistant({
           : current
       );
       if (
-        failureCause instanceof WorkspaceApiError &&
-        failureCause.code === 'version_conflict' &&
-        failureCause.versionKind === 'draft'
+        caught instanceof WorkspaceApiError &&
+        caught.code === 'version_conflict' &&
+        caught.versionKind === 'draft'
       ) {
         onConflict();
         return;
       }
-      if (isAssistantUnavailable(failureCause)) {
+      if (isAssistantUnavailable(caught)) {
         setStatus('unavailable');
       }
       const failure = errorMessage(
-        failureCause,
+        caught,
         'The Draft Assistant could not complete the request.'
       );
       onError(failure);
@@ -368,11 +426,11 @@ export function useWxPostDraftAssistant({
       setPending(false);
     }
   }, [
+    applyOperationResult,
     dirty,
     manifestVersion,
     message,
     onConflict,
-    onDraftChanged,
     onError,
     savedDraft,
     selectedText,

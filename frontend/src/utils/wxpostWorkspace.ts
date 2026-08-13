@@ -196,6 +196,17 @@ export interface WorkspaceDraftConversation {
     turnId?: string;
     steps?: WorkspaceDraftProgressActivity[];
   }>;
+  // The saved Draft version at load time: lets a mounting client detect
+  // that a turn completed while nobody was polling and reload the Draft.
+  draftVersion?: number;
+  // Present while a turn is still running: lets a reconnecting client
+  // (refresh, second tab) resume polling instead of losing the turn.
+  activeOperation?: {
+    operationId: string;
+    memberMessage: string;
+    selectedText: string | null;
+    steps: WorkspaceDraftProgressActivity[];
+  };
 }
 
 export interface WorkspaceDraftOperation {
@@ -213,6 +224,14 @@ export interface WorkspaceDraftOperation {
     message: string;
     versionKind?: string;
   } | null;
+  // Live progress accumulated while the operation is running.
+  steps: WorkspaceDraftProgressActivity[];
+}
+
+export interface WorkspaceDraftSubmission {
+  workspaceId: string;
+  operationId: string;
+  state: 'running';
 }
 
 export interface WorkspaceDraftProgressActivity {
@@ -229,47 +248,6 @@ export interface WorkspaceDraftTurn {
   reply: string;
   context: WorkspaceContext;
   draftChanged: boolean;
-}
-
-export type WorkspaceDraftProgressStage =
-  | 'request_started'
-  | 'activity_started'
-  | 'activity_completed'
-  | 'activity_failed';
-
-export interface WorkspaceDraftProgress {
-  stage: WorkspaceDraftProgressStage;
-  activityId?: string;
-  label?: string;
-  toolName?: string;
-  operationNames?: string[];
-}
-
-function isWorkspaceDraftProgress(
-  payload: unknown
-): payload is WorkspaceDraftProgress {
-  if (!payload || typeof payload !== 'object' || !('stage' in payload)) {
-    return false;
-  }
-  const stage = payload.stage;
-  if (stage === 'request_started') return true;
-  const toolNameValid =
-    !('toolName' in payload) || typeof payload.toolName === 'string';
-  const operationNamesValid =
-    !('operationNames' in payload) ||
-    (Array.isArray(payload.operationNames) &&
-      payload.operationNames.every((name) => typeof name === 'string'));
-  return (
-    (stage === 'activity_started' ||
-      stage === 'activity_completed' ||
-      stage === 'activity_failed') &&
-    'activityId' in payload &&
-    typeof payload.activityId === 'string' &&
-    'label' in payload &&
-    typeof payload.label === 'string' &&
-    toolNameValid &&
-    operationNamesValid
-  );
 }
 
 interface WxPostValidationResult {
@@ -357,6 +335,7 @@ export class WorkspaceApiError extends Error {
 
 export function draftAssistantErrorStatus(code: string | null | undefined) {
   if (code === 'version_conflict') return 409;
+  if (code === 'draft_operation_in_progress') return 409;
   if (code === 'hermes_unavailable' || code === 'draft_store_unavailable') {
     return 503;
   }
@@ -553,7 +532,7 @@ export function generateWorkspaceDraft(
   );
 }
 
-export function chatWithWorkspaceDraft(
+export function submitWorkspaceDraftChat(
   workspaceId: string,
   input: {
     expectedManifestVersion: number;
@@ -562,117 +541,20 @@ export function chatWithWorkspaceDraft(
     message: string;
     selectedText: string | null;
   },
-  options: {
-    onProgress?: (progress: WorkspaceDraftProgress) => void;
-    signal?: AbortSignal;
-  } = {}
+  signal?: AbortSignal
 ) {
-  return requestDraftChatStream(workspaceId, input, options);
-}
-
-async function requestDraftChatStream(
-  workspaceId: string,
-  input: {
-    expectedManifestVersion: number;
-    expectedDraftVersion: number;
-    operationId: string;
-    message: string;
-    selectedText: string | null;
-  },
-  options: {
-    onProgress?: (progress: WorkspaceDraftProgress) => void;
-    signal?: AbortSignal;
-  }
-) {
-  const response = await fetch(
-    `${apiEndpoint}${workspacePath(workspaceId)}/draft/chat`,
+  // Async submit: the Controller records the operation and returns its id
+  // immediately; the turn runs server-side and is observed by polling
+  // getWorkspaceDraftOperation. No held-open stream.
+  return requestJson<WorkspaceDraftSubmission>(
+    `${workspacePath(workspaceId)}/draft/chat`,
     {
       method: 'POST',
-      headers: memberHeaders({
-        Accept: 'text/event-stream',
-        'Content-Type': 'application/json',
-      }),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
-      signal: options.signal,
+      signal,
     }
   );
-  if (!response.ok) throw await errorFromResponse(response);
-  if (!response.body) {
-    throw new WorkspaceApiError(
-      502,
-      'The Draft Assistant returned an empty stream.',
-      'invalid_stream'
-    );
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let completed: WorkspaceDraftTurn | null = null;
-
-  const handleEvent = (block: string) => {
-    let event = 'message';
-    const data: string[] = [];
-    for (const line of block.split(/\r?\n/)) {
-      if (line.startsWith('event:')) event = line.slice(6).trim();
-      if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
-    }
-    if (data.length === 0) return;
-    let payload: unknown;
-    try {
-      payload = JSON.parse(data.join('\n'));
-    } catch {
-      throw new WorkspaceApiError(
-        502,
-        'The Draft Assistant returned an invalid stream event.',
-        'invalid_stream'
-      );
-    }
-    if (event === 'progress') {
-      if (isWorkspaceDraftProgress(payload)) options.onProgress?.(payload);
-      return;
-    }
-    if (event === 'error') {
-      const error = payload as {
-        code?: unknown;
-        message?: unknown;
-        versionKind?: unknown;
-      };
-      throw new WorkspaceApiError(
-        draftAssistantErrorStatus(
-          typeof error.code === 'string' ? error.code : null
-        ),
-        typeof error.message === 'string'
-          ? error.message
-          : 'The Draft Assistant could not complete the request.',
-        typeof error.code === 'string' ? error.code : null,
-        typeof error.versionKind === 'string' ? error.versionKind : null
-      );
-    }
-    if (event === 'complete') completed = payload as WorkspaceDraftTurn;
-  };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
-    let boundary = buffer.indexOf('\n\n');
-    while (boundary >= 0) {
-      handleEvent(buffer.slice(0, boundary));
-      buffer = buffer.slice(boundary + 2);
-      boundary = buffer.indexOf('\n\n');
-    }
-    if (done) break;
-  }
-  if (buffer.trim()) handleEvent(buffer);
-  const result = completed as WorkspaceDraftTurn | null;
-  if (!result) {
-    throw new WorkspaceApiError(
-      502,
-      'The Draft Assistant stream ended before completing the request.',
-      'incomplete_stream'
-    );
-  }
-  return result;
 }
 
 export function saveWorkspaceMaterials(
