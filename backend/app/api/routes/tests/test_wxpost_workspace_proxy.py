@@ -1,4 +1,3 @@
-import asyncio
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -6,7 +5,6 @@ from uuid import UUID
 
 import httpx
 import pytest
-from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from postgrest.exceptions import APIError
 
@@ -929,24 +927,28 @@ def test_workspace_proxy_allows_only_the_scoped_draft_routes(
     ]
 
 
-def test_workspace_draft_chat_preserves_the_controller_event_stream(
+def test_workspace_draft_chat_proxies_the_async_submit(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stream = (
-        'event: progress\ndata: {"stage":"request_started"}\n\n'
-        ": keep-alive\n\n"
-        'event: progress\ndata: {"stage":"activity_started",'
-        '"activityId":"context-1","label":"Reading the saved Draft"}\n\n'
-        'event: complete\ndata: {"reply":"Done."}\n\n'
-    )
+    """draft/chat is a short JSON submit: the Controller answers immediately
+    with the running operation and the browser polls it — no held-open
+    stream crosses this backend."""
+
+    submit_payload = {
+        "workspaceId": "wxpost-abc",
+        "operationId": "draft-0123456789abcdef0123456789abcdef",
+        "state": "running",
+    }
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/workspaces/wxpost-abc/draft/chat"
+        body = json.loads(request.content)
+        assert body["operationId"] == submit_payload["operationId"]
         return httpx.Response(
             200,
-            headers={"Content-Type": "text/event-stream; charset=utf-8"},
-            content=stream.encode(),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            json=submit_payload,
         )
 
     _configure_controller(monkeypatch, handler)
@@ -957,68 +959,15 @@ def test_workspace_draft_chat_preserves_the_controller_event_stream(
         json={
             "expectedManifestVersion": 3,
             "expectedDraftVersion": 1,
+            "operationId": submit_payload["operationId"],
             "message": "How many sections are there?",
             "selectedText": None,
         },
     )
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    assert response.headers["x-accel-buffering"] == "no"
-    assert response.headers["cache-control"] == "private, no-store, no-transform"
-    assert response.text == stream
-
-
-@pytest.mark.asyncio
-async def test_workspace_draft_stream_forwards_heartbeat_before_completion(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    release_completion = asyncio.Event()
-    stream_closed = asyncio.Event()
-
-    class BlockingControllerStream(httpx.AsyncByteStream):
-        async def __aiter__(self):
-            yield b": keep-alive\n\n"
-            await release_completion.wait()
-            yield b'event: complete\ndata: {"reply":"Done."}\n\n'
-
-        async def aclose(self) -> None:
-            stream_closed.set()
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/workspaces/wxpost-abc/draft/chat"
-        return httpx.Response(
-            200,
-            headers={"Content-Type": "text/event-stream; charset=utf-8"},
-            stream=BlockingControllerStream(),
-        )
-
-    _configure_controller(monkeypatch, handler)
-    response = await wxpost_route._stream_workspace_controller(
-        "POST",
-        "/workspaces/wxpost-abc/draft/chat",
-        body=b"{}",
-        content_type="application/json",
-        timeout=330,
-    )
-    assert isinstance(response, StreamingResponse)
-    iterator = aiter(response.body_iterator)
-    try:
-        first_chunk = await anext(iterator)
-
-        assert first_chunk == b": keep-alive\n\n"
-        assert not release_completion.is_set()
-
-        release_completion.set()
-        assert await anext(iterator) == (b'event: complete\ndata: {"reply":"Done."}\n\n')
-        with pytest.raises(StopAsyncIteration):
-            await anext(iterator)
-        assert stream_closed.is_set()
-    finally:
-        release_completion.set()
-        close_iterator = getattr(iterator, "aclose", None)
-        if close_iterator is not None:
-            await close_iterator()
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json() == submit_payload
 
 
 def test_member_reads_the_wechat_projection_status_from_the_public_revision(

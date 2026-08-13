@@ -7,14 +7,13 @@ import json
 import re
 import secrets
 import time
-from collections.abc import AsyncIterator
 from typing import Annotated, Any
 from urllib.parse import quote
 from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from postgrest.exceptions import APIError
 from pydantic import BaseModel, StringConstraints, ValidationError
@@ -362,66 +361,6 @@ async def _workspace_creation_body(request: Request, user: User) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode()
 
 
-async def _stream_workspace_controller(
-    method: str,
-    path: str,
-    *,
-    body: bytes,
-    content_type: str | None,
-    timeout: int,
-) -> Response:
-    if not WXPOST_CONTROLLER_URL or not WXPOST_SERVICE_TOKEN:
-        raise HTTPException(
-            status_code=503,
-            detail="WxPost workspace controller is not configured.",
-        )
-    headers = {"Authorization": f"Bearer {WXPOST_SERVICE_TOKEN}"}
-    if content_type:
-        headers["Content-Type"] = content_type
-    client = httpx.AsyncClient(timeout=timeout, trust_env=False)
-    try:
-        request = client.build_request(
-            method,
-            f"{WXPOST_CONTROLLER_URL}{path}",
-            content=body,
-            headers=headers,
-        )
-        upstream = await client.send(request, stream=True)
-    except httpx.HTTPError as error:
-        await client.aclose()
-        raise HTTPException(
-            status_code=503,
-            detail="WxPost workspace controller is unavailable.",
-        ) from error
-
-    if upstream.status_code != 200:
-        content = await upstream.aread()
-        await upstream.aclose()
-        await client.aclose()
-        return Response(
-            content=content,
-            status_code=upstream.status_code,
-            media_type=upstream.headers.get("Content-Type"),
-        )
-
-    async def chunks() -> AsyncIterator[bytes]:
-        try:
-            async for chunk in upstream.aiter_bytes():
-                yield chunk
-        finally:
-            await upstream.aclose()
-            await client.aclose()
-
-    return StreamingResponse(
-        chunks(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "private, no-store, no-transform",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 async def _request_workspace_controller(
     method: str,
     path: str,
@@ -564,14 +503,8 @@ async def _proxy_workspace_request(
     else:
         query = ""
     body = await _read_limited_workspace_upload(request) if controller_path == "uploads" else await request.body()
-    if controller_path == "draft/chat":
-        return await _stream_workspace_controller(
-            request.method,
-            f"/workspaces/{quote(workspace_id, safe='')}/{controller_path}",
-            body=body,
-            content_type=request.headers.get("Content-Type"),
-            timeout=330,
-        )
+    # draft/chat is an async submit: the Controller records the operation and
+    # returns its id immediately; the browser polls draft/operations/{id}.
     return await _proxy_workspace_controller(
         request.method,
         (f"/workspaces/{quote(workspace_id, safe='')}/{controller_path}{query}"),
@@ -579,10 +512,7 @@ async def _proxy_workspace_request(
         content_type=request.headers.get("Content-Type"),
         expected_manifest_version=request.headers.get("X-Expected-Manifest-Version"),
         timeout=(
-            330
-            if controller_path in {"draft/generate", "draft/chat"}
-            or controller_path.endswith("/description-suggestion")
-            else 30
+            330 if controller_path == "draft/generate" or controller_path.endswith("/description-suggestion") else 30
         ),
     )
 
