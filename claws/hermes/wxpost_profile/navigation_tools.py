@@ -22,15 +22,16 @@ from wxpost_controller.core import (
 )
 from wxpost_controller.feishu_navigation import FeishuNavigation
 
-
 TOOLSET = "wxpost_navigation"
 CURRENT_TOOLSET = "wxpost_current"
 
 
+# The web Draft operation identity is bound server-side (see
+# _bound_operation_id); it is deliberately absent from these model-facing
+# schemas so a persistent session can never replay a stale operation id.
 class CurrentDraftSaveInput(ContractModel):
     expected_manifest_version: int = Field(ge=1, strict=True)
     expected_draft_version: int = Field(ge=0, strict=True)
-    operation_id: str
     refresh_from_materials: bool = Field(strict=True)
     proposal: DraftProposal
     media_changes: DraftMediaChanges | None = None
@@ -39,7 +40,6 @@ class CurrentDraftSaveInput(ContractModel):
 class CurrentDraftEditInput(ContractModel):
     expected_manifest_version: int = Field(ge=1, strict=True)
     expected_draft_version: int = Field(ge=1, strict=True)
-    operation_id: str
     edits: list[DraftEditOperation] = Field(min_length=1)
 
 
@@ -335,6 +335,36 @@ def async_navigation_handler(name: str) -> Callable[..., Any]:
     return handle
 
 
+# Kept in lockstep with the writer in wxpost_controller/hermes_session.py.
+DRAFT_OPERATION_MARKER = ".draft-operation.json"
+
+
+def _bound_operation_id(controller: WorkspaceController, workspace_id: str) -> str:
+    """Return the trusted per-turn Draft operation id bound by the Controller.
+
+    The web Controller writes this marker before each Draft turn and removes
+    it afterwards. The model never supplies the value, so a persistent
+    session cannot attribute a save to a stale operation id copied from an
+    earlier turn's context.
+    """
+
+    path = controller.inbox_root / workspace_id / DRAFT_OPERATION_MARKER
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise InvalidRequest(
+            "no Draft operation is active for this workspace"
+        ) from None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InvalidRequest(
+            "the active Draft operation binding is unreadable"
+        ) from exc
+    operation_id = payload.get("operationId") if isinstance(payload, dict) else None
+    if not isinstance(operation_id, str) or not operation_id:
+        raise InvalidRequest("the active Draft operation binding is invalid")
+    return operation_id
+
+
 def current_workspace() -> tuple[WorkspaceController, str]:
     """Resolve the Web workspace from Hermes' task-local, Controller-set cwd."""
 
@@ -368,7 +398,7 @@ def handle_current(name: str, args: dict[str, Any]) -> str:
                 expected_manifest_version=save_request.expected_manifest_version,
                 expected_draft_version=save_request.expected_draft_version,
                 proposal=save_request.proposal,
-                operation_id=save_request.operation_id,
+                operation_id=_bound_operation_id(controller, workspace_id),
                 refresh_from_materials=save_request.refresh_from_materials,
                 media_changes=save_request.media_changes,
             )
@@ -378,7 +408,7 @@ def handle_current(name: str, args: dict[str, Any]) -> str:
                 workspace_id,
                 expected_manifest_version=edit_request.expected_manifest_version,
                 expected_draft_version=edit_request.expected_draft_version,
-                operation_id=edit_request.operation_id,
+                operation_id=_bound_operation_id(controller, workspace_id),
                 edits=[edit.to_wire() for edit in edit_request.edits],
             )
         else:  # pragma: no cover - registration is static

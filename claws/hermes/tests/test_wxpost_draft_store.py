@@ -59,6 +59,7 @@ def test_operation_lifecycle_is_durable_and_drives_conversation_history(
         "state": "running",
         "result": None,
         "error": None,
+        "steps": [],
     }
     assert store.history("wxpost-test") == []
 
@@ -115,12 +116,14 @@ def test_failed_and_running_operations_are_not_chat_messages(tmp_path: Path) -> 
     store = HermesDraftStore(tmp_path)
     failed_id = "draft-fedcba9876543210fedcba9876543210"
     running_id = "draft-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    # One in-flight operation per workspace: the first must settle before a
+    # second may be admitted.
     _start(store, failed_id)
-    _start(store, running_id)
     store.fail_operation(
         failed_id,
         error={"code": "hermes_unavailable", "message": "Hermes is offline"},
     )
+    _start(store, running_id)
 
     assert store.history("wxpost-test") == []
     assert store.completed_turns("wxpost-test") == []
@@ -202,7 +205,7 @@ def test_schema_v1_upgrade_retires_persistent_sessions_and_discards_history(
         assert "legacy_turn_progress" not in tables
         assert connection.execute(
             "SELECT value FROM metadata WHERE key = 'schema_version'"
-        ).fetchone() == ("3",)
+        ).fetchone() == ("4",)
 
 
 def test_schema_v2_upgrade_adds_selected_text_without_losing_operations(
@@ -257,9 +260,71 @@ def test_schema_v2_upgrade_adds_selected_text_without_losing_operations(
             row[1] for row in connection.execute("PRAGMA table_info(draft_operations)")
         }
         assert "selected_text" in columns
+        assert "steps_json" in columns
         assert connection.execute(
             "SELECT value FROM metadata WHERE key = 'schema_version'"
-        ).fetchone() == ("3",)
+        ).fetchone() == ("4",)
+
+
+def test_schema_v3_upgrade_adds_steps_and_sessions_without_losing_operations(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / ".wxpost-controller"
+    directory.mkdir()
+    database = directory / "controller.sqlite3"
+    operation_id = "draft-55555555555555555555555555555555"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            f"""
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO metadata VALUES ('schema_version', '3');
+            CREATE TABLE pending_session_deletions (
+                session_locator TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE draft_operations (
+                operation_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                request_fingerprint TEXT NOT NULL,
+                member_message TEXT NOT NULL,
+                selected_text TEXT,
+                expected_manifest_version INTEGER NOT NULL,
+                expected_draft_version INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                result_json TEXT,
+                error_json TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO draft_operations(
+                operation_id, workspace_id, request_fingerprint,
+                member_message, expected_manifest_version,
+                expected_draft_version, state, result_json
+            ) VALUES (
+                '{operation_id}', 'wxpost-test', 'old-hash',
+                'Remember this.', 4, 2, 'completed',
+                '{{"reply":"Remembered.","draftChanged":false,"draftVersion":2,"steps":[]}}'
+            );
+            """
+        )
+
+    store = HermesDraftStore(tmp_path)
+
+    assert store.history("wxpost-test") == [
+        {"role": "user", "text": "Remember this."},
+        {"role": "assistant", "text": "Remembered.", "turnId": operation_id},
+    ]
+    assert store.session_binding("wxpost-test") is None
+    store.bind_session("wxpost-test", "session-after-upgrade")
+    assert store.session_binding("wxpost-test") == "session-after-upgrade"
+    with sqlite3.connect(database) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(draft_operations)")
+        }
+        assert "steps_json" in columns
+        assert connection.execute(
+            "SELECT value FROM metadata WHERE key = 'schema_version'"
+        ).fetchone() == ("4",)
 
 
 def test_initialization_does_not_delete_unsupported_legacy_json(tmp_path: Path) -> None:

@@ -43,7 +43,10 @@ from wxpost_controller.core import (  # noqa: E402
     VersionConflict,
     WorkspaceController,
 )
-from wxpost_controller.errors import DraftStoreUnavailable  # noqa: E402
+from wxpost_controller.errors import (  # noqa: E402
+    DraftOperationInProgress,
+    DraftStoreUnavailable,
+)
 from wxpost_controller.http_server import build_server  # noqa: E402
 
 from app.models.wxpost import (  # noqa: E402
@@ -453,31 +456,40 @@ def test_http_draft_save_returns_the_complete_updated_context(
         thread.join(timeout=5)
 
 
-def test_http_draft_chat_streams_progress_before_the_complete_result(
+def _draft_chat_request(port: int, operation_id: str) -> urllib.request.Request:
+    return urllib.request.Request(
+        f"http://127.0.0.1:{port}/workspaces/wxpost-stream/draft/chat",
+        data=json.dumps(
+            {
+                "expectedManifestVersion": 4,
+                "expectedDraftVersion": 2,
+                "operationId": operation_id,
+                "message": "Tighten it.",
+                "selectedText": None,
+            }
+        ).encode(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Type": "application/json",
+        },
+    )
+
+
+def test_http_draft_chat_submits_and_returns_the_running_operation(
     tmp_path: Path,
 ) -> None:
+    operation_id = "draft-0123456789abcdef0123456789abcdef"
+
     class DraftService:
-        def chat(self, workspace_id: str, *, on_progress, **kwargs):
+        def chat_submit(self, workspace_id: str, **kwargs):
             assert workspace_id == "wxpost-stream"
-            on_progress(
-                {
-                    "stage": "activity_started",
-                    "activityId": "context-1",
-                    "label": "Reading the saved Draft and media",
-                }
-            )
-            on_progress(
-                {
-                    "stage": "activity_completed",
-                    "activityId": "context-1",
-                    "label": "Reading the saved Draft and media",
-                }
-            )
+            assert kwargs["operation_id"] == operation_id
+            assert kwargs["message"] == "Tighten it."
             return {
                 "workspaceId": workspace_id,
-                "reply": "Saved.",
-                "context": {"workspaceId": workspace_id},
-                "draftChanged": True,
+                "operationId": operation_id,
+                "state": "running",
             }
 
     server = build_server(
@@ -489,106 +501,59 @@ def test_http_draft_chat_streams_progress_before_the_complete_result(
     server.draft_service = DraftService()  # type: ignore[assignment]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    request = urllib.request.Request(
-        (f"http://127.0.0.1:{server.server_port}/workspaces/wxpost-stream/draft/chat"),
-        data=json.dumps(
-            {
-                "expectedManifestVersion": 4,
-                "expectedDraftVersion": 2,
-                "operationId": "draft-0123456789abcdef0123456789abcdef",
-                "message": "Tighten it.",
-                "selectedText": None,
-            }
-        ).encode(),
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {TOKEN}",
-            "Content-Type": "application/json",
-        },
-    )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            body = response.read().decode()
+        with urllib.request.urlopen(
+            _draft_chat_request(server.server_port, operation_id),
+            timeout=5,
+        ) as response:
+            payload = json.loads(response.read().decode())
 
-        assert response.headers["Content-Type"] == ("text/event-stream; charset=utf-8")
-        assert body.index('"stage": "request_started"') < body.index(
-            '"stage": "activity_started"'
-        )
-        assert body.index('"stage": "activity_started"') < body.index(
-            '"stage": "activity_completed"'
-        )
-        assert body.index("event: progress") < body.index("event: complete")
-        assert '"reply": "Saved."' in body
+        # The submit returns immediately with the pollable operation —
+        # no held-open stream, no event framing.
+        assert response.headers["Content-Type"].startswith("application/json")
+        assert payload == {
+            "workspaceId": "wxpost-stream",
+            "operationId": operation_id,
+            "state": "running",
+        }
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
 
-def test_http_draft_chat_sends_heartbeats_while_hermes_is_quiet(
+def test_http_draft_chat_rejects_a_second_submit_while_one_runs(
     tmp_path: Path,
 ) -> None:
-    operation_started = threading.Event()
-    release_operation = threading.Event()
-    operation_finished = threading.Event()
-
     class DraftService:
-        def chat(self, workspace_id: str, *, on_progress, **kwargs):
-            operation_started.set()
-            try:
-                assert release_operation.wait(timeout=5)
-                return {
-                    "workspaceId": workspace_id,
-                    "reply": "Saved.",
-                    "context": {"workspaceId": workspace_id},
-                    "draftChanged": True,
-                }
-            finally:
-                operation_finished.set()
+        def chat_submit(self, workspace_id: str, **kwargs):
+            raise DraftOperationInProgress(
+                "another Draft Assistant operation is already running "
+                "for this workspace"
+            )
 
     server = build_server(
         workspace_root=str(tmp_path),
         bearer_token=TOKEN,
         host="127.0.0.1",
         port=0,
-        draft_heartbeat_seconds=0.01,
     )
     server.draft_service = DraftService()  # type: ignore[assignment]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{server.server_port}/workspaces/wxpost-stream/draft/chat",
-        data=json.dumps(
-            {
-                "expectedManifestVersion": 4,
-                "expectedDraftVersion": 2,
-                "operationId": "draft-fedcba9876543210fedcba9876543210",
-                "message": "Tighten it.",
-                "selectedText": None,
-            }
-        ).encode(),
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {TOKEN}",
-            "Content-Type": "application/json",
-        },
-    )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            assert response.readline() == b"event: progress\n"
-            assert b'"stage": "request_started"' in response.readline()
-            assert response.readline() == b"\n"
-            assert operation_started.wait(timeout=1)
-            assert response.readline() == b": keep-alive\n"
-            assert response.readline() == b"\n"
-            assert not operation_finished.is_set()
-            release_operation.set()
-            body = response.read().decode()
-
-        assert "event: complete" in body
-        assert '"reply": "Saved."' in body
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(
+                _draft_chat_request(
+                    server.server_port,
+                    "draft-fedcba9876543210fedcba9876543210",
+                ),
+                timeout=5,
+            )
+        assert caught.value.code == 409
+        payload = json.loads(caught.value.read().decode())
+        assert payload["error"]["code"] == "draft_operation_in_progress"
     finally:
-        release_operation.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)

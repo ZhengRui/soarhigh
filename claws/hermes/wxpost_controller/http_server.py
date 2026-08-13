@@ -4,9 +4,7 @@ import argparse
 import hmac
 import json
 import os
-import queue
 import re
-import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, cast
@@ -20,13 +18,14 @@ from .core import (
     UpstreamUnavailable,
     ValidationUnavailable,
     VersionConflict,
+    WorkspaceAlreadyExists,
     WorkspaceController,
     WorkspaceError,
-    WorkspaceAlreadyExists,
     WorkspaceNotFound,
     error_response,
 )
 from .errors import (
+    DraftOperationInProgress,
     DraftOperationNotFound,
     DraftStoreUnavailable,
     HermesTurnFailed,
@@ -74,7 +73,6 @@ class ControllerHTTPServer(ThreadingHTTPServer):
     draft_service: HermesDraftService
     editorial_client: HermesEditorialClient
     bearer_token: str
-    draft_heartbeat_seconds: float
 
 
 class ControllerRequestHandler(BaseHTTPRequestHandler):
@@ -437,8 +435,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     "Draft operation identifier is required",
                 )
                 return
-            self._run_draft_stream(
-                lambda on_progress: self.server.draft_service.chat(
+            # Async submit: the durable operation record is created before
+            # this responds, the turn runs in the background, and the client
+            # polls GET /draft/operations/{id} for progress and the result.
+            self._run_controller(
+                lambda: self.server.draft_service.chat_submit(
                     draft_chat_match.group(1),
                     expected_manifest_version=cast(
                         int,
@@ -454,7 +455,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         str | None,
                         payload.get("selectedText"),
                     ),
-                    on_progress=on_progress,
                 )
             )
             return
@@ -704,6 +704,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     VersionConflict,
                     SourceReferencedByDraft,
                     WorkspaceAlreadyExists,
+                    DraftOperationInProgress,
                 ),
             ):
                 status = HTTPStatus.CONFLICT
@@ -734,79 +735,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             )
         else:
             self._send_json(HTTPStatus.OK, result, cache_control=cache_control)
-
-    def _run_draft_stream(self, operation) -> None:
-        connected = True
-
-        def send_event(event: str, payload: Any) -> None:
-            nonlocal connected
-            if not connected:
-                return
-            body = (
-                f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            ).encode("utf-8")
-            try:
-                self.wfile.write(body)
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                connected = False
-
-        def send_heartbeat() -> None:
-            nonlocal connected
-            if not connected:
-                return
-            try:
-                self.wfile.write(b": keep-alive\n\n")
-                self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                connected = False
-
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "private, no-store, no-transform")
-        self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.close_connection = True
-        send_event("progress", {"stage": "request_started"})
-        outcomes: queue.Queue[tuple[str, Any]] = queue.Queue()
-
-        def run_operation() -> None:
-            try:
-                result = operation(
-                    lambda progress: outcomes.put(("progress", progress))
-                )
-            except WorkspaceError as exc:
-                outcomes.put(("error", error_response(exc)["error"]))
-            except Exception:
-                outcomes.put(
-                    (
-                        "error",
-                        {
-                            "code": "internal_error",
-                            "message": "controller operation failed",
-                        },
-                    )
-                )
-            else:
-                outcomes.put(("complete", result))
-
-        threading.Thread(
-            target=run_operation,
-            name="wxpost-draft-stream",
-            daemon=True,
-        ).start()
-        while True:
-            try:
-                event, payload = outcomes.get(
-                    timeout=self.server.draft_heartbeat_seconds
-                )
-            except queue.Empty:
-                send_heartbeat()
-                continue
-            send_event(event, payload)
-            if event in {"complete", "error"}:
-                return
 
     def _run_source_read(self, operation) -> None:
         try:
@@ -870,12 +798,9 @@ def build_server(
     hermes_serve_url: str = "ws://127.0.0.1:9119/api/ws",
     editorial_runner: OneShotRunner | None = None,
     editorial_runtime_resolver: MainRuntimeResolver | None = None,
-    draft_heartbeat_seconds: float = 15,
 ) -> ControllerHTTPServer:
     if not bearer_token:
         raise ValueError("controller bearer token must not be empty")
-    if draft_heartbeat_seconds <= 0:
-        raise ValueError("Draft heartbeat interval must be positive")
     server = ControllerHTTPServer((host, port), ControllerRequestHandler)
     server.controller = WorkspaceController(workspace_root)
     session_client = HermesSessionClient(
@@ -896,7 +821,6 @@ def build_server(
         runtime_resolver=editorial_runtime_resolver,
     )
     server.bearer_token = bearer_token
-    server.draft_heartbeat_seconds = draft_heartbeat_seconds
     return server
 
 

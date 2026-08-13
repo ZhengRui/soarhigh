@@ -6,14 +6,18 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from .errors import DraftStoreUnavailable, HermesTurnFailed
+from .errors import (
+    DraftOperationInProgress,
+    DraftStoreUnavailable,
+    HermesTurnFailed,
+)
 from .sqlite_support import serialize_controller_database_initialization
 
 
 class HermesDraftStore:
     """Durable Controller state for Draft Assistant operations and cleanup."""
 
-    _SCHEMA_VERSION = 3
+    _SCHEMA_VERSION = 4
 
     def __init__(self, workspace_root: Path) -> None:
         self._directory = workspace_root / ".wxpost-controller"
@@ -56,6 +60,22 @@ class HermesDraftStore:
                             "Draft operation identifier was reused for a different request"
                         )
                     raise HermesTurnFailed("Draft operation has already been submitted")
+                # One in-flight turn per workspace. The check runs inside the
+                # BEGIN IMMEDIATE transaction, so two concurrent submits
+                # cannot both pass it.
+                running = connection.execute(
+                    """
+                    SELECT operation_id FROM draft_operations
+                    WHERE workspace_id = ? AND state = 'running'
+                    LIMIT 1
+                    """,
+                    (workspace_id,),
+                ).fetchone()
+                if running is not None:
+                    raise DraftOperationInProgress(
+                        "another Draft Assistant operation is already running "
+                        "for this workspace"
+                    )
                 connection.execute(
                     """
                     INSERT INTO draft_operations(
@@ -117,7 +137,7 @@ class HermesDraftStore:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT state, result_json, error_json
+                SELECT state, result_json, error_json, steps_json
                 FROM draft_operations
                 WHERE workspace_id = ? AND operation_id = ?
                 """,
@@ -133,6 +153,45 @@ class HermesDraftStore:
             "state": str(row[0]),
             "result": result,
             "error": error,
+            # Live progress for polling clients: accumulated while the
+            # operation is still running, before any result exists.
+            "steps": json.loads(str(row[3])) if row[3] is not None else [],
+        }
+
+    def set_steps(self, operation_id: str, steps: list[dict[str, Any]]) -> None:
+        """Persist the running operation's progress steps for polling."""
+
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE draft_operations
+                SET steps_json = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE operation_id = ? AND state = 'running'
+                """,
+                (json.dumps(steps, ensure_ascii=False), operation_id),
+            )
+
+    def running_operation(self, workspace_id: str) -> dict[str, Any] | None:
+        """Return the workspace's in-flight operation for reconnecting clients."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT operation_id, member_message, selected_text, steps_json
+                FROM draft_operations
+                WHERE workspace_id = ? AND state = 'running'
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (workspace_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "operationId": str(row[0]),
+            "memberMessage": str(row[1]),
+            "selectedText": str(row[2]) if row[2] is not None else None,
+            "steps": json.loads(str(row[3])) if row[3] is not None else [],
         }
 
     def completed_turns(self, workspace_id: str) -> list[dict[str, Any]]:
@@ -148,26 +207,6 @@ class HermesDraftStore:
                 (workspace_id,),
             ).fetchall()
         return [self._completed_turn(row) for row in rows]
-
-    @contextmanager
-    def newest_completed_turns(
-        self,
-        workspace_id: str,
-    ) -> Iterator[Iterator[dict[str, Any]]]:
-        """Stream completed turns newest-first until the caller has enough."""
-
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT operation_id, member_message, selected_text,
-                       expected_draft_version, result_json
-                FROM draft_operations
-                WHERE workspace_id = ? AND state = 'completed'
-                ORDER BY created_at DESC, rowid DESC
-                """,
-                (workspace_id,),
-            )
-            yield (self._completed_turn(row) for row in rows)
 
     def history(self, workspace_id: str) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
@@ -218,6 +257,38 @@ class HermesDraftStore:
                 WHERE state = 'running'
                 """,
                 (error,),
+            )
+
+    def session_binding(self, workspace_id: str) -> str | None:
+        """Return the workspace's persistent Hermes session id, if bound."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT session_id FROM draft_sessions WHERE workspace_id = ?",
+                (workspace_id,),
+            ).fetchone()
+        return str(row[0]) if row is not None else None
+
+    def bind_session(self, workspace_id: str, session_id: str) -> None:
+        if not session_id:
+            raise HermesTurnFailed("Hermes session identifier must not be empty")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO draft_sessions(workspace_id, session_id)
+                VALUES (?, ?)
+                ON CONFLICT(workspace_id) DO UPDATE SET
+                    session_id = excluded.session_id,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (workspace_id, session_id),
+            )
+
+    def unbind_session(self, workspace_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM draft_sessions WHERE workspace_id = ?",
+                (workspace_id,),
             )
 
     def pending_deletions(self) -> list[str]:
@@ -295,6 +366,11 @@ class HermesDraftStore:
                         session_locator TEXT PRIMARY KEY,
                         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                     );
+                    CREATE TABLE IF NOT EXISTS draft_sessions (
+                        workspace_id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    );
                     """
                 )
                 row = connection.execute(
@@ -317,6 +393,13 @@ class HermesDraftStore:
                     connection.execute(
                         "ALTER TABLE draft_operations ADD COLUMN selected_text TEXT"
                     )
+                    connection.execute(
+                        "ALTER TABLE draft_operations ADD COLUMN steps_json TEXT"
+                    )
+                elif stored_version == 3:
+                    connection.execute(
+                        "ALTER TABLE draft_operations ADD COLUMN steps_json TEXT"
+                    )
                 elif stored_version not in {None, self._SCHEMA_VERSION}:
                     raise HermesTurnFailed("Draft store schema is incompatible")
                 connection.execute(
@@ -333,6 +416,7 @@ class HermesDraftStore:
                             CHECK(state IN ('running', 'completed', 'failed')),
                         result_json TEXT,
                         error_json TEXT,
+                        steps_json TEXT,
                         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                     )

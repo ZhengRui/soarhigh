@@ -166,6 +166,107 @@ def test_current_tools_resolve_the_exact_workspace_from_session_cwd(
     )
 
 
+def test_current_save_tools_do_not_expose_operation_id(monkeypatch) -> None:
+    plugin = _load_plugin(monkeypatch)
+
+    for name in ("wxpost_save_current_draft", "wxpost_edit_current_draft"):
+        parameters = plugin.CURRENT_SCHEMAS[name]["parameters"]
+        assert "operation_id" not in parameters["properties"]
+        assert "operationId" not in parameters["properties"]
+        assert "operation_id" not in parameters.get("required", [])
+
+
+def _bound_workspace(plugin, tmp_path, monkeypatch) -> str:
+    monkeypatch.setenv("WXPOST_WORKSPACE_ROOT", str(tmp_path))
+    controller = plugin.navigation_tools.WorkspaceController(str(tmp_path))
+    context = controller.create_workspace(
+        meeting_id=None,
+        editorial={
+            "articleType": "custom",
+            "customArticleType": "Test article",
+            "writingApproach": "chronological",
+            "transcript": "",
+            "extraNotes": "",
+            "writingGuidance": "",
+            "voiceTone": {"presets": [], "customProfiles": []},
+        },
+        created_by={"id": "member", "name": "Member"},
+    )
+    workspace_id = context["workspaceId"]
+    runtime_cwd = ModuleType("agent.runtime_cwd")
+    runtime_cwd.resolve_agent_cwd = lambda: tmp_path / "inbox" / workspace_id
+    monkeypatch.setitem(sys.modules, "agent", ModuleType("agent"))
+    monkeypatch.setitem(sys.modules, "agent.runtime_cwd", runtime_cwd)
+    return workspace_id
+
+
+def test_current_edit_rejects_a_model_supplied_operation_id(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plugin = _load_plugin(monkeypatch)
+    _bound_workspace(plugin, tmp_path, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="invalid current-workspace tool input"):
+        plugin.navigation_tools.handle_current(
+            "wxpost_edit_current_draft",
+            {
+                "expectedManifestVersion": 1,
+                "expectedDraftVersion": 1,
+                "operationId": "draft-" + "9" * 32,
+                "edits": [
+                    {"type": "replaceMetadata", "field": "title", "value": "x"}
+                ],
+            },
+        )
+
+
+def test_current_edit_requires_an_active_bound_operation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plugin = _load_plugin(monkeypatch)
+    _bound_workspace(plugin, tmp_path, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="no Draft operation is active"):
+        plugin.navigation_tools.handle_current(
+            "wxpost_edit_current_draft",
+            {
+                "expectedManifestVersion": 1,
+                "expectedDraftVersion": 1,
+                "edits": [
+                    {"type": "replaceMetadata", "field": "title", "value": "x"}
+                ],
+            },
+        )
+
+
+def test_bound_operation_id_reads_the_controller_marker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    plugin = _load_plugin(monkeypatch)
+    workspace_id = _bound_workspace(plugin, tmp_path, monkeypatch)
+    controller = plugin.navigation_tools.WorkspaceController(str(tmp_path))
+    marker = tmp_path / "inbox" / workspace_id / ".draft-operation.json"
+    marker.write_text(
+        json.dumps({"operationId": "draft-" + "5" * 32}),
+        encoding="utf-8",
+    )
+
+    assert (
+        plugin.navigation_tools._bound_operation_id(controller, workspace_id)
+        == "draft-" + "5" * 32
+    )
+
+    marker.write_text("not json", encoding="utf-8")
+    with pytest.raises(
+        plugin.navigation_tools.InvalidRequest,
+        match="unreadable",
+    ):
+        plugin.navigation_tools._bound_operation_id(controller, workspace_id)
+
+
 def test_current_tools_reject_a_session_cwd_outside_the_workspace_inbox(
     tmp_path: Path,
     monkeypatch,

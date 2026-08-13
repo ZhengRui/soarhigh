@@ -172,8 +172,11 @@ above. Neither suggestion step changes Materials or the Draft.
    `wxpost_save_draft` only for whole-article restructuring or rewriting.
    Presentation is preserved by the controller.
 6. For `wxpost_edit_draft`, pass the request's expected `manifestVersion`,
-   expected `draftVersion`, exact `operation_id`, and the smallest explicit
-   typed edit list. A title, excerpt, byline, body node, directive field or
+   expected `draftVersion`, and the smallest explicit typed edit list. Include
+   the exact `operation_id` only where the tool schema requires it: the Web
+   bound tool (`wxpost_edit_current_draft`) binds the operation identity
+   server-side and takes no `operation_id` argument.
+   A title, excerpt, byline, body node, directive field or
    item, media occurrence, media description, or cover change is a fine-grained
    edit. `setCover` may directly select any imported workspace-ready image; it
    does not insert that image into the body or change Materials inclusion.
@@ -190,9 +193,11 @@ above. Neither suggestion step changes Materials or the Draft.
    `operation_id`, `refresh_from_materials`, and `proposal`. Use `true` for
    Generate or Regenerate so the new Draft adopts current Materials. A focused
    whole-article revision also includes `media_changes` and uses
-   `refresh_from_materials=false`. Copy the operation ID exactly from the
-   request; it identifies this turn's successful save and is not article
-   content. Never call a Materials mutation tool during a Draft Assistant turn.
+   `refresh_from_materials=false`. Where the schema includes `operation_id`,
+   copy it exactly from the current request, never from an earlier turn; the
+   Web bound tool (`wxpost_save_current_draft`) binds the operation identity
+   server-side and takes no `operation_id` argument.
+   Never call a Materials mutation tool during a Draft Assistant turn.
 8. Report success only after one save succeeds. If the first call is rejected
    before saving solely by the proposal schema or ArticleDocument validation,
    correct the proposal from that formal validation error and make one

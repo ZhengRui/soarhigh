@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -10,25 +11,32 @@ import pytest
 from wxpost_controller.core import InvalidRequest, VersionConflict
 from wxpost_controller.draft_store import HermesDraftStore
 from wxpost_controller.errors import (
+    DraftOperationInProgress,
     HermesTurnFailed,
     HermesUnavailable,
 )
 from wxpost_controller.hermes_session import (
-    DRAFT_CONVERSATION_CONTEXT_MAX_BYTES,
     HERMES_DRAFT_IDENTITY,
     HermesDescriptionService,
     HermesDraftService,
     HermesSessionClient,
     HermesTurn,
-    _bounded_conversation_context,
     _draft_edit_activity,
 )
+
+
+def _marker_operation_id(cwd: str) -> str:
+    """Read the Controller-bound operation id exactly like the real tools."""
+
+    marker = Path(cwd) / ".draft-operation.json"
+    return str(json.loads(marker.read_text(encoding="utf-8"))["operationId"])
 
 
 class _Controller:
     def __init__(self, root: Path) -> None:
         self.workspace_root = root
         self.inbox_root = root / "inbox"
+        (self.inbox_root / "wxpost-test").mkdir(parents=True, exist_ok=True)
         self.source_revision = "source-revision-1"
         self.deleted_workspace_ids: list[str] = []
         self.context: dict[str, Any] = {
@@ -108,6 +116,7 @@ class _SessionClient:
         self.controller = controller
         self.prompts: list[dict[str, str]] = []
         self.turn_session_ids: list[str | None] = []
+        self.close_on_disconnect_flags: list[bool] = []
         self.deleted_session_ids: list[str] = []
 
     def turn(
@@ -117,11 +126,16 @@ class _SessionClient:
         cwd: str,
         prompt: str,
         session_id: str | None = None,
+        close_on_disconnect: bool = False,
         on_event=None,
+        on_session_resolved=None,
     ) -> HermesTurn:
         self.turn_session_ids.append(session_id)
+        self.close_on_disconnect_flags.append(close_on_disconnect)
         self.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
-        operation_id = prompt.split('operation_id="', 1)[1].split('"', 1)[0]
+        if on_session_resolved is not None:
+            on_session_resolved("stored-session")
+        operation_id = _marker_operation_id(cwd)
         if on_event is not None:
             on_event(
                 "tool.start",
@@ -160,12 +174,7 @@ def _service(tmp_path: Path) -> tuple[HermesDraftService, _SessionClient]:
     )
 
 
-def _conversation_context(prompt: str) -> dict[str, Any]:
-    marker = "PRIOR_COMPLETED_TURNS_JSON:"
-    return json.loads(prompt.split(marker, 1)[1].splitlines()[0])
-
-
-def test_generate_uses_one_isolated_session_and_persists_controller_history(
+def test_generate_binds_a_persistent_workspace_session_and_persists_history(
     tmp_path: Path,
 ) -> None:
     service, session = _service(tmp_path)
@@ -180,10 +189,12 @@ def test_generate_uses_one_isolated_session_and_persists_controller_history(
     assert result["context"]["draft"]["draftVersion"] == 3
     assert result["reply"] == "Draft regenerated.\n\nDraft version: v2 → v3"
     assert session.turn_session_ids == [None]
-    assert len(session.deleted_session_ids) == 1
-    assert session.prompts[0]["title"].startswith(
-        "SoarHigh WxPost Draft · wxpost-test · draft-"
+    assert session.close_on_disconnect_flags == [False]
+    assert session.deleted_session_ids == []
+    assert HermesDraftStore(tmp_path).session_binding("wxpost-test") == (
+        "stored-session"
     )
+    assert session.prompts[0]["title"] == "SoarHigh WxPost Draft · wxpost-test"
     assert session.prompts[0]["cwd"].endswith("/inbox/wxpost-test")
     assert "Expected manifest version: 4" in session.prompts[0]["prompt"]
     assert "Expected draft version: 2" in session.prompts[0]["prompt"]
@@ -193,13 +204,19 @@ def test_generate_uses_one_isolated_session_and_persists_controller_history(
     assert "refresh_from_materials=true" in session.prompts[0]["prompt"]
     assert session.prompts[0]["prompt"].startswith(HERMES_DRAFT_IDENTITY)
     assert history["workspaceId"] == "wxpost-test"
+    # The saved Draft version is reported so a mounting client can detect a
+    # turn that completed while nobody was polling and reload the Draft.
+    assert history["draftVersion"] == 3
     assert history["messages"][0]["text"] == (
         "Regenerate the English draft from saved Materials."
     )
     assert history["messages"][1]["text"].endswith("Draft version: v2 → v3")
 
 
-def test_generate_does_not_consume_prior_chat_context(tmp_path: Path) -> None:
+def test_prompts_never_replay_controller_history(tmp_path: Path) -> None:
+    """Hermes owns cross-turn context inside the persistent session; the
+    Controller no longer serializes prior turns into any prompt."""
+
     service, session = _service(tmp_path)
     service.chat(
         "wxpost-test",
@@ -215,11 +232,11 @@ def test_generate_does_not_consume_prior_chat_context(tmp_path: Path) -> None:
         expected_draft_version=3,
     )
 
-    assert "PRIOR_COMPLETED_TURNS_JSON:" in session.prompts[0]["prompt"]
-    assert "PRIOR_COMPLETED_TURNS_JSON:" not in session.prompts[1]["prompt"]
+    assert "PRIOR_COMPLETED_TURNS_JSON" not in session.prompts[0]["prompt"]
+    assert "PRIOR_COMPLETED_TURNS_JSON" not in session.prompts[1]["prompt"]
 
 
-def test_each_chat_turn_uses_a_fresh_hermes_session(tmp_path: Path) -> None:
+def test_chat_turns_share_one_persistent_workspace_session(tmp_path: Path) -> None:
     service, session = _service(tmp_path)
 
     service.chat(
@@ -238,28 +255,10 @@ def test_each_chat_turn_uses_a_fresh_hermes_session(tmp_path: Path) -> None:
         selected_text=None,
     )
 
-    assert session.turn_session_ids == [None, None]
-    assert session.prompts[0]["title"] != session.prompts[1]["title"]
-    assert len(session.deleted_session_ids) == 2
+    assert session.turn_session_ids == [None, "stored-session"]
+    assert session.prompts[0]["title"] == session.prompts[1]["title"]
+    assert session.deleted_session_ids == []
     assert len(service.history("wxpost-test")["messages"]) == 4
-    assert _conversation_context(session.prompts[0]["prompt"]) == {
-        "olderTurnsOmitted": False,
-        "turns": [],
-    }
-    second_context = _conversation_context(session.prompts[1]["prompt"])
-    assert second_context["olderTurnsOmitted"] is False
-    assert len(second_context["turns"]) == 1
-    assert second_context["turns"][0]["memberMessage"] == "Tighten the opening."
-    assert second_context["turns"][0]["selectedText"] == "The original opening."
-    assert second_context["turns"][0]["assistantReply"].endswith(
-        "Draft version: v2 → v3"
-    )
-    assert second_context["turns"][0]["draftVersionAfter"] == 3
-    assert second_context["turns"][0]["actions"] == [
-        {"label": "Saving Draft v3", "toolName": "wxpost_save_draft"},
-        {"label": "Verifying the saved Draft"},
-    ]
-    assert "steps" not in second_context["turns"][0]
     assert "activityId" not in session.prompts[1]["prompt"]
     assert service.history("wxpost-test")["messages"][0]["selectedText"] == (
         "The original opening."
@@ -299,11 +298,15 @@ def test_controller_history_survives_service_recreation(tmp_path: Path) -> None:
         message="What did I just ask you to change?",
         selected_text=None,
     )
-    recreated_context = _conversation_context(second_session.prompts[0]["prompt"])
-    assert recreated_context["turns"][0]["memberMessage"] == ("Tighten the opening.")
+    # The workspace→session binding is durable: a recreated service resumes
+    # the same persistent Hermes session (which carries the model context)
+    # instead of starting a new one.
+    assert second_session.turn_session_ids == ["stored-session"]
 
 
-def test_reset_clears_only_controller_conversation(tmp_path: Path) -> None:
+def test_reset_clears_conversation_and_retires_the_workspace_session(
+    tmp_path: Path,
+) -> None:
     service, session = _service(tmp_path)
     service.chat(
         "wxpost-test",
@@ -319,6 +322,12 @@ def test_reset_clears_only_controller_conversation(tmp_path: Path) -> None:
     assert result == {"workspaceId": "wxpost-test", "messages": []}
     assert service.history("wxpost-test")["messages"] == []
     assert session.controller.context == before_reset
+    # Reset starts a genuinely new conversation: the persistent session is
+    # retired (deleted via the durable queue) and the binding is dropped, so
+    # the next turn creates a fresh session with no pre-reset model context.
+    assert session.deleted_session_ids == ["stored-session"]
+    assert HermesDraftStore(tmp_path).session_binding("wxpost-test") is None
+    assert HermesDraftStore(tmp_path).pending_deletions() == []
     service.chat(
         "wxpost-test",
         expected_manifest_version=4,
@@ -326,54 +335,7 @@ def test_reset_clears_only_controller_conversation(tmp_path: Path) -> None:
         message="What happened before this message?",
         selected_text=None,
     )
-    assert _conversation_context(session.prompts[1]["prompt"]) == {
-        "olderTurnsOmitted": False,
-        "turns": [],
-    }
-
-
-def test_conversation_context_keeps_newest_complete_turns_within_budget() -> None:
-    turns = [
-        {
-            "operationId": f"draft-{index:032x}",
-            "memberMessage": f"request-{index}-" + "x" * 700,
-            "assistantReply": f"reply-{index}-" + "y" * 500,
-            "expectedDraftVersion": index,
-            "draftChanged": True,
-            "draftVersionAfter": index + 1,
-            "steps": [],
-        }
-        for index in range(3)
-    ]
-
-    context = _bounded_conversation_context(reversed(turns), max_bytes=1_600)
-    encoded = json.dumps(context, ensure_ascii=False).encode("utf-8")
-
-    assert len(encoded) <= 1_600
-    assert context["olderTurnsOmitted"] is True
-    assert [turn["operationId"] for turn in context["turns"]] == [
-        "draft-00000000000000000000000000000002"
-    ]
-    assert DRAFT_CONVERSATION_CONTEXT_MAX_BYTES == 48_000
-
-
-def test_conversation_context_stops_reading_after_the_budget_is_full() -> None:
-    def newest_turns():
-        yield {
-            "operationId": "draft-00000000000000000000000000000002",
-            "memberMessage": "x" * 2_000,
-            "assistantReply": "Too large for this budget.",
-            "expectedDraftVersion": 2,
-            "draftChanged": False,
-            "draftVersionAfter": 2,
-            "actions": [],
-        }
-        raise AssertionError("older turns must not be loaded after the budget fills")
-
-    assert _bounded_conversation_context(newest_turns(), max_bytes=1_000) == {
-        "olderTurnsOmitted": True,
-        "turns": [],
-    }
+    assert session.turn_session_ids == [None, None]
 
 
 def test_workspace_delete_removes_controller_conversation(tmp_path: Path) -> None:
@@ -394,6 +356,10 @@ def test_workspace_delete_removes_controller_conversation(tmp_path: Path) -> Non
     assert result == {"workspaceId": "wxpost-test", "deleted": True}
     assert session.controller.deleted_workspace_ids == ["wxpost-test"]
     assert HermesDraftStore(tmp_path).history("wxpost-test") == []
+    # Workspace deletion retires the persistent session so no Hermes session
+    # lineage is leaked behind a deleted workspace.
+    assert session.deleted_session_ids == ["stored-session"]
+    assert HermesDraftStore(tmp_path).session_binding("wxpost-test") is None
 
 
 def test_retire_session_still_cleans_native_feishu_sessions(tmp_path: Path) -> None:
@@ -409,9 +375,140 @@ def test_retire_session_still_cleans_native_feishu_sessions(tmp_path: Path) -> N
     assert HermesDraftStore(tmp_path).pending_deletions() == []
 
 
-def test_failed_draft_turn_retires_its_isolated_session(tmp_path: Path) -> None:
+def test_chat_submit_runs_in_background_with_pollable_progress(
+    tmp_path: Path,
+) -> None:
     service, session = _service(tmp_path)
+    release = threading.Event()
+    real_turn = session.turn
+
+    def gated_turn(**kwargs: Any) -> HermesTurn:
+        kwargs["on_event"](
+            "tool.start",
+            {"toolId": "context-1", "name": "wxpost_get_current_context"},
+        )
+        assert release.wait(timeout=5)
+        return real_turn(**kwargs)
+
+    session.turn = gated_turn  # type: ignore[method-assign]
+    operation_id = "draft-" + "a" * 32
+
+    submitted = service.chat_submit(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        operation_id=operation_id,
+        message="Tighten the opening.",
+        selected_text=None,
+    )
+    assert submitted == {
+        "workspaceId": "wxpost-test",
+        "operationId": operation_id,
+        "state": "running",
+    }
+
+    try:
+        # Incremental step persistence: a polling client sees the in-progress
+        # activity while the turn is still running, before any result exists.
+        operation = service.operation("wxpost-test", operation_id)
+        for _ in range(250):
+            operation = service.operation("wxpost-test", operation_id)
+            if operation["steps"]:
+                break
+            time.sleep(0.02)
+        assert operation["state"] == "running"
+        assert operation["result"] is None
+        assert operation["steps"][0]["label"] == "Reading the saved Draft and media"
+        assert operation["steps"][0]["completed"] is False
+
+        # A reconnecting client (refresh, second tab) rediscovers the running
+        # operation from the conversation history.
+        history = service.history("wxpost-test")
+        assert history["activeOperation"]["operationId"] == operation_id
+        assert history["activeOperation"]["memberMessage"] == (
+            "Tighten the opening."
+        )
+
+        # One in-flight turn per workspace: a concurrent submit is rejected.
+        with pytest.raises(DraftOperationInProgress):
+            service.chat_submit(
+                "wxpost-test",
+                expected_manifest_version=4,
+                expected_draft_version=2,
+                operation_id="draft-" + "b" * 32,
+                message="Another request.",
+                selected_text=None,
+            )
+    finally:
+        release.set()
+
+    for _ in range(250):
+        operation = service.operation("wxpost-test", operation_id)
+        if operation["state"] != "running":
+            break
+        time.sleep(0.02)
+    assert operation["state"] == "completed"
+    assert operation["result"]["draftChanged"] is True
+    assert service.history("wxpost-test").get("activeOperation") is None
+
+
+def test_draft_turn_binds_and_clears_the_operation_marker(tmp_path: Path) -> None:
+    service, session = _service(tmp_path)
+    marker = tmp_path / "inbox" / "wxpost-test" / ".draft-operation.json"
+    seen_markers: list[str] = []
+    real_turn = session.turn
+
+    def observing_turn(**kwargs: Any) -> HermesTurn:
+        seen_markers.append(_marker_operation_id(kwargs["cwd"]))
+        return real_turn(**kwargs)
+
+    session.turn = observing_turn  # type: ignore[method-assign]
+    service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="Tighten the opening.",
+        selected_text=None,
+    )
+
+    # The trusted id was bound during the turn and cleared afterwards, and it
+    # never rides in the prompt text the model could copy from later context.
+    assert len(seen_markers) == 1
+    assert seen_markers[0].startswith("draft-")
+    assert not marker.exists()
+    assert "operation_id=" not in session.prompts[0]["prompt"]
+    assert "Draft operation ID" not in session.prompts[0]["prompt"]
+
+    def fail_turn(**_kwargs: Any) -> HermesTurn:
+        raise HermesUnavailable("Hermes web session is unavailable")
+
+    session.turn = fail_turn  # type: ignore[method-assign]
+    with pytest.raises(HermesUnavailable):
+        service.chat(
+            "wxpost-test",
+            expected_manifest_version=4,
+            expected_draft_version=3,
+            message="Tighten the closing.",
+            selected_text=None,
+        )
+    # A failed turn also clears the marker so no later tool call can bind to
+    # a finished operation.
+    assert not marker.exists()
+
+
+def test_failed_draft_turn_keeps_the_workspace_session_binding(
+    tmp_path: Path,
+) -> None:
+    service, session = _service(tmp_path)
+    service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="Tighten the opening.",
+        selected_text=None,
+    )
     operation_id = "draft-55555555555555555555555555555555"
+    real_turn = session.turn
 
     def fail_turn(**_kwargs: Any) -> HermesTurn:
         raise HermesUnavailable("Hermes web session is unavailable")
@@ -422,20 +519,32 @@ def test_failed_draft_turn_retires_its_isolated_session(tmp_path: Path) -> None:
         service.chat(
             "wxpost-test",
             expected_manifest_version=4,
-            expected_draft_version=2,
+            expected_draft_version=3,
             operation_id=operation_id,
-            message="Tighten the opening.",
+            message="Tighten the closing.",
             selected_text=None,
         )
 
-    assert session.deleted_session_ids == [
-        f"SoarHigh WxPost Draft · wxpost-test · {operation_id}"
-    ]
+    # A failed turn no longer tears the session down: the persistent binding
+    # survives so the next turn resumes the same workspace session.
+    assert session.deleted_session_ids == []
     assert HermesDraftStore(tmp_path).pending_deletions() == []
+    assert HermesDraftStore(tmp_path).session_binding("wxpost-test") == (
+        "stored-session"
+    )
     assert (
         HermesDraftStore(tmp_path).get_operation("wxpost-test", operation_id)["state"]
         == "failed"
     )
+    session.turn = real_turn  # type: ignore[method-assign]
+    service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=3,
+        message="Tighten the closing again.",
+        selected_text=None,
+    )
+    assert session.turn_session_ids[-1] == "stored-session"
 
 
 def test_draft_service_accepts_a_successful_save_despite_manifest_drift(
@@ -469,6 +578,7 @@ def test_chat_rejects_a_save_attributed_to_an_earlier_turn(
         prompt: str,
         session_id: str | None,
         on_event,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         tool_name = "wxpost_edit_current_draft"
@@ -519,7 +629,13 @@ def test_general_chat_is_not_blocked_by_unrelated_stale_page_versions(
     service, session = _service(tmp_path)
 
     def answer_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
+        *,
+        title: str,
+        cwd: str,
+        prompt: str,
+        session_id: str | None,
+        on_event=None,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         return HermesTurn(session_id="stored-session", reply="It is sunny today.")
@@ -605,7 +721,13 @@ def test_draft_service_does_not_duplicate_hermes_version_transition(
     original_turn = session.turn
 
     def versioned_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
+        *,
+        title: str,
+        cwd: str,
+        prompt: str,
+        session_id: str | None,
+        on_event=None,
+        **_kwargs: Any,
     ) -> HermesTurn:
         turn = original_turn(
             title=title,
@@ -655,7 +777,13 @@ def test_chat_can_answer_a_read_only_draft_question_without_saving(
     service, session = _service(tmp_path)
 
     def answer_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
+        *,
+        title: str,
+        cwd: str,
+        prompt: str,
+        session_id: str | None,
+        on_event=None,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         return HermesTurn(session_id="stored-session", reply="There are four parts.")
@@ -705,6 +833,7 @@ def test_failed_current_workspace_read_is_not_replaced_with_stale_history(
         prompt: str,
         session_id: str | None,
         on_event,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         on_event(
@@ -763,6 +892,7 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
         prompt: str,
         session_id: str | None,
         on_event,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         on_event(
@@ -831,7 +961,7 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
             },
         )
         on_event("message.delta", {"text": "Saved."})
-        operation_id = prompt.split('operation_id="', 1)[1].split('"', 1)[0]
+        operation_id = _marker_operation_id(cwd)
         session.controller.context["draft"]["draftVersion"] = 3
         session.controller.context["manifest"]["draft"] = {
             "version": 3,
@@ -922,11 +1052,9 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
         "label": "Verifying the saved Draft",
     }
     assert result["draftChanged"] is True
-    operation_id = (
-        session.prompts[-1]["prompt"]
-        .split("Draft operation ID: ", 1)[1]
-        .splitlines()[0]
-    )
+    # The operation id no longer appears in the prompt; the manifest carries
+    # the server-bound id the fake tool read from the marker.
+    operation_id = session.controller.context["manifest"]["draft"]["operationId"]
     operation = service.operation("wxpost-test", operation_id)
     assert operation == {
         "workspaceId": "wxpost-test",
@@ -939,7 +1067,11 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
             "steps": operation["result"]["steps"],
         },
         "error": None,
+        "steps": operation["steps"],
     }
+    # The live steps persisted during the turn include the in-progress
+    # entries and end settled, so a polling client saw real-time progress.
+    assert operation["steps"][-1]["completed"] is True
     assert operation["result"]["steps"][-2:] == [
         {
             "activityId": "save-1",
@@ -986,6 +1118,7 @@ def test_chat_records_failed_operation_for_exact_recovery(tmp_path: Path) -> Non
             "code": "hermes_unavailable",
             "message": "Hermes web session is unavailable",
         },
+        "steps": [],
     }
 
 
@@ -1036,6 +1169,7 @@ def test_failed_draft_save_does_not_report_verification_success(
         prompt: str,
         session_id: str | None,
         on_event,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         on_event(
@@ -1107,6 +1241,7 @@ def test_failed_draft_save_without_start_event_does_not_report_verification(
         prompt: str,
         session_id: str | None,
         on_event,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         on_event(
@@ -1141,7 +1276,13 @@ def test_draft_service_does_not_adopt_an_unrelated_save(
     service, session = _service(tmp_path)
 
     def unrelated_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
+        *,
+        title: str,
+        cwd: str,
+        prompt: str,
+        session_id: str | None,
+        on_event=None,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         session.controller.context["draft"]["draftVersion"] = 3
@@ -1164,7 +1305,13 @@ def test_draft_service_reports_a_manifest_change_during_the_turn_as_a_conflict(
     service, session = _service(tmp_path)
 
     def changed_materials_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
+        *,
+        title: str,
+        cwd: str,
+        prompt: str,
+        session_id: str | None,
+        on_event=None,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         session.controller.context["manifest"]["manifestVersion"] = 5
@@ -1186,7 +1333,13 @@ def test_chat_does_not_misreport_a_materials_change_as_a_draft_conflict(
     service, session = _service(tmp_path)
 
     def changed_materials_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
+        *,
+        title: str,
+        cwd: str,
+        prompt: str,
+        session_id: str | None,
+        on_event=None,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         session.controller.context["manifest"]["manifestVersion"] = 5
@@ -1216,7 +1369,13 @@ def test_draft_service_keeps_a_no_save_turn_as_a_hermes_failure(
     service, session = _service(tmp_path)
 
     def no_save_turn(
-        *, title: str, cwd: str, prompt: str, session_id: str | None, on_event=None
+        *,
+        title: str,
+        cwd: str,
+        prompt: str,
+        session_id: str | None,
+        on_event=None,
+        **_kwargs: Any,
     ) -> HermesTurn:
         session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         return HermesTurn(session_id="stored-session", reply="Unable to save.")
