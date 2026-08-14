@@ -91,6 +91,7 @@ services:
       args:
         HERMES_IMAGE: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
     restart: unless-stopped
+    user: "${HERMES_UID:-10000}:${HERMES_GID:-10000}"
     working_dir: /workspace
     entrypoint:
       - /opt/soarhigh/controller_entrypoint.sh
