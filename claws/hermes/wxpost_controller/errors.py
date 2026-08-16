@@ -25,3 +25,9 @@ class DraftOperationInProgress(WorkspaceError):
     """Another Draft operation is already running for this workspace."""
 
     code = "draft_operation_in_progress"
+
+
+class DraftTurnInterrupted(WorkspaceError):
+    """The member stopped the Draft turn before it saved anything."""
+
+    code = "draft_turn_interrupted"

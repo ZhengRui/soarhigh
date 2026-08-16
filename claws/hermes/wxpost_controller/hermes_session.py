@@ -28,13 +28,12 @@ from .draft_store import HermesDraftStore
 from .errors import (
     DraftOperationNotFound,
     DraftStoreUnavailable,
+    DraftTurnInterrupted,
     HermesTurnFailed,
     HermesUnavailable,
 )
 
 HERMES_DESCRIPTION_PROTOCOL_VERSION = 3
-# Kept in lockstep with the reader in wxpost_profile/navigation_tools.py.
-DRAFT_OPERATION_MARKER = ".draft-operation.json"
 _DRAFT_OPERATION_ID = re.compile(r"^draft-[0-9a-f]{32}$")
 HERMES_DRAFT_IDENTITY = (
     "You are SoarHigh Club's AI Assistant "
@@ -65,12 +64,26 @@ _CURRENT_TOOL_ALIASES = {
 logger = logging.getLogger(__name__)
 
 
-def _normalized_tool_name(tool_name: str) -> str:
+def _called_tool_name(tool_name: str) -> str:
+    """The tool name as actually called, without transport prefixes.
+
+    Used for member-facing step badges so the trace shows which tool ran
+    (`wxpost_edit_current_draft` vs `wxpost_edit_draft`), not a merged alias.
+    """
+
     for prefix in _WXPOST_MCP_PREFIXES:
         if tool_name.startswith(prefix):
-            tool_name = tool_name.removeprefix(prefix)
-            break
-    return _CURRENT_TOOL_ALIASES.get(tool_name, tool_name)
+            return tool_name.removeprefix(prefix)
+    return tool_name
+
+
+def _normalized_tool_name(tool_name: str) -> str:
+    """Alias-merged name for behavior matching (labels, save detection)."""
+
+    return _CURRENT_TOOL_ALIASES.get(
+        _called_tool_name(tool_name),
+        _called_tool_name(tool_name),
+    )
 
 
 def _is_draft_save_tool(tool_name: str) -> bool:
@@ -158,6 +171,8 @@ def _dispatch_session_cleanup(callback: Callable[[], None]) -> None:
 class HermesTurn:
     session_id: str
     reply: str
+    # True when Hermes reports the turn was stopped by session.interrupt.
+    interrupted: bool = False
 
 
 class HermesSessionClient:
@@ -189,6 +204,7 @@ class HermesSessionClient:
         close_on_disconnect: bool = False,
         on_event: HermesEventCallback | None = None,
         on_session_resolved: HermesSessionResolvedCallback | None = None,
+        on_live_session: HermesSessionResolvedCallback | None = None,
     ) -> HermesTurn:
         try:
             with self._connect() as websocket:
@@ -216,6 +232,11 @@ class HermesSessionClient:
                 stored_session_id = self._stored_session_id(session)
                 if on_session_resolved is not None:
                     on_session_resolved(stored_session_id)
+                # The live id addresses the in-memory session; session.interrupt
+                # from another connection needs it (a busy session cannot be
+                # resumed a second time to discover it).
+                if on_live_session is not None:
+                    on_live_session(session_id)
                 self._rpc(
                     websocket,
                     "prompt.submit",
@@ -224,7 +245,7 @@ class HermesSessionClient:
                         "text": prompt,
                     },
                 )
-                reply = self._wait_for_completion(
+                reply, interrupted = self._wait_for_completion(
                     websocket,
                     session_id,
                     on_event=on_event,
@@ -232,9 +253,33 @@ class HermesSessionClient:
                 return HermesTurn(
                     session_id=stored_session_id,
                     reply=reply,
+                    interrupted=interrupted,
                 )
         except HermesTurnFailed:
             raise
+        except (OSError, TimeoutError, WebSocketException) as error:
+            raise HermesUnavailable("Hermes web session is unavailable") from error
+
+    def interrupt(self, *, live_session_id: str) -> bool:
+        """Stop the running turn on one live Hermes session.
+
+        Returns False when the session is no longer live (the turn already
+        finished); the caller's poll observes the recorded outcome either way.
+        """
+
+        try:
+            with self._connect() as websocket:
+                try:
+                    self._rpc(
+                        websocket,
+                        "session.interrupt",
+                        {"session_id": live_session_id},
+                    )
+                except HermesTurnFailed as error:
+                    if error.args and error.args[0] == "session_not_found":
+                        return False
+                    raise
+                return True
         except (OSError, TimeoutError, WebSocketException) as error:
             raise HermesUnavailable("Hermes web session is unavailable") from error
 
@@ -336,7 +381,7 @@ class HermesSessionClient:
         session_id: str,
         *,
         on_event: HermesEventCallback | None = None,
-    ) -> str:
+    ) -> tuple[str, bool]:
         while True:
             message = self._read_message(websocket, timeout=self._turn_timeout)
             if message.get("method") != "event":
@@ -367,7 +412,10 @@ class HermesSessionClient:
                     str(payload.get("message") or "Hermes turn failed")
                 )
             if event_type == "message.complete":
-                return str(payload.get("text") or "").strip()
+                return (
+                    str(payload.get("text") or "").strip(),
+                    payload.get("status") == "interrupted",
+                )
 
     @staticmethod
     def _read_message(
@@ -415,6 +463,11 @@ class HermesDraftService:
         self._cleanup_dispatch = cleanup_dispatch
         self._cleanup_requested = threading.Event()
         self._cleanup_worker_lock = threading.Lock()
+        # workspace_id -> (operation_id, live Hermes session id) for the turn
+        # currently running in this process; session.interrupt needs the live
+        # id because a busy session cannot be resumed from a second connection.
+        self._live_turns: dict[str, tuple[str, str]] = {}
+        self._live_turns_guard = threading.Lock()
         self._draft_store.fail_interrupted_operations()
         self._schedule_session_cleanup()
 
@@ -489,12 +542,88 @@ class HermesDraftService:
         expected_manifest_version: int,
         expected_draft_version: int,
     ) -> dict[str, Any]:
+        """Run one Draft generation synchronously: admit, run, and record."""
+
+        prepared = self._prepare_generate(
+            workspace_id,
+            expected_manifest_version=expected_manifest_version,
+            expected_draft_version=expected_draft_version,
+            operation_id=None,
+        )
+        return self._execute_draft_operation(
+            workspace_id,
+            expected_manifest_version=expected_manifest_version,
+            expected_draft_version=expected_draft_version,
+            operation_id=prepared["operationId"],
+            member_message=prepared["memberMessage"],
+            selected_text=None,
+            request_fingerprint=prepared["fingerprint"],
+            prompt=prepared["prompt"],
+            save_required=True,
+        )
+
+    def generate_submit(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        expected_draft_version: int,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Admit one Draft generation, then run it in the background.
+
+        Same contract as chat_submit: the durable operation record exists
+        before this returns, so the caller polls the operation id; the
+        heaviest turn no longer needs a held-open connection anywhere.
+        """
+
+        prepared = self._prepare_generate(
+            workspace_id,
+            expected_manifest_version=expected_manifest_version,
+            expected_draft_version=expected_draft_version,
+            operation_id=operation_id,
+        )
+        self._admit_chat(
+            workspace_id,
+            prepared,
+            expected_manifest_version=expected_manifest_version,
+            expected_draft_version=expected_draft_version,
+        )
+        threading.Thread(
+            target=self._run_turn_background,
+            kwargs={
+                "workspace_id": workspace_id,
+                "expected_manifest_version": expected_manifest_version,
+                "expected_draft_version": expected_draft_version,
+                "operation_id": prepared["operationId"],
+                "prompt": prepared["prompt"],
+                "save_required": True,
+            },
+            name="wxpost-draft-turn",
+            daemon=True,
+        ).start()
+        return {
+            "workspaceId": workspace_id,
+            "operationId": prepared["operationId"],
+            "state": "running",
+        }
+
+    def _prepare_generate(
+        self,
+        workspace_id: str,
+        *,
+        expected_manifest_version: int,
+        expected_draft_version: int,
+        operation_id: str | None,
+    ) -> dict[str, Any]:
         self._validate_versions(
             expected_manifest_version,
             expected_draft_version,
         )
+        operation_id = operation_id or f"draft-{uuid4().hex}"
+        if not _DRAFT_OPERATION_ID.fullmatch(operation_id):
+            raise InvalidRequest("Draft operation identifier is invalid")
         operation = "Generate" if expected_draft_version == 0 else "Regenerate"
-        operation_id = f"draft-{uuid4().hex}"
         member_request = f"{operation} the English draft from saved Materials."
         prompt = "\n".join(
             [
@@ -529,17 +658,13 @@ class HermesDraftService:
                 "MEMBER_REQUEST_JSON:" + json.dumps(member_request, ensure_ascii=False),
             ]
         )
-        return self._execute_draft_operation(
-            workspace_id,
-            expected_manifest_version=expected_manifest_version,
-            expected_draft_version=expected_draft_version,
-            operation_id=operation_id,
-            member_message=member_request,
-            selected_text=None,
-            request_fingerprint=self._request_fingerprint(member_request, ""),
-            prompt=prompt,
-            save_required=True,
-        )
+        return {
+            "operationId": operation_id,
+            "memberMessage": member_request,
+            "selectedText": None,
+            "fingerprint": self._request_fingerprint(member_request, ""),
+            "prompt": prompt,
+        }
 
     def chat(
         self,
@@ -612,13 +737,14 @@ class HermesDraftService:
             expected_draft_version=expected_draft_version,
         )
         threading.Thread(
-            target=self._run_chat_background,
+            target=self._run_turn_background,
             kwargs={
                 "workspace_id": workspace_id,
                 "expected_manifest_version": expected_manifest_version,
                 "expected_draft_version": expected_draft_version,
                 "operation_id": prepared["operationId"],
                 "prompt": prepared["prompt"],
+                "save_required": False,
             },
             name="wxpost-draft-turn",
             daemon=True,
@@ -734,7 +860,7 @@ class HermesDraftService:
             expected_draft_version=expected_draft_version,
         )
 
-    def _run_chat_background(
+    def _run_turn_background(
         self,
         *,
         workspace_id: str,
@@ -742,6 +868,7 @@ class HermesDraftService:
         expected_draft_version: int,
         operation_id: str,
         prompt: str,
+        save_required: bool,
     ) -> None:
         try:
             self._run_recorded_draft_turn(
@@ -750,7 +877,7 @@ class HermesDraftService:
                 expected_draft_version=expected_draft_version,
                 operation_id=operation_id,
                 prompt=prompt,
-                save_required=False,
+                save_required=save_required,
             )
         except WorkspaceError:
             # Already recorded on the operation; polling clients read it there.
@@ -772,6 +899,46 @@ class HermesDraftService:
         if operation is None:
             raise DraftOperationNotFound("Draft operation does not exist")
         return operation
+
+    def interrupt_operation(
+        self,
+        workspace_id: str,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Ask Hermes to stop the turn behind one running operation.
+
+        This only signals the stop; the background turn thread still owns the
+        outcome. It records `failed: draft_turn_interrupted` when nothing was
+        saved, or a normal completion when the save landed first, and the
+        caller's poll observes whichever it was.
+        """
+
+        if not _DRAFT_OPERATION_ID.fullmatch(operation_id):
+            raise InvalidRequest("Draft operation identifier is invalid")
+        operation = self._draft_store.get_operation(workspace_id, operation_id)
+        if operation is None:
+            raise DraftOperationNotFound("Draft operation does not exist")
+        if operation["state"] != "running":
+            return {
+                "workspaceId": workspace_id,
+                "operationId": operation_id,
+                "interrupted": False,
+            }
+        with self._live_turns_guard:
+            live = self._live_turns.get(workspace_id)
+        if live is None or live[0] != operation_id:
+            # The turn is still connecting to Hermes (or runs in another
+            # Controller process after a restart); there is nothing to signal.
+            raise InvalidRequest(
+                "the Draft turn cannot be stopped yet — try again"
+            )
+        return {
+            "workspaceId": workspace_id,
+            "operationId": operation_id,
+            "interrupted": self._session_client.interrupt(
+                live_session_id=live[1]
+            ),
+        }
 
     def _execute_draft_operation(
         self,
@@ -933,7 +1100,7 @@ class HermesDraftService:
                         "activity_started",
                         activityId=tool_id,
                         label=label,
-                        toolName=_normalized_tool_name(tool_name),
+                        toolName=_called_tool_name(tool_name),
                     )
                     return
                 activity = visible_activities.pop(tool_id, None)
@@ -952,7 +1119,7 @@ class HermesDraftService:
                     details: dict[str, Any] = {
                         "activityId": tool_id,
                         "label": label,
-                        "toolName": _normalized_tool_name(started_tool_name),
+                        "toolName": _called_tool_name(started_tool_name),
                     }
                     if operation_names:
                         details["operationNames"] = operation_names
@@ -984,14 +1151,26 @@ class HermesDraftService:
             # to this turn. It must be observed even when the caller does not
             # render progress (for example, initial Generate/Regenerate).
             turn_kwargs["on_event"] = handle_hermes_event
-            # Bind this turn's trusted operation id for the in-process save
-            # tools before the model runs; clear it afterwards so no later
-            # tool call can attribute a write to a finished operation.
-            self._write_operation_marker(workspace_id, operation_id)
+
+            def register_live_session(live_session_id: str) -> None:
+                with self._live_turns_guard:
+                    self._live_turns[workspace_id] = (
+                        operation_id,
+                        live_session_id,
+                    )
+
+            turn_kwargs["on_live_session"] = register_live_session
+            # The save tools resolve this turn's trusted operation id from the
+            # running operation record (already admitted durably), so nothing
+            # extra needs to be bound before the model runs.
             try:
                 turn = self._session_client.turn(**turn_kwargs)
             finally:
-                self._clear_operation_marker(workspace_id)
+                with self._live_turns_guard:
+                    if self._live_turns.get(workspace_id, (None,))[0] == (
+                        operation_id
+                    ):
+                        del self._live_turns[workspace_id]
             if save_succeeded:
                 verification_id = f"verify-{operation_id}"
                 emit(
@@ -1013,6 +1192,15 @@ class HermesDraftService:
                 and actual_draft_version == expected_draft_version + 1
                 and actual_operation_id == operation_id
             )
+            # Linearize a Stop: a save that landed before the interrupt is a
+            # normal completion (the version transition below reports it); an
+            # interrupt that beat the save records a distinct failure so the
+            # client shows "stopped", not a generic error.
+            if turn.interrupted and not draft_changed:
+                raise DraftTurnInterrupted(
+                    "The Draft Assistant turn was stopped before it saved "
+                    "anything."
+                )
             if (
                 (save_required or save_started)
                 and not draft_changed
@@ -1125,27 +1313,6 @@ class HermesDraftService:
             # Cleanup is best-effort maintenance. Leave the request pending so
             # a later trigger can retry without failing the user operation.
             self._cleanup_worker_lock.release()
-
-    def _operation_marker_path(self, workspace_id: str):
-        return self._controller.inbox_root / workspace_id / DRAFT_OPERATION_MARKER
-
-    def _write_operation_marker(self, workspace_id: str, operation_id: str) -> None:
-        path = self._operation_marker_path(workspace_id)
-        temporary = path.parent / f"{path.name}.tmp"
-        temporary.write_text(
-            json.dumps({"operationId": operation_id}),
-            encoding="utf-8",
-        )
-        temporary.replace(path)
-
-    def _clear_operation_marker(self, workspace_id: str) -> None:
-        try:
-            self._operation_marker_path(workspace_id).unlink(missing_ok=True)
-        except OSError:
-            logger.warning(
-                "Draft operation marker could not be removed",
-                exc_info=True,
-            )
 
     def _retire_workspace_session(self, workspace_id: str) -> None:
         """Queue the workspace's persistent session for deletion, then unbind.

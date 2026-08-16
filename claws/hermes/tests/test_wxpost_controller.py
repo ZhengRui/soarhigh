@@ -559,6 +559,121 @@ def test_http_draft_chat_rejects_a_second_submit_while_one_runs(
         thread.join(timeout=5)
 
 
+def test_http_draft_generate_submits_and_returns_the_running_operation(
+    tmp_path: Path,
+) -> None:
+    operation_id = "draft-0123456789abcdef0123456789abcdef"
+
+    class DraftService:
+        def generate_submit(self, workspace_id: str, **kwargs):
+            assert workspace_id == "wxpost-stream"
+            assert kwargs["operation_id"] == operation_id
+            assert kwargs["expected_manifest_version"] == 4
+            assert kwargs["expected_draft_version"] == 2
+            return {
+                "workspaceId": workspace_id,
+                "operationId": operation_id,
+                "state": "running",
+            }
+
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.draft_service = DraftService()  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}/workspaces/wxpost-stream/draft/generate",
+            data=json.dumps(
+                {
+                    "expectedManifestVersion": 4,
+                    "expectedDraftVersion": 2,
+                    "operationId": operation_id,
+                }
+            ).encode(),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode())
+        assert payload == {
+            "workspaceId": "wxpost-stream",
+            "operationId": operation_id,
+            "state": "running",
+        }
+
+        # The submit contract requires the client-supplied operation id.
+        bare = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}/workspaces/wxpost-stream/draft/generate",
+            data=json.dumps(
+                {"expectedManifestVersion": 4, "expectedDraftVersion": 2}
+            ).encode(),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                "Content-Type": "application/json",
+            },
+        )
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(bare, timeout=5)
+        assert caught.value.code == 422
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_draft_operation_interrupt_routes_to_the_service(
+    tmp_path: Path,
+) -> None:
+    operation_id = "draft-0123456789abcdef0123456789abcdef"
+
+    class DraftService:
+        def interrupt_operation(self, workspace_id: str, requested_id: str):
+            assert workspace_id == "wxpost-stream"
+            assert requested_id == operation_id
+            return {
+                "workspaceId": workspace_id,
+                "operationId": operation_id,
+                "interrupted": True,
+            }
+
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.draft_service = DraftService()  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}/workspaces/wxpost-stream/draft/operations/{operation_id}/interrupt",
+            data=b"",
+            method="POST",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode())
+        assert payload == {
+            "workspaceId": "wxpost-stream",
+            "operationId": operation_id,
+            "interrupted": True,
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_http_exposes_non_cached_draft_operation_status(tmp_path: Path) -> None:
     operation_id = "draft-0123456789abcdef0123456789abcdef"
 

@@ -9,9 +9,13 @@ from typing import Any
 
 import pytest
 from wxpost_controller.core import InvalidRequest, VersionConflict
-from wxpost_controller.draft_store import HermesDraftStore
+from wxpost_controller.draft_store import (
+    HermesDraftStore,
+    read_running_operation_id,
+)
 from wxpost_controller.errors import (
     DraftOperationInProgress,
+    DraftTurnInterrupted,
     HermesTurnFailed,
     HermesUnavailable,
 )
@@ -25,11 +29,17 @@ from wxpost_controller.hermes_session import (
 )
 
 
-def _marker_operation_id(cwd: str) -> str:
-    """Read the Controller-bound operation id exactly like the real tools."""
+def _bound_operation_id(cwd: str) -> str:
+    """Resolve the Controller-bound operation id exactly like the real tools:
+    a read-only lookup of the running operation record."""
 
-    marker = Path(cwd) / ".draft-operation.json"
-    return str(json.loads(marker.read_text(encoding="utf-8"))["operationId"])
+    workspace = Path(cwd)
+    operation_id = read_running_operation_id(
+        workspace.parent.parent,
+        workspace.name,
+    )
+    assert operation_id is not None, "no running Draft operation is recorded"
+    return operation_id
 
 
 class _Controller:
@@ -118,6 +128,9 @@ class _SessionClient:
         self.turn_session_ids: list[str | None] = []
         self.close_on_disconnect_flags: list[bool] = []
         self.deleted_session_ids: list[str] = []
+        self.live_session_ids: list[str] = []
+        self.interrupted_session_ids: list[str] = []
+        self.interrupt_next_turn = False
 
     def turn(
         self,
@@ -129,13 +142,24 @@ class _SessionClient:
         close_on_disconnect: bool = False,
         on_event=None,
         on_session_resolved=None,
+        on_live_session=None,
     ) -> HermesTurn:
         self.turn_session_ids.append(session_id)
         self.close_on_disconnect_flags.append(close_on_disconnect)
         self.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
         if on_session_resolved is not None:
             on_session_resolved("stored-session")
-        operation_id = _marker_operation_id(cwd)
+        if on_live_session is not None:
+            on_live_session("live-session")
+            self.live_session_ids.append("live-session")
+        if self.interrupt_next_turn:
+            self.interrupt_next_turn = False
+            return HermesTurn(
+                session_id="stored-session",
+                reply="",
+                interrupted=True,
+            )
+        operation_id = _bound_operation_id(cwd)
         if on_event is not None:
             on_event(
                 "tool.start",
@@ -159,6 +183,10 @@ class _SessionClient:
 
     def delete(self, *, session_id: str) -> None:
         self.deleted_session_ids.append(session_id)
+
+    def interrupt(self, *, live_session_id: str) -> bool:
+        self.interrupted_session_ids.append(live_session_id)
+        return True
 
 
 def _service(tmp_path: Path) -> tuple[HermesDraftService, _SessionClient]:
@@ -452,14 +480,168 @@ def test_chat_submit_runs_in_background_with_pollable_progress(
     assert service.history("wxpost-test").get("activeOperation") is None
 
 
-def test_draft_turn_binds_and_clears_the_operation_marker(tmp_path: Path) -> None:
+def test_generate_submit_runs_in_background_like_chat(tmp_path: Path) -> None:
+    """The heaviest turn uses the same async submit + poll contract as chat."""
+
     service, session = _service(tmp_path)
-    marker = tmp_path / "inbox" / "wxpost-test" / ".draft-operation.json"
-    seen_markers: list[str] = []
+    operation_id = "draft-" + "c" * 32
+
+    submitted = service.generate_submit(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        operation_id=operation_id,
+    )
+    assert submitted == {
+        "workspaceId": "wxpost-test",
+        "operationId": operation_id,
+        "state": "running",
+    }
+
+    for _ in range(250):
+        operation = service.operation("wxpost-test", operation_id)
+        if operation["state"] != "running":
+            break
+        time.sleep(0.02)
+    assert operation["state"] == "completed"
+    assert operation["result"]["draftChanged"] is True
+    assert operation["result"]["draftVersion"] == 3
+    assert "Regenerate the English draft" in session.prompts[0]["prompt"]
+
+
+def test_interrupt_operation_signals_the_live_hermes_session(
+    tmp_path: Path,
+) -> None:
+    service, session = _service(tmp_path)
+    release = threading.Event()
+    real_turn = session.turn
+
+    def gated_turn(**kwargs: Any) -> HermesTurn:
+        kwargs["on_live_session"]("live-session")
+        assert release.wait(timeout=5)
+        kwargs["on_live_session"] = None
+        return real_turn(**kwargs)
+
+    session.turn = gated_turn  # type: ignore[method-assign]
+    operation_id = "draft-" + "d" * 32
+    service.chat_submit(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        operation_id=operation_id,
+        message="Tighten the opening.",
+        selected_text=None,
+    )
+
+    try:
+        for _ in range(250):
+            with service._live_turns_guard:
+                if "wxpost-test" in service._live_turns:
+                    break
+            time.sleep(0.02)
+        interrupted = service.interrupt_operation("wxpost-test", operation_id)
+        assert interrupted == {
+            "workspaceId": "wxpost-test",
+            "operationId": operation_id,
+            "interrupted": True,
+        }
+        assert session.interrupted_session_ids == ["live-session"]
+    finally:
+        release.set()
+
+    for _ in range(250):
+        operation = service.operation("wxpost-test", operation_id)
+        if operation["state"] != "running":
+            break
+        time.sleep(0.02)
+    assert operation["state"] == "completed"
+
+
+def test_interrupted_turn_without_save_records_a_stopped_failure(
+    tmp_path: Path,
+) -> None:
+    service, session = _service(tmp_path)
+    session.interrupt_next_turn = True
+
+    with pytest.raises(DraftTurnInterrupted):
+        service.chat(
+            "wxpost-test",
+            expected_manifest_version=4,
+            expected_draft_version=2,
+            message="Tighten the opening.",
+            selected_text=None,
+            operation_id="draft-" + "e" * 32,
+        )
+
+    operation = service.operation("wxpost-test", "draft-" + "e" * 32)
+    assert operation["state"] == "failed"
+    assert operation["error"]["code"] == "draft_turn_interrupted"
+
+
+def test_interrupted_turn_with_landed_save_completes_normally(
+    tmp_path: Path,
+) -> None:
+    """Linearization: a save that landed before the interrupt is the truth."""
+
+    service, session = _service(tmp_path)
+    real_turn = session.turn
+
+    def interrupted_after_save(**kwargs: Any) -> HermesTurn:
+        turn = real_turn(**kwargs)
+        return HermesTurn(
+            session_id=turn.session_id,
+            reply="",
+            interrupted=True,
+        )
+
+    session.turn = interrupted_after_save  # type: ignore[method-assign]
+    result = service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="Tighten the opening.",
+        selected_text=None,
+        operation_id="draft-" + "f" * 32,
+    )
+
+    assert result["draftChanged"] is True
+    assert result["reply"] == "Draft version: v2 → v3"
+    operation = service.operation("wxpost-test", "draft-" + "f" * 32)
+    assert operation["state"] == "completed"
+
+
+def test_interrupt_of_a_finished_operation_is_a_no_op(tmp_path: Path) -> None:
+    service, _session = _service(tmp_path)
+    operation_id = "draft-" + "1" * 32
+    service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="Tighten the opening.",
+        selected_text=None,
+        operation_id=operation_id,
+    )
+
+    assert service.interrupt_operation("wxpost-test", operation_id) == {
+        "workspaceId": "wxpost-test",
+        "operationId": operation_id,
+        "interrupted": False,
+    }
+
+
+def test_draft_turn_binding_is_scoped_to_the_running_operation(
+    tmp_path: Path,
+) -> None:
+    """The save tools resolve the trusted operation id from the running
+    operation record: present during the turn, gone once it settles, and
+    never carried in prompt text the model could copy from later context."""
+
+    service, session = _service(tmp_path)
+    seen_bindings: list[str] = []
     real_turn = session.turn
 
     def observing_turn(**kwargs: Any) -> HermesTurn:
-        seen_markers.append(_marker_operation_id(kwargs["cwd"]))
+        seen_bindings.append(_bound_operation_id(kwargs["cwd"]))
         return real_turn(**kwargs)
 
     session.turn = observing_turn  # type: ignore[method-assign]
@@ -471,11 +653,10 @@ def test_draft_turn_binds_and_clears_the_operation_marker(tmp_path: Path) -> Non
         selected_text=None,
     )
 
-    # The trusted id was bound during the turn and cleared afterwards, and it
-    # never rides in the prompt text the model could copy from later context.
-    assert len(seen_markers) == 1
-    assert seen_markers[0].startswith("draft-")
-    assert not marker.exists()
+    assert len(seen_bindings) == 1
+    assert seen_bindings[0].startswith("draft-")
+    # Settled operations are not running: no later tool call can bind to one.
+    assert read_running_operation_id(tmp_path, "wxpost-test") is None
     assert "operation_id=" not in session.prompts[0]["prompt"]
     assert "Draft operation ID" not in session.prompts[0]["prompt"]
 
@@ -491,9 +672,8 @@ def test_draft_turn_binds_and_clears_the_operation_marker(tmp_path: Path) -> Non
             message="Tighten the closing.",
             selected_text=None,
         )
-    # A failed turn also clears the marker so no later tool call can bind to
-    # a finished operation.
-    assert not marker.exists()
+    # A failed turn settles its operation too, releasing the binding.
+    assert read_running_operation_id(tmp_path, "wxpost-test") is None
 
 
 def test_failed_draft_turn_keeps_the_workspace_session_binding(
@@ -618,8 +798,8 @@ def test_chat_rejects_a_save_attributed_to_an_earlier_turn(
             on_progress=progress.append,
         )
 
-    assert progress[0]["toolName"] == "wxpost_edit_draft"
-    assert progress[1]["toolName"] == "wxpost_edit_draft"
+    assert progress[0]["toolName"] == "wxpost_edit_current_draft"
+    assert progress[1]["toolName"] == "wxpost_edit_current_draft"
     assert progress[1]["label"] == "Updating the Draft title"
 
 
@@ -875,7 +1055,7 @@ def test_failed_current_workspace_read_is_not_replaced_with_stale_history(
         "stage": "activity_failed",
         "activityId": "report-1",
         "label": "Reading the workspace configuration",
-        "toolName": "wxpost_get_workspace_report",
+        "toolName": "wxpost_get_current_workspace_report",
     }
 
 
@@ -961,7 +1141,7 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
             },
         )
         on_event("message.delta", {"text": "Saved."})
-        operation_id = _marker_operation_id(cwd)
+        operation_id = _bound_operation_id(cwd)
         session.controller.context["draft"]["draftVersion"] = 3
         session.controller.context["manifest"]["draft"] = {
             "version": 3,
@@ -1053,7 +1233,7 @@ def test_chat_maps_only_genuine_hermes_events_to_product_progress(
     }
     assert result["draftChanged"] is True
     # The operation id no longer appears in the prompt; the manifest carries
-    # the server-bound id the fake tool read from the marker.
+    # the server-bound id the fake tool read from the running operation record.
     operation_id = session.controller.context["manifest"]["draft"]["operationId"]
     operation = service.operation("wxpost-test", operation_id)
     assert operation == {
@@ -1509,13 +1689,14 @@ def test_session_client_forwards_only_safe_lifecycle_events() -> None:
         token="secret",
     )
 
-    reply = client._wait_for_completion(  # type: ignore[arg-type]
+    reply, interrupted = client._wait_for_completion(  # type: ignore[arg-type]
         Messages(),
         "live-session",
         on_event=lambda event, payload: events.append((event, payload)),
     )
 
     assert reply == "Done."
+    assert interrupted is False
     assert events == [
         (
             "tool.start",

@@ -59,6 +59,9 @@ SOURCE_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)$")
 UPLOADS_PATH = re.compile(r"^/workspaces/([^/]+)/uploads$")
 DRAFT_CONVERSATION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/conversation$")
 DRAFT_OPERATION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/operations/([^/]+)$")
+DRAFT_OPERATION_INTERRUPT_PATH = re.compile(
+    r"^/workspaces/([^/]+)/draft/operations/([^/]+)/interrupt$"
+)
 DRAFT_SAVE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/save$")
 DRAFT_GENERATE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/generate$")
 DRAFT_CHAT_PATH = re.compile(r"^/workspaces/([^/]+)/draft/chat$")
@@ -394,12 +397,22 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 {
                     "expectedManifestVersion",
                     "expectedDraftVersion",
+                    "operationId",
                 },
                 "draft generation",
             ):
                 return
+            if "operationId" not in payload:
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_request",
+                    "Draft operation identifier is required",
+                )
+                return
+            # Async submit, same contract as draft/chat: the operation record
+            # exists before this responds and the client polls for the result.
             self._run_controller(
-                lambda: self.server.draft_service.generate(
+                lambda: self.server.draft_service.generate_submit(
                     draft_generate_match.group(1),
                     expected_manifest_version=cast(
                         int,
@@ -409,6 +422,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         int,
                         payload.get("expectedDraftVersion"),
                     ),
+                    operation_id=cast(str, payload.get("operationId")),
+                )
+            )
+            return
+
+        interrupt_match = DRAFT_OPERATION_INTERRUPT_PATH.fullmatch(parsed.path)
+        if interrupt_match is not None:
+            self._run_controller(
+                lambda: self.server.draft_service.interrupt_operation(
+                    interrupt_match.group(1),
+                    interrupt_match.group(2),
                 )
             )
             return

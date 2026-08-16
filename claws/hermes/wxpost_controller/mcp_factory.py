@@ -10,10 +10,29 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from .contracts import DraftEditOperation, DraftMediaChanges, DraftProposal
 from .core import WorkspaceController, WorkspaceError, error_response
+from .draft_store import read_running_operation_id
 
 
 def _controller() -> WorkspaceController:
     return WorkspaceController(os.environ.get("WXPOST_WORKSPACE_ROOT", "/workspace"))
+
+
+def _trusted_operation_id(
+    controller: WorkspaceController,
+    workspace_id: str,
+    model_supplied: str,
+) -> str:
+    """Attribute writes to the Controller-run operation when one is in flight.
+
+    The Controller's durable operation record is the single source of truth
+    for an in-flight Draft turn. The model-supplied argument is only trusted
+    when no operation is running (a Feishu turn on an idle workspace): a
+    model-minted id would misattribute the write and fail the web turn's
+    post-turn verification.
+    """
+
+    bound = read_running_operation_id(controller.workspace_root, workspace_id)
+    return bound if bound is not None else model_supplied
 
 
 def _run(operation: Callable[[], dict[str, Any]]) -> dict[str, Any]:
@@ -29,8 +48,12 @@ def create_mcp(*, include_material_mutations: bool, name: str) -> FastMCP:
     server = FastMCP(
         name,
         instructions=(
-            "Use these tools for canonical WxPost reads and writes. Never edit "
-            "source-manifest.json or draft/article.json directly."
+            "Canonical WxPost reads and writes for Feishu conversations, "
+            "which span many workspaces and so pass workspace_id explicitly. "
+            "In a Web Draft Assistant session, use the session-bound "
+            "wxpost_*_current_* tools for Draft writes instead — they take "
+            "no workspace or operation id. Never edit source-manifest.json "
+            "or draft/article.json directly."
         ),
     )
 
@@ -150,18 +173,27 @@ def create_mcp(*, include_material_mutations: bool, name: str) -> FastMCP:
         proposal: DraftProposal,
         media_changes: DraftMediaChanges | None = None,
     ) -> dict[str, Any]:
-        """Assemble and save a canonical Draft from strict editorial output."""
-        return _run(
-            lambda: _controller().save_draft_proposal(
+        """Save a complete Draft proposal in a Feishu conversation.
+
+        Web Draft Assistant sessions use wxpost_save_current_draft instead:
+        it takes the same proposal but no workspace or operation id.
+        """
+
+        def save() -> dict[str, Any]:
+            controller = _controller()
+            return controller.save_draft_proposal(
                 workspace_id,
                 expected_manifest_version=expected_manifest_version,
                 expected_draft_version=expected_draft_version,
                 proposal=proposal,
-                operation_id=operation_id,
+                operation_id=_trusted_operation_id(
+                    controller, workspace_id, operation_id
+                ),
                 refresh_from_materials=refresh_from_materials,
                 media_changes=media_changes,
             )
-        )
+
+        return _run(save)
 
     @server.tool()
     def wxpost_edit_draft(
@@ -171,15 +203,24 @@ def create_mcp(*, include_material_mutations: bool, name: str) -> FastMCP:
         operation_id: str,
         edits: list[DraftEditOperation],
     ) -> dict[str, Any]:
-        """Apply small, typed edits to the current saved Draft."""
-        return _run(
-            lambda: _controller().edit_draft(
+        """Apply small, typed Draft edits in a Feishu conversation.
+
+        Web Draft Assistant sessions use wxpost_edit_current_draft instead:
+        it takes the same edits but no workspace or operation id.
+        """
+
+        def apply_edits() -> dict[str, Any]:
+            controller = _controller()
+            return controller.edit_draft(
                 workspace_id,
                 expected_manifest_version=expected_manifest_version,
                 expected_draft_version=expected_draft_version,
-                operation_id=operation_id,
+                operation_id=_trusted_operation_id(
+                    controller, workspace_id, operation_id
+                ),
                 edits=[edit.to_wire() for edit in edits],
             )
-        )
+
+        return _run(apply_edits)
 
     return server

@@ -14,6 +14,42 @@ from .errors import (
 from .sqlite_support import serialize_controller_database_initialization
 
 
+def read_running_operation_id(
+    workspace_root: Path,
+    workspace_id: str,
+) -> str | None:
+    """Read the workspace's in-flight Controller operation id, if any.
+
+    This is the trusted-attribution lookup for save-tool handlers running in
+    the Hermes gateway process: strictly read-only (no schema initialization,
+    no writes — only the Controller owns this database) and fail-open to
+    ``None`` when the store does not exist or cannot be read, so an idle
+    Feishu workspace behaves exactly as if no operation were running.
+    """
+
+    path = workspace_root / ".wxpost-controller" / "controller.sqlite3"
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return None
+    try:
+        connection.execute("PRAGMA busy_timeout = 5000")
+        row = connection.execute(
+            """
+            SELECT operation_id FROM draft_operations
+            WHERE workspace_id = ? AND state = 'running'
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            (workspace_id,),
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        connection.close()
+    return str(row[0]) if row is not None else None
+
+
 class HermesDraftStore:
     """Durable Controller state for Draft Assistant operations and cleanup."""
 
