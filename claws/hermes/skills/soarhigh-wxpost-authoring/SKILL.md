@@ -81,8 +81,11 @@ this boundary before every write tool, including raw MCP tools.
    If no workspace is selected, ask the member to select or create one and then
    resend the files; do not queue file paths across turns.
 6. In editing mode, pass the selected workspace ID explicitly to the normal
-   authoring tools for
-   Materials and Draft operations. Feishu may update Materials, generate a
+   authoring tools (`wxpost_get_context`, `wxpost_edit_draft`,
+   `wxpost_save_draft`, and the Materials tools) for
+   Materials and Draft operations. The `wxpost_*_current_*` tools are
+   Web-session tools and are not used in Feishu conversations. Feishu may
+   update Materials, generate a
    Draft, answer questions about the saved Draft, and make typed Draft edits.
    It must not create, update, or delete a public WxPost revision.
 7. When the member asks for the workspace configuration, call
@@ -151,10 +154,20 @@ above. Neither suggestion step changes Materials or the Draft.
 
 ## Web Draft workflow
 
+A Web Draft Assistant session is bound to exactly one workspace, so it uses
+the session-bound current-workspace tools for every step:
+`wxpost_get_current_context`, `wxpost_get_current_workspace_report`,
+`wxpost_edit_current_draft`, and `wxpost_save_current_draft`. These tools
+take no `workspace_id` and no `operation_id` — both are bound server-side —
+and their arguments are camelCase (`expectedManifestVersion`,
+`expectedDraftVersion`, `refreshFromMaterials`, `mediaChanges`). Never call
+the Feishu cross-workspace tools (`wxpost_save_draft`, `wxpost_edit_draft`,
+`wxpost_get_context`) from a Web session.
+
 1. For Generate, Regenerate, a question about the saved article, or a Draft
-   revision, call `wxpost_get_context` with the requested workspace ID. A
-   general question that does not depend on the workspace can be answered
-   directly without calling a workspace tool.
+   revision, call `wxpost_get_current_context`. A general question that does
+   not depend on the workspace can be answered directly without calling a
+   workspace tool.
 2. When context is read, compare its `manifestVersion` and `draftVersion` with the expected
    versions in the request. If either differs, stop without saving; never adopt
    a newer version or retry with guessed versions.
@@ -167,15 +180,13 @@ above. Neither suggestion step changes Materials or the Draft.
    meeting facts when present, and saved included materials.
 5. For a question about the saved article, answer from the context without
    saving. For a small revision, change only what the member requested through
-   `wxpost_edit_draft`. Its body node indexes must come from the current
-   `draft.editContext`; never guess or relocate a target by matching text. Use
-   `wxpost_save_draft` only for whole-article restructuring or rewriting.
-   Presentation is preserved by the controller.
-6. For `wxpost_edit_draft`, pass the request's expected `manifestVersion`,
-   expected `draftVersion`, and the smallest explicit typed edit list. Include
-   the exact `operation_id` only where the tool schema requires it: the Web
-   bound tool (`wxpost_edit_current_draft`) binds the operation identity
-   server-side and takes no `operation_id` argument.
+   `wxpost_edit_current_draft`. Its body node indexes must come from the
+   current `draft.editContext`; never guess or relocate a target by matching
+   text. Use `wxpost_save_current_draft` only for whole-article restructuring
+   or rewriting. Presentation is preserved by the controller.
+6. For `wxpost_edit_current_draft`, pass the request's expected
+   `expectedManifestVersion`, `expectedDraftVersion`, and the smallest
+   explicit typed edit list — nothing else.
    A title, excerpt, byline, body node, directive field or
    item, media occurrence, media description, or cover change is a fine-grained
    edit. `setCover` may directly select any imported workspace-ready image; it
@@ -185,18 +196,12 @@ above. Neither suggestion step changes Materials or the Draft.
    Draft body or cover, explain that there is no Draft caption to edit and that
    its Materials description must be changed on the Materials page. Do not call
    a Draft save tool for that request.
-7. Call `wxpost_save_draft` with the request's expected `manifestVersion`,
-   expected `draftVersion` (zero when absent), `operation_id`,
-   `refresh_from_materials`, and the complete `proposal`. Generate and
-   Regenerate use the six top-level arguments:
-   `workspace_id`, `expected_manifest_version`, `expected_draft_version`,
-   `operation_id`, `refresh_from_materials`, and `proposal`. Use `true` for
+7. Call `wxpost_save_current_draft` with the request's expected
+   `expectedManifestVersion`, `expectedDraftVersion` (zero when absent),
+   `refreshFromMaterials`, and the complete `proposal`. Use `true` for
    Generate or Regenerate so the new Draft adopts current Materials. A focused
-   whole-article revision also includes `media_changes` and uses
-   `refresh_from_materials=false`. Where the schema includes `operation_id`,
-   copy it exactly from the current request, never from an earlier turn; the
-   Web bound tool (`wxpost_save_current_draft`) binds the operation identity
-   server-side and takes no `operation_id` argument.
+   whole-article revision also includes `mediaChanges` and uses
+   `refreshFromMaterials=false`.
    Never call a Materials mutation tool during a Draft Assistant turn.
 8. Report success only after one save succeeds. If the first call is rejected
    before saving solely by the proposal schema or ArticleDocument validation,
@@ -321,7 +326,9 @@ above. Neither suggestion step changes Materials or the Draft.
 
 ## Focused revision media changes
 
-Prefer `wxpost_edit_draft` for a focused media or cover change:
+Prefer the Draft edit tool (`wxpost_edit_current_draft` in a Web session,
+`wxpost_edit_draft` in a Feishu conversation) for a focused media or cover
+change:
 
 - `setCover` selects any imported workspace-ready image. The controller derives
   the cover-only dependency; the image does not need to appear in the body or
@@ -334,10 +341,13 @@ Prefer `wxpost_edit_draft` for a focused media or cover change:
   without requiring its node index. Neither operation clears the cover.
 - Never delete a workspace source or mutate Materials during Draft editing.
 
-The complete `media_changes` contract below applies only when a whole-article
-focused revision genuinely requires `wxpost_save_draft`:
+The complete media-changes contract below applies only when a whole-article
+focused revision genuinely requires the full save tool
+(`wxpost_save_current_draft` in a Web session, `wxpost_save_draft` in a
+Feishu conversation; the argument is `mediaChanges` / `media_changes`
+respectively):
 
-Every focused revision save includes `media_changes` alongside the proposal:
+Every focused revision save includes the media changes alongside the proposal:
 
 ```json
 {
@@ -485,7 +495,8 @@ quotations, and outcomes. Omit modules that do not serve the custom purpose.
 
 ## Supported semantic blocks
 
-Use only the discriminated block variants in the `wxpost_save_draft` MCP schema:
+Use only the discriminated block variants in the Draft save tool's `proposal`
+schema (identical for `wxpost_save_current_draft` and `wxpost_save_draft`):
 
 - `markdown`: `markdown` for ordinary free-form Markdown prose, transitions,
   or lists;

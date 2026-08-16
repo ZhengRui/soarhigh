@@ -66,8 +66,9 @@ def test_skill_covers_semantic_vocabulary_without_presentation() -> None:
     assert "replacement call with the same expected versions" in skill
     assert "Never parse or repair\n   serialized YAML" in skill
     assert "`wxpost_edit_draft`" in skill
+    assert "`wxpost_edit_current_draft`" in skill
     assert (
-        "body node indexes must come from the current\n   `draft.editContext`" in skill
+        "body node indexes must come from the\n   current `draft.editContext`" in skill
     )
     assert (
         "does not insert that image into the body or change Materials inclusion"

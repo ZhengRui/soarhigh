@@ -42,6 +42,30 @@ def _state_store() -> FeishuStateStore:
     return FeishuStateStore(os.environ.get("WXPOST_WORKSPACE_ROOT", "/workspace"))
 
 
+def _session_bound_workspace_id() -> str | None:
+    """Workspace this non-Feishu session is bound to via its cwd, if any.
+
+    Mirrors navigation_tools.current_workspace(): web Draft sessions are
+    created by the Controller with cwd = the workspace directory. Sessions
+    with any other cwd (description one-shots, unrelated api sessions) are
+    not workspace-bound and return None.
+    """
+
+    try:
+        from agent.runtime_cwd import resolve_agent_cwd
+        from pathlib import Path
+
+        cwd = resolve_agent_cwd().resolve()
+        inbox = (
+            Path(os.environ.get("WXPOST_WORKSPACE_ROOT", "/workspace")) / "inbox"
+        ).resolve()
+    except Exception:
+        return None
+    if cwd.parent != inbox or not cwd.name:
+        return None
+    return cwd.name
+
+
 def _scope_key(event: Any, gateway: Any, session_store: Any) -> str:
     source = getattr(event, "source", None)
     for owner, method_name in (
@@ -223,7 +247,29 @@ def guard_feishu_writes(
     """Block every Feishu mutation while its conversation is read-only."""
 
     if get_session_env("HERMES_SESSION_PLATFORM") != "feishu":
-        return None
+        # A web Draft session is bound to exactly one workspace via its cwd.
+        # The raw workspace-write tools take workspace_id from the model, so
+        # verify — not trust — that argument: a write aimed at any other
+        # workspace is blocked with the correct id, which the model applies
+        # readily (unlike a tool redirect, which it fights).
+        canonical_name = tool_name.rsplit("__", 1)[-1]
+        if canonical_name not in FEISHU_ACTIVE_WORKSPACE_WRITES:
+            return None
+        bound_workspace_id = _session_bound_workspace_id()
+        if bound_workspace_id is None:
+            return None
+        requested = str(args.get("workspace_id", "")).strip()
+        if requested == bound_workspace_id:
+            return None
+        return {
+            "action": "block",
+            "message": (
+                "The write was blocked: this session is bound to workspace "
+                f'"{bound_workspace_id}", so workspace_id must be exactly '
+                "that value (or use the *_current_* tools, which need no "
+                "workspace_id). No workspace data was changed."
+            ),
+        }
     canonical_name = tool_name.rsplit("__", 1)[-1]
     is_write = canonical_name in FEISHU_WRITE_TOOLS
     if canonical_name == "wxpost_describe_material":

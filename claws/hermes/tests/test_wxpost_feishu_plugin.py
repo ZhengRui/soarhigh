@@ -241,30 +241,166 @@ def test_current_edit_requires_an_active_bound_operation(
         )
 
 
-def test_bound_operation_id_reads_the_controller_marker(
+def _start_running_operation(
+    workspace_root: Path,
+    workspace_id: str,
+    operation_id: str,
+):
+    from wxpost_controller.draft_store import HermesDraftStore
+
+    store = HermesDraftStore(workspace_root)
+    store.start_operation(
+        workspace_id,
+        operation_id,
+        request_fingerprint="fingerprint",
+        member_message="Tighten the opening.",
+        selected_text=None,
+        expected_manifest_version=1,
+        expected_draft_version=0,
+    )
+    return store
+
+
+def test_bound_operation_id_reads_the_running_operation_record(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     plugin = _load_plugin(monkeypatch)
     workspace_id = _bound_workspace(plugin, tmp_path, monkeypatch)
     controller = plugin.navigation_tools.WorkspaceController(str(tmp_path))
-    marker = tmp_path / "inbox" / workspace_id / ".draft-operation.json"
-    marker.write_text(
-        json.dumps({"operationId": "draft-" + "5" * 32}),
-        encoding="utf-8",
-    )
 
-    assert (
-        plugin.navigation_tools._bound_operation_id(controller, workspace_id)
-        == "draft-" + "5" * 32
-    )
-
-    marker.write_text("not json", encoding="utf-8")
     with pytest.raises(
         plugin.navigation_tools.InvalidRequest,
-        match="unreadable",
+        match="no Draft operation is active",
     ):
         plugin.navigation_tools._bound_operation_id(controller, workspace_id)
+
+    operation_id = "draft-" + "5" * 32
+    store = _start_running_operation(tmp_path, workspace_id, operation_id)
+    assert (
+        plugin.navigation_tools._bound_operation_id(controller, workspace_id)
+        == operation_id
+    )
+
+    # A settled operation releases the binding: no later tool call can
+    # attribute a write to a finished operation.
+    store.fail_operation(
+        operation_id,
+        error={"code": "hermes_turn_failed", "message": "stopped"},
+    )
+    with pytest.raises(
+        plugin.navigation_tools.InvalidRequest,
+        match="no Draft operation is active",
+    ):
+        plugin.navigation_tools._bound_operation_id(controller, workspace_id)
+
+
+def test_pre_tool_guard_verifies_workspace_id_on_bound_web_sessions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A web Draft session is bound to one workspace via its cwd. Raw
+    workspace-write tools must target exactly that workspace — the model's
+    workspace_id argument is verified, not trusted. Reads and correctly
+    targeted writes pass through unchanged."""
+
+    plugin = _load_plugin(monkeypatch)
+    workspace_id = _bound_workspace(plugin, tmp_path, monkeypatch)
+    plugin.hermes_hooks.get_session_env = lambda _name: ""
+
+    for tool_name in (
+        "wxpost_save_draft",
+        "mcp__soarhigh_wxpost__wxpost_edit_draft",
+        "wxpost_update_sources",
+    ):
+        wrong = plugin.hermes_hooks.guard_feishu_writes(
+            tool_name=tool_name,
+            args={"workspace_id": "wxpost-somewhere-else"},
+        )
+        assert wrong["action"] == "block"
+        assert workspace_id in wrong["message"]
+        assert "No workspace data was changed" in wrong["message"]
+
+        assert (
+            plugin.hermes_hooks.guard_feishu_writes(
+                tool_name=tool_name,
+                args={"workspace_id": workspace_id},
+            )
+            is None
+        )
+
+    # Reads and the bound current tools are never intercepted.
+    for tool_name in ("wxpost_get_context", "wxpost_save_current_draft"):
+        assert (
+            plugin.hermes_hooks.guard_feishu_writes(
+                tool_name=tool_name, args={}
+            )
+            is None
+        )
+
+
+def test_pre_tool_guard_ignores_web_sessions_without_a_workspace_cwd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Non-workspace sessions (description one-shots, unrelated api
+    sessions) keep full raw-tool behavior: the workspace guard only engages
+    when the session cwd is a workspace directory."""
+
+    plugin = _load_plugin(monkeypatch)
+    monkeypatch.setenv("WXPOST_WORKSPACE_ROOT", str(tmp_path))
+    runtime_cwd = ModuleType("agent.runtime_cwd")
+    runtime_cwd.resolve_agent_cwd = lambda: tmp_path / "not-a-workspace"
+    monkeypatch.setitem(sys.modules, "agent", ModuleType("agent"))
+    monkeypatch.setitem(sys.modules, "agent.runtime_cwd", runtime_cwd)
+    plugin.hermes_hooks.get_session_env = lambda _name: ""
+
+    assert (
+        plugin.hermes_hooks.guard_feishu_writes(
+            tool_name="wxpost_save_draft",
+            args={"workspace_id": "wxpost-anything"},
+        )
+        is None
+    )
+
+
+def test_raw_save_tools_prefer_the_controller_bound_operation_id(
+    tmp_path: Path,
+) -> None:
+    """While a Controller-run Draft turn is in flight (running operation
+    recorded), a raw save call is attributed to that operation — a
+    model-minted id must not misattribute the write. With no running
+    operation (idle Feishu workspace, or no Controller store at all) the
+    model-supplied id passes through unchanged."""
+
+    from wxpost_controller import mcp_factory
+
+    class Controller:
+        workspace_root = tmp_path
+        inbox_root = tmp_path / "inbox"
+
+    bound = "draft-" + "7" * 32
+    minted = "generate-wxpost-raw-v1"
+    assert (
+        mcp_factory._trusted_operation_id(Controller(), "wxpost-raw", minted)
+        == minted
+    )
+
+    store = _start_running_operation(tmp_path, "wxpost-raw", bound)
+    assert (
+        mcp_factory._trusted_operation_id(Controller(), "wxpost-raw", minted)
+        == bound
+    )
+
+    # Once the operation settles, Feishu saves keep their own ids.
+    store.complete_operation(
+        bound,
+        result={"reply": "Saved.", "draftChanged": True, "draftVersion": 1, "steps": []},
+    )
+    assert (
+        mcp_factory._trusted_operation_id(Controller(), "wxpost-raw", minted)
+        == minted
+    )
 
 
 def test_current_tools_reject_a_session_cwd_outside_the_workspace_inbox(
@@ -457,6 +593,7 @@ def test_pre_tool_guard_blocks_only_feishu_writes_in_readonly_mode(
     )
     assert wrong_workspace["action"] == "block"
     assert "does not match" in wrong_workspace["message"]
+
     missing_workspace = plugin.hermes_hooks.guard_feishu_writes(
         tool_name="wxpost_update_sources",
         args={},

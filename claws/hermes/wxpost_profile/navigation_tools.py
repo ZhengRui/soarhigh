@@ -20,6 +20,7 @@ from wxpost_controller.core import (
     WorkspaceError,
     error_response,
 )
+from wxpost_controller.draft_store import read_running_operation_id
 from wxpost_controller.feishu_navigation import FeishuNavigation
 
 TOOLSET = "wxpost_navigation"
@@ -335,33 +336,21 @@ def async_navigation_handler(name: str) -> Callable[..., Any]:
     return handle
 
 
-# Kept in lockstep with the writer in wxpost_controller/hermes_session.py.
-DRAFT_OPERATION_MARKER = ".draft-operation.json"
-
-
 def _bound_operation_id(controller: WorkspaceController, workspace_id: str) -> str:
     """Return the trusted per-turn Draft operation id bound by the Controller.
 
-    The web Controller writes this marker before each Draft turn and removes
-    it afterwards. The model never supplies the value, so a persistent
-    session cannot attribute a save to a stale operation id copied from an
-    earlier turn's context.
+    The Controller's durable operation record — created before the turn
+    starts and settled when it ends — is the single source of truth. The
+    model never supplies the value, so a persistent session cannot attribute
+    a save to a stale operation id copied from an earlier turn's context.
     """
 
-    path = controller.inbox_root / workspace_id / DRAFT_OPERATION_MARKER
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise InvalidRequest(
-            "no Draft operation is active for this workspace"
-        ) from None
-    except (OSError, json.JSONDecodeError) as exc:
-        raise InvalidRequest(
-            "the active Draft operation binding is unreadable"
-        ) from exc
-    operation_id = payload.get("operationId") if isinstance(payload, dict) else None
-    if not isinstance(operation_id, str) or not operation_id:
-        raise InvalidRequest("the active Draft operation binding is invalid")
+    operation_id = read_running_operation_id(
+        controller.workspace_root,
+        workspace_id,
+    )
+    if operation_id is None:
+        raise InvalidRequest("no Draft operation is active for this workspace")
     return operation_id
 
 
