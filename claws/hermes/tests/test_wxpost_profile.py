@@ -99,10 +99,11 @@ def test_configure_profile_keeps_only_wxpost_capabilities(
     assert config["agent"]["service_tier"] == "fast"
     assert config["agent"]["image_input_mode"] == "text"
     assert config["auxiliary"]["vision"] == {
-        "provider": "example",
-        "model": "model",
-        "base_url": "",
-        "api_key": "",
+        "provider": "old-provider",
+        "model": "old-model",
+        "base_url": "https://old.example/v1",
+        "api_key": "old-key",
+        "api_mode": "chat_completions",
         "timeout": 120,
         "download_timeout": 30,
     }
@@ -154,6 +155,71 @@ def test_configure_profile_keeps_only_wxpost_capabilities(
     }
     assert not legacy_plugin.exists()
     assert not legacy_skill.exists()
+
+
+def _configure_with_base_config(tmp_path: Path, base_config: dict) -> dict:
+    root_home = tmp_path / "hermes"
+    root_home.mkdir()
+    (root_home / "config.yaml").write_text(
+        yaml.safe_dump(base_config), encoding="utf-8"
+    )
+    (root_home / ".env").write_text("TOKEN=test\n", encoding="utf-8")
+    source_skill = tmp_path / "skill"
+    source_skill.mkdir()
+    (source_skill / "SKILL.md").write_text("# WxPost\n", encoding="utf-8")
+    source_soul = tmp_path / "SOUL.md"
+    source_soul.write_text("identity\n", encoding="utf-8")
+    source_plugin = tmp_path / "navigation-plugin"
+    source_plugin.mkdir()
+    (source_plugin / "plugin.yaml").write_text(
+        f"name: {NAVIGATION_PLUGIN_NAME}\n", encoding="utf-8"
+    )
+    (source_plugin / "__init__.py").write_text("plugin = True\n", encoding="utf-8")
+    profile_home = configure_profile(
+        root_home=root_home,
+        source_skill=source_skill,
+        source_soul=source_soul,
+        source_plugin=source_plugin,
+    )
+    return yaml.safe_load((profile_home / "config.yaml").read_text())
+
+
+def test_vision_mirrors_main_model_when_not_explicitly_configured(
+    tmp_path: Path, capsys
+) -> None:
+    config = _configure_with_base_config(
+        tmp_path,
+        {"model": {"provider": "openai-codex", "default": "gpt-5.6-luna"}},
+    )
+    assert config["auxiliary"]["vision"] == {
+        "provider": "openai-codex",
+        "model": "gpt-5.6-luna",
+        "base_url": "",
+        "api_key": "",
+    }
+    assert "WARNING" not in capsys.readouterr().err
+
+
+def test_vision_treats_auto_vision_provider_as_unset(tmp_path: Path) -> None:
+    config = _configure_with_base_config(
+        tmp_path,
+        {
+            "model": {"provider": "openai-codex", "default": "gpt-5.6-luna"},
+            "auxiliary": {"vision": {"provider": "auto", "model": ""}},
+        },
+    )
+    vision = config["auxiliary"]["vision"]
+    assert vision["provider"] == "openai-codex"
+    assert vision["model"] == "gpt-5.6-luna"
+
+
+def test_vision_warns_when_no_provider_is_resolvable(tmp_path: Path, capsys) -> None:
+    config = _configure_with_base_config(
+        tmp_path,
+        {"model": {"provider": "auto", "default": "gpt-5.6-luna"}},
+    )
+    assert "image descriptions will run blind" in capsys.readouterr().err
+    assert config["auxiliary"]["vision"].get("provider", "") in ("", "auto")
 
 
 def test_enabled_toolsets_adds_web_only_with_tavily_key(monkeypatch) -> None:

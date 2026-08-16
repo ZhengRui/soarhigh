@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import sys
 import tempfile
 from copy import deepcopy
 from pathlib import Path
@@ -45,6 +46,13 @@ DISABLED_TOOLSETS = [
     "yuanbao",
     "computer_use",
 ]
+
+
+def _concrete_provider(value: Any) -> str:
+    provider = str(value or "").strip()
+    if provider.lower() == "auto":
+        return ""
+    return provider
 
 
 def _write_yaml(path: Path, value: dict[str, Any]) -> None:
@@ -166,27 +174,43 @@ def configure_profile(
     # managed Feishu plugin separately preserves official cache paths so the
     # Feishu-only import tool can copy the exact attached files.
     agent_config["image_input_mode"] = "text"
-    # Use the same provider and model as the WxPost profile's main agent for
-    # image understanding. This avoids an unnecessary auxiliary-provider
-    # attempt before Hermes falls back to the main Codex model. Keep the
-    # auxiliary timeouts inherited from the default profile, but do not carry
-    # provider-specific credentials or transport overrides across providers.
+    # Vision provider resolution, in precedence order:
+    #   1. An explicit auxiliary.vision block in the base config wins as-is.
+    #   2. Otherwise mirror the main agent's provider and model so image
+    #      understanding needs no separate configuration; drop credentials and
+    #      transport overrides that would not apply across providers.
+    #   3. "auto" counts as unset in both places — Hermes' vision auto-chain
+    #      never tries the codex provider, so "auto" here means image
+    #      descriptions silently run blind. Warn loudly instead.
+    vision_config = config.setdefault("auxiliary", {}).setdefault("vision", {})
+    explicit_provider = _concrete_provider(vision_config.get("provider"))
     model_config = config.get("model")
+    main_provider = ""
+    main_model = ""
     if isinstance(model_config, dict):
-        main_provider = str(model_config.get("provider", "")).strip()
+        main_provider = _concrete_provider(model_config.get("provider"))
         main_model = str(model_config.get("default", "")).strip()
-        if main_provider and main_model:
-            vision_config = config.setdefault("auxiliary", {}).setdefault("vision", {})
-            vision_config.update(
-                {
-                    "provider": main_provider,
-                    "model": main_model,
-                    "base_url": "",
-                    "api_key": "",
-                }
-            )
-            for key in ("key_env", "api_key_env", "api_mode"):
-                vision_config.pop(key, None)
+    if explicit_provider:
+        vision_config["provider"] = explicit_provider
+    elif main_provider and main_model:
+        vision_config.update(
+            {
+                "provider": main_provider,
+                "model": main_model,
+                "base_url": "",
+                "api_key": "",
+            }
+        )
+        for key in ("key_env", "api_key_env", "api_mode"):
+            vision_config.pop(key, None)
+    else:
+        print(
+            "WARNING: wxpost vision has no resolvable provider - image"
+            " descriptions will run blind. Set model.provider or"
+            " auxiliary.vision.provider to a concrete provider (not"
+            ' "auto") in the base Hermes config.',
+            file=sys.stderr,
+        )
     config.setdefault("skills", {})["always_load"] = []
     config.setdefault("memory", {})["memory_enabled"] = False
     config.setdefault("memory", {})["user_profile_enabled"] = False
