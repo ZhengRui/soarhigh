@@ -6,8 +6,9 @@ import toast from 'react-hot-toast';
 import {
   draftAssistantErrorStatus,
   getWorkspaceContext,
-  getWorkspaceDraftOperation,
   getWorkspaceDraftConversation,
+  interruptWorkspaceDraftOperation,
+  pollWorkspaceDraftOperation,
   submitWorkspaceDraftChat,
   resetWorkspaceDraftConversation,
   WorkspaceApiError,
@@ -19,9 +20,6 @@ import {
 export type DraftProgressActivity = WorkspaceDraftProgressActivity;
 export type DraftAssistantStatus = 'connecting' | 'ready' | 'unavailable';
 
-const DRAFT_POLL_MS = 1_000;
-const MAX_CONSECUTIVE_POLL_FAILURES = 30;
-
 function isAssistantUnavailable(error: unknown) {
   return (
     error instanceof WorkspaceApiError &&
@@ -31,85 +29,6 @@ function isAssistantUnavailable(error: unknown) {
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
-}
-
-function isTransientPollFailure(error: unknown) {
-  return (
-    error instanceof TypeError ||
-    (error instanceof WorkspaceApiError &&
-      [502, 503, 504].includes(error.status))
-  );
-}
-
-function waitForPollInterval(signal: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const onAbort = () => {
-      window.clearTimeout(timeout);
-      reject(signal.reason);
-    };
-    const timeout = window.setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, DRAFT_POLL_MS);
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-// The primary transport: the turn runs server-side against the Controller's
-// durable operation record, and the browser observes it with short polls.
-// Completion truth lives in that record, never in a connection's lifetime, so
-// transient poll failures are retried instead of being treated as terminal.
-async function pollDraftOperation(
-  workspaceId: string,
-  operationId: string,
-  signal: AbortSignal,
-  onSteps: (steps: DraftProgressActivity[]) => void
-) {
-  let consecutiveFailures = 0;
-  while (true) {
-    let operation;
-    try {
-      operation = await getWorkspaceDraftOperation(
-        workspaceId,
-        operationId,
-        signal
-      );
-      consecutiveFailures = 0;
-    } catch (caught) {
-      if (signal.aborted || !isTransientPollFailure(caught)) throw caught;
-      consecutiveFailures += 1;
-      if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) throw caught;
-      await waitForPollInterval(signal);
-      continue;
-    }
-    if (operation.state === 'running') {
-      onSteps(operation.steps);
-      await waitForPollInterval(signal);
-      continue;
-    }
-    if (operation.state === 'failed') {
-      const errorCode = operation.error?.code ?? 'operation_failed';
-      throw new WorkspaceApiError(
-        draftAssistantErrorStatus(errorCode),
-        operation.error?.message ??
-          'The Draft Assistant could not complete the request.',
-        errorCode,
-        operation.error?.versionKind ?? null
-      );
-    }
-    if (!operation.result) {
-      throw new WorkspaceApiError(
-        502,
-        'The Draft Assistant returned an invalid operation result.',
-        'invalid_operation'
-      );
-    }
-    return operation.result;
-  }
 }
 
 export function useWxPostDraftAssistant({
@@ -140,8 +59,11 @@ export function useWxPostDraftAssistant({
   const [pending, setPending] = useState(false);
   const [resetPending, setResetPending] = useState(false);
   const [progress, setProgress] = useState<DraftProgressActivity[]>([]);
+  const [stopPending, setStopPending] = useState(false);
   const progressRef = useRef<DraftProgressActivity[]>([]);
   const requestControllerRef = useRef<AbortController | null>(null);
+  // The operation the running poll is attached to, so Stop can target it.
+  const activeOperationIdRef = useRef<string | null>(null);
   const historyRequestIdRef = useRef(0);
   // The completion handler needs the dirty state at completion time, not the
   // value captured when the turn was submitted.
@@ -159,7 +81,8 @@ export function useWxPostDraftAssistant({
 
   const applyOperationResult = useCallback(
     async (operationId: string, controller: AbortController) => {
-      const result = await pollDraftOperation(
+      activeOperationIdRef.current = operationId;
+      const result = await pollWorkspaceDraftOperation(
         workspaceId,
         operationId,
         controller.signal,
@@ -235,6 +158,13 @@ export function useWxPostDraftAssistant({
           if (controller.signal.aborted) return;
           if (
             caught instanceof WorkspaceApiError &&
+            caught.code === 'draft_turn_interrupted'
+          ) {
+            toast('Stopped the Draft Assistant turn.');
+            return;
+          }
+          if (
+            caught instanceof WorkspaceApiError &&
             caught.code === 'version_conflict' &&
             caught.versionKind === 'draft'
           ) {
@@ -254,6 +184,7 @@ export function useWxPostDraftAssistant({
           if (requestControllerRef.current === controller) {
             requestControllerRef.current = null;
           }
+          activeOperationIdRef.current = null;
           setProgress([]);
           progressRef.current = [];
           setPending(false);
@@ -297,37 +228,44 @@ export function useWxPostDraftAssistant({
     [onDraftChanged, onError, workspaceId]
   );
 
+  const adoptConversation = useCallback(
+    (history: WorkspaceDraftConversation) => {
+      const running = history.activeOperation;
+      if (!running) {
+        setConversation(history);
+        setStatus('ready');
+        settleSavedDraft(history.draftVersion);
+        return;
+      }
+      // A turn is still running server-side (this tab refreshed, or it was
+      // submitted from another tab). Show its user message and reattach by
+      // polling — never resubmit.
+      setConversation({
+        workspaceId,
+        messages: [
+          ...history.messages,
+          {
+            role: 'user',
+            text: running.memberMessage,
+            ...(running.selectedText
+              ? { selectedText: running.selectedText }
+              : {}),
+          },
+        ],
+      });
+      setStatus('ready');
+      resumeOperation(running.operationId, running.steps);
+    },
+    [resumeOperation, settleSavedDraft, workspaceId]
+  );
+
   useEffect(() => {
     if (!active || conversation) return;
     const requestId = ++historyRequestIdRef.current;
     void getWorkspaceDraftConversation(workspaceId)
       .then((history) => {
         if (historyRequestIdRef.current !== requestId) return;
-        const running = history.activeOperation;
-        if (!running) {
-          setConversation(history);
-          setStatus('ready');
-          settleSavedDraft(history.draftVersion);
-          return;
-        }
-        // A turn is still running server-side (this tab refreshed, or it was
-        // submitted from another tab). Show its user message and reattach by
-        // polling — never resubmit.
-        setConversation({
-          workspaceId,
-          messages: [
-            ...history.messages,
-            {
-              role: 'user',
-              text: running.memberMessage,
-              ...(running.selectedText
-                ? { selectedText: running.selectedText }
-                : {}),
-            },
-          ],
-        });
-        setStatus('ready');
-        resumeOperation(running.operationId, running.steps);
+        adoptConversation(history);
       })
       .catch(() => {
         if (historyRequestIdRef.current !== requestId) return;
@@ -339,7 +277,30 @@ export function useWxPostDraftAssistant({
         historyRequestIdRef.current += 1;
       }
     };
-  }, [active, conversation, resumeOperation, settleSavedDraft, workspaceId]);
+  }, [active, adoptConversation, conversation, workspaceId]);
+
+  // A tab that did not submit the running turn has no push channel. When it
+  // becomes visible again, re-read the conversation: adopt turns finished
+  // elsewhere (which also settles the editor) and reattach to one still
+  // running. Skipped while this tab's own poll is attached.
+  useEffect(() => {
+    if (!active) return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (requestControllerRef.current) return;
+      const requestId = ++historyRequestIdRef.current;
+      void getWorkspaceDraftConversation(workspaceId)
+        .then((history) => {
+          if (historyRequestIdRef.current !== requestId) return;
+          if (requestControllerRef.current) return;
+          adoptConversation(history);
+        })
+        .catch(() => undefined);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () =>
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [active, adoptConversation, workspaceId]);
 
   const send = useCallback(async () => {
     const request = message.trim();
@@ -402,6 +363,15 @@ export function useWxPostDraftAssistant({
       );
       if (
         caught instanceof WorkspaceApiError &&
+        caught.code === 'draft_turn_interrupted'
+      ) {
+        // The member asked for the stop; their message is back in the
+        // composer for a retry, so this is not an error.
+        toast('Stopped the Draft Assistant turn.');
+        return;
+      }
+      if (
+        caught instanceof WorkspaceApiError &&
         caught.code === 'version_conflict' &&
         caught.versionKind === 'draft'
       ) {
@@ -421,6 +391,7 @@ export function useWxPostDraftAssistant({
       if (requestControllerRef.current === requestController) {
         requestControllerRef.current = null;
       }
+      activeOperationIdRef.current = null;
       setProgress([]);
       progressRef.current = [];
       setPending(false);
@@ -436,6 +407,24 @@ export function useWxPostDraftAssistant({
     selectedText,
     workspaceId,
   ]);
+
+  const stop = useCallback(async () => {
+    const operationId = activeOperationIdRef.current;
+    if (!operationId || stopPending) return;
+    setStopPending(true);
+    try {
+      // Only signals the stop: the running poll keeps observing the
+      // operation and reports how it actually ended (stopped, or completed
+      // because the save landed first).
+      await interruptWorkspaceDraftOperation(workspaceId, operationId);
+    } catch (caught) {
+      toast.error(
+        errorMessage(caught, 'The Draft Assistant turn could not be stopped.')
+      );
+    } finally {
+      setStopPending(false);
+    }
+  }, [stopPending, workspaceId]);
 
   const reset = useCallback(async () => {
     if (pending || resetPending) return false;
@@ -471,9 +460,11 @@ export function useWxPostDraftAssistant({
     message,
     pending,
     resetPending,
+    stopPending,
     progress,
     setMessage,
     send,
+    stop,
     reset,
   };
 }

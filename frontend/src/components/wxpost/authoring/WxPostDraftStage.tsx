@@ -663,6 +663,7 @@ export function WxPostDraftStage({
           assistantStatus={assistant.status}
           chatPending={assistant.pending}
           resetPending={assistant.resetPending}
+          stopPending={assistant.stopPending}
           progress={assistant.progress}
           selectedText={selectedText}
           message={assistant.message}
@@ -671,6 +672,7 @@ export function WxPostDraftStage({
           onClearSelection={() => setSelectedText(null)}
           onMessageChange={assistant.setMessage}
           onSend={() => void assistant.send()}
+          onStop={() => void assistant.stop()}
           onReset={assistant.reset}
         />
       </div>

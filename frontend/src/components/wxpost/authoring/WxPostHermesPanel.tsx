@@ -15,6 +15,7 @@ import {
   CircleX,
   Loader2,
   Sparkles,
+  Square,
   X,
 } from 'lucide-react';
 
@@ -94,6 +95,7 @@ export function WxPostHermesPanel({
   conversation,
   assistantStatus,
   chatPending,
+  stopPending,
   progress,
   selectedText,
   message,
@@ -102,12 +104,14 @@ export function WxPostHermesPanel({
   onClearSelection,
   onMessageChange,
   onSend,
+  onStop,
   onNewConversationRequest,
 }: {
   mobile: boolean;
   conversation: WorkspaceDraftConversation | null;
   assistantStatus: DraftAssistantStatus;
   chatPending: boolean;
+  stopPending: boolean;
   progress: DraftProgressActivity[];
   selectedText: string | null;
   message: string;
@@ -116,6 +120,7 @@ export function WxPostHermesPanel({
   onClearSelection: () => void;
   onMessageChange: (message: string) => void;
   onSend: () => void;
+  onStop: () => void;
   onNewConversationRequest: () => void;
 }) {
   const historyRef = useRef<HTMLDivElement>(null);
@@ -362,27 +367,41 @@ export function WxPostHermesPanel({
                   ? 'Save local edits first'
                   : 'Works on the saved Draft'}
             </span>
-            <button
-              type='button'
-              className='grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300'
-              aria-label='Send message'
-              disabled={
-                !message.trim() ||
-                chatPending ||
-                (dirty && message.trim() !== '/new')
-              }
-              title={
-                dirty && message.trim() !== '/new'
-                  ? 'Save local edits before asking the assistant.'
-                  : undefined
-              }
-              onClick={submitMessage}
-              data-testid={
-                mobile ? 'send-mobile-draft-chat' : 'send-draft-chat'
-              }
-            >
-              <ArrowUp className='h-4 w-4' />
-            </button>
+            {chatPending ? (
+              <button
+                type='button'
+                className='grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-slate-700 text-white hover:bg-slate-800 disabled:bg-slate-300'
+                aria-label='Stop the running turn'
+                disabled={stopPending}
+                title='Stop the running turn'
+                onClick={onStop}
+                data-testid={
+                  mobile ? 'stop-mobile-draft-chat' : 'stop-draft-chat'
+                }
+              >
+                <Square className='h-3.5 w-3.5 fill-current' />
+              </button>
+            ) : (
+              <button
+                type='button'
+                className='grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300'
+                aria-label='Send message'
+                disabled={
+                  !message.trim() || (dirty && message.trim() !== '/new')
+                }
+                title={
+                  dirty && message.trim() !== '/new'
+                    ? 'Save local edits before asking the assistant.'
+                    : undefined
+                }
+                onClick={submitMessage}
+                data-testid={
+                  mobile ? 'send-mobile-draft-chat' : 'send-draft-chat'
+                }
+              >
+                <ArrowUp className='h-4 w-4' />
+              </button>
+            )}
           </div>
         </div>
       </div>

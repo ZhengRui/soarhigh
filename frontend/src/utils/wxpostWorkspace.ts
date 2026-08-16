@@ -243,13 +243,6 @@ export interface WorkspaceDraftProgressActivity {
   failed: boolean;
 }
 
-export interface WorkspaceDraftTurn {
-  workspaceId: string;
-  reply: string;
-  context: WorkspaceContext;
-  draftChanged: boolean;
-}
-
 interface WxPostValidationResult {
   valid: true;
   document: WxPostArticleDocument;
@@ -482,6 +475,89 @@ export function getWorkspaceDraftOperation(
   );
 }
 
+const DRAFT_POLL_MS = 1_000;
+const MAX_CONSECUTIVE_POLL_FAILURES = 30;
+
+function isTransientPollFailure(error: unknown) {
+  return (
+    error instanceof TypeError ||
+    (error instanceof WorkspaceApiError &&
+      [502, 503, 504].includes(error.status))
+  );
+}
+
+function waitForPollInterval(signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      window.clearTimeout(timeout);
+      reject(signal.reason);
+    };
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, DRAFT_POLL_MS);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+// The primary transport for Draft turns (chat and generate): the turn runs
+// server-side against the Controller's durable operation record, and the
+// browser observes it with short polls. Completion truth lives in that
+// record, never in a connection's lifetime, so transient poll failures are
+// retried instead of being treated as terminal.
+export async function pollWorkspaceDraftOperation(
+  workspaceId: string,
+  operationId: string,
+  signal: AbortSignal,
+  onSteps: (steps: WorkspaceDraftProgressActivity[]) => void
+) {
+  let consecutiveFailures = 0;
+  while (true) {
+    let operation;
+    try {
+      operation = await getWorkspaceDraftOperation(
+        workspaceId,
+        operationId,
+        signal
+      );
+      consecutiveFailures = 0;
+    } catch (caught) {
+      if (signal.aborted || !isTransientPollFailure(caught)) throw caught;
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) throw caught;
+      await waitForPollInterval(signal);
+      continue;
+    }
+    if (operation.state === 'running') {
+      onSteps(operation.steps);
+      await waitForPollInterval(signal);
+      continue;
+    }
+    if (operation.state === 'failed') {
+      const errorCode = operation.error?.code ?? 'operation_failed';
+      throw new WorkspaceApiError(
+        draftAssistantErrorStatus(errorCode),
+        operation.error?.message ??
+          'The Draft Assistant could not complete the request.',
+        errorCode,
+        operation.error?.versionKind ?? null
+      );
+    }
+    if (!operation.result) {
+      throw new WorkspaceApiError(
+        502,
+        'The Draft Assistant returned an invalid operation result.',
+        'invalid_operation'
+      );
+    }
+    return operation.result;
+  }
+}
+
 export function resetWorkspaceDraftConversation(workspaceId: string) {
   return requestJson<WorkspaceDraftConversation>(
     `${workspacePath(workspaceId)}/draft/conversation`,
@@ -515,19 +591,25 @@ export function saveWorkspaceDraft(
   );
 }
 
-export function generateWorkspaceDraft(
+export function submitWorkspaceDraftGenerate(
   workspaceId: string,
   input: {
     expectedManifestVersion: number;
     expectedDraftVersion: number;
-  }
+    operationId: string;
+  },
+  signal?: AbortSignal
 ) {
-  return requestJson<WorkspaceDraftTurn>(
+  // Async submit, same contract as draft/chat: the Controller records the
+  // operation and returns its id immediately; the generation runs
+  // server-side and is observed by polling pollWorkspaceDraftOperation.
+  return requestJson<WorkspaceDraftSubmission>(
     `${workspacePath(workspaceId)}/draft/generate`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
+      signal,
     }
   );
 }
@@ -554,6 +636,23 @@ export function submitWorkspaceDraftChat(
       body: JSON.stringify(input),
       signal,
     }
+  );
+}
+
+export function interruptWorkspaceDraftOperation(
+  workspaceId: string,
+  operationId: string
+) {
+  // Signals the stop; the running poll observes the recorded outcome —
+  // failed draft_turn_interrupted, or a normal completion when the save
+  // landed before the interrupt.
+  return requestJson<{
+    workspaceId: string;
+    operationId: string;
+    interrupted: boolean;
+  }>(
+    `${workspacePath(workspaceId)}/draft/operations/${encodeURIComponent(operationId)}/interrupt`,
+    { method: 'POST' }
   );
 }
 

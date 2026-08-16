@@ -23,6 +23,7 @@ type AssistantProps = {
   assistantStatus: DraftAssistantStatus;
   chatPending: boolean;
   resetPending: boolean;
+  stopPending: boolean;
   progress: DraftProgressActivity[];
   selectedText: string | null;
   message: string;
@@ -31,6 +32,7 @@ type AssistantProps = {
   onClearSelection: () => void;
   onMessageChange: (message: string) => void;
   onSend: () => void;
+  onStop: () => void;
   onReset: () => Promise<boolean>;
 };
 
@@ -41,6 +43,7 @@ export function WxPostDraftAssistant(props: AssistantProps) {
     conversation: props.conversation,
     assistantStatus: props.assistantStatus,
     chatPending: props.chatPending,
+    stopPending: props.stopPending,
     progress: props.progress,
     selectedText: props.selectedText,
     message: props.message,
@@ -48,6 +51,7 @@ export function WxPostDraftAssistant(props: AssistantProps) {
     onClearSelection: props.onClearSelection,
     onMessageChange: props.onMessageChange,
     onSend: props.onSend,
+    onStop: props.onStop,
     onNewConversationRequest: () => setResetConfirming(true),
   };
 

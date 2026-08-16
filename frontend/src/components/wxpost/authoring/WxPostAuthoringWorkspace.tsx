@@ -9,6 +9,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import toast from 'react-hot-toast';
@@ -16,8 +17,10 @@ import toast from 'react-hot-toast';
 import { useMeetingOptions } from '@/hooks/useMeetingOptions';
 import {
   createWorkspace,
-  generateWorkspaceDraft,
   getWorkspaceContext,
+  getWorkspaceDraftConversation,
+  pollWorkspaceDraftOperation,
+  submitWorkspaceDraftGenerate,
   WORKSPACE_ARTICLE_TYPE_LABELS,
   WorkspaceApiError,
   workspaceEditorPath,
@@ -201,7 +204,10 @@ export function WxPostAuthoringWorkspace({
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [syncWorkspaceMeeting, setSyncWorkspaceMeeting] = useState(false);
   const [draftGenerationPending, setDraftGenerationPending] = useState(false);
+  const generateAbortRef = useRef<AbortController | null>(null);
   const meetingsQuery = useMeetingOptions();
+
+  useEffect(() => () => generateAbortRef.current?.abort(), []);
 
   useLayoutEffect(() => {
     if (initialWorkspaceId) window.scrollTo({ top: 0, left: 0 });
@@ -364,23 +370,81 @@ export function WxPostAuthoringWorkspace({
     setupCustomArticleType,
   ]);
 
-  const handleGenerateDraft = useCallback(async () => {
-    if (!workspaceContext || !workspaceId) return;
-    setDraftGenerationPending(true);
-    setWorkspaceError(null);
-    try {
-      const result = await generateWorkspaceDraft(workspaceId, {
-        expectedManifestVersion: workspaceContext.manifest.manifestVersion,
-        expectedDraftVersion: workspaceContext.draft?.draftVersion ?? 0,
-      });
-      applyChangedWorkspaceContext(result.context);
+  // Generation is an async submit + poll, same transport as Draft chat: the
+  // Controller records the operation and runs the turn server-side, so no
+  // connection needs to stay open for the heaviest turn.
+  const finishGenerateOperation = useCallback(
+    async (
+      generateWorkspaceId: string,
+      operationId: string,
+      hadDraft: boolean,
+      signal: AbortSignal
+    ) => {
+      await pollWorkspaceDraftOperation(
+        generateWorkspaceId,
+        operationId,
+        signal,
+        () => {}
+      );
+      const context = await getWorkspaceContext(generateWorkspaceId, signal);
+      applyChangedWorkspaceContext(context);
       setStage('draft');
       toast.success(
-        workspaceContext.draft
+        hadDraft
           ? 'Draft regenerated successfully!'
           : 'Draft generated successfully!'
       );
+    },
+    [applyChangedWorkspaceContext]
+  );
+
+  const handleGenerateDraft = useCallback(async () => {
+    if (!workspaceContext || !workspaceId) return;
+    const hadDraft = Boolean(workspaceContext.draft);
+    const operationId = `draft-${crypto.randomUUID().replaceAll('-', '')}`;
+    const controller = new AbortController();
+    generateAbortRef.current = controller;
+    setDraftGenerationPending(true);
+    setWorkspaceError(null);
+    try {
+      try {
+        await submitWorkspaceDraftGenerate(
+          workspaceId,
+          {
+            expectedManifestVersion: workspaceContext.manifest.manifestVersion,
+            expectedDraftVersion: workspaceContext.draft?.draftVersion ?? 0,
+            operationId,
+          },
+          controller.signal
+        );
+      } catch (submitError) {
+        // A network failure may have lost only the response: if the submit
+        // reached the Controller the operation exists, so try to attach to
+        // it before reporting the failure.
+        if (!(submitError instanceof TypeError)) throw submitError;
+        try {
+          await finishGenerateOperation(
+            workspaceId,
+            operationId,
+            hadDraft,
+            controller.signal
+          );
+          return;
+        } catch (pollError) {
+          throw pollError instanceof WorkspaceApiError &&
+            pollError.code === 'draft_operation_not_found'
+            ? submitError
+            : pollError;
+        }
+      }
+      await finishGenerateOperation(
+        workspaceId,
+        operationId,
+        hadDraft,
+        controller.signal
+      );
     } catch (error) {
+      if (controller.signal.aborted) return;
       if (
         error instanceof WorkspaceApiError &&
         error.code === 'version_conflict'
@@ -394,9 +458,55 @@ export function WxPostAuthoringWorkspace({
       setWorkspaceError(message);
       toast.error(message);
     } finally {
+      if (generateAbortRef.current === controller) {
+        generateAbortRef.current = null;
+      }
       setDraftGenerationPending(false);
     }
-  }, [applyChangedWorkspaceContext, workspaceContext, workspaceId]);
+  }, [finishGenerateOperation, workspaceContext, workspaceId]);
+
+  // A generation submitted before a reload keeps running server-side. While
+  // no Draft exists the assistant panel cannot mount to reattach, so the
+  // page itself checks for the running operation and resumes polling.
+  const generateReattachCheckedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!workspaceId || !workspaceContext || workspaceContext.draft) return;
+    if (generateReattachCheckedRef.current === workspaceId) return;
+    generateReattachCheckedRef.current = workspaceId;
+    void getWorkspaceDraftConversation(workspaceId)
+      .then((history) => {
+        const running = history.activeOperation;
+        if (!running) return;
+        const controller = new AbortController();
+        generateAbortRef.current = controller;
+        setDraftGenerationPending(true);
+        setWorkspaceError(null);
+        void (async () => {
+          try {
+            await finishGenerateOperation(
+              workspaceId,
+              running.operationId,
+              false,
+              controller.signal
+            );
+          } catch (error) {
+            if (controller.signal.aborted) return;
+            const message =
+              error instanceof Error
+                ? error.message
+                : 'Unable to generate the draft.';
+            setWorkspaceError(message);
+            toast.error(message);
+          } finally {
+            if (generateAbortRef.current === controller) {
+              generateAbortRef.current = null;
+            }
+            setDraftGenerationPending(false);
+          }
+        })();
+      })
+      .catch(() => undefined);
+  }, [finishGenerateOperation, workspaceContext, workspaceId]);
 
   const effectiveMeeting = linked ? selectedMeeting : null;
   const canOpenMaterials = Boolean(initialWorkspaceId || workspaceContext);
