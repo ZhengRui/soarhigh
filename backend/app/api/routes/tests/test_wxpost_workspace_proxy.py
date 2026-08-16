@@ -841,6 +841,34 @@ def test_workspace_proxy_exposes_private_draft_operation_status(
     assert response.json()["state"] == "running"
 
 
+def test_workspace_proxy_allows_draft_operation_interrupt(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation_id = "draft-0123456789abcdef0123456789abcdef"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path.endswith(f"/draft/operations/{operation_id}/interrupt")
+        return httpx.Response(
+            200,
+            json={
+                "workspaceId": "wxpost-abc",
+                "operationId": operation_id,
+                "interrupted": True,
+            },
+        )
+
+    _configure_controller(monkeypatch, handler)
+    response = client.post(
+        f"/posts/wxposts/workspaces/wxpost-abc/draft/operations/{operation_id}/interrupt",
+        headers={"Authorization": "Bearer member-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["interrupted"] is True
+
+
 def test_workspace_proxy_rejects_operations_outside_the_materials_slice(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

@@ -92,6 +92,7 @@ workspace_draft_routes = {
     ("POST", "draft/chat"),
 }
 workspace_draft_operation_route = re.compile(r"^draft/operations/draft-[0-9a-f]{32}$")
+workspace_draft_interrupt_route = re.compile(r"^draft/operations/draft-[0-9a-f]{32}/interrupt$")
 
 
 class VoiceToneSuggestionRequest(BaseModel):
@@ -467,6 +468,8 @@ def _workspace_route_allowed(method: str, path: str) -> bool:
         return True
     if method == "GET" and workspace_draft_operation_route.fullmatch(path):
         return True
+    if method == "POST" and workspace_draft_interrupt_route.fullmatch(path):
+        return True
     if not workspace_source_route.fullmatch(path):
         return False
     leaf = path.rsplit("/", 1)[-1]
@@ -503,17 +506,16 @@ async def _proxy_workspace_request(
     else:
         query = ""
     body = await _read_limited_workspace_upload(request) if controller_path == "uploads" else await request.body()
-    # draft/chat is an async submit: the Controller records the operation and
-    # returns its id immediately; the browser polls draft/operations/{id}.
+    # draft/chat and draft/generate are async submits: the Controller records
+    # the operation and returns its id immediately; the browser polls
+    # draft/operations/{id}. Only description-suggestion still runs inline.
     return await _proxy_workspace_controller(
         request.method,
         (f"/workspaces/{quote(workspace_id, safe='')}/{controller_path}{query}"),
         body=body,
         content_type=request.headers.get("Content-Type"),
         expected_manifest_version=request.headers.get("X-Expected-Manifest-Version"),
-        timeout=(
-            330 if controller_path == "draft/generate" or controller_path.endswith("/description-suggestion") else 30
-        ),
+        timeout=(330 if controller_path.endswith("/description-suggestion") else 30),
     )
 
 
