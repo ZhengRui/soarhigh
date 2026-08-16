@@ -332,6 +332,132 @@ def test_controller_history_survives_service_recreation(tmp_path: Path) -> None:
     assert second_session.turn_session_ids == ["stored-session"]
 
 
+def test_startup_completes_interrupted_operation_whose_save_landed(
+    tmp_path: Path,
+) -> None:
+    """A restart that hit after the save landed must not report failure: the
+    manifest's operation-id stamp proves the Draft write succeeded."""
+
+    controller = _Controller(tmp_path)
+    store = HermesDraftStore(tmp_path)
+    operation_id = "draft-44444444444444444444444444444444"
+    store.start_operation(
+        "wxpost-test",
+        operation_id,
+        request_fingerprint="fingerprint",
+        member_message="Tighten the opening.",
+        selected_text=None,
+        expected_manifest_version=4,
+        expected_draft_version=2,
+    )
+    store.set_steps(
+        operation_id,
+        [
+            {
+                "activityId": "save-1",
+                "label": "Saving the Draft",
+                "toolName": "wxpost_save_current_draft",
+                "completed": True,
+                "failed": False,
+            },
+            {
+                "activityId": "verify-1",
+                "label": "Verifying the saved Draft",
+                "completed": False,
+                "failed": False,
+            },
+        ],
+    )
+    controller.context["draft"]["draftVersion"] = 3
+    controller.context["manifest"]["draft"] = {
+        "version": 3,
+        "operationId": operation_id,
+    }
+
+    service = HermesDraftService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=_SessionClient(controller),  # type: ignore[arg-type]
+        cleanup_dispatch=lambda callback: callback(),
+    )
+
+    operation = store.get_operation("wxpost-test", operation_id)
+    assert operation["state"] == "completed"
+    assert operation["result"]["draftChanged"] is True
+    assert operation["result"]["draftVersion"] == 3
+    assert operation["result"]["reply"].endswith("Draft version: v2 → v3")
+    # The step still in flight when the process died is dropped so history
+    # never renders a forever-pending badge.
+    assert [step["activityId"] for step in operation["result"]["steps"]] == ["save-1"]
+    history = service.history("wxpost-test")
+    assert history["messages"][1]["turnId"] == operation_id
+    assert history["draftVersion"] == 3
+
+
+def test_startup_fails_interrupted_operation_without_landed_save(
+    tmp_path: Path,
+) -> None:
+    controller = _Controller(tmp_path)
+    store = HermesDraftStore(tmp_path)
+    stamped_elsewhere = "draft-55555555555555555555555555555555"
+    orphaned = "draft-66666666666666666666666666666666"
+    store.start_operation(
+        "wxpost-test",
+        orphaned,
+        request_fingerprint="fingerprint",
+        member_message="Tighten the opening.",
+        selected_text=None,
+        expected_manifest_version=4,
+        expected_draft_version=2,
+    )
+    # The manifest stamp belongs to an earlier, already-settled turn — it must
+    # not be mistaken for this operation's save.
+    controller.context["manifest"]["draft"] = {
+        "version": 2,
+        "operationId": stamped_elsewhere,
+    }
+
+    HermesDraftService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=_SessionClient(controller),  # type: ignore[arg-type]
+        cleanup_dispatch=lambda callback: callback(),
+    )
+
+    operation = store.get_operation("wxpost-test", orphaned)
+    assert operation["state"] == "failed"
+    assert operation["error"]["code"] == "controller_restarted"
+
+
+def test_startup_fails_interrupted_operation_when_workspace_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    class _UnreadableController(_Controller):
+        def get_context(self, workspace_id: str) -> dict[str, Any]:
+            raise HermesTurnFailed("workspace cannot be read")
+
+    controller = _UnreadableController(tmp_path)
+    store = HermesDraftStore(tmp_path)
+    operation_id = "draft-77777777777777777777777777777777"
+    store.start_operation(
+        "wxpost-test",
+        operation_id,
+        request_fingerprint="fingerprint",
+        member_message="Tighten the opening.",
+        selected_text=None,
+        expected_manifest_version=4,
+        expected_draft_version=2,
+    )
+
+    HermesDraftService(
+        controller=controller,  # type: ignore[arg-type]
+        session_client=_SessionClient(controller),  # type: ignore[arg-type]
+        cleanup_dispatch=lambda callback: callback(),
+    )
+
+    operation = store.get_operation("wxpost-test", operation_id)
+    assert operation["state"] == "failed"
+    assert operation["error"]["code"] == "controller_restarted"
+
+
 def test_reset_clears_conversation_and_retires_the_workspace_session(
     tmp_path: Path,
 ) -> None:
@@ -453,9 +579,7 @@ def test_chat_submit_runs_in_background_with_pollable_progress(
         # operation from the conversation history.
         history = service.history("wxpost-test")
         assert history["activeOperation"]["operationId"] == operation_id
-        assert history["activeOperation"]["memberMessage"] == (
-            "Tighten the opening."
-        )
+        assert history["activeOperation"]["memberMessage"] == ("Tighten the opening.")
 
         # One in-flight turn per workspace: a concurrent submit is rejected.
         with pytest.raises(DraftOperationInProgress):
@@ -1057,6 +1181,56 @@ def test_failed_current_workspace_read_is_not_replaced_with_stale_history(
         "label": "Reading the workspace configuration",
         "toolName": "wxpost_get_current_workspace_report",
     }
+
+
+def test_recovered_workspace_read_keeps_the_model_reply(tmp_path: Path) -> None:
+    """A read that fails but is retried successfully saw current data, so the
+    stale-data reply override must not fire."""
+
+    service, session = _service(tmp_path)
+
+    def retried_read_turn(
+        *,
+        title: str,
+        cwd: str,
+        prompt: str,
+        session_id: str | None,
+        on_event,
+        **_kwargs: Any,
+    ) -> HermesTurn:
+        session.prompts.append({"title": title, "cwd": cwd, "prompt": prompt})
+        on_event(
+            "tool.complete",
+            {
+                "toolId": "report-1",
+                "name": "wxpost_get_current_workspace_report",
+                "error": True,
+            },
+        )
+        on_event(
+            "tool.complete",
+            {
+                "toolId": "report-2",
+                "name": "wxpost_get_current_workspace_report",
+                "error": False,
+            },
+        )
+        return HermesTurn(
+            session_id="stored-session",
+            reply="There are 3 materials.",
+        )
+
+    session.turn = retried_read_turn  # type: ignore[method-assign]
+
+    result = service.chat(
+        "wxpost-test",
+        expected_manifest_version=4,
+        expected_draft_version=2,
+        message="List the current material library.",
+        selected_text=None,
+    )
+
+    assert result["reply"] == "There are 3 materials."
 
 
 def test_chat_maps_only_genuine_hermes_events_to_product_progress(
@@ -1673,6 +1847,27 @@ def test_session_client_forwards_only_safe_lifecycle_events() -> None:
                     "method": "event",
                     "params": {
                         "session_id": "live-session",
+                        "type": "tool.complete",
+                        "payload": {
+                            "tool_id": "tool-3",
+                            "name": "mcp__soarhigh_wxpost__wxpost_save_draft",
+                            "args": {"private": "save arguments"},
+                            # Hermes reports MCP-level failures only through
+                            # the result payload; the event carries no error
+                            # flag of its own.
+                            "result": {
+                                "error": (
+                                    "Error executing tool wxpost_save_draft: "
+                                    "1 validation error"
+                                ),
+                            },
+                        },
+                    },
+                },
+                {
+                    "method": "event",
+                    "params": {
+                        "session_id": "live-session",
                         "type": "message.complete",
                         "payload": {"text": "Done."},
                     },
@@ -1717,6 +1912,14 @@ def test_session_client_forwards_only_safe_lifecycle_events() -> None:
                 "name": "mcp__soarhigh_wxpost__wxpost_edit_draft",
                 "error": False,
                 "arguments": {"edits": [{"type": "clearCover"}]},
+            },
+        ),
+        (
+            "tool.complete",
+            {
+                "toolId": "tool-3",
+                "name": "mcp__soarhigh_wxpost__wxpost_save_draft",
+                "error": True,
             },
         ),
     ]

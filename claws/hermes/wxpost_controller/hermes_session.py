@@ -86,6 +86,22 @@ def _normalized_tool_name(tool_name: str) -> str:
     )
 
 
+def _tool_result_reports_error(result: object) -> bool:
+    """Detect a failed tool call from the ``tool.complete`` result payload.
+
+    Hermes never flags tool-level failures on ``tool.complete`` events; it
+    stringifies a failed call (MCP isError, blocked write, invalid arguments)
+    as ``{"error": "<message>"}``, which the gateway JSON-parses into the
+    event's ``result``. A non-empty string under ``error`` is that failure
+    shape — without this check, failed saves render as green step badges.
+    """
+
+    if not isinstance(result, dict):
+        return False
+    error = result.get("error")
+    return isinstance(error, str) and bool(error.strip())
+
+
 def _is_draft_save_tool(tool_name: str) -> bool:
     return _normalized_tool_name(tool_name) in {
         "wxpost_save_draft",
@@ -400,7 +416,9 @@ class HermesSessionClient:
                 if event_type == "tool.start":
                     safe_payload["context"] = payload.get("context")
                 else:
-                    safe_payload["error"] = bool(payload.get("error"))
+                    safe_payload["error"] = bool(
+                        payload.get("error")
+                    ) or _tool_result_reports_error(payload.get("result"))
                     arguments = payload.get("args")
                     if _normalized_tool_name(
                         str(payload.get("name") or "")
@@ -468,8 +486,58 @@ class HermesDraftService:
         # id because a busy session cannot be resumed from a second connection.
         self._live_turns: dict[str, tuple[str, str]] = {}
         self._live_turns_guard = threading.Lock()
-        self._draft_store.fail_interrupted_operations()
+        self._settle_interrupted_operations()
         self._schedule_session_cleanup()
+
+    def _settle_interrupted_operations(self) -> None:
+        """Resolve operations a previous Controller process left running.
+
+        A restart kills the background turn, but the turn's save may already
+        have landed: every save stamps its operation id into the workspace
+        manifest. A matching stamp means the Draft write succeeded and only
+        the reply was lost, so the operation is recorded as completed instead
+        of lying to the poller with a failure. Everything else is failed as
+        interrupted by the restart.
+        """
+
+        for operation in self._draft_store.interrupted_operations():
+            operation_id = operation["operationId"]
+            try:
+                context = self._controller.get_context(operation["workspaceId"])
+                draft_state = context.get("manifest", {}).get("draft")
+                if (
+                    not isinstance(draft_state, dict)
+                    or draft_state.get("operationId") != operation_id
+                ):
+                    continue
+                draft_version = self._draft_version(context)
+                reply = (
+                    "The Draft was saved, but the Controller restarted before "
+                    "this turn could report back, so the assistant's reply "
+                    "was lost.\n\nDraft version: "
+                    f"v{operation['expectedDraftVersion']} → v{draft_version}"
+                )
+                self._draft_store.complete_operation(
+                    operation_id,
+                    result={
+                        "reply": reply,
+                        "draftChanged": True,
+                        "draftVersion": draft_version,
+                        # Steps still in flight when the process died would
+                        # render as forever-pending; keep only settled ones.
+                        "steps": [
+                            step
+                            for step in operation["steps"]
+                            if step.get("completed") or step.get("failed")
+                        ],
+                    },
+                )
+            except WorkspaceError:
+                # The workspace (or its stored steps) could not be trusted;
+                # the blanket failure below records the honest interrupted
+                # outcome for this operation.
+                continue
+        self._draft_store.fail_interrupted_operations()
 
     def history(self, workspace_id: str) -> dict[str, Any]:
         # No turn lock: SQLite reads are consistent on their own, and a
@@ -929,15 +997,11 @@ class HermesDraftService:
         if live is None or live[0] != operation_id:
             # The turn is still connecting to Hermes (or runs in another
             # Controller process after a restart); there is nothing to signal.
-            raise InvalidRequest(
-                "the Draft turn cannot be stopped yet — try again"
-            )
+            raise InvalidRequest("the Draft turn cannot be stopped yet — try again")
         return {
             "workspaceId": workspace_id,
             "operationId": operation_id,
-            "interrupted": self._session_client.interrupt(
-                live_session_id=live[1]
-            ),
+            "interrupted": self._session_client.interrupt(live_session_id=live[1]),
         }
 
     def _execute_draft_operation(
@@ -1014,9 +1078,7 @@ class HermesDraftService:
 
             def emit(stage: str, **details: Any) -> None:
                 if stage == "activity_started":
-                    live_steps.append(
-                        {**details, "completed": False, "failed": False}
-                    )
+                    live_steps.append({**details, "completed": False, "failed": False})
                     persist_steps()
                 if stage in {"activity_completed", "activity_failed"}:
                     step = {
@@ -1081,13 +1143,14 @@ class HermesDraftService:
                     if event_type == "tool.complete":
                         if payload.get("error") is not True:
                             save_succeeded = True
-                if (
-                    event_type == "tool.complete"
-                    and payload.get("error") is True
-                    and normalized_name
-                    in {"wxpost_get_context", "wxpost_get_workspace_report"}
-                ):
-                    workspace_read_failed = True
+                if event_type == "tool.complete" and normalized_name in {
+                    "wxpost_get_context",
+                    "wxpost_get_workspace_report",
+                }:
+                    # Last read wins: a retried, successful read means the
+                    # model saw current data, so the stale-data reply
+                    # override must not fire.
+                    workspace_read_failed = payload.get("error") is True
                 tool_id = str(payload.get("toolId") or "")
                 if not tool_id:
                     return
@@ -1167,9 +1230,7 @@ class HermesDraftService:
                 turn = self._session_client.turn(**turn_kwargs)
             finally:
                 with self._live_turns_guard:
-                    if self._live_turns.get(workspace_id, (None,))[0] == (
-                        operation_id
-                    ):
+                    if self._live_turns.get(workspace_id, (None,))[0] == (operation_id):
                         del self._live_turns[workspace_id]
             if save_succeeded:
                 verification_id = f"verify-{operation_id}"
@@ -1198,8 +1259,7 @@ class HermesDraftService:
             # client shows "stopped", not a generic error.
             if turn.interrupted and not draft_changed:
                 raise DraftTurnInterrupted(
-                    "The Draft Assistant turn was stopped before it saved "
-                    "anything."
+                    "The Draft Assistant turn was stopped before it saved anything."
                 )
             if (
                 (save_required or save_started)

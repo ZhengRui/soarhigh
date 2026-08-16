@@ -156,8 +156,20 @@ def test_service_startup_marks_interrupted_operations_failed(tmp_path: Path) -> 
     store = HermesDraftStore(tmp_path)
     operation_id = "draft-33333333333333333333333333333333"
     _start(store, operation_id)
+    store.set_steps(operation_id, _result()["steps"])
+
+    assert store.interrupted_operations() == [
+        {
+            "operationId": operation_id,
+            "workspaceId": "wxpost-test",
+            "expectedDraftVersion": 2,
+            "steps": _result()["steps"],
+        }
+    ]
 
     store.fail_interrupted_operations()
+
+    assert store.interrupted_operations() == []
 
     operation = store.get_operation("wxpost-test", operation_id)
     assert operation["state"] == "failed"

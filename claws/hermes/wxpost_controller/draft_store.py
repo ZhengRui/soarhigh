@@ -275,6 +275,34 @@ class HermesDraftStore:
     def remove_workspace(self, workspace_id: str) -> None:
         self.reset_history(workspace_id)
 
+    def interrupted_operations(self) -> list[dict[str, Any]]:
+        """Return operations a previous Controller process left running.
+
+        Only meaningful at startup, before any new turn is admitted: a live
+        Controller owns every 'running' row it created, so rows in that state
+        at initialization can only be orphans from a dead process.
+        """
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT operation_id, workspace_id, expected_draft_version,
+                       steps_json
+                FROM draft_operations
+                WHERE state = 'running'
+                ORDER BY created_at, rowid
+                """
+            ).fetchall()
+        return [
+            {
+                "operationId": str(row[0]),
+                "workspaceId": str(row[1]),
+                "expectedDraftVersion": int(row[2]),
+                "steps": json.loads(str(row[3])) if row[3] is not None else [],
+            }
+            for row in rows
+        ]
+
     def fail_interrupted_operations(self) -> None:
         error = json.dumps(
             {
