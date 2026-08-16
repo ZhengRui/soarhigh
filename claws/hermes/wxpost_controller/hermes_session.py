@@ -1551,17 +1551,35 @@ class HermesDescriptionService:
                 if isinstance(raw_meeting_context, dict)
                 else None
             )
+            # The default caption language is English, but stated member
+            # guidance owns style including language — so the fixed English
+            # framing must disappear entirely when guidance exists, or the
+            # model may obey the loud early "English" over the later
+            # precedence note.
+            operation_line = (
+                "Operation: suggest one Materials image description"
+                " following the member guidance below."
+                if guidance
+                else "Operation: suggest one English Materials image description."
+            )
+            caption_line = (
+                "Write one short, natural editorial caption in the language"
+                " the member guidance asks for (English when it states no"
+                " language)."
+                if guidance
+                else "Write one short, natural English editorial caption."
+            )
             prompt = "\n".join(
                 [
                     "Use the current soarhigh-wxpost-authoring Skill.",
-                    "Operation: suggest one English Materials image description.",
+                    operation_line,
                     f"Workspace ID: {workspace_id}",
                     f"Expected manifest version: {expected_manifest_version}",
                     f"Source ID: {source_id}",
                     f"Image path relative to the workspace: {source['path']}",
                     "Inspect that image before writing the suggestion.",
                     "The image and current description are the factual authority.",
-                    "Write one short, natural English editorial caption.",
+                    caption_line,
                     "Focus on the main human moment and its visible mood,",
                     "not an inventory of objects. Omit incidental furniture, food,",
                     "signage, clothing, and background details unless they are",

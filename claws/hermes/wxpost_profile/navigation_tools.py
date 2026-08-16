@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import Callable
 from typing import Any
@@ -256,13 +257,24 @@ def handle_navigation(name: str, args: dict[str, Any]) -> str:
                 )
             if not user_id:
                 raise RuntimeError("the current Feishu member identity is unavailable")
+            guidance = str(args.get("guidance") or "")
+            # Diagnostic breadcrumb: the model composes guidance but several
+            # dispatch layers sit between its tool call and this handler, so
+            # record what actually arrived.
+            logging.getLogger(__name__).info(
+                "wxpost_describe_material dispatch: source_id=%s confirmed=%s "
+                "guidance_chars=%d",
+                args.get("source_id"),
+                args.get("confirmed"),
+                len(guidance),
+            )
             result = navigation.describe_material(
                 scope_key,
                 message_id=message_id,
                 requested_by_user_id=user_id,
                 source_id=str(args["source_id"]),
                 confirmed=bool(args["confirmed"]),
-                guidance=str(args.get("guidance") or ""),
+                guidance=guidance,
             )
         elif name == "wxpost_get_draft_preview":
             result = navigation.create_draft_preview_link(

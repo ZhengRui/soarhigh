@@ -2051,6 +2051,12 @@ def test_description_service_threads_member_guidance_into_the_prompt(
     assert "take precedence over the default" in prompt
     # Guidance steers style only; the image stays the factual authority.
     assert "never override what the" in prompt
+    # The fixed English framing disappears whenever guidance exists — a loud
+    # early "English" otherwise outweighs the later precedence note.
+    assert "suggest one English" not in prompt
+    assert "natural English editorial caption" not in prompt
+    assert "following the member guidance below" in prompt
+    assert "in the language" in prompt
 
     with pytest.raises(InvalidRequest, match="at most 500 characters"):
         service.suggest(
