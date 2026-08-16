@@ -91,14 +91,32 @@ this boundary before every write tool, including raw MCP tools.
    library, call `wxpost_show_material_library`; it sends the complete catalog
    as native Feishu media and labels candidates separately from imported media.
 8. When the member asks for an AI description for an imported image, call
-   `wxpost_describe_material` with `confirmed=false`. Present its exact English
-   suggestion and ask whether to save it. This first call does not change
-   Materials. Only after the same member explicitly confirms in a later message
-   call the tool for the same source with `confirmed=true`; that saves the
-   staged suggestion as an AI-authored, confirmed Materials description. Do not
-   call `wxpost_update_sources` for this workflow and never describe an
-   unimported candidate directly.
-9. After Generate, Regenerate, or any successful Draft save/edit, call
+   `wxpost_describe_material` with `confirmed=false`. When that request states
+   wishes for the caption — language, length, tone, emphasis, or details to
+   mention — pass their words as `guidance` so the image-inspecting model
+   hears them; do not silently drop them and do not invent guidance the member
+   did not give. Present the exact returned suggestion and ask whether to save
+   it. This first call does not change Materials. Only after the same member
+   explicitly confirms in a later message call the tool for the same source
+   with `confirmed=true`; that saves the staged suggestion as an AI-authored,
+   confirmed Materials description. Never save an AI suggestion through
+   `wxpost_update_sources` and never describe an unimported candidate
+   directly.
+9. Feedback and discussion about an existing description stay conversational —
+   generation is slow, so do not call `wxpost_describe_material` for every
+   remark. Talk it through and refine caption wording in plain text as unsaved
+   proposals, staying honest that you cannot see the image and are working
+   from the current description and context only. Escalate to exactly one
+   tool call in two cases. When the member explicitly asks to regenerate or
+   re-describe the image ("重新生成描述", "regenerate it with this feedback"),
+   call `wxpost_describe_material` with `confirmed=false` and pass a concise
+   summary of the member's accumulated feedback from the conversation — not
+   just the last message — as `guidance`. When the member explicitly asks to
+   save exact wording they dictated or settled on in chat, save it with
+   `wxpost_update_sources` as `descriptionSource` `user` and
+   `descriptionStatus` `confirmed`; member-authored text does not need the
+   describe tool.
+10. After Generate, Regenerate, or any successful Draft save/edit, call
    `wxpost_get_draft_preview` for the version just saved. The tool sends the
    complete temporary preview link and authenticated web editor link directly
    to Feishu; do not repeat, shorten, or reconstruct either URL in the
@@ -116,13 +134,13 @@ this boundary before every write tool, including raw MCP tools.
    confirm delivery without writing any URL or reusing a link from chat history.
    If link delivery fails, report that preview delivery
    failed without changing or retrying the Draft save.
-10. Call `wxpost_send_draft_preview_image` only when the member explicitly asks
+11. Call `wxpost_send_draft_preview_image` only when the member explicitly asks
    for a screenshot, full-page image, or “整篇预览图”. It renders the saved
    Draft through the same canonical renderer as the web editor and sends one
    native Feishu image. Do not send the image automatically after ordinary
    Draft edits. A screenshot failure must not mutate Draft, Materials, or public
    revision state, and must never be replaced with an older workspace image.
-11. When the member explicitly asks to edit Materials on the web, call
+12. When the member explicitly asks to edit Materials on the web, call
    `wxpost_send_web_editor_link` with `target=materials`. When the member asks
    to edit the Draft on the web, call it with `target=draft`. The tool sends the
    authenticated route directly to Feishu; do not repeat, shorten, or
@@ -144,8 +162,10 @@ clothing, and background objects are omitted unless essential to the moment.
 When a current description exists in any language, the service preserves its
 supported meaning while translating, compressing, and polishing it. The image
 and current description are authoritative; linked meeting theme, introduction,
-and agenda are supporting context only. The service never invents a person,
-role, award, quotation, reaction, or event. The web Materials page keeps the
+and agenda are supporting context only. Member `guidance` steers style —
+language, length, tone, emphasis — and takes precedence over the default
+caption style, but never over what the image shows. The service never invents
+a person, role, award, quotation, reaction, or event. The web Materials page keeps the
 result local until `Save Materials`, which confirms and persists it. Feishu
 uses the explicit two-turn `wxpost_describe_material` confirmation workflow
 above. Neither suggestion step changes Materials or the Draft.

@@ -337,7 +337,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             payload = self._read_json_body()
             if payload is None or not self._accept_fields(
                 payload,
-                {"expectedManifestVersion", "currentDescription"},
+                {"expectedManifestVersion", "currentDescription", "guidance"},
                 "source description suggestion",
             ):
                 return
@@ -353,6 +353,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         str,
                         payload.get("currentDescription"),
                     ),
+                    guidance=cast(str, payload.get("guidance") or ""),
                 )
             )
             return

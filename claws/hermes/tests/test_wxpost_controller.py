@@ -418,6 +418,83 @@ def test_http_workspace_delete_requires_the_current_manifest_version(
         thread.join(timeout=5)
 
 
+def test_http_description_suggestion_accepts_member_guidance(
+    tmp_path: Path,
+) -> None:
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    captured: dict[str, Any] = {}
+
+    class _FakeDescriptionService:
+        def suggest(
+            self,
+            workspace_id: str,
+            *,
+            expected_manifest_version: int,
+            source_id: str,
+            current_description: str,
+            guidance: str = "",
+        ) -> dict[str, Any]:
+            captured.update(
+                workspaceId=workspace_id,
+                sourceId=source_id,
+                guidance=guidance,
+            )
+            return {
+                "workspaceId": workspace_id,
+                "sourceId": source_id,
+                "manifestVersion": expected_manifest_version,
+                "description": "A caption.",
+            }
+
+    server.description_service = _FakeDescriptionService()  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    url = f"{base_url}/workspaces/wxpost-abc/sources/M01/description-suggestion"
+    try:
+        status, payload = _json_request(
+            url,
+            method="POST",
+            payload={
+                "expectedManifestVersion": 3,
+                "currentDescription": "",
+                "guidance": "写中文，提到会议主题",
+            },
+        )
+        assert status == 200
+        assert payload["description"] == "A caption."
+        assert captured["guidance"] == "写中文，提到会议主题"
+
+        # Guidance stays optional, and unknown fields are still rejected.
+        status, _ = _json_request(
+            url,
+            method="POST",
+            payload={"expectedManifestVersion": 3, "currentDescription": ""},
+        )
+        assert status == 200
+        assert captured["guidance"] == ""
+        status, rejected = _json_request(
+            url,
+            method="POST",
+            payload={
+                "expectedManifestVersion": 3,
+                "currentDescription": "",
+                "bogus": True,
+            },
+        )
+        assert status == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert rejected["error"]["code"] == "invalid_request"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_http_draft_save_returns_the_complete_updated_context(
     seeded_workspace: tuple[Path, str],
 ) -> None:

@@ -107,10 +107,11 @@ SCHEMAS = {
     ),
     "wxpost_describe_material": _schema(
         "wxpost_describe_material",
-        "Generate an English AI description suggestion for one imported image in the selected Feishu workspace, or save the exact staged suggestion after explicit confirmation in a later member message. Calling with confirmed=false never changes Materials; confirmed=true saves it as a confirmed AI description.",
+        "Generate an AI description suggestion for one imported image in the selected Feishu workspace, or save the exact staged suggestion after explicit confirmation in a later member message. Calling with confirmed=false never changes Materials; confirmed=true saves it as a confirmed AI description. When the member states wishes for the caption (language, length, tone, emphasis, details to mention), pass them via guidance so the image-inspecting model hears them; it still never invents facts the image does not show.",
         {
             "source_id": {"type": "string"},
             "confirmed": {"type": "boolean"},
+            "guidance": {"type": "string", "maxLength": 500},
         },
         ("source_id", "confirmed"),
     ),
@@ -261,6 +262,7 @@ def handle_navigation(name: str, args: dict[str, Any]) -> str:
                 requested_by_user_id=user_id,
                 source_id=str(args["source_id"]),
                 confirmed=bool(args["confirmed"]),
+                guidance=str(args.get("guidance") or ""),
             )
         elif name == "wxpost_get_draft_preview":
             result = navigation.create_draft_preview_link(

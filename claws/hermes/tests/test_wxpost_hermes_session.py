@@ -2018,7 +2018,48 @@ def test_description_service_polishes_any_language_into_local_english_suggestion
     assert "internalNote" not in prompt
     assert "会员们在会议开始前围坐交流。" in prompt
     assert "Do not save or update the workspace" in prompt
+    # No guidance was given, so the member-guidance framing must be absent.
+    assert "MEMBER_GUIDANCE_JSON" not in prompt
     assert retired_sessions == ["description-session"]
+
+
+def test_description_service_threads_member_guidance_into_the_prompt(
+    tmp_path: Path,
+) -> None:
+    controller = _Controller(tmp_path)
+    session = _SessionClient(controller)
+    session.turn = lambda **kwargs: (  # type: ignore[method-assign]
+        session.prompts.append(kwargs)
+        or HermesTurn(
+            session_id="description-session",
+            reply='{"status":"ok","description":"大家在会前围坐交流。"}',
+        )
+    )
+    service = _description_service(controller, session)
+
+    result = service.suggest(
+        "wxpost-test",
+        expected_manifest_version=4,
+        source_id="M01",
+        current_description="",
+        guidance="写中文，简洁，提到会议主题",
+    )
+
+    assert result["description"] == "大家在会前围坐交流。"
+    prompt = session.prompts[0]["prompt"]
+    assert "MEMBER_GUIDANCE_JSON:" + '"写中文，简洁，提到会议主题"' in prompt
+    assert "take precedence over the default" in prompt
+    # Guidance steers style only; the image stays the factual authority.
+    assert "never override what the" in prompt
+
+    with pytest.raises(InvalidRequest, match="at most 500 characters"):
+        service.suggest(
+            "wxpost-test",
+            expected_manifest_version=4,
+            source_id="M01",
+            current_description="",
+            guidance="x" * 501,
+        )
 
 
 def test_description_service_uses_image_first_generation_for_empty_text(

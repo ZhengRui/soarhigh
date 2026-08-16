@@ -360,6 +360,7 @@ def test_feishu_image_description_requires_confirmation_before_materials_save(
         message_id="om_description_request",
         requested_by_user_id="ou_member",
         source_id="M01",
+        guidance="写中文，提到会议主题",
     )
 
     assert proposed == {
@@ -369,6 +370,8 @@ def test_feishu_image_description_requires_confirmation_before_materials_save(
         "sourceId": "M01",
         "suggestedDescription": "Members share an energetic moment together.",
     }
+    # The member's stated caption wishes travel to the description service.
+    assert captured[0]["body"]["guidance"] == "写中文，提到会议主题"
     source = navigation._controller.get_context(workspace_id)["manifest"]["sources"][0]
     assert source["description"] == ""
     assert source["descriptionStatus"] == "missing"
@@ -414,6 +417,7 @@ def test_feishu_image_description_requires_confirmation_before_materials_save(
             "body": {
                 "expectedManifestVersion": manifest["manifestVersion"],
                 "currentDescription": "",
+                "guidance": "写中文，提到会议主题",
             },
             "timeout": 330,
         }

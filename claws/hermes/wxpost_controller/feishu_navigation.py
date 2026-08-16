@@ -207,6 +207,7 @@ class FeishuNavigation:
         requested_by_user_id: str,
         source_id: str,
         confirmed: bool = False,
+        guidance: str = "",
     ) -> dict[str, Any]:
         """Generate, then explicitly confirm, one Materials image description."""
 
@@ -227,6 +228,7 @@ class FeishuNavigation:
                 source_id=source_id,
                 expected_manifest_version=manifest["manifestVersion"],
                 current_description=source["description"],
+                guidance=guidance,
             )
             confirmation = StagedMaterialDescription(
                 workspaceId=workspace_id,
@@ -300,6 +302,7 @@ class FeishuNavigation:
         source_id: str,
         expected_manifest_version: int,
         current_description: str,
+        guidance: str = "",
     ) -> str:
         if not self._controller_base_url or not self._service_token:
             raise UpstreamUnavailable(
@@ -313,6 +316,7 @@ class FeishuNavigation:
                 {
                     "expectedManifestVersion": expected_manifest_version,
                     "currentDescription": current_description,
+                    "guidance": guidance,
                 }
             ).encode(),
             headers={
