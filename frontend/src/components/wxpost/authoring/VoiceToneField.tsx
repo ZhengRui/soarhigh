@@ -298,6 +298,9 @@ export function VoiceToneField({
           aria-modal='true'
           aria-labelledby='voice-tone-dialog-title'
           data-testid='voice-tone-dialog'
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeDialog();
+          }}
         >
           <div className='w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl max-[480px]:p-4'>
             <div className='flex items-start justify-between gap-4'>

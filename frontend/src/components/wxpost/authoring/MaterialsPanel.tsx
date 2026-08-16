@@ -324,7 +324,7 @@ function MaterialCard({
                 ? 'Descriptions can only be generated for images.'
                 : !material.workspaceReady
                   ? 'Import this image before generating a description.'
-                  : 'Generate an English description'
+                  : 'Generate a description. Instructions typed in the field (e.g. "中文，联系主题") are followed.'
             }
             disabled={
               busy ||
