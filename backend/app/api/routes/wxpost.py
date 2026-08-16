@@ -878,7 +878,7 @@ async def r_get_wxpost_workspace_editor_links(
 async def r_get_wxpost_draft_preview(token: str) -> dict[str, Any]:
     """Return canonical render input for a valid temporary Draft link."""
 
-    workspace_id, draft_version, document, _ = await _load_versioned_draft_preview(token)
+    workspace_id, draft_version, document, context = await _load_versioned_draft_preview(token)
     render_document = (
         validate_and_parse(document)
         .render_document(document)
@@ -887,16 +887,40 @@ async def r_get_wxpost_draft_preview(token: str) -> dict[str, Any]:
             mode="json",
         )
     )
+    manifest = context.get("manifest")
+    sources = manifest.get("sources", []) if isinstance(manifest, dict) else []
+    dimensions_by_source: dict[str, dict[str, int]] = {}
+    for source in sources:
+        if not isinstance(source, dict) or not isinstance(source.get("id"), str):
+            continue
+        dimensions = source.get("dimensions")
+        if (
+            isinstance(dimensions, dict)
+            and isinstance(dimensions.get("width"), int)
+            and isinstance(dimensions.get("height"), int)
+            and dimensions["width"] > 0
+            and dimensions["height"] > 0
+        ):
+            dimensions_by_source[source["id"]] = {
+                "width": dimensions["width"],
+                "height": dimensions["height"],
+            }
+    asset_dimensions: dict[str, dict[str, int]] = {}
     for media in render_document["media"]:
         source_id = media["id"]
         media["sourceUrl"] = (
             f"/posts/wxposts/draft-previews/{quote(token, safe='')}/media/" f"{quote(source_id, safe='')}"
         )
         media["posterUrl"] = None
+        if source_id in dimensions_by_source:
+            asset_dimensions[source_id] = dimensions_by_source[source_id]
     return {
         "workspaceId": workspace_id,
         "draftVersion": draft_version,
         "renderDocument": render_document,
+        # Trusted ingest-time image dimensions so the preview page can
+        # reserve exact-ratio boxes before any media bytes arrive.
+        "assetDimensions": asset_dimensions,
     }
 
 
@@ -924,7 +948,10 @@ async def r_get_wxpost_draft_preview_media(token: str, source_id: str) -> Respon
     return Response(
         content=content,
         media_type=mime_type,
-        headers={"Cache-Control": "private, no-store"},
+        # Media under a preview token is immutable (the token binds an exact
+        # Draft version and the bytes are sha256-verified), so private
+        # caching is safe and makes re-opens and retries instant.
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 

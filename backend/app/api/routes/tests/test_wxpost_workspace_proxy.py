@@ -86,7 +86,13 @@ def test_service_can_issue_and_read_a_version_bound_private_draft_preview(
                     "workspaceId": "wxpost-abc",
                     "manifest": {
                         "manifestVersion": 7,
-                        "sources": [{"id": "M01", "contentSha256": "a" * 64}],
+                        "sources": [
+                            {
+                                "id": "M01",
+                                "contentSha256": "a" * 64,
+                                "dimensions": {"width": 1200, "height": 800},
+                            }
+                        ],
                     },
                     "draft": {"draftVersion": 4, "document": article},
                 },
@@ -124,11 +130,16 @@ def test_service_can_issue_and_read_a_version_bound_private_draft_preview(
     assert preview.json()["draftVersion"] == 4
     assert render_document["title"] == article["title"]
     assert render_document["media"][0]["sourceUrl"].endswith(f"/draft-previews/{token}/media/M01")
+    # Trusted ingest-time dimensions ride along so the preview page can
+    # reserve exact-ratio boxes before any media bytes arrive.
+    assert preview.json()["assetDimensions"] == {"M01": {"width": 1200, "height": 800}}
 
     media = client.get(f"/posts/wxposts/draft-previews/{token}/media/M01")
     assert media.status_code == 200
     assert media.content == b"draft-image"
     assert media.headers["content-type"] == "image/jpeg"
+    # Immutable per token+sha256, so private caching is allowed.
+    assert media.headers["cache-control"] == "private, max-age=3600"
     assert all(request.headers["Authorization"] == "Bearer controller-secret" for request in requests)
 
 

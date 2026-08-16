@@ -214,9 +214,7 @@ def test_current_edit_rejects_a_model_supplied_operation_id(
                 "expectedManifestVersion": 1,
                 "expectedDraftVersion": 1,
                 "operationId": "draft-" + "9" * 32,
-                "edits": [
-                    {"type": "replaceMetadata", "field": "title", "value": "x"}
-                ],
+                "edits": [{"type": "replaceMetadata", "field": "title", "value": "x"}],
             },
         )
 
@@ -234,9 +232,7 @@ def test_current_edit_requires_an_active_bound_operation(
             {
                 "expectedManifestVersion": 1,
                 "expectedDraftVersion": 1,
-                "edits": [
-                    {"type": "replaceMetadata", "field": "title", "value": "x"}
-                ],
+                "edits": [{"type": "replaceMetadata", "field": "title", "value": "x"}],
             },
         )
 
@@ -332,9 +328,7 @@ def test_pre_tool_guard_verifies_workspace_id_on_bound_web_sessions(
     # Reads and the bound current tools are never intercepted.
     for tool_name in ("wxpost_get_context", "wxpost_save_current_draft"):
         assert (
-            plugin.hermes_hooks.guard_feishu_writes(
-                tool_name=tool_name, args={}
-            )
+            plugin.hermes_hooks.guard_feishu_writes(tool_name=tool_name, args={})
             is None
         )
 
@@ -382,24 +376,26 @@ def test_raw_save_tools_prefer_the_controller_bound_operation_id(
     bound = "draft-" + "7" * 32
     minted = "generate-wxpost-raw-v1"
     assert (
-        mcp_factory._trusted_operation_id(Controller(), "wxpost-raw", minted)
-        == minted
+        mcp_factory._trusted_operation_id(Controller(), "wxpost-raw", minted) == minted
     )
 
     store = _start_running_operation(tmp_path, "wxpost-raw", bound)
     assert (
-        mcp_factory._trusted_operation_id(Controller(), "wxpost-raw", minted)
-        == bound
+        mcp_factory._trusted_operation_id(Controller(), "wxpost-raw", minted) == bound
     )
 
     # Once the operation settles, Feishu saves keep their own ids.
     store.complete_operation(
         bound,
-        result={"reply": "Saved.", "draftChanged": True, "draftVersion": 1, "steps": []},
+        result={
+            "reply": "Saved.",
+            "draftChanged": True,
+            "draftVersion": 1,
+            "steps": [],
+        },
     )
     assert (
-        mcp_factory._trusted_operation_id(Controller(), "wxpost-raw", minted)
-        == minted
+        mcp_factory._trusted_operation_id(Controller(), "wxpost-raw", minted) == minted
     )
 
 
@@ -1025,6 +1021,8 @@ def test_capture_full_page_uses_mobile_viewport_and_crops_to_article(
     async def run_browser(*args: str, timeout: int = 120) -> str:
         del timeout
         calls.append(args)
+        if args[-1] == plugin.feishu_delivery._IMAGES_SETTLED_EXPRESSION:
+            return json.dumps({"data": True})
         if args[-3:] == ("get", "box", '[data-testid="wxpost-article"]'):
             return json.dumps(
                 {
@@ -1074,6 +1072,73 @@ def test_capture_full_page_uses_mobile_viewport_and_crops_to_article(
         "/test/chrome-headless-shell",
     )
     assert crops == [(12, 20, 378, 820)]
+    # Images are forced eager and polled to completion BEFORE the article box
+    # is measured, so the crop reflects the final page height.
+    eager_index = next(
+        index
+        for index, args in enumerate(calls)
+        if "eval" in args and 'image.loading = "eager"' in args[-1]
+    )
+    settle_index = next(
+        index
+        for index, args in enumerate(calls)
+        if args[-1] == plugin.feishu_delivery._IMAGES_SETTLED_EXPRESSION
+    )
+    box_index = next(
+        index for index, args in enumerate(calls) if args[-2:-1] == ("box",)
+    )
+    assert eager_index < settle_index < box_index
+
+
+def test_capture_full_page_polls_until_images_settle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    plugin = _load_plugin(monkeypatch)
+    monkeypatch.setenv("WXPOST_CHROMIUM_PATH", "/test/chrome-headless-shell")
+    monkeypatch.setattr(plugin.feishu_delivery, "_IMAGE_SETTLE_INTERVAL_SECONDS", 0)
+    destination = tmp_path / "draft.png"
+    settle_calls = 0
+
+    async def run_browser(*args: str, timeout: int = 120) -> str:
+        del timeout
+        nonlocal settle_calls
+        if args[-1] == plugin.feishu_delivery._IMAGES_SETTLED_EXPRESSION:
+            settle_calls += 1
+            return json.dumps({"data": settle_calls >= 3})
+        if args[-3:] == ("get", "box", '[data-testid="wxpost-article"]'):
+            return json.dumps({"data": {"x": 0, "y": 0, "width": 390, "height": 400}})
+        if "screenshot" in args:
+            Path(args[-1]).write_bytes(b"full-page")
+        return ""
+
+    monkeypatch.setattr(plugin.feishu_delivery, "run_browser", run_browser)
+
+    class CroppedImage:
+        def save(self, path, *, format):
+            del path, format
+
+    class FullPageImage:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def crop(self, box):
+            del box
+            return CroppedImage()
+
+    pil_module = ModuleType("PIL")
+    pil_module.Image = SimpleNamespace(open=lambda path: FullPageImage())
+    monkeypatch.setitem(sys.modules, "PIL", pil_module)
+
+    asyncio.run(
+        plugin.feishu_delivery.capture_full_page(
+            "https://soarhigh.example/temporary-preview", destination
+        )
+    )
+
+    assert settle_calls == 3
 
 
 def test_resolve_chromium_path_uses_override(monkeypatch) -> None:

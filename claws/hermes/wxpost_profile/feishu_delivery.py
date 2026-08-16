@@ -252,6 +252,29 @@ def resolve_chromium_path() -> str:
     )
 
 
+# networkidle means network-quiet, not layout-stable: images may still be
+# decoding (and lazy images below the viewport not even requested) when it
+# fires. The capture polls until every image has settled — success or
+# failure both set img.complete — so the article box and the screenshot
+# agree on the final page height.
+_IMAGE_SETTLE_ATTEMPTS = 30
+_IMAGE_SETTLE_INTERVAL_SECONDS = 1.0
+_IMAGES_SETTLED_EXPRESSION = (
+    "Array.from(document.images).every((image) => image.complete)"
+)
+
+
+def _eval_reports_true(payload: str) -> bool:
+    text = payload.strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return text == "true"
+    if isinstance(data, dict):
+        data = data.get("data")
+    return data is True
+
+
 async def capture_full_page(preview_url: str, destination: Path) -> None:
     session = f"wxpost-preview-{uuid4().hex}"
     browser_path = resolve_chromium_path()
@@ -277,8 +300,22 @@ async def capture_full_page(preview_url: str, destination: Path) -> None:
                 "html { scrollbar-width: none !important; } " +
                 "html::-webkit-scrollbar { display: none !important; }";
               document.head.appendChild(style);
+              for (const image of Array.from(document.images)) {
+                image.loading = "eager";
+              }
             })()""",
         )
+        for _ in range(_IMAGE_SETTLE_ATTEMPTS):
+            settled = await run_browser(
+                "--session",
+                session,
+                "--json",
+                "eval",
+                _IMAGES_SETTLED_EXPRESSION,
+            )
+            if _eval_reports_true(settled):
+                break
+            await asyncio.sleep(_IMAGE_SETTLE_INTERVAL_SECONDS)
         box_payload = await run_browser(
             "--session",
             session,

@@ -15,6 +15,7 @@ interface DraftPreviewPayload {
   workspaceId: string;
   draftVersion: number;
   renderDocument: WxPostRenderDocument;
+  assetDimensions?: Record<string, { width: number; height: number }>;
 }
 
 function apiUrl(path: string) {
@@ -65,11 +66,21 @@ export default async function WxPostDraftPreviewPage({
   const assetUrls = Object.fromEntries(
     renderDocument.media.map((media) => [media.id, media.sourceUrl])
   );
+  const assetDimensions = Object.fromEntries(
+    Object.entries(payload.assetDimensions ?? {}).filter(
+      ([, dimensions]) =>
+        Number.isInteger(dimensions?.width) &&
+        Number.isInteger(dimensions?.height) &&
+        dimensions.width > 0 &&
+        dimensions.height > 0
+    )
+  );
   const { html } = compileWxPost({
     renderDocument,
     presentation: renderDocument.presentation,
     context: {
       assetUrls,
+      assetDimensions,
       publisherName: 'SoarHigh Toastmasters',
     },
   });

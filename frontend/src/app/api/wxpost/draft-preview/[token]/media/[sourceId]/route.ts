@@ -26,10 +26,13 @@ export async function GET(
       headers: { 'Cache-Control': 'private, no-store' },
     });
   }
+  // Media under a preview token is immutable (exact Draft version,
+  // sha256-verified bytes), so private caching is safe and makes re-opens
+  // and retries instant.
   return new Response(response.body, {
     status: 200,
     headers: {
-      'Cache-Control': 'private, no-store',
+      'Cache-Control': 'private, max-age=3600',
       'Content-Type':
         response.headers.get('content-type') ?? 'application/octet-stream',
     },
