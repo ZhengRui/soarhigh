@@ -49,11 +49,11 @@ remains in the canonical controller rather than a second assistant-owned store.
 Feishu conversations start in read-only mode. They retain the selected
 workspace context and may inspect Materials and Drafts, answer questions,
 search the web, and deliver previews, but every workspace, Materials, and Draft
-write is rejected in code. Send `/editing` twice in separate messages to see
-the warning and confirm editing mode; send `/readonly` to return immediately.
+write is rejected in code. Send `/editing` to switch to editing mode; send
+`/readonly` to return immediately.
 Selecting or creating a workspace and `/new` always reset the conversation to
-read-only. The mode and its short-lived confirmation are stored by the
-Controller in `controller.sqlite3`, independently from Hermes chat history.
+read-only. The mode is stored by the Controller in `controller.sqlite3`,
+independently from Hermes chat history.
 The Feishu navigation layer checks the mode before its own mutations, while a
 `pre_tool_call` hook guards the complete raw WxPost MCP write surface. Web Draft
 Assistant sessions are not subject to this Feishu-only mode.

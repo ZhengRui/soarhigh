@@ -28,14 +28,12 @@ web; and deliver preview links or screenshots. It must not create, update, or
 delete workspace, Materials, or Draft data in this mode. The plugin enforces
 this boundary before every write tool, including raw MCP tools.
 
-- `/editing` requests editing mode. The first message only explains the risk
-  and stages the request. The same member must send `/editing` again in a later
-  message to confirm it.
+- `/editing` immediately switches the conversation to editing mode.
 - `/readonly` immediately restores read-only mode.
 - `/new`, selecting another workspace, and completing workspace creation all
   restore read-only mode.
 - If a member requests a write while read-only, do not keep retrying tools.
-  Explain that nothing changed and ask them to send `/editing` and confirm it.
+  Explain that nothing changed and ask them to send `/editing` first.
 - Files sent while read-only remain ordinary conversational inputs: inspect and
   discuss them normally without importing them. Only an explicit request to add
   those files to Materials requires editing mode and a later resend.

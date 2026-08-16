@@ -160,42 +160,19 @@ def prepare_feishu_event(
             ),
         }
     if lowered == EDITING_COMMAND:
-        user_id = str(getattr(source, "user_id", "") or "").strip()
-        if not user_id or not message_id:
-            raise RuntimeError("Feishu member and message identity are required")
         if store.interaction_mode(scope_key) == FeishuStateStore.EDITING:
             return {
                 "action": "rewrite",
                 "text": "The Feishu conversation is already in editing mode. Say so briefly.",
             }
-        confirmed = store.consume_editing_confirmation(
-            scope_key,
-            message_id=str(message_id),
-            requested_by_user_id=user_id,
-        )
-        if confirmed:
-            store.set_interaction_mode(scope_key, FeishuStateStore.EDITING)
-            return {
-                "action": "rewrite",
-                "text": (
-                    "The member confirmed editing mode. Confirm briefly that future "
-                    "explicit requests may now change the selected workspace, "
-                    "Materials, or Draft until /readonly, /new, or a workspace switch."
-                ),
-            }
-        store.stage_editing_confirmation(
-            scope_key,
-            message_id=str(message_id),
-            requested_by_user_id=user_id,
-        )
+        store.set_interaction_mode(scope_key, FeishuStateStore.EDITING)
         return {
             "action": "rewrite",
             "text": (
-                "The member has not entered editing mode. Reply in the member's "
-                "current language and include both mandatory points: editing mode "
-                "can change workspace, Materials, and Draft data; to confirm that "
-                "risk, the member must send /editing again in a separate message. "
-                "Do not omit either point and do not call a tool."
+                "The member switched this Feishu conversation to editing mode. "
+                "Confirm briefly that explicit requests may now change the "
+                "selected workspace, Materials, or Draft until /readonly, /new, "
+                "or a workspace switch."
             ),
         }
 
@@ -232,7 +209,7 @@ def prepare_feishu_event(
             "them and answer questions about them normally. Do not import them into "
             "the active WxPost workspace. Only if the member explicitly asks to add "
             "them to Materials, explain that importing is a workspace change and "
-            "they must enter editing mode with the two-step /editing confirmation, "
+            "they must enter editing mode with /editing, "
             "then resend the files. Attachment metadata: "
             + json.dumps(attachments, ensure_ascii=False)
         )

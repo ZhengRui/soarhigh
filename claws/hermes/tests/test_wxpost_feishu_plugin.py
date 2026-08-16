@@ -452,7 +452,7 @@ def test_prepare_feishu_event_exposes_message_and_attachment_metadata(
     assert "conversation-only input" in event.text
     assert "inspect them and answer questions about them normally" in event.text
     assert "Do not import them" in event.text
-    assert "two-step /editing confirmation" in event.text
+    assert "enter editing mode with /editing" in event.text
     assert '"sourcePath": "/opt/data/profiles/wxpost/cache/images/image.png"' in (
         event.text
     )
@@ -495,7 +495,7 @@ def test_prepare_event_does_not_expose_navigation_metadata_on_web(
     assert event.text == "member text"
 
 
-def test_feishu_mode_commands_require_confirmation_and_new_resets_readonly(
+def test_feishu_mode_commands_switch_immediately_and_new_resets_readonly(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -522,12 +522,12 @@ def test_feishu_mode_commands_require_confirmation_and_new_resets_readonly(
             gateway=gateway,
         )
 
-    first = dispatch("/editing", "om_editing_request")
-    assert "send /editing again" in first["text"]
-    assert plugin.hermes_hooks._state_store().interaction_mode(scope_key) == "readonly"
+    switched = dispatch("/editing", "om_editing_request")
+    assert "switched this Feishu conversation to editing mode" in switched["text"]
+    assert plugin.hermes_hooks._state_store().interaction_mode(scope_key) == "editing"
 
-    confirmed = dispatch("/editing", "om_editing_confirm")
-    assert "confirmed editing mode" in confirmed["text"]
+    repeated = dispatch("/editing", "om_editing_repeat")
+    assert "already in editing mode" in repeated["text"]
     assert plugin.hermes_hooks._state_store().interaction_mode(scope_key) == "editing"
 
     readonly = dispatch("/readonly", "om_readonly")

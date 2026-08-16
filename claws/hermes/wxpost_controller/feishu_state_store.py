@@ -74,77 +74,6 @@ class FeishuStateStore:
                 "DELETE FROM feishu_pending_confirmations WHERE scope_key = ?",
                 (scope_key,),
             )
-            connection.execute(
-                "DELETE FROM feishu_mode_confirmations WHERE scope_key = ?",
-                (scope_key,),
-            )
-
-    def stage_editing_confirmation(
-        self,
-        scope_key: str,
-        *,
-        message_id: str,
-        requested_by_user_id: str,
-    ) -> None:
-        scope_key = self._validate_scope_key(scope_key)
-        if not message_id or not requested_by_user_id:
-            raise InvalidRequest("editing confirmation requires a message and member")
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO feishu_mode_confirmations(
-                    scope_key, requested_message_id, requested_by_user_id,
-                    expires_at
-                ) VALUES (?, ?, ?, ?)
-                ON CONFLICT(scope_key) DO UPDATE SET
-                    requested_message_id = excluded.requested_message_id,
-                    requested_by_user_id = excluded.requested_by_user_id,
-                    expires_at = excluded.expires_at,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    scope_key,
-                    message_id,
-                    requested_by_user_id,
-                    self._clock() + self.CONFIRMATION_TTL_SECONDS,
-                ),
-            )
-
-    def consume_editing_confirmation(
-        self,
-        scope_key: str,
-        *,
-        message_id: str,
-        requested_by_user_id: str,
-    ) -> bool:
-        scope_key = self._validate_scope_key(scope_key)
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT requested_message_id, requested_by_user_id, expires_at
-                FROM feishu_mode_confirmations
-                WHERE scope_key = ?
-                """,
-                (scope_key,),
-            ).fetchone()
-            if row is None:
-                return False
-            if (
-                str(row[0]) == message_id
-                or str(row[1]) != requested_by_user_id
-                or float(row[2]) <= self._clock()
-            ):
-                if float(row[2]) <= self._clock():
-                    connection.execute(
-                        "DELETE FROM feishu_mode_confirmations WHERE scope_key = ?",
-                        (scope_key,),
-                    )
-                return False
-            connection.execute(
-                "DELETE FROM feishu_mode_confirmations WHERE scope_key = ?",
-                (scope_key,),
-            )
-        return True
 
     def bind(self, scope_key: str, workspace_id: str) -> None:
         scope_key = self._validate_scope_key(scope_key)
@@ -314,14 +243,6 @@ class FeishuStateStore:
                 CREATE TABLE IF NOT EXISTS feishu_interaction_modes (
                     scope_key TEXT PRIMARY KEY,
                     mode TEXT NOT NULL CHECK(mode IN ('readonly', 'editing')),
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE TABLE IF NOT EXISTS feishu_mode_confirmations (
-                    scope_key TEXT PRIMARY KEY,
-                    requested_message_id TEXT NOT NULL,
-                    requested_by_user_id TEXT NOT NULL,
-                    expires_at REAL NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );

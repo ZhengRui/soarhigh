@@ -308,38 +308,6 @@ def test_confirmation_accepts_same_member_in_a_later_message(tmp_path: Path) -> 
     )
 
 
-def test_editing_confirmation_does_not_replace_a_pending_workspace_action(
-    tmp_path: Path,
-) -> None:
-    store = FeishuStateStore(tmp_path, clock=lambda: 1_000.0)
-    payload = '{"sourceId":"M01"}'
-    store.stage_confirmation(
-        DM_SCOPE,
-        action="save_material_description",
-        payload=payload,
-        message_id="om_description",
-        requested_by_user_id="ou_member",
-    )
-    store.stage_editing_confirmation(
-        DM_SCOPE,
-        message_id="om_editing",
-        requested_by_user_id="ou_member",
-    )
-
-    assert store.consume_editing_confirmation(
-        DM_SCOPE,
-        message_id="om_editing_confirm",
-        requested_by_user_id="ou_member",
-    )
-    assert store.consume_confirmation(
-        DM_SCOPE,
-        action="save_material_description",
-        payload=payload,
-        message_id="om_description_confirm",
-        requested_by_user_id="ou_member",
-    )
-
-
 def test_feishu_image_description_requires_confirmation_before_materials_save(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
