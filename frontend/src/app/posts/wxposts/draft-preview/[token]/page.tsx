@@ -4,6 +4,8 @@ import { notFound } from 'next/navigation';
 import { compileWxPost } from '@/components/wxpost/renderer/compiler';
 import type { WxPostRenderDocument } from '@/components/wxpost/types';
 
+import { MediaRetryActivator } from './MediaRetry';
+
 export const dynamic = 'force-dynamic';
 
 export const metadata = {
@@ -95,6 +97,7 @@ export default async function WxPostDraftPreviewPage({
         className='mx-auto max-w-4xl'
         dangerouslySetInnerHTML={{ __html: html }}
       />
+      <MediaRetryActivator />
     </main>
   );
 }
