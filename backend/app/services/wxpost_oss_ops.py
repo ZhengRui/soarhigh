@@ -236,7 +236,7 @@ def _process_variant(bucket: Any, source_key: str, style: str, target_key: str) 
         bucket.process_object(source_key, style)
     except Exception as e:
         raise OssOpsError(
-            "invalid_wechat_image",
+            "asset_unavailable",
             f"Failed to process image: {e}",
         ) from e
 
@@ -248,7 +248,7 @@ def _get_variant_size(bucket: Any, target_key: str) -> int:
         return meta.content_length
     except Exception as e:
         raise OssOpsError(
-            "invalid_wechat_image",
+            "asset_unavailable",
             f"Failed to get variant size: {e}",
         ) from e
 
@@ -260,6 +260,6 @@ def _download_variant(bucket: Any, target_key: str) -> bytes:
         return obj.read()
     except Exception as e:
         raise OssOpsError(
-            "invalid_wechat_image",
+            "asset_unavailable",
             f"Failed to download variant: {e}",
         ) from e

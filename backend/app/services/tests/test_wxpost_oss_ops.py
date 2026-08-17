@@ -14,6 +14,13 @@ from app.services.wxpost_oss_ops import (
 )
 
 
+class FakeObjectMeta:
+    """Fake object metadata for head_object."""
+
+    def __init__(self, size: int) -> None:
+        self.content_length = size
+
+
 class FakeBucket:
     """Mock OSS bucket for testing."""
 
@@ -38,11 +45,6 @@ class FakeBucket:
         """Mock head_object returns object metadata."""
         # First check if it's in the pre-defined head_sizes (for copy tests)
         if key in self.head_sizes:
-
-            class FakeObjectMeta:
-                def __init__(self, size: int) -> None:
-                    self.content_length = size
-
             return FakeObjectMeta(self.head_sizes[key])
 
         # Otherwise, it's for variant size tracking (called after process_object)
@@ -51,10 +53,6 @@ class FakeBucket:
         else:
             size = 2**21
         self._head_object_call_count += 1
-
-        class FakeObjectMeta:
-            def __init__(self, size: int) -> None:
-                self.content_length = size
 
         return FakeObjectMeta(size)
 
@@ -89,6 +87,33 @@ class FakeBucket:
                 return self._content
 
         return FakeStreamingBody(self.object_bytes)
+
+
+class FailingBucket:
+    """Mock OSS bucket that raises exceptions."""
+
+    def __init__(self, fail_on: str = "head") -> None:
+        self.fail_on = fail_on
+
+    def head_object(self, key: str) -> Any:
+        if self.fail_on == "head":
+            raise RuntimeError("OSS head_object failed")
+        return FakeObjectMeta(100)
+
+    def copy_object(self, source_key: str, target_key: str) -> Any:
+        if self.fail_on == "copy":
+            raise RuntimeError("OSS copy_object failed")
+        return type("FakeCopyResult", (), {"etag": "AB" * 16})()
+
+    def process_object(self, source_key: str, style: str) -> Any:
+        if self.fail_on == "process":
+            raise RuntimeError("OSS process_object failed")
+        return type("FakeProcessResult", (), {})()
+
+    def get_object(self, key: str) -> Any:
+        if self.fail_on == "get":
+            raise RuntimeError("OSS get_object failed")
+        return type("FakeStreamingBody", (), {"read": lambda: b""})()
 
 
 def test_copy_public_object_verifies_size_and_returns_etag() -> None:
@@ -141,3 +166,42 @@ def test_generate_wechat_variant_png_ladder_stays_png() -> None:
     assert variant.extension == "png"
     assert "format,png" in bucket.process_styles[0]
     assert "quality" not in bucket.process_styles[0]
+
+
+def test_copy_public_object_raises_asset_unavailable_on_head_failure() -> None:
+    bucket = FailingBucket(fail_on="head")
+    with pytest.raises(OssOpsError) as err:
+        copy_public_object("src.jpg", "dst.jpg", expected_size=100, bucket_factory=lambda: bucket)
+    assert err.value.code == "asset_unavailable"
+
+
+def test_copy_public_object_raises_asset_unavailable_on_copy_failure() -> None:
+    bucket = FailingBucket(fail_on="copy")
+    bucket.head_sizes = {"src.jpg": 100}
+    bucket.head_object = lambda key: FakeObjectMeta(100) if key == "src.jpg" else None
+    with pytest.raises(OssOpsError) as err:
+        copy_public_object("src.jpg", "dst.jpg", expected_size=100, bucket_factory=lambda: bucket)
+    assert err.value.code == "asset_unavailable"
+
+
+def test_generate_wechat_variant_raises_asset_unavailable_on_process_failure() -> None:
+    bucket = FailingBucket(fail_on="process")
+    with pytest.raises(OssOpsError) as err:
+        generate_wechat_variant("src.jpg", "dir", mime_type="image/jpeg", bucket_factory=lambda: bucket)
+    assert err.value.code == "asset_unavailable"
+
+
+def test_generate_wechat_variant_raises_asset_unavailable_on_head_failure() -> None:
+    bucket = FailingBucket(fail_on="head")
+    with pytest.raises(OssOpsError) as err:
+        generate_wechat_variant("src.jpg", "dir", mime_type="image/jpeg", bucket_factory=lambda: bucket)
+    assert err.value.code == "asset_unavailable"
+
+
+def test_generate_wechat_variant_raises_asset_unavailable_on_get_failure() -> None:
+    bucket = FailingBucket(fail_on="get")
+    bucket.process_object = lambda source_key, style: type("FakeProcessResult", (), {})()
+    bucket.head_object = lambda key: FakeObjectMeta(800 * 1024)
+    with pytest.raises(OssOpsError) as err:
+        generate_wechat_variant("src.jpg", "dir", mime_type="image/jpeg", bucket_factory=lambda: bucket)
+    assert err.value.code == "asset_unavailable"
