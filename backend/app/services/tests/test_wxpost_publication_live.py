@@ -126,7 +126,11 @@ async def test_real_publication_storage_lifecycle() -> None:
     try:
         first = await synchronize_workspace_publication(
             workspace_id,
-            WxPostPublicationSyncRequest(expected_manifest_version=1, expected_draft_version=1),
+            WxPostPublicationSyncRequest(
+                operation_id="publish-" + "0" * 32,
+                expected_manifest_version=1,
+                expected_draft_version=1,
+            ),
             load_context=load_context,
             load_source=load_source,
             compile_render=compile_render,
@@ -164,6 +168,7 @@ async def test_real_publication_storage_lifecycle() -> None:
         repeated = await synchronize_workspace_publication(
             workspace_id,
             WxPostPublicationSyncRequest(
+                operation_id="publish-" + "1" * 32,
                 expected_manifest_version=1,
                 expected_draft_version=1,
                 expected_public_revision=1,
@@ -183,6 +188,7 @@ async def test_real_publication_storage_lifecycle() -> None:
         replaced = await synchronize_workspace_publication(
             workspace_id,
             WxPostPublicationSyncRequest(
+                operation_id="publish-" + "2" * 32,
                 expected_manifest_version=2,
                 expected_draft_version=2,
                 expected_public_revision=1,

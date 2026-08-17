@@ -72,8 +72,8 @@ from ...services.wxpost_publication import (
     delete_public_wxpost,
     ensure_publication_asset,
     finalize_publication,
+    prepare_publication_submit,
     publication_status,
-    synchronize_workspace_publication,
 )
 from ...services.wxpost_wechat import (
     WechatDraftError,
@@ -98,6 +98,7 @@ workspace_draft_routes = {
 }
 workspace_draft_operation_route = re.compile(r"^draft/operations/draft-[0-9a-f]{32}$")
 workspace_draft_interrupt_route = re.compile(r"^draft/operations/draft-[0-9a-f]{32}/interrupt$")
+workspace_publication_operation_route = re.compile(r"publication/operations/publish-[0-9a-f]{32}")
 
 
 class VoiceToneSuggestionRequest(BaseModel):
@@ -469,11 +470,14 @@ def _workspace_route_allowed(method: str, path: str) -> bool:
         ("GET", "context"),
         ("PATCH", "sources"),
         ("POST", "uploads"),
+        ("GET", "publication/operations/current"),
     } | workspace_draft_routes:
         return True
     if method == "GET" and workspace_draft_operation_route.fullmatch(path):
         return True
     if method == "POST" and workspace_draft_interrupt_route.fullmatch(path):
+        return True
+    if method == "GET" and workspace_publication_operation_route.fullmatch(path):
         return True
     if not workspace_source_route.fullmatch(path):
         return False
@@ -1003,26 +1007,38 @@ async def r_get_wxpost_draft_preview_media(token: str, source_id: str) -> Respon
     )
 
 
-@r.post(
-    "/posts/wxposts/workspaces/{workspace_id}/publication/sync",
-    response_model=WxPostPublicationStatus,
-)
+@r.post("/posts/wxposts/workspaces/{workspace_id}/publication/sync")
 async def r_sync_wxpost_workspace_publication(
     request: WxPostPublicationSyncRequest,
     workspace_id: str = Path(..., min_length=1),
     user: User = Depends(get_current_user),
-) -> WxPostPublicationStatus | JSONResponse:
+) -> JSONResponse:
+    """Validate the workspace Draft and hand the submit plan to the Controller's
+    async publication runner, which owns asset materialization and finalize."""
+
     del user
     try:
-        return await synchronize_workspace_publication(
+        plan = await prepare_publication_submit(
             workspace_id,
             request,
             load_context=_load_workspace_context,
-            load_source=_load_workspace_source,
-            compile_render=_compile_trusted_render,
         )
     except PublicationError as error:
         return _publication_error(error)
+    upstream = await _request_workspace_controller(
+        "POST",
+        f"/workspaces/{quote(workspace_id, safe='')}/publication/sync",
+        body=json.dumps(
+            {
+                "operationId": request.operation_id,
+                "plan": plan.model_dump(by_alias=True, mode="json"),
+            }
+        ).encode(),
+        content_type="application/json",
+    )
+    if upstream.status_code != 200:
+        raise _upstream_error(upstream)
+    return JSONResponse(status_code=202, content={"operationId": request.operation_id})
 
 
 @r.post(

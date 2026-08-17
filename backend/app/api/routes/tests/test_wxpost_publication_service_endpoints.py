@@ -3,33 +3,56 @@
 Covers the `POST .../publication/assets/ensure` and
 `POST .../publication/finalize` routes added for the async publication
 pipeline: service-token auth, the OSS-copy asset materialization path, and
-the finalize tail's version-drift guard + up-to-date short-circuit.
+the finalize tail's version-drift guard + up-to-date short-circuit. Also
+covers `POST .../publication/sync`, the member-facing route that validates
+the Draft and hands the submit plan to the Controller's async runner.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 import app.api.routes.wxpost as wxpost_route
 import app.services.wxpost_publication as wxpost_publication
 from app.api.serv import app
+from app.models.users import User
 from app.services.wxpost_oss_ops import OssOpsError, VariantObject
 
 WXPOST_ID = UUID("00000000-0000-4000-8000-000000000abc")
 WORKSPACE_ID = "wxpost-abc"
+OPERATION_ID = "publish-0123456789abcdef0123456789abcdef"
 
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     yield TestClient(app)
+
+
+@pytest.fixture
+def member_client() -> Iterator[TestClient]:
+    """A client authenticated as a bound member, for the `/publication/sync`
+    route which is gated by `get_current_user` rather than the service
+    token used by the Controller-facing ensure/finalize routes above."""
+
+    app.dependency_overrides[wxpost_route.get_current_user] = lambda: User(
+        uid="member-123",
+        username="test-member",
+        full_name="Test Member",
+    )
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(wxpost_route.get_current_user, None)
 
 
 @pytest.fixture(autouse=True)
@@ -602,3 +625,187 @@ def test_finalize_publishes_and_rewrites_media_on_the_real_publish_path(
     )
 
     assert swept == [{content_sha256}]
+
+
+def _stub_new_workspace_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_prepare_submit`'s shell-adoption path for a workspace with no prior
+    public WxPost: no existing row, so a fresh "assembling" shell is
+    created and adopted."""
+
+    monkeypatch.setattr(wxpost_publication, "get_wxpost_by_workspace_id", lambda workspace_id: None)
+    monkeypatch.setattr(wxpost_publication, "has_abandoned_wxpost_assets", lambda wxpost_id: False)
+    monkeypatch.setattr(
+        wxpost_publication,
+        "create_publication_shell",
+        lambda **kwargs: {
+            "id": str(WXPOST_ID),
+            "status": "assembling",
+            "is_public": False,
+            "article_revision": 1,
+            "source_workspace_id": kwargs["workspace_id"],
+            "source_draft_version": kwargs["draft_version"],
+            "source_draft_sha256": kwargs["draft_sha256"],
+        },
+    )
+
+
+def _sync_body(
+    *,
+    operation_id: str | None = OPERATION_ID,
+    manifest_version: int = 4,
+    draft_version: int = 2,
+    public_revision: int | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "expectedManifestVersion": manifest_version,
+        "expectedDraftVersion": draft_version,
+        "expectedPublicRevision": public_revision,
+    }
+    if operation_id is not None:
+        body["operationId"] = operation_id
+    return body
+
+
+def test_sync_route_validates_the_draft_and_forwards_the_plan_to_the_controller(
+    member_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_new_workspace_shell(monkeypatch)
+
+    async def load_context(workspace_id: str) -> dict:
+        assert workspace_id == WORKSPACE_ID
+        return _context()
+
+    monkeypatch.setattr(wxpost_route, "_load_workspace_context", load_context)
+
+    captured: list[dict[str, Any]] = []
+
+    async def fake_request_workspace_controller(
+        method: str,
+        path: str,
+        *,
+        body: bytes | None = None,
+        content_type: str | None = None,
+        expected_manifest_version: str | None = None,
+        timeout: int = 30,
+    ) -> httpx.Response:
+        captured.append({"method": method, "path": path, "body": body, "content_type": content_type})
+        return httpx.Response(
+            200,
+            json={"workspaceId": WORKSPACE_ID, "operationId": OPERATION_ID, "state": "running"},
+        )
+
+    monkeypatch.setattr(wxpost_route, "_request_workspace_controller", fake_request_workspace_controller)
+
+    response = member_client.post(
+        f"/posts/wxposts/workspaces/{WORKSPACE_ID}/publication/sync",
+        json=_sync_body(),
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {"operationId": OPERATION_ID}
+
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["method"] == "POST"
+    assert call["path"] == f"/workspaces/{WORKSPACE_ID}/publication/sync"
+    assert call["content_type"] == "application/json"
+
+    forwarded = json.loads(call["body"])
+    assert forwarded["operationId"] == OPERATION_ID
+    plan = forwarded["plan"]
+    assert plan["wxpostId"] == str(WXPOST_ID)
+    assert plan["draftVersion"] == 2
+    assert plan["manifestVersion"] == 4
+    assert len(plan["bundleSha256"]) == 64
+    assert plan["items"] == [
+        {
+            "sourceId": "M01",
+            "kind": "image",
+            "filename": "round-table.jpg",
+            "mimeType": "image/jpeg",
+            "sizeBytes": 0,
+            "contentSha256": hashlib.sha256(b"public image bytes").hexdigest(),
+            "meetingFileKey": "public/meetings/2026/M01.jpg",
+            "needsWechatVariant": True,
+        }
+    ]
+
+
+def test_sync_route_rejects_a_request_missing_the_operation_id(member_client: TestClient) -> None:
+    response = member_client.post(
+        f"/posts/wxposts/workspaces/{WORKSPACE_ID}/publication/sync",
+        json=_sync_body(operation_id=None),
+    )
+
+    assert response.status_code == 422
+
+
+def test_sync_route_rejects_a_malformed_operation_id(member_client: TestClient) -> None:
+    response = member_client.post(
+        f"/posts/wxposts/workspaces/{WORKSPACE_ID}/publication/sync",
+        json=_sync_body(operation_id="not-a-valid-operation-id"),
+    )
+
+    assert response.status_code == 422
+
+
+def test_sync_route_rejects_upload_origin_material_before_forwarding_to_the_controller(
+    member_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(wxpost_publication, "get_wxpost_by_workspace_id", lambda workspace_id: None)
+
+    context = _context()
+    context["manifest"]["sources"][0]["origin"] = {"type": "web-upload"}
+
+    async def load_context(workspace_id: str) -> dict:
+        return context
+
+    monkeypatch.setattr(wxpost_route, "_load_workspace_context", load_context)
+    monkeypatch.setattr(
+        wxpost_route,
+        "_request_workspace_controller",
+        lambda *args, **kwargs: pytest.fail("upload-origin rejection still forwarded to the controller"),
+    )
+
+    response = member_client.post(
+        f"/posts/wxposts/workspaces/{WORKSPACE_ID}/publication/sync",
+        json=_sync_body(),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "upload_origin_unsupported"
+
+
+def test_sync_route_passes_through_a_controller_conflict_error_envelope(
+    member_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_new_workspace_shell(monkeypatch)
+
+    async def load_context(workspace_id: str) -> dict:
+        return _context()
+
+    monkeypatch.setattr(wxpost_route, "_load_workspace_context", load_context)
+
+    async def fake_request_workspace_controller(*args: Any, **kwargs: Any) -> httpx.Response:
+        return httpx.Response(
+            409,
+            json={
+                "error": {
+                    "code": "draft_operation_in_progress",
+                    "message": "A publication is already running for this workspace.",
+                }
+            },
+        )
+
+    monkeypatch.setattr(wxpost_route, "_request_workspace_controller", fake_request_workspace_controller)
+
+    response = member_client.post(
+        f"/posts/wxposts/workspaces/{WORKSPACE_ID}/publication/sync",
+        json=_sync_body(),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "A publication is already running for this workspace."

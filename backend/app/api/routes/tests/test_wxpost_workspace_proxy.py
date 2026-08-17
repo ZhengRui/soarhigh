@@ -12,7 +12,7 @@ import app.api.routes.wxpost as wxpost_route
 import app.services.wxpost_publication as wxpost_publication
 from app.api.serv import app
 from app.models.users import User
-from app.models.wxpost import WxPostPublicationStatus, WxPostWechatDraftResult
+from app.models.wxpost import WxPostWechatDraftResult
 
 WXPOST_FIXTURE = Path(__file__).parent / "fixtures" / "wxpost-meeting-recap-v1.json"
 
@@ -489,7 +489,7 @@ def test_workspace_list_survives_unavailable_publication_status(
     }
 
 
-def test_member_can_read_and_sync_workspace_publication(
+def test_member_can_read_workspace_publication_status(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -508,56 +508,11 @@ def test_member_can_read_and_sync_workspace_publication(
         "get_wxpost_by_workspace_id",
         lambda workspace_id: None,
     )
-    calls: list[dict] = []
-
-    async def sync(workspace_id, request, **kwargs):
-        calls.append(
-            {
-                "workspace_id": workspace_id,
-                "request": request.model_dump(by_alias=True),
-            }
-        )
-        return WxPostPublicationStatus(
-            state="up-to-date",
-            workspaceId=workspace_id,
-            slug="public-note",
-            publicRevision=1,
-            sourceDraftVersion=3,
-            currentDraftVersion=3,
-            publishedAt="2026-08-01T08:00:00Z",
-            publicUrl="https://soarhigh.example/posts/wxposts/public-note",
-        )
-
-    monkeypatch.setattr(
-        wxpost_route,
-        "synchronize_workspace_publication",
-        sync,
-    )
 
     status_response = client.get("/posts/wxposts/workspaces/wxpost-abc/publication")
-    sync_response = client.post(
-        "/posts/wxposts/workspaces/wxpost-abc/publication/sync",
-        json={
-            "expectedManifestVersion": 5,
-            "expectedDraftVersion": 3,
-            "expectedPublicRevision": None,
-        },
-    )
 
     assert status_response.status_code == 200
     assert status_response.json()["state"] == "not-synced"
-    assert sync_response.status_code == 200
-    assert sync_response.json()["state"] == "up-to-date"
-    assert calls == [
-        {
-            "workspace_id": "wxpost-abc",
-            "request": {
-                "expectedManifestVersion": 5,
-                "expectedDraftVersion": 3,
-                "expectedPublicRevision": None,
-            },
-        }
-    ]
 
 
 def test_controller_service_can_read_publication_without_a_callback(
@@ -878,6 +833,82 @@ def test_workspace_proxy_allows_draft_operation_interrupt(
 
     assert response.status_code == 200
     assert response.json()["interrupted"] is True
+
+
+def test_workspace_proxy_allows_reading_the_current_publication_operation(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/publication/operations/current")
+        return httpx.Response(
+            200,
+            json={
+                "workspaceId": "wxpost-abc",
+                "operationId": "publish-0123456789abcdef0123456789abcdef",
+                "state": "running",
+                "result": None,
+                "error": None,
+            },
+        )
+
+    _configure_controller(monkeypatch, handler)
+    response = client.get(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/operations/current",
+        headers={"Authorization": "Bearer member-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "running"
+
+
+def test_workspace_proxy_allows_reading_a_publication_operation_by_id(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation_id = "publish-0123456789abcdef0123456789abcdef"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith(f"/publication/operations/{operation_id}")
+        return httpx.Response(
+            200,
+            json={
+                "workspaceId": "wxpost-abc",
+                "operationId": operation_id,
+                "state": "succeeded",
+                "result": {"state": "up-to-date"},
+                "error": None,
+            },
+        )
+
+    _configure_controller(monkeypatch, handler)
+    response = client.get(
+        f"/posts/wxposts/workspaces/wxpost-abc/publication/operations/{operation_id}",
+        headers={"Authorization": "Bearer member-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "succeeded"
+
+
+def test_workspace_proxy_rejects_an_unrecognized_publication_operation_id(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={})
+
+    _configure_controller(monkeypatch, handler)
+    response = client.get(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/operations/evil",
+        headers={"Authorization": "Bearer member-token"},
+    )
+
+    assert response.status_code == 404
+    assert captured == []
 
 
 def test_workspace_proxy_rejects_operations_outside_the_materials_slice(

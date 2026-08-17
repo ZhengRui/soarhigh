@@ -371,6 +371,7 @@ class WxPostPublicDetail(WxPostPersistenceModel):
 
 
 class WxPostPublicationSyncRequest(WireModel):
+    operation_id: str = Field(pattern=r"^publish-[0-9a-f]{32}$")
     expected_manifest_version: int = Field(ge=1, strict=True)
     expected_draft_version: int = Field(ge=1, strict=True)
     expected_public_revision: int | None = Field(default=None, ge=1, strict=True)

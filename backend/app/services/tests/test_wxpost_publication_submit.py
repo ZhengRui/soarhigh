@@ -105,6 +105,7 @@ def _request(
     public_revision: int | None = None,
 ) -> WxPostPublicationSyncRequest:
     return WxPostPublicationSyncRequest(
+        operation_id="publish-" + "0" * 32,
         expected_manifest_version=manifest_version,
         expected_draft_version=draft_version,
         expected_public_revision=public_revision,
