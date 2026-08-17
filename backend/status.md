@@ -616,9 +616,14 @@ JPEG, the OSS ladder cannot; (2) the OSS ladder trusts the asset's stored
 `mime_type` says `image/jpeg` but is actually a PNG (or vice versa) gets
 processed as its stored type — e.g. a mislabeled PNG-as-JPEG loses alpha and
 comes back as a flattened JPEG variant, where the old byte-sniffing Pillow
-path would have preserved transparency. Both only matter for backfilling
-pre-existing rows whose stored `mime_type` doesn't match their actual bytes;
-new assets always get a byte-verified `mime_type` at ingest.
+path would have preserved transparency. This isn't only a legacy-row
+concern: `mime_type` is derived from the upload's declared header (or
+`mimetypes.guess_type`) or, for meeting-library sources, purely from the
+file extension (`meeting.py:649`, controller `core.py:1021-1023`) — ingest
+verifies decodability, dimensions, and sha256, but never byte-verifies or
+corrects `mime_type` — so a mislabeled material (e.g. a PNG named `.jpg`)
+hits this same alpha-loss behavior on new publications too, not just when
+backfilling older rows.
 
 ### Current Implementation Details
 
