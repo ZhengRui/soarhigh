@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -48,6 +49,10 @@ def _ready_wxpost_ids(*, batch_size: int) -> list[UUID]:
         start += batch_size
 
 
+async def _run(identifiers: list[UUID], *, dry_run: bool) -> list[dict]:
+    return [await reconcile_publication_wechat_variants(identifier, dry_run=dry_run) for identifier in identifiers]
+
+
 def main() -> None:
     args = _arguments()
     if not 1 <= args.batch_size <= 100:
@@ -56,7 +61,7 @@ def main() -> None:
         identifiers = [args.wxpost_id]
     else:
         identifiers = _ready_wxpost_ids(batch_size=args.batch_size)
-    reports = [reconcile_publication_wechat_variants(identifier, dry_run=args.dry_run) for identifier in identifiers]
+    reports = asyncio.run(_run(identifiers, dry_run=args.dry_run))
     print(json.dumps(reports, ensure_ascii=False, indent=2))
 
 

@@ -597,6 +597,29 @@ end-to-end (`app/services/tests/test_wxpost_publication_live.py`) was retired
 with that pipeline; there is currently no live OSS/Supabase smoke test for the
 async ensure/finalize path.
 
+The WeChat variant reconciliation backfill
+(`reconcile_publication_wechat_variants`, driven by
+`scripts/backfill_wxpost_wechat_variants.py`) switched the same way: it used
+to download each asset's original bytes from OSS and render the WeChat body
+variant locally with Pillow (`render_wechat_body_variant`, now deleted); it
+now calls the OSS server-side ladder (`generate_wechat_variant`) directly
+against the already-in-OSS original, with no download. This is the same
+switch the live ensure-asset path (`ensure_publication_asset` /
+`_ensure_wechat_variant`, Task 3) made, and the backfill now shares that
+exact code (`_materialize_wechat_variant`) rather than duplicating it. Two
+deliberate, accepted behavior differences from the retired Pillow path,
+consistent with the live path and worth knowing when backfilling older rows:
+(1) `image/gif` assets are now rejected outright with `invalid_wechat_image`
+— the old Pillow path could still flatten a static (non-animated) GIF to a
+JPEG, the OSS ladder cannot; (2) the OSS ladder trusts the asset's stored
+`mime_type` rather than sniffing the actual bytes, so a legacy asset whose
+`mime_type` says `image/jpeg` but is actually a PNG (or vice versa) gets
+processed as its stored type — e.g. a mislabeled PNG-as-JPEG loses alpha and
+comes back as a flattened JPEG variant, where the old byte-sniffing Pillow
+path would have preserved transparency. Both only matter for backfilling
+pre-existing rows whose stored `mime_type` doesn't match their actual bytes;
+new assets always get a byte-verified `mime_type` at ingest.
+
 ### Current Implementation Details
 
 The backend now fully supports the meeting management workflow:

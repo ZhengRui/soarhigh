@@ -627,6 +627,148 @@ def test_finalize_publishes_and_rewrites_media_on_the_real_publish_path(
     assert swept == [{content_sha256}]
 
 
+def test_finalize_conflict_adopts_a_concurrent_finalize_that_already_landed(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """finalize_workspace_publication raising WxPostRevisionConflictError is
+    not fatal by itself: _finalize_publication_record re-reads the workspace
+    row, and if a concurrent finalize call already landed the exact same
+    draft_version + bundle_sha256, it adopts that row instead of erroring."""
+
+    async def load_context(workspace_id: str) -> dict:
+        return _context()
+
+    bundle_sha256 = "e" * 64
+    content_sha256 = hashlib.sha256(b"public image bytes").hexdigest()
+    owner = {
+        "id": str(WXPOST_ID),
+        "slug": "a-public-field-note",
+        "status": "assembling",
+        "is_public": False,
+        "article_revision": 1,
+        "source_workspace_id": WORKSPACE_ID,
+        "source_draft_version": 2,
+        "source_draft_sha256": "stale-hash",
+        "finalize_request_hash": None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    landed = _owner_row(draft_version=2, draft_sha256=bundle_sha256)
+    ready_asset = {
+        "id": "00000000-0000-4000-8000-000000000999",
+        "object_key": f"public/wxposts/{WXPOST_ID}/assets/M01/original.jpg",
+        "content_sha256": content_sha256,
+    }
+
+    monkeypatch.setattr(wxpost_route, "_load_workspace_context", load_context)
+    monkeypatch.setattr(wxpost_publication, "get_wxpost_by_id", lambda wxpost_id: owner)
+    monkeypatch.setattr(wxpost_publication, "get_ready_wxpost_assets", lambda wxpost_id: [ready_asset])
+
+    # First call is finalize_publication's own "current" pre-check (returns
+    # None so same_bundle/same_draft stay False and the real finalize is
+    # attempted); the second is _finalize_publication_record's post-conflict
+    # "latest" re-read, simulating a concurrent finalize that just landed.
+    workspace_lookups = iter([None, landed])
+    monkeypatch.setattr(
+        wxpost_publication,
+        "get_wxpost_by_workspace_id",
+        lambda workspace_id: next(workspace_lookups),
+    )
+
+    async def fake_compile(render_document: dict) -> str:
+        return "<article>compiled</article>"
+
+    monkeypatch.setattr(wxpost_route, "_compile_trusted_render", fake_compile)
+    monkeypatch.setattr(
+        wxpost_publication,
+        "finalize_workspace_publication",
+        lambda *args, **kwargs: (_ for _ in ()).throw(wxpost_publication.WxPostRevisionConflictError()),
+    )
+    monkeypatch.setattr(
+        wxpost_publication,
+        "_remove_unreferenced_assets",
+        lambda *args, **kwargs: pytest.fail("adoption path swept assets instead of reusing the landed row"),
+    )
+
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/finalize",
+        json=_finalize_body(bundle_sha256=bundle_sha256),
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "up-to-date"
+    assert body["publicRevision"] == landed["article_revision"]
+
+
+def test_finalize_conflict_reports_version_conflict_when_latest_does_not_match(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When finalize_workspace_publication raises a conflict and the latest
+    workspace row does NOT match the requested draft_version + bundle_sha256
+    (a genuinely different concurrent change, not just a race with an
+    identical finalize), the conflict is reported rather than silently
+    adopted."""
+
+    async def load_context(workspace_id: str) -> dict:
+        return _context()
+
+    bundle_sha256 = "e" * 64
+    content_sha256 = hashlib.sha256(b"public image bytes").hexdigest()
+    owner = {
+        "id": str(WXPOST_ID),
+        "slug": "a-public-field-note",
+        "status": "assembling",
+        "is_public": False,
+        "article_revision": 1,
+        "source_workspace_id": WORKSPACE_ID,
+        "source_draft_version": 2,
+        "source_draft_sha256": "stale-hash",
+        "finalize_request_hash": None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    # A concurrent change landed, but with a different bundle than this
+    # request expected — not the same-content race the adoption path covers.
+    mismatched = _owner_row(draft_version=2, draft_sha256="f" * 64)
+    ready_asset = {
+        "id": "00000000-0000-4000-8000-000000000999",
+        "object_key": f"public/wxposts/{WXPOST_ID}/assets/M01/original.jpg",
+        "content_sha256": content_sha256,
+    }
+
+    monkeypatch.setattr(wxpost_route, "_load_workspace_context", load_context)
+    monkeypatch.setattr(wxpost_publication, "get_wxpost_by_id", lambda wxpost_id: owner)
+    monkeypatch.setattr(wxpost_publication, "get_ready_wxpost_assets", lambda wxpost_id: [ready_asset])
+
+    workspace_lookups = iter([None, mismatched])
+    monkeypatch.setattr(
+        wxpost_publication,
+        "get_wxpost_by_workspace_id",
+        lambda workspace_id: next(workspace_lookups),
+    )
+
+    async def fake_compile(render_document: dict) -> str:
+        return "<article>compiled</article>"
+
+    monkeypatch.setattr(wxpost_route, "_compile_trusted_render", fake_compile)
+    monkeypatch.setattr(
+        wxpost_publication,
+        "finalize_workspace_publication",
+        lambda *args, **kwargs: (_ for _ in ()).throw(wxpost_publication.WxPostRevisionConflictError()),
+    )
+
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/finalize",
+        json=_finalize_body(bundle_sha256=bundle_sha256),
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "version_conflict"
+
+
 def _stub_new_workspace_shell(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_prepare_submit`'s shell-adoption path for a workspace with no prior
     public WxPost: no existing row, so a fresh "assembling" shell is

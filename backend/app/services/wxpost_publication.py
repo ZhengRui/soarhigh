@@ -266,8 +266,19 @@ async def _copy_original_asset(
         ) from error
 
 
-async def _ensure_wechat_variant(asset: dict, item: WxPostPublicationSubmitItem) -> bool:
-    """Idempotently materialize the WeChat body variant for one ready asset."""
+def _materialize_wechat_variant(asset: dict, *, mime_type: str, source_id: str) -> bool:
+    """Idempotently materialize the WeChat body variant for one ready asset via the OSS ladder.
+
+    Blocking, synchronous core shared by both call sites that need this:
+    the live ensure-asset path (``_ensure_wechat_variant``) and the WeChat
+    reconciliation backfill (``_reconcile_wechat_variant``). Both wrap this
+    in ``asyncio.to_thread`` — the live path because it runs on the request's
+    event loop, the backfill for parity even though its own caller
+    (``scripts/backfill_wxpost_wechat_variants.py``) has no event loop of
+    its own beyond the one ``asyncio.run`` gives it for this call. The only
+    things that differ between call sites are the asset's ``mime_type`` and
+    the ``source_id`` used in error messages, both parameterized here.
+    """
 
     existing = get_wxpost_asset_variant(UUID(asset["id"]), profile=WECHAT_BODY_PROFILE)
     if existing is not None and existing.get("status") == "ready":
@@ -275,11 +286,10 @@ async def _ensure_wechat_variant(asset: dict, item: WxPostPublicationSubmitItem)
 
     asset_directory = str(asset["object_key"]).rsplit("/original.", 1)[0]
     try:
-        rendered = await asyncio.to_thread(
-            generate_wechat_variant,
+        rendered = generate_wechat_variant(
             asset["object_key"],
             asset_directory,
-            mime_type=item.mime_type,
+            mime_type=mime_type,
         )
     except OssOpsError as error:
         raise _map_oss_error(error) from error
@@ -317,10 +327,21 @@ async def _ensure_wechat_variant(asset: dict, item: WxPostPublicationSubmitItem)
             pass
         raise PublicationError(
             "asset_variant_upload_failed",
-            f"Material {item.source_id} could not be prepared for WeChat delivery.",
+            f"Material {source_id} could not be prepared for WeChat delivery.",
             status=503,
         ) from error
     return True
+
+
+async def _ensure_wechat_variant(asset: dict, item: WxPostPublicationSubmitItem) -> bool:
+    """Idempotently materialize the WeChat body variant for one ready asset."""
+
+    return await asyncio.to_thread(
+        _materialize_wechat_variant,
+        asset,
+        mime_type=item.mime_type,
+        source_id=item.source_id,
+    )
 
 
 async def ensure_publication_asset(
@@ -402,7 +423,7 @@ def _remove_unreferenced_assets(
     delete_wxpost_assets([asset["id"] for asset in stale])
 
 
-def reconcile_publication_wechat_variants(wxpost_id: UUID, *, dry_run: bool = False) -> dict[str, Any]:
+async def reconcile_publication_wechat_variants(wxpost_id: UUID, *, dry_run: bool = False) -> dict[str, Any]:
     """Backfill missing deterministic renditions without revising public content."""
 
     row = get_wxpost_by_id(wxpost_id)
@@ -465,72 +486,28 @@ def reconcile_publication_wechat_variants(wxpost_id: UUID, *, dry_run: bool = Fa
         return report
 
     for asset, source_id in missing_assets.values():
-        _reconcile_wechat_variant(asset, source_id)
+        await _reconcile_wechat_variant(asset, source_id)
     report["created"] = missing
     return report
 
 
-def _reconcile_wechat_variant(asset: dict, source_id: str) -> None:
+async def _reconcile_wechat_variant(asset: dict, source_id: str) -> None:
     """Idempotently materialize the WeChat body variant for one ready asset.
 
-    Sync counterpart of ``_ensure_wechat_variant`` (Task 3's live ensure-asset
-    path): the original is already in OSS at ``asset["object_key"]``, so this
-    generates the variant server-side via ``generate_wechat_variant`` instead
-    of downloading the original for local Pillow rendering. Runs synchronously
-    because the reconciliation backfill (``scripts/backfill_wxpost_wechat_variants.py``)
-    has no event loop of its own.
+    Thin async wrapper around the shared ``_materialize_wechat_variant``
+    core (also used by the live ensure-asset path's
+    ``_ensure_wechat_variant``): the original is already in OSS at
+    ``asset["object_key"]``, so this generates the variant server-side via
+    ``generate_wechat_variant`` instead of downloading the original for
+    local Pillow rendering.
     """
 
-    existing = get_wxpost_asset_variant(UUID(asset["id"]), profile=WECHAT_BODY_PROFILE)
-    if existing is not None and existing.get("status") == "ready":
-        return
-
-    asset_directory = str(asset["object_key"]).rsplit("/original.", 1)[0]
-    try:
-        rendered = generate_wechat_variant(
-            asset["object_key"],
-            asset_directory,
-            mime_type=str(asset.get("mime_type") or ""),
-        )
-    except OssOpsError as error:
-        raise _map_oss_error(error) from error
-
-    variant = create_pending_wxpost_asset_variant(
-        {
-            "id": str(uuid4()),
-            "asset_id": asset["id"],
-            "profile": WECHAT_BODY_PROFILE,
-            "status": "pending",
-            "object_key": rendered.object_key,
-            "mime_type": rendered.mime_type,
-            "size_bytes": rendered.size_bytes,
-            "content_sha256": rendered.sha256,
-        }
+    await asyncio.to_thread(
+        _materialize_wechat_variant,
+        asset,
+        mime_type=str(asset.get("mime_type") or ""),
+        source_id=source_id,
     )
-    if variant.get("status") == "ready":
-        return
-    if variant.get("status") == "failed":
-        variant = retry_failed_wxpost_asset_variant(UUID(variant["id"]))
-        if variant.get("status") == "ready":
-            return
-
-    # generate_wechat_variant already wrote the winning candidate to OSS
-    # server-side (via the ladder's sys/saveas step) — there is no local
-    # put_object here, so the etag we record is the downloaded variant
-    # bytes' MD5 rather than an OSS copy/put response etag.
-    etag = hashlib.md5(rendered.content).hexdigest().upper()
-    try:
-        mark_wxpost_asset_variant_ready(UUID(variant["id"]), etag=etag)
-    except Exception as error:
-        try:
-            mark_wxpost_asset_variant_failed(UUID(variant["id"]))
-        except Exception:
-            pass
-        raise PublicationError(
-            "asset_variant_upload_failed",
-            f"Material {source_id} could not be prepared for WeChat delivery.",
-            status=503,
-        ) from error
 
 
 async def delete_public_wxpost(

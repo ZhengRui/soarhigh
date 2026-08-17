@@ -183,7 +183,8 @@ def _rendered_variant(object_key: str) -> VariantObject:
     )
 
 
-def test_backfill_creates_missing_variant_via_oss_server_side_ladder(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_backfill_creates_missing_variant_via_oss_server_side_ladder(monkeypatch) -> None:
     source_sha = hashlib.sha256(b"immutable-public-original").hexdigest()
     source_asset = {
         "id": "00000000-0000-4000-8000-000000000996",
@@ -226,7 +227,7 @@ def test_backfill_creates_missing_variant_via_oss_server_side_ladder(monkeypatch
 
     monkeypatch.setattr(publication, "mark_wxpost_asset_variant_ready", mark_ready)
 
-    report = publication.reconcile_publication_wechat_variants(WXPOST_ID)
+    report = await publication.reconcile_publication_wechat_variants(WXPOST_ID)
 
     assert report == {
         "wxpostId": str(WXPOST_ID),
@@ -241,7 +242,8 @@ def test_backfill_creates_missing_variant_via_oss_server_side_ladder(monkeypatch
     assert ready == [(UUID(created[0]["id"]), hashlib.md5(b"wechat-variant-bytes").hexdigest().upper())]
 
 
-def test_backfill_reuses_one_public_asset_for_multiple_media_ids(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_backfill_reuses_one_public_asset_for_multiple_media_ids(monkeypatch) -> None:
     source_sha = hashlib.sha256(b"shared-immutable-public-original").hexdigest()
     object_key = f"public/wxposts/{WXPOST_ID}/assets/shared/original.jpg"
     source_asset = {
@@ -290,7 +292,7 @@ def test_backfill_reuses_one_public_asset_for_multiple_media_ids(monkeypatch) ->
         lambda variant_id, *, etag: {"id": str(variant_id), "status": "ready"},
     )
 
-    report = publication.reconcile_publication_wechat_variants(WXPOST_ID)
+    report = await publication.reconcile_publication_wechat_variants(WXPOST_ID)
 
     assert report["missing"] == ["M01", "M02"]
     assert report["created"] == ["M01", "M02"]
@@ -298,7 +300,8 @@ def test_backfill_reuses_one_public_asset_for_multiple_media_ids(monkeypatch) ->
     assert generated == [source_asset["object_key"]]
 
 
-def test_backfill_variant_generation_failure_maps_to_publication_error(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_backfill_variant_generation_failure_maps_to_publication_error(monkeypatch) -> None:
     source_sha = hashlib.sha256(b"immutable-public-original").hexdigest()
     source_asset = {
         "id": "00000000-0000-4000-8000-000000000994",
@@ -323,13 +326,14 @@ def test_backfill_variant_generation_failure_maps_to_publication_error(monkeypat
     monkeypatch.setattr(publication, "generate_wechat_variant", generate)
 
     with pytest.raises(publication.PublicationError) as raised:
-        publication.reconcile_publication_wechat_variants(WXPOST_ID)
+        await publication.reconcile_publication_wechat_variants(WXPOST_ID)
 
     assert raised.value.code == "asset_unavailable"
     assert raised.value.status == 503
 
 
-def test_backfill_dry_run_reports_missing_without_generating(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_backfill_dry_run_reports_missing_without_generating(monkeypatch) -> None:
     source_sha = hashlib.sha256(b"immutable-public-original").hexdigest()
     source_asset = {
         "id": "00000000-0000-4000-8000-000000000993",
@@ -352,7 +356,7 @@ def test_backfill_dry_run_reports_missing_without_generating(monkeypatch) -> Non
         lambda *args, **kwargs: pytest.fail("dry run generated a variant"),
     )
 
-    report = publication.reconcile_publication_wechat_variants(WXPOST_ID, dry_run=True)
+    report = await publication.reconcile_publication_wechat_variants(WXPOST_ID, dry_run=True)
 
     assert report["missing"] == ["M01"]
     assert report["created"] == []

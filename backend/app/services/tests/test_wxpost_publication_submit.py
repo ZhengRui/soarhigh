@@ -333,3 +333,27 @@ async def test_retrying_completed_revision_with_abandoned_assets_is_adopted(
 
     assert plan.wxpost_id == str(WXPOST_ID)
     assert plan.bundle_sha256 == bundle_sha256
+
+
+@pytest.mark.asyncio
+async def test_retry_without_abandoned_assets_is_a_version_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same (revision - 1) + matching draft_version shape as the adoption
+    test above, but with no abandoned assets left behind — nothing signals
+    a prior attempt made progress, so this is just a stale resubmit."""
+
+    monkeypatch.setattr(
+        publication,
+        "get_wxpost_by_workspace_id",
+        lambda workspace_id: _row(revision=4, draft_version=2),
+    )
+    monkeypatch.setattr(publication, "has_abandoned_wxpost_assets", lambda wxpost_id: False)
+
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.prepare_publication_submit(
+            "wxpost-abc",
+            _request(public_revision=3),
+            load_context=_load_context,
+        )
+
+    assert raised.value.code == "version_conflict"
+    assert raised.value.status == 409
