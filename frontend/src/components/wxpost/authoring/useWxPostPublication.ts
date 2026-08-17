@@ -1,12 +1,14 @@
 'use client';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import {
+  getRunningPublicationOperation,
   getWorkspacePublication,
-  syncWorkspacePublication,
+  pollWorkspacePublicationOperation,
+  submitWorkspacePublicationSync,
   WorkspaceApiError,
   type WorkspaceContext,
   type WorkspacePublicationStatus,
@@ -36,6 +38,15 @@ export function useWxPostPublication({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [pending, setPending] = useState(false);
+  // The operation the currently attached poll is watching, whether started
+  // by this tab's own submit or reattached to one already running
+  // server-side. Aborting it only stops this tab from watching — the
+  // publication continues running on the Controller.
+  const pollControllerRef = useRef<AbortController | null>(null);
+  const statusRef = useRef<WorkspacePublicationStatus | null>(null);
+  statusRef.current = status;
+
+  useEffect(() => () => pollControllerRef.current?.abort(), []);
 
   useEffect(() => {
     if (!active || !savedDraft) return;
@@ -62,15 +73,11 @@ export function useWxPostPublication({
     };
   }, [active, savedDraft, workspaceId]);
 
-  const sync = useCallback(async () => {
-    if (!savedDraft || !status || dirty) return;
-    setPending(true);
-    try {
-      const next = await syncWorkspacePublication(workspaceId, {
-        expectedManifestVersion: manifestVersion,
-        expectedDraftVersion: savedDraft.draftVersion,
-        expectedPublicRevision: status.publicRevision,
-      });
+  const applyPublicationResult = useCallback(
+    (
+      next: WorkspacePublicationStatus,
+      priorState: WorkspacePublicationStatus['state'] | undefined
+    ) => {
       setStatus(next);
       void queryClient.invalidateQueries({
         queryKey: ['wxpost-workspaces'],
@@ -84,14 +91,91 @@ export function useWxPostPublication({
         });
       }
       toast.success(
-        status.state === 'not-synced'
+        priorState === 'not-synced'
           ? 'Public WxPost published successfully!'
           : 'Public WxPost updated successfully!'
       );
+    },
+    [queryClient]
+  );
+
+  // Attach a poll to an operation already admitted server-side (this tab's
+  // own submit, or one reattached on mount) and report the outcome the same
+  // way a fresh submit does.
+  const watchOperation = useCallback(
+    async (operationId: string, controller: AbortController) => {
+      const priorState = statusRef.current?.state;
+      const next = await pollWorkspacePublicationOperation(
+        workspaceId,
+        operationId,
+        controller.signal
+      );
+      applyPublicationResult(next, priorState);
+    },
+    [applyPublicationResult, workspaceId]
+  );
+
+  // Resume-on-mount: a publish can outlive the tab that submitted it (a
+  // refresh, or another tab). When the publication panel becomes active,
+  // check for an operation still running server-side and reattach instead
+  // of leaving the panel to think nothing is happening.
+  useEffect(() => {
+    if (!active) return;
+    let current = true;
+    void getRunningPublicationOperation(workspaceId)
+      .then((response) => {
+        if (!current || !response.running || pollControllerRef.current) {
+          return;
+        }
+        const controller = new AbortController();
+        pollControllerRef.current = controller;
+        setPending(true);
+        void watchOperation(response.running.operationId, controller)
+          .catch((caught) => {
+            if (controller.signal.aborted) return;
+            if (
+              caught instanceof WorkspaceApiError &&
+              caught.code === 'version_conflict'
+            ) {
+              onConflict();
+              return;
+            }
+            toast.error(
+              errorMessage(caught, 'Unable to synchronize the public WxPost.')
+            );
+          })
+          .finally(() => {
+            if (pollControllerRef.current === controller) {
+              pollControllerRef.current = null;
+            }
+            setPending(false);
+          });
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [active, onConflict, watchOperation, workspaceId]);
+
+  const sync = useCallback(async () => {
+    if (!savedDraft || !status || dirty || pollControllerRef.current) return;
+    const operationId = `publish-${crypto.randomUUID().replaceAll('-', '')}`;
+    const controller = new AbortController();
+    pollControllerRef.current = controller;
+    setPending(true);
+    try {
+      await submitWorkspacePublicationSync(workspaceId, {
+        operationId,
+        expectedManifestVersion: manifestVersion,
+        expectedDraftVersion: savedDraft.draftVersion,
+        expectedPublicRevision: status.publicRevision,
+      });
+      await watchOperation(operationId, controller);
     } catch (caught) {
+      if (controller.signal.aborted) return;
       if (
         caught instanceof WorkspaceApiError &&
-        (caught.code === 'version_conflict' || caught.status === 409)
+        caught.code === 'version_conflict'
       ) {
         onConflict();
         return;
@@ -100,15 +184,18 @@ export function useWxPostPublication({
         errorMessage(caught, 'Unable to synchronize the public WxPost.')
       );
     } finally {
+      if (pollControllerRef.current === controller) {
+        pollControllerRef.current = null;
+      }
       setPending(false);
     }
   }, [
     dirty,
     manifestVersion,
     onConflict,
-    queryClient,
     savedDraft,
     status,
+    watchOperation,
     workspaceId,
   ]);
 

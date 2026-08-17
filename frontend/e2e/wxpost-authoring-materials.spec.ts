@@ -6,6 +6,7 @@ import {
   MEETING_462,
   MEETING_OPTIONS,
   draftDocument,
+  meetingSources,
   mockAuthenticatedMember,
   mockWxPostReadApis,
   mockWxPostWorkspaceApi,
@@ -1070,4 +1071,174 @@ test('keeps the full Materials workflow readable on a 390px viewport', async ({
   await page.getByTestId('meeting-context-toggle').click();
   await page.getByTestId('meeting-agenda-toggle').click();
   await expect(page.getByText('Listening Across Cultures')).toBeVisible();
+});
+
+// Seeds a workspace whose saved Draft already exists (skipping the Setup /
+// Materials / Generate Draft flow, which these tests don't exercise) and
+// opens it directly in the Draft workbench, ready for a publication submit.
+async function openPublishableWorkspace(page: import('@playwright/test').Page, workspaceId: string) {
+  await mockAuthenticatedMember(page);
+  await mockWxPostReadApis(page);
+  const workspace = await mockWxPostWorkspaceApi(page);
+  workspace.contexts.set(workspaceId, {
+    workspaceId,
+    manifest: {
+      schemaVersion: 5,
+      workspaceId,
+      manifestVersion: 1,
+      nextMaterialNumber: meetingSources('meeting-462').length + 1,
+      createdBy: { id: 'member-123', name: 'Test Member' },
+      createdAt: '2026-07-29T03:00:00Z',
+      updatedAt: '2026-07-29T03:00:00Z',
+      meetingId: 'meeting-462',
+      draft: { version: 1, sourceManifestVersion: 1, sha256: 'draft-1' },
+      editorial: {
+        articleType: 'meeting-recap',
+        customArticleType: null,
+        writingApproach: 'chronological',
+        transcript: '',
+        extraNotes: '',
+        writingGuidance: '',
+        voiceTone: { presets: [], customProfiles: [] },
+      },
+      sources: meetingSources('meeting-462'),
+    },
+    draft: { draftVersion: 1, document: draftDocument() },
+  });
+  const workspaceKey = workspaceId.replace(/^wxpost-/, '');
+  await page.goto(`/posts/wxposts/edit/${workspaceKey}?view=edit`);
+  await expect(page.getByTestId('draft-workbench')).toBeVisible();
+  return workspace;
+}
+
+test('shows pending state through a polled publication submit and reports success', async ({
+  page,
+}) => {
+  const workspace = await openPublishableWorkspace(page, 'wxpost-publish-poll');
+  workspace.publicationOperationRunningPolls = 2;
+  workspace.publicationOperationSteps = [
+    {
+      activityId: 'asset-M01',
+      label: 'Preparing M01',
+      completed: false,
+      failed: false,
+    },
+    {
+      activityId: 'finalize',
+      label: 'Publishing the article',
+      completed: false,
+      failed: false,
+    },
+  ];
+
+  await expect(page.getByTestId('publication-status')).toHaveText(
+    'Not published · Draft v1'
+  );
+  await page.getByTestId('sync-public-wxpost').click();
+  await page
+    .getByTestId('publication-confirm-dialog')
+    .getByRole('button', { name: 'Publish WxPost' })
+    .click();
+
+  await expect(page.getByTestId('sync-public-wxpost')).toBeDisabled();
+  await expect(page.getByTestId('publication-status')).toHaveText(
+    'Not published · Draft v1'
+  );
+
+  await expect(
+    page.getByText('Public WxPost published successfully!', { exact: true })
+  ).toBeVisible();
+  await expect(page.getByTestId('publication-status')).toHaveText(
+    'Public revision 1 · from Draft v1 · up to date'
+  );
+});
+
+test('reports the operation error message when a publication fails', async ({
+  page,
+}) => {
+  const workspace = await openPublishableWorkspace(page, 'wxpost-publish-fail');
+  workspace.failNextPublicationOperation = {
+    code: 'invalid_wechat_image',
+    message: 'One of the selected images could not be used for WeChat Draft.',
+  };
+
+  await page.getByTestId('sync-public-wxpost').click();
+  await page
+    .getByTestId('publication-confirm-dialog')
+    .getByRole('button', { name: 'Publish WxPost' })
+    .click();
+
+  await expect(
+    page.getByText(
+      'One of the selected images could not be used for WeChat Draft.'
+    )
+  ).toBeVisible();
+  await expect(page.getByTestId('publication-status')).toHaveText(
+    'Not published · Draft v1'
+  );
+  await expect(page.getByTestId('sync-public-wxpost')).toBeEnabled();
+});
+
+test('resumes a publication operation still running on mount', async ({
+  page,
+}) => {
+  await mockAuthenticatedMember(page);
+  await mockWxPostReadApis(page);
+  const workspace = await mockWxPostWorkspaceApi(page);
+  const workspaceId = 'wxpost-publish-resume';
+  workspace.contexts.set(workspaceId, {
+    workspaceId,
+    manifest: {
+      schemaVersion: 5,
+      workspaceId,
+      manifestVersion: 1,
+      nextMaterialNumber: meetingSources('meeting-462').length + 1,
+      createdBy: { id: 'member-123', name: 'Test Member' },
+      createdAt: '2026-07-29T03:00:00Z',
+      updatedAt: '2026-07-29T03:00:00Z',
+      meetingId: 'meeting-462',
+      draft: { version: 1, sourceManifestVersion: 1, sha256: 'draft-1' },
+      editorial: {
+        articleType: 'meeting-recap',
+        customArticleType: null,
+        writingApproach: 'chronological',
+        transcript: '',
+        extraNotes: '',
+        writingGuidance: '',
+        voiceTone: { presets: [], customProfiles: [] },
+      },
+      sources: meetingSources('meeting-462'),
+    },
+    draft: { draftVersion: 1, document: draftDocument() },
+  });
+  const workspaceKey = workspaceId.replace(/^wxpost-/, '');
+  const operationId = `publish-${'a'.repeat(32)}`;
+  workspace.publicationOperations.set(operationId, {
+    workspaceId,
+    operationId,
+    steps: [],
+    remainingRunningPolls: 2,
+    finalResult: {
+      state: 'up-to-date',
+      workspaceId,
+      slug: `public-${workspaceId}`,
+      publicRevision: 1,
+      sourceDraftVersion: 1,
+      currentDraftVersion: 1,
+      publishedAt: '2026-08-01T08:00:00Z',
+      publicUrl: `http://localhost:3000/posts/wxposts/public-${workspaceId}`,
+    },
+    finalError: null,
+  });
+
+  await page.goto(`/posts/wxposts/edit/${workspaceKey}?view=edit`);
+  await expect(page.getByTestId('draft-workbench')).toBeVisible();
+  await expect(page.getByTestId('sync-public-wxpost')).toBeDisabled();
+
+  await expect(
+    page.getByText('Public WxPost published successfully!', { exact: true })
+  ).toBeVisible();
+  await expect(page.getByTestId('publication-status')).toHaveText(
+    'Public revision 1 · from Draft v1 · up to date'
+  );
 });

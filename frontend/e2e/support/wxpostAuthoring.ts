@@ -5,7 +5,10 @@ import type {
   WxPostArticleDocument,
   WxPostBodyNode,
 } from '../../src/components/wxpost/types';
-import type { WorkspacePublicationStatus } from '../../src/utils/wxpostWorkspace';
+import type {
+  WorkspaceDraftProgressActivity,
+  WorkspacePublicationStatus,
+} from '../../src/utils/wxpostWorkspace';
 import {
   MEETING_462,
   MEETING_461,
@@ -160,6 +163,24 @@ export type WorkspaceMock = {
     }
   >;
   publications: Map<string, WorkspacePublicationStatus>;
+  publicationOperations: Map<string, PublicationOperationRecord>;
+  // Applies to the next POST .../publication/sync submit: how many GET
+  // .../operations/{id} polls report 'running' (with publicationOperationSteps)
+  // before the operation resolves. 0 resolves on the first poll.
+  publicationOperationRunningPolls: number;
+  publicationOperationSteps: WorkspaceDraftProgressActivity[];
+  // When set, the next submitted publication operation resolves 'failed'
+  // with this error instead of completing successfully.
+  failNextPublicationOperation: { code: string; message: string } | null;
+};
+
+type PublicationOperationRecord = {
+  workspaceId: string;
+  operationId: string;
+  steps: WorkspaceDraftProgressActivity[];
+  remainingRunningPolls: number;
+  finalResult: WorkspacePublicationStatus | null;
+  finalError: { code: string; message: string } | null;
 };
 
 export type DraftDocument = WxPostArticleDocument;
@@ -312,6 +333,10 @@ export async function mockWxPostWorkspaceApi(
     draftMessages: new Map(),
     draftOperations: new Map(),
     publications: new Map(),
+    publicationOperations: new Map(),
+    publicationOperationRunningPolls: 0,
+    publicationOperationSteps: [],
+    failNextPublicationOperation: null,
   };
 
   const createWorkspaceContext = (
@@ -454,6 +479,80 @@ export async function mockWxPostWorkspaceApi(
       if (parts[0] === 'publication') {
         const currentDraftVersion = context.draft?.draftVersion ?? null;
         const existing = mock.publications.get(workspaceId);
+        if (method === 'GET' && parts[1] === 'operations' && parts[2] === 'current') {
+          const running = [...mock.publicationOperations.values()].find(
+            (operation) =>
+              operation.workspaceId === workspaceId &&
+              operation.remainingRunningPolls > 0
+          );
+          await route.fulfill({
+            status: 200,
+            json: {
+              running: running
+                ? { operationId: running.operationId, steps: running.steps }
+                : null,
+            },
+          });
+          return;
+        }
+        if (method === 'GET' && parts[1] === 'operations' && parts[2]) {
+          const operation = mock.publicationOperations.get(parts[2]);
+          if (!operation || operation.workspaceId !== workspaceId) {
+            await route.fulfill({
+              status: 404,
+              json: {
+                error: {
+                  code: 'publication_operation_not_found',
+                  message: 'Publication operation does not exist',
+                },
+              },
+            });
+            return;
+          }
+          if (operation.remainingRunningPolls > 0) {
+            operation.remainingRunningPolls -= 1;
+            await route.fulfill({
+              status: 200,
+              json: {
+                workspaceId,
+                operationId: operation.operationId,
+                state: 'running',
+                result: null,
+                error: null,
+                steps: operation.steps,
+              },
+            });
+            return;
+          }
+          if (operation.finalError) {
+            await route.fulfill({
+              status: 200,
+              json: {
+                workspaceId,
+                operationId: operation.operationId,
+                state: 'failed',
+                result: null,
+                error: operation.finalError,
+                steps: operation.steps,
+              },
+            });
+            return;
+          }
+          const finalResult = operation.finalResult!;
+          mock.publications.set(workspaceId, finalResult);
+          await route.fulfill({
+            status: 200,
+            json: {
+              workspaceId,
+              operationId: operation.operationId,
+              state: 'completed',
+              result: finalResult,
+              error: null,
+              steps: operation.steps,
+            },
+          });
+          return;
+        }
         if (method === 'GET' && parts.length === 1) {
           if (mock.publicationStatusDelayMs > 0) {
             await new Promise((resolve) =>
@@ -493,23 +592,11 @@ export async function mockWxPostWorkspaceApi(
         }
         if (method === 'POST' && parts[1] === 'sync') {
           const input = request.postDataJSON() as {
+            operationId: string;
             expectedManifestVersion: number;
             expectedDraftVersion: number;
             expectedPublicRevision: number | null;
           };
-          if (mock.failNextPublication) {
-            mock.failNextPublication = false;
-            await route.fulfill({
-              status: 503,
-              json: {
-                error: {
-                  code: 'asset_upload_failed',
-                  message: 'Public asset upload failed',
-                },
-              },
-            });
-            return;
-          }
           if (
             mock.conflictNextPublication ||
             input.expectedManifestVersion !==
@@ -529,8 +616,12 @@ export async function mockWxPostWorkspaceApi(
             });
             return;
           }
+          // The submit itself only validates and admits the operation; the
+          // publish (asset ensures, then finalize) runs server-side and is
+          // observed by polling GET .../operations/{operationId}, mirroring
+          // the async draft/chat and draft/generate contract.
           const publicRevision = (existing?.publicRevision ?? 0) + 1;
-          const next = {
+          const finalResult = {
             state: 'up-to-date',
             workspaceId,
             slug: existing?.slug ?? `public-${workspaceId}`,
@@ -540,8 +631,30 @@ export async function mockWxPostWorkspaceApi(
             publishedAt: '2026-08-01T08:00:00Z',
             publicUrl: `http://localhost:3000/posts/wxposts/public-${workspaceId}`,
           } satisfies WorkspacePublicationStatus;
-          mock.publications.set(workspaceId, next);
-          await route.fulfill({ status: 200, json: next });
+          let finalError: { code: string; message: string } | null = null;
+          if (mock.failNextPublication) {
+            mock.failNextPublication = false;
+            finalError = {
+              code: 'asset_upload_failed',
+              message: 'Public asset upload failed',
+            };
+          }
+          if (mock.failNextPublicationOperation) {
+            finalError = mock.failNextPublicationOperation;
+            mock.failNextPublicationOperation = null;
+          }
+          mock.publicationOperations.set(input.operationId, {
+            workspaceId,
+            operationId: input.operationId,
+            steps: mock.publicationOperationSteps,
+            remainingRunningPolls: mock.publicationOperationRunningPolls,
+            finalResult: finalError ? null : finalResult,
+            finalError,
+          });
+          await route.fulfill({
+            status: 202,
+            json: { operationId: input.operationId },
+          });
           return;
         }
       }

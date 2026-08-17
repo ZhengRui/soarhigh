@@ -299,6 +299,15 @@ export type WorkspacePublicationStatus = {
   publicUrl: string | null;
 };
 
+export type WorkspacePublicationOperation = {
+  workspaceId: string;
+  operationId: string;
+  state: 'running' | 'completed' | 'failed';
+  result: WorkspacePublicationStatus | null;
+  error: { code: string; message: string } | null;
+  steps: WorkspaceDraftProgressActivity[];
+};
+
 export interface PaginatedWorkspaceSummaries {
   items: WorkspaceSummary[];
   total: number;
@@ -330,6 +339,19 @@ export function draftAssistantErrorStatus(code: string | null | undefined) {
   if (code === 'version_conflict') return 409;
   if (code === 'draft_operation_in_progress') return 409;
   if (code === 'hermes_unavailable' || code === 'draft_store_unavailable') {
+    return 503;
+  }
+  return 502;
+}
+
+export function publicationErrorStatus(code: string | null | undefined) {
+  if (code === 'version_conflict') return 409;
+  if (code === 'draft_operation_in_progress') return 409;
+  if (
+    code === 'backend_unreachable' ||
+    code === 'controller_restarted' ||
+    code === 'asset_unavailable'
+  ) {
     return 503;
   }
   return 502;
@@ -439,15 +461,22 @@ export function getWorkspacePublication(workspaceId: string) {
   );
 }
 
-export function syncWorkspacePublication(
+// Async submit, same shape as draft/chat and draft/generate: the Controller
+// admits the operation and returns its id immediately; the publication runs
+// server-side (asset ensures, then finalize) and is observed by polling
+// pollWorkspacePublicationOperation. Callers must generate a fresh
+// operationId per attempt — the Controller's store rejects a resubmit of an
+// id it has already seen.
+export function submitWorkspacePublicationSync(
   workspaceId: string,
   input: {
+    operationId: string;
     expectedManifestVersion: number;
     expectedDraftVersion: number;
     expectedPublicRevision: number | null;
   }
 ) {
-  return requestJson<WorkspacePublicationStatus>(
+  return requestJson<{ operationId: string }>(
     `${workspacePath(workspaceId)}/publication/sync`,
     {
       method: 'POST',
@@ -455,6 +484,28 @@ export function syncWorkspacePublication(
       body: JSON.stringify(input),
     }
   );
+}
+
+export function getWorkspacePublicationOperation(
+  workspaceId: string,
+  operationId: string,
+  signal?: AbortSignal
+) {
+  return requestJson<WorkspacePublicationOperation>(
+    `${workspacePath(workspaceId)}/publication/operations/${encodeURIComponent(operationId)}`,
+    { cache: 'no-store', signal }
+  );
+}
+
+export function getRunningPublicationOperation(workspaceId: string) {
+  return requestJson<{
+    running: {
+      operationId: string;
+      steps: WorkspaceDraftProgressActivity[];
+    } | null;
+  }>(`${workspacePath(workspaceId)}/publication/operations/current`, {
+    cache: 'no-store',
+  });
 }
 
 export function getWorkspaceDraftConversation(workspaceId: string) {
@@ -551,6 +602,57 @@ export async function pollWorkspaceDraftOperation(
       throw new WorkspaceApiError(
         502,
         'The Draft Assistant returned an invalid operation result.',
+        'invalid_operation'
+      );
+    }
+    return operation.result;
+  }
+}
+
+// Mirrors pollWorkspaceDraftOperation above: the publication runs server-side
+// against the Controller's durable operation record, so transient poll
+// failures are retried rather than treated as terminal. Unlike the Draft
+// Assistant poll, there is no progress callback — the publication panel only
+// needs to know when the operation is done, not show step-by-step activity.
+export async function pollWorkspacePublicationOperation(
+  workspaceId: string,
+  operationId: string,
+  signal: AbortSignal
+): Promise<WorkspacePublicationStatus> {
+  let consecutiveFailures = 0;
+  while (true) {
+    let operation;
+    try {
+      operation = await getWorkspacePublicationOperation(
+        workspaceId,
+        operationId,
+        signal
+      );
+      consecutiveFailures = 0;
+    } catch (caught) {
+      if (signal.aborted || !isTransientPollFailure(caught)) throw caught;
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) throw caught;
+      await waitForPollInterval(signal);
+      continue;
+    }
+    if (operation.state === 'running') {
+      await waitForPollInterval(signal);
+      continue;
+    }
+    if (operation.state === 'failed') {
+      const errorCode = operation.error?.code ?? 'operation_failed';
+      throw new WorkspaceApiError(
+        publicationErrorStatus(errorCode),
+        operation.error?.message ??
+          'The publication could not complete.',
+        errorCode
+      );
+    }
+    if (!operation.result) {
+      throw new WorkspaceApiError(
+        502,
+        'The publication returned an invalid operation result.',
         'invalid_operation'
       );
     }
