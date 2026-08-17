@@ -930,7 +930,7 @@ async def finalize_publication(
         source = sources.get(media.id)
         content_sha256 = source.get("contentSha256") if isinstance(source, dict) else None
         asset = assets_by_sha256.get(content_sha256) if isinstance(content_sha256, str) else None
-        if asset is None:
+        if not isinstance(content_sha256, str) or asset is None:
             raise PublicationError(
                 "missing_publication_media",
                 f"Material {media.id} is not backed by a ready public asset.",

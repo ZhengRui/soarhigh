@@ -119,7 +119,7 @@ class FailingBucket:
 
 def test_head_public_object_returns_size_and_etag() -> None:
     bucket = FakeBucket(head_sizes={"src.jpg": 100})
-    bucket.head_object = lambda key: type("Meta", (), {"content_length": 100, "etag": "AB" * 16})()
+    bucket.head_object = lambda key: type("Meta", (), {"content_length": 100, "etag": "AB" * 16})()  # type: ignore[method-assign]
     size, etag = head_public_object("src.jpg", bucket_factory=lambda: bucket)
     assert size == 100
     assert etag == "AB" * 16
@@ -127,7 +127,7 @@ def test_head_public_object_returns_size_and_etag() -> None:
 
 def test_head_public_object_rejects_multipart_etag() -> None:
     bucket = FakeBucket()
-    bucket.head_object = lambda key: type("Meta", (), {"content_length": 100, "etag": "AB" * 16 + "-2"})()
+    bucket.head_object = lambda key: type("Meta", (), {"content_length": 100, "etag": "AB" * 16 + "-2"})()  # type: ignore[method-assign]
     with pytest.raises(OssOpsError) as err:
         head_public_object("src.jpg", bucket_factory=lambda: bucket)
     assert err.value.code == "asset_copy_unverifiable"
@@ -208,8 +208,8 @@ def test_generate_wechat_variant_raises_asset_unavailable_on_head_failure() -> N
 
 def test_generate_wechat_variant_raises_asset_unavailable_on_get_failure() -> None:
     bucket = FailingBucket(fail_on="get")
-    bucket.process_object = lambda source_key, style: type("FakeProcessResult", (), {})()
-    bucket.head_object = lambda key: FakeObjectMeta(800 * 1024)
+    bucket.process_object = lambda source_key, style: type("FakeProcessResult", (), {})()  # type: ignore[method-assign]
+    bucket.head_object = lambda key: FakeObjectMeta(800 * 1024)  # type: ignore[method-assign]
     with pytest.raises(OssOpsError) as err:
         generate_wechat_variant("src.jpg", "dir", mime_type="image/jpeg", bucket_factory=lambda: bucket)
     assert err.value.code == "asset_unavailable"
