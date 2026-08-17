@@ -211,6 +211,34 @@ async def test_oversized_cover_needs_wechat_variant_even_without_body_reference(
 
 
 @pytest.mark.asyncio
+async def test_missing_size_bytes_is_rejected() -> None:
+    """sizeBytes drives the WeChat-cover-variant threshold check and the
+    later head-object integrity verification; a missing/zero/non-int value
+    must hard-fail at submit time rather than silently coerce to 0."""
+
+    context = _context(
+        sources=[
+            _source(source_id="M01", content=b"public image bytes", size_bytes=19),
+            {**_source(source_id="M02", content=b"second image bytes"), "sizeBytes": None},
+        ]
+    )
+
+    async def load_context(workspace_id: str) -> dict:
+        return context
+
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.prepare_publication_submit(
+            "wxpost-abc",
+            _request(),
+            load_context=load_context,
+        )
+
+    assert raised.value.code == "missing_publication_media"
+    assert raised.value.status == 422
+    assert "M02" in str(raised.value)
+
+
+@pytest.mark.asyncio
 async def test_upload_origin_source_is_rejected() -> None:
     context = _context(
         sources=[

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -30,6 +31,8 @@ from .wxpost_image_variants import (
     WECHAT_BODY_PROFILE,
     WECHAT_BODY_TARGET_BYTES,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OssOpsError(Exception):
@@ -59,52 +62,81 @@ def _default_bucket_factory() -> Any:
     return oss2.Bucket(auth, ALICLOUD_OSS_ENDPOINT, ALICLOUD_OSS_BUCKET)
 
 
+def head_public_object(
+    key: str,
+    *,
+    bucket_factory: Callable[[], Any] = _default_bucket_factory,
+) -> tuple[int, str]:
+    """Head an object, returning its (content_length, etag).
+
+    The returned etag is validated as a single-part (32-hex) upload, since a
+    multipart source can't be content-verified this way and callers rely on
+    this etag to derive ``content_md5`` and to verify a later copy.
+
+    Args:
+        key: Object key in OSS.
+        bucket_factory: Function that returns an oss2.Bucket instance.
+
+    Returns:
+        A ``(content_length, etag)`` tuple; etag is 32-hex uppercase.
+
+    Raises:
+        OssOpsError: If the OSS lookup fails, or the etag is not 32-hex
+            (multipart).
+    """
+    bucket = bucket_factory()
+    try:
+        meta = bucket.head_object(key)
+    except Exception as e:
+        logger.exception("OSS head_object failed for key %r", key)
+        raise OssOpsError(
+            "asset_unavailable",
+            "The public storage lookup failed.",
+        ) from e
+
+    etag = meta.etag
+    if not _is_single_part_etag(etag):
+        raise OssOpsError(
+            "asset_copy_unverifiable",
+            f"Source object was uploaded as multipart (etag: {etag})",
+        )
+
+    return meta.content_length, etag
+
+
 def copy_public_object(
     source_key: str,
     target_key: str,
     *,
-    expected_size: int,
     bucket_factory: Callable[[], Any] = _default_bucket_factory,
 ) -> str:
-    """Copy a public object server-side, verifying source size and returning etag.
+    """Copy a public object server-side, returning its etag.
+
+    Callers that need to verify the source hasn't changed should call
+    ``head_public_object`` first and compare its size/etag before (and
+    after) calling this.
 
     Args:
         source_key: Source object key in OSS.
         target_key: Target object key in OSS.
-        expected_size: Expected size of source object in bytes.
         bucket_factory: Function that returns an oss2.Bucket instance.
 
     Returns:
         The etag of the copied object (32-hex uppercase).
 
     Raises:
-        OssOpsError: If source size doesn't match, etag is not 32-hex (multipart),
-            or OSS operation fails.
+        OssOpsError: If the etag is not 32-hex (multipart), or the OSS copy
+            operation fails.
     """
     bucket = bucket_factory()
 
-    # Verify source size
-    try:
-        source_meta = bucket.head_object(source_key)
-    except Exception as e:
-        raise OssOpsError(
-            "asset_unavailable",
-            f"Failed to verify source object: {e}",
-        ) from e
-
-    if source_meta.content_length != expected_size:
-        raise OssOpsError(
-            "asset_changed",
-            f"Source object size mismatch: expected {expected_size}, got {source_meta.content_length}",
-        )
-
-    # Copy object
     try:
         result = bucket.copy_object(source_key, target_key)
     except Exception as e:
+        logger.exception("OSS copy_object failed for %r -> %r", source_key, target_key)
         raise OssOpsError(
             "asset_unavailable",
-            f"Failed to copy object: {e}",
+            "The public storage copy failed.",
         ) from e
 
     etag = result.etag
@@ -235,9 +267,10 @@ def _process_variant(bucket: Any, source_key: str, style: str, target_key: str) 
     try:
         bucket.process_object(source_key, style)
     except Exception as e:
+        logger.exception("OSS process_object failed for %r (style=%r)", source_key, style)
         raise OssOpsError(
             "asset_unavailable",
-            f"Failed to process image: {e}",
+            "The WeChat variant processing failed.",
         ) from e
 
 
@@ -247,9 +280,10 @@ def _get_variant_size(bucket: Any, target_key: str) -> int:
         meta = bucket.head_object(target_key)
         return meta.content_length
     except Exception as e:
+        logger.exception("OSS head_object failed for variant key %r", target_key)
         raise OssOpsError(
             "asset_unavailable",
-            f"Failed to get variant size: {e}",
+            "The public storage lookup failed.",
         ) from e
 
 
@@ -259,7 +293,8 @@ def _download_variant(bucket: Any, target_key: str) -> bytes:
         obj = bucket.get_object(target_key)
         return obj.read()
     except Exception as e:
+        logger.exception("OSS get_object failed for variant key %r", target_key)
         raise OssOpsError(
             "asset_unavailable",
-            f"Failed to download variant: {e}",
+            "The WeChat variant could not be downloaded.",
         ) from e

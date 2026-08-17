@@ -11,6 +11,7 @@ from app.services.wxpost_oss_ops import (
     OssOpsError,
     copy_public_object,
     generate_wechat_variant,
+    head_public_object,
 )
 
 
@@ -116,24 +117,40 @@ class FailingBucket:
         return type("FakeStreamingBody", (), {"read": lambda: b""})()
 
 
-def test_copy_public_object_verifies_size_and_returns_etag() -> None:
-    bucket = FakeBucket(head_sizes={"src.jpg": 100}, copy_etag="AB" * 16)
-    etag = copy_public_object("src.jpg", "dst.jpg", expected_size=100, bucket_factory=lambda: bucket)
+def test_head_public_object_returns_size_and_etag() -> None:
+    bucket = FakeBucket(head_sizes={"src.jpg": 100})
+    bucket.head_object = lambda key: type("Meta", (), {"content_length": 100, "etag": "AB" * 16})()
+    size, etag = head_public_object("src.jpg", bucket_factory=lambda: bucket)
+    assert size == 100
+    assert etag == "AB" * 16
+
+
+def test_head_public_object_rejects_multipart_etag() -> None:
+    bucket = FakeBucket()
+    bucket.head_object = lambda key: type("Meta", (), {"content_length": 100, "etag": "AB" * 16 + "-2"})()
+    with pytest.raises(OssOpsError) as err:
+        head_public_object("src.jpg", bucket_factory=lambda: bucket)
+    assert err.value.code == "asset_copy_unverifiable"
+
+
+def test_head_public_object_raises_asset_unavailable_on_head_failure() -> None:
+    bucket = FailingBucket(fail_on="head")
+    with pytest.raises(OssOpsError) as err:
+        head_public_object("src.jpg", bucket_factory=lambda: bucket)
+    assert err.value.code == "asset_unavailable"
+
+
+def test_copy_public_object_returns_etag() -> None:
+    bucket = FakeBucket(copy_etag="AB" * 16)
+    etag = copy_public_object("src.jpg", "dst.jpg", bucket_factory=lambda: bucket)
     assert etag == "AB" * 16
     assert bucket.copied == [("src.jpg", "dst.jpg")]
 
 
-def test_copy_public_object_rejects_size_mismatch() -> None:
-    bucket = FakeBucket(head_sizes={"src.jpg": 99}, copy_etag="AB" * 16)
-    with pytest.raises(OssOpsError) as err:
-        copy_public_object("src.jpg", "dst.jpg", expected_size=100, bucket_factory=lambda: bucket)
-    assert err.value.code == "asset_changed"
-
-
 def test_copy_public_object_rejects_multipart_etag() -> None:
-    bucket = FakeBucket(head_sizes={"src.jpg": 100}, copy_etag="AB" * 16 + "-2")
+    bucket = FakeBucket(copy_etag="AB" * 16 + "-2")
     with pytest.raises(OssOpsError) as err:
-        copy_public_object("src.jpg", "dst.jpg", expected_size=100, bucket_factory=lambda: bucket)
+        copy_public_object("src.jpg", "dst.jpg", bucket_factory=lambda: bucket)
     assert err.value.code == "asset_copy_unverifiable"
 
 
@@ -168,19 +185,10 @@ def test_generate_wechat_variant_png_ladder_stays_png() -> None:
     assert "quality" not in bucket.process_styles[0]
 
 
-def test_copy_public_object_raises_asset_unavailable_on_head_failure() -> None:
-    bucket = FailingBucket(fail_on="head")
-    with pytest.raises(OssOpsError) as err:
-        copy_public_object("src.jpg", "dst.jpg", expected_size=100, bucket_factory=lambda: bucket)
-    assert err.value.code == "asset_unavailable"
-
-
 def test_copy_public_object_raises_asset_unavailable_on_copy_failure() -> None:
     bucket = FailingBucket(fail_on="copy")
-    bucket.head_sizes = {"src.jpg": 100}
-    bucket.head_object = lambda key: FakeObjectMeta(100) if key == "src.jpg" else None
     with pytest.raises(OssOpsError) as err:
-        copy_public_object("src.jpg", "dst.jpg", expected_size=100, bucket_factory=lambda: bucket)
+        copy_public_object("src.jpg", "dst.jpg", bucket_factory=lambda: bucket)
     assert err.value.code == "asset_unavailable"
 
 
