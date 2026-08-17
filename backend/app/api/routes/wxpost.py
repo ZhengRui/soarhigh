@@ -98,7 +98,7 @@ workspace_draft_routes = {
 }
 workspace_draft_operation_route = re.compile(r"^draft/operations/draft-[0-9a-f]{32}$")
 workspace_draft_interrupt_route = re.compile(r"^draft/operations/draft-[0-9a-f]{32}/interrupt$")
-workspace_publication_operation_route = re.compile(r"publication/operations/publish-[0-9a-f]{32}")
+workspace_publication_operation_route = re.compile(r"^publication/operations/publish-[0-9a-f]{32}$")
 
 
 class VoiceToneSuggestionRequest(BaseModel):
@@ -1012,7 +1012,7 @@ async def r_sync_wxpost_workspace_publication(
     request: WxPostPublicationSyncRequest,
     workspace_id: str = Path(..., min_length=1),
     user: User = Depends(get_current_user),
-) -> JSONResponse:
+) -> Response:
     """Validate the workspace Draft and hand the submit plan to the Controller's
     async publication runner, which owns asset materialization and finalize."""
 
@@ -1037,7 +1037,17 @@ async def r_sync_wxpost_workspace_publication(
         content_type="application/json",
     )
     if upstream.status_code != 200:
-        raise _upstream_error(upstream)
+        # Preserve the Controller's {"error": {code, message}} envelope
+        # verbatim (rather than flattening via _upstream_error) so the
+        # frontend can branch on error.code (e.g. draft_operation_in_progress).
+        response_headers = {}
+        if upstream_content_type := upstream.headers.get("Content-Type"):
+            response_headers["Content-Type"] = upstream_content_type
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            headers=response_headers,
+        )
     return JSONResponse(status_code=202, content={"operationId": request.operation_id})
 
 

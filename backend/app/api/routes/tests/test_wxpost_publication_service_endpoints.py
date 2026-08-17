@@ -808,4 +808,5 @@ def test_sync_route_passes_through_a_controller_conflict_error_envelope(
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "A publication is already running for this workspace."
+    assert response.json()["error"]["code"] == "draft_operation_in_progress"
+    assert response.json()["error"]["message"] == "A publication is already running for this workspace."
