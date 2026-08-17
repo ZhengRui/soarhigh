@@ -45,6 +45,14 @@ export function useWxPostPublication({
   const pollControllerRef = useRef<AbortController | null>(null);
   const statusRef = useRef<WorkspacePublicationStatus | null>(null);
   statusRef.current = status;
+  // The panel's caller passes an inline arrow for onConflict, so its
+  // identity changes on every render of the parent (block clicks, selection
+  // changes, setDocument, ...). Read it through a ref so the resume effect
+  // below can key off [active, workspaceId] alone instead of re-running
+  // (and re-fetching the running-operation check) on every unrelated
+  // parent render.
+  const onConflictRef = useRef(onConflict);
+  onConflictRef.current = onConflict;
 
   useEffect(() => () => pollControllerRef.current?.abort(), []);
 
@@ -74,10 +82,14 @@ export function useWxPostPublication({
   }, [active, savedDraft, workspaceId]);
 
   const applyPublicationResult = useCallback(
-    (
-      next: WorkspacePublicationStatus,
-      priorState: WorkspacePublicationStatus['state'] | undefined
-    ) => {
+    (next: WorkspacePublicationStatus) => {
+      // Read the wording state right before it flips: status can't change
+      // mid-poll except through this very operation completing, so this is
+      // still "the state before this publish" for both a fresh submit (where
+      // it was loaded before the button was even enabled) and a resumed one
+      // (where the mount-time status fetch may still be in flight when the
+      // poll attaches, but has settled by the time it resolves).
+      const priorState = statusRef.current?.state;
       setStatus(next);
       void queryClient.invalidateQueries({
         queryKey: ['wxpost-workspaces'],
@@ -104,23 +116,29 @@ export function useWxPostPublication({
   // way a fresh submit does.
   const watchOperation = useCallback(
     async (operationId: string, controller: AbortController) => {
-      const priorState = statusRef.current?.state;
       const next = await pollWorkspacePublicationOperation(
         workspaceId,
         operationId,
         controller.signal
       );
-      applyPublicationResult(next, priorState);
+      applyPublicationResult(next);
     },
     [applyPublicationResult, workspaceId]
   );
+  const watchOperationRef = useRef(watchOperation);
+  watchOperationRef.current = watchOperation;
 
   // Resume-on-mount: a publish can outlive the tab that submitted it (a
   // refresh, or another tab). When the publication panel becomes active,
   // check for an operation still running server-side and reattach instead
   // of leaving the panel to think nothing is happening.
+  //
+  // Deps are intentionally just [active, savedDraft, workspaceId]: onConflict
+  // and watchOperation are read through refs so an unrelated re-render of the
+  // Draft stage (which passes onConflict as a fresh inline arrow every time)
+  // doesn't re-fire the running-operation check.
   useEffect(() => {
-    if (!active) return;
+    if (!active || !savedDraft) return;
     let current = true;
     void getRunningPublicationOperation(workspaceId)
       .then((response) => {
@@ -130,14 +148,15 @@ export function useWxPostPublication({
         const controller = new AbortController();
         pollControllerRef.current = controller;
         setPending(true);
-        void watchOperation(response.running.operationId, controller)
+        void watchOperationRef
+          .current(response.running.operationId, controller)
           .catch((caught) => {
             if (controller.signal.aborted) return;
             if (
               caught instanceof WorkspaceApiError &&
               caught.code === 'version_conflict'
             ) {
-              onConflict();
+              onConflictRef.current();
               return;
             }
             toast.error(
@@ -155,7 +174,7 @@ export function useWxPostPublication({
     return () => {
       current = false;
     };
-  }, [active, onConflict, watchOperation, workspaceId]);
+  }, [active, savedDraft, workspaceId]);
 
   const sync = useCallback(async () => {
     if (!savedDraft || !status || dirty || pollControllerRef.current) return;
@@ -177,7 +196,7 @@ export function useWxPostPublication({
         caught instanceof WorkspaceApiError &&
         caught.code === 'version_conflict'
       ) {
-        onConflict();
+        onConflictRef.current();
         return;
       }
       toast.error(
@@ -189,15 +208,7 @@ export function useWxPostPublication({
       }
       setPending(false);
     }
-  }, [
-    dirty,
-    manifestVersion,
-    onConflict,
-    savedDraft,
-    status,
-    watchOperation,
-    workspaceId,
-  ]);
+  }, [dirty, manifestVersion, savedDraft, status, watchOperation, workspaceId]);
 
   return { status, loading, loadError, pending, sync };
 }

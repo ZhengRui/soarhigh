@@ -172,6 +172,12 @@ export type WorkspaceMock = {
   // When set, the next submitted publication operation resolves 'failed'
   // with this error instead of completing successfully.
   failNextPublicationOperation: { code: string; message: string } | null;
+  // When set, the next POST .../publication/sync itself rejects synchronously
+  // with this error (the real backend forwards controller-originated 409s,
+  // such as draft_operation_in_progress, verbatim from the submit call —
+  // distinct from conflictNextPublication's version_conflict, and from
+  // failNextPublicationOperation's async operation failure).
+  failNextPublicationSubmit: { code: string; message: string } | null;
 };
 
 type PublicationOperationRecord = {
@@ -337,6 +343,7 @@ export async function mockWxPostWorkspaceApi(
     publicationOperationRunningPolls: 0,
     publicationOperationSteps: [],
     failNextPublicationOperation: null,
+    failNextPublicationSubmit: null,
   };
 
   const createWorkspaceContext = (
@@ -597,6 +604,15 @@ export async function mockWxPostWorkspaceApi(
             expectedDraftVersion: number;
             expectedPublicRevision: number | null;
           };
+          if (mock.failNextPublicationSubmit) {
+            const submitError = mock.failNextPublicationSubmit;
+            mock.failNextPublicationSubmit = null;
+            await route.fulfill({
+              status: 409,
+              json: { error: submitError },
+            });
+            return;
+          }
           if (
             mock.conflictNextPublication ||
             input.expectedManifestVersion !==

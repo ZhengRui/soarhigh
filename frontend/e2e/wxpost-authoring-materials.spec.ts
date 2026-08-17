@@ -1116,6 +1116,10 @@ test('shows pending state through a polled publication submit and reports succes
 }) => {
   const workspace = await openPublishableWorkspace(page, 'wxpost-publish-poll');
   workspace.publicationOperationRunningPolls = 2;
+  // Populated on the operation record (matching what the real Controller
+  // sends while running) but intentionally unasserted here: the publication
+  // panel's poll has no progress callback and never surfaces step-by-step
+  // activity in the UI, unlike the Draft Assistant's poll.
   workspace.publicationOperationSteps = [
     {
       activityId: 'asset-M01',
@@ -1173,6 +1177,34 @@ test('reports the operation error message when a publication fails', async ({
       'One of the selected images could not be used for WeChat Draft.'
     )
   ).toBeVisible();
+  await expect(page.getByTestId('publication-status')).toHaveText(
+    'Not published · Draft v1'
+  );
+  await expect(page.getByTestId('sync-public-wxpost')).toBeEnabled();
+});
+
+test('toasts a draft_operation_in_progress submit rejection instead of opening the conflict dialog', async ({
+  page,
+}) => {
+  const workspace = await openPublishableWorkspace(
+    page,
+    'wxpost-publish-in-progress'
+  );
+  workspace.failNextPublicationSubmit = {
+    code: 'draft_operation_in_progress',
+    message: 'Another publish is already running for this workspace.',
+  };
+
+  await page.getByTestId('sync-public-wxpost').click();
+  await page
+    .getByTestId('publication-confirm-dialog')
+    .getByRole('button', { name: 'Publish WxPost' })
+    .click();
+
+  await expect(
+    page.getByText('Another publish is already running for this workspace.')
+  ).toBeVisible();
+  await expect(page.getByTestId('draft-conflict-dialog')).toHaveCount(0);
   await expect(page.getByTestId('publication-status')).toHaveText(
     'Not published · Draft v1'
   );
