@@ -1344,3 +1344,104 @@ def test_http_source_checksums_returns_md5_and_rejects_unknown_fields(
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+
+
+def test_sync_meeting_media_appends_and_prunes_library_changes(
+    tmp_path: Path,
+) -> None:
+    media = [
+        _media(
+            "meetings/462/first.jpg",
+            "first.jpg",
+            size=len(RED_PNG),
+            uploaded_at="2026-07-20T09:00:00Z",
+        ),
+        _media(
+            "meetings/462/stale.jpg",
+            "stale.jpg",
+            size=4,
+            uploaded_at="2026-07-20T09:30:00Z",
+        ),
+    ]
+    files = {"https://assets.example/first.jpg": RED_PNG}
+    controller = _controller(tmp_path, media, files)
+    created = _bootstrap(controller)
+    assert [source["id"] for source in created["manifest"]["sources"]] == [
+        "M01",
+        "M02",
+    ]
+    imported = controller.import_source(
+        "material-workspace",
+        expected_manifest_version=created["manifest"]["manifestVersion"],
+        source_id="M01",
+    )
+
+    # After workspace creation the library changed: first.jpg and stale.jpg
+    # were deleted from the meeting, third.jpg was uploaded.
+    media[:] = [
+        _media(
+            "meetings/462/third.jpg",
+            "third.jpg",
+            size=6,
+            uploaded_at="2026-07-21T09:00:00Z",
+        )
+    ]
+    synced = controller.sync_meeting_media("material-workspace")
+
+    manifest = synced["manifest"]
+    sources = {source["id"]: source for source in manifest["sources"]}
+    # Imported sources survive library deletion: the workspace copy is real.
+    assert sources["M01"]["workspaceReady"] is True
+    # Never-imported candidates whose library file vanished are pruned.
+    assert "M02" not in sources
+    # New library media appear as fresh candidates with the next number.
+    assert sources["M03"]["origin"]["fileKey"] == "meetings/462/third.jpg"
+    assert sources["M03"]["workspaceReady"] is False
+    assert sources["M03"]["included"] is False
+    assert manifest["nextMaterialNumber"] == 4
+    assert manifest["manifestVersion"] == imported["manifestVersion"] + 1
+
+
+def test_sync_meeting_media_is_a_no_op_when_library_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    media = [
+        _media(
+            "meetings/462/first.jpg",
+            "first.jpg",
+            size=len(RED_PNG),
+            uploaded_at="2026-07-20T09:00:00Z",
+        )
+    ]
+    controller = _controller(tmp_path, media, {})
+    created = _bootstrap(controller)
+
+    synced = controller.sync_meeting_media("material-workspace")
+
+    assert synced["manifest"] == created["manifest"]
+
+
+def test_sync_meeting_media_skips_workspaces_without_a_meeting(
+    tmp_path: Path,
+) -> None:
+    def _refuse(meeting_id: str) -> list[dict[str, Any]]:
+        raise AssertionError("sync must not consult the meeting API")
+
+    controller = WorkspaceController(
+        tmp_path,
+        article_validator=lambda document: document,
+        meeting_media_loader=_refuse,
+        source_loader=lambda url: b"",
+    )
+    created = controller.bootstrap_workspace(
+        "material-workspace",
+        meeting_id=None,
+        editorial=EDITORIAL,
+        created_by=CREATOR,
+    )
+
+    synced = controller.sync_meeting_media("material-workspace")
+
+    assert synced["manifest"] == created["manifest"]

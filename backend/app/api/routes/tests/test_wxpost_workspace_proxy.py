@@ -1432,3 +1432,29 @@ def test_member_opens_the_link_refetched_from_the_linked_wechat_draft(
 
     assert response.status_code == 200
     assert response.json() == {"previewUrl": "https://mp.weixin.qq.com/s/test-preview"}
+
+
+def test_workspace_proxy_allows_meeting_media_sync(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path.endswith("/sources/sync-meeting-media")
+        return httpx.Response(
+            200,
+            json={
+                "workspaceId": "wxpost-abc",
+                "manifest": {"manifestVersion": 5},
+                "draft": None,
+            },
+        )
+
+    _configure_controller(monkeypatch, handler)
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/sources/sync-meeting-media",
+        headers={"Authorization": "Bearer member-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["manifest"]["manifestVersion"] == 5

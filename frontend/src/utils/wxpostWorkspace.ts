@@ -456,6 +456,13 @@ export function getWorkspaceContext(workspaceId: string, signal?: AbortSignal) {
   );
 }
 
+export function syncWorkspaceMeetingMedia(workspaceId: string) {
+  return requestJson<WorkspaceContext>(
+    `${workspacePath(workspaceId)}/sources/sync-meeting-media`,
+    { method: 'POST' }
+  );
+}
+
 export function getWorkspacePublication(workspaceId: string) {
   return requestJson<WorkspacePublicationStatus>(
     `${workspacePath(workspaceId)}/publication`

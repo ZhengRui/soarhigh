@@ -3246,3 +3246,41 @@ async def test_http_and_mcp_share_the_complete_material_operation_state(
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_http_sync_meeting_media_route(tmp_path: Path) -> None:
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_sync(workspace_id: str) -> dict[str, Any]:
+        captured["workspaceId"] = workspace_id
+        return {
+            "workspaceId": workspace_id,
+            "manifest": {"manifestVersion": 2},
+            "draft": None,
+        }
+
+    server.controller.sync_meeting_media = fake_sync  # type: ignore[method-assign]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = (
+        f"http://127.0.0.1:{server.server_port}"
+        "/workspaces/wxpost-abc/sources/sync-meeting-media"
+    )
+    try:
+        status, payload = _json_request(url, method="POST")
+        assert status == 200
+        assert payload["manifest"]["manifestVersion"] == 2
+        assert captured["workspaceId"] == "wxpost-abc"
+
+        status, _ = _json_request(url, method="POST", token="wrong")
+        assert status == HTTPStatus.UNAUTHORIZED
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

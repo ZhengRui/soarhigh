@@ -117,6 +117,8 @@ export type WorkspaceMock = {
   draftChatCompletionDelayAfterDisconnectMs: number;
   answerNextDraftChat: boolean;
   failNextDescriptionSuggestion: boolean;
+  syncAppendSources: WorkspaceManifest['sources'];
+  meetingMediaSyncRequests: number;
   conflictNextPublication: boolean;
   failNextPublication: boolean;
   publicationStatusUnavailable: boolean;
@@ -335,6 +337,8 @@ export async function mockWxPostWorkspaceApi(
     draftChatCompletionDelayAfterDisconnectMs: 0,
     answerNextDraftChat: false,
     failNextDescriptionSuggestion: false,
+    syncAppendSources: [],
+    meetingMediaSyncRequests: 0,
     conflictNextPublication: false,
     failNextPublication: false,
     publicationStatusUnavailable: false,
@@ -508,6 +512,21 @@ export async function mockWxPostWorkspaceApi(
           await new Promise((resolve) =>
             setTimeout(resolve, mock.contextDelayMs)
           );
+        }
+        await route.fulfill({ status: 200, json: context });
+        return;
+      }
+      if (
+        method === 'POST' &&
+        parts[0] === 'sources' &&
+        parts[1] === 'sync-meeting-media' &&
+        parts.length === 2
+      ) {
+        mock.meetingMediaSyncRequests += 1;
+        if (mock.syncAppendSources.length > 0) {
+          context.manifest.sources.push(...mock.syncAppendSources);
+          mock.syncAppendSources = [];
+          context.manifest.manifestVersion += 1;
         }
         await route.fulfill({ status: 200, json: context });
         return;

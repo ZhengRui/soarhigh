@@ -16,6 +16,7 @@ import {
   preflightWorkspaceSourceDelete,
   saveWorkspaceMaterials,
   suggestWorkspaceSourceDescription,
+  syncWorkspaceMeetingMedia,
   uploadWorkspaceSource,
   type WorkspaceContext,
   type WorkspaceDeletePreflight,
@@ -189,6 +190,24 @@ export function WxPostMaterialsStage({
   useEffect(() => {
     contextRef.current = context;
   }, [context]);
+
+  // The manifest snapshots the meeting library at workspace creation, so
+  // media uploaded to the meeting afterwards have no source record. Sync
+  // once per workspace when the stage opens; a failed sync just leaves the
+  // known candidates in place.
+  const syncedMeetingMediaFor = useRef<string | null>(null);
+  const onContextChangeRef = useRef(onContextChange);
+  useEffect(() => {
+    onContextChangeRef.current = onContextChange;
+  }, [onContextChange]);
+  useEffect(() => {
+    if (!active || !meetingId) return;
+    if (syncedMeetingMediaFor.current === workspaceId) return;
+    syncedMeetingMediaFor.current = workspaceId;
+    void syncWorkspaceMeetingMedia(workspaceId)
+      .then((refreshed) => onContextChangeRef.current(refreshed))
+      .catch(() => undefined);
+  }, [active, meetingId, workspaceId]);
 
   const materials = useMemo<WxPostMaterial[]>(() => {
     const mediaUrls = new Map(

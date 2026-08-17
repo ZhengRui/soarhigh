@@ -1312,6 +1312,71 @@ class WorkspaceController:
 
         return manifest.to_wire()
 
+    def sync_meeting_media(self, workspace_id: str) -> dict[str, Any]:
+        """Reconcile meeting-library sources with the meeting's current media.
+
+        Bootstrap snapshots the meeting library once; media uploaded to the
+        meeting afterwards never gain a manifest record and stay invisible to
+        Materials. This appends new library media as fresh candidates and
+        prunes never-imported candidates whose library file has vanished.
+        Imported sources always survive: their workspace copies are real.
+        """
+
+        workspace = self._resolve_workspace(workspace_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            if manifest.meeting_id is None:
+                draft = self._read_draft(workspace, manifest)
+                return self._context_response(workspace_id, manifest, draft)
+            meeting_id = manifest.meeting_id
+
+        # Load the library before taking the write lock: the upstream call is
+        # slow and must not serialize other operations on this workspace.
+        meeting_media = self._load_meeting_media(meeting_id)
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            manifest_data = manifest.to_wire()
+            if self._reconcile_meeting_sources(manifest_data, meeting_media):
+                manifest = self._write_changed_manifest(
+                    workspace,
+                    manifest_data,
+                    manifest.manifest_version,
+                )
+            draft = self._read_draft(workspace, manifest)
+        return self._context_response(workspace_id, manifest, draft)
+
+    def _reconcile_meeting_sources(
+        self,
+        manifest_data: dict[str, Any],
+        meeting_media: list[MeetingMediaReference],
+    ) -> bool:
+        library_keys = {media.file_key for media in meeting_media}
+        known_keys: set[str] = set()
+        kept: list[dict[str, Any]] = []
+        changed = False
+        for source in manifest_data["sources"]:
+            origin = source["origin"]
+            if origin["type"] == "meeting-library":
+                file_key = origin["fileKey"]
+                known_keys.add(file_key)
+                if not source["workspaceReady"] and file_key not in library_keys:
+                    changed = True
+                    continue
+            kept.append(source)
+        for media in meeting_media:
+            if media.file_key in known_keys:
+                continue
+            record = self._meeting_source_record(
+                manifest_data["nextMaterialNumber"],
+                media,
+            )
+            kept.append(record.to_wire())
+            manifest_data["nextMaterialNumber"] += 1
+            changed = True
+        if changed:
+            manifest_data["sources"] = kept
+        return changed
+
     def save_draft(
         self,
         workspace_id: str,

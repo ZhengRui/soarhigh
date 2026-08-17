@@ -1274,3 +1274,42 @@ test('resumes a publication operation still running on mount', async ({
     'Public revision 1 · from Draft v1 · up to date'
   );
 });
+
+test('shows meeting media uploaded after the workspace was created', async ({
+  page,
+}) => {
+  const workspace = await openAuthoringPage(page);
+  workspace.syncAppendSources = [
+    {
+      id: 'M04',
+      kind: 'image',
+      origin: {
+        type: 'meeting-library',
+        fileKey: 'meetings/462/late-upload.jpg',
+      },
+      filename: 'late-upload.jpg',
+      mimeType: 'image/jpeg',
+      sizeBytes: 400,
+      contentSha256: null,
+      dimensions: null,
+      workspaceReady: false,
+      included: false,
+      description: '',
+      descriptionSource: null,
+      descriptionStatus: 'missing',
+    },
+  ];
+
+  await page.getByTestId('create-workspace').click();
+
+  await expect
+    .poll(() => workspace.meetingMediaSyncRequests, { timeout: 5_000 })
+    .toBe(1);
+  await expect(page.getByTestId('material-M04')).toBeVisible();
+  await expect(page.getByTestId('material-M04')).toContainText(
+    'late-upload.jpg'
+  );
+  expect(workspace.meetingMediaSyncRequests).toBe(1);
+  const context = Array.from(workspace.contexts.values())[0];
+  expect(context.manifest.manifestVersion).toBe(2);
+});

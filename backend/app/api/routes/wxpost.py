@@ -477,6 +477,7 @@ def _workspace_route_allowed(method: str, path: str) -> bool:
         ("PATCH", "sources"),
         ("POST", "uploads"),
         ("GET", "publication/operations/current"),
+        ("POST", "sources/sync-meeting-media"),
     } | workspace_draft_routes:
         return True
     if method == "GET" and workspace_draft_operation_route.fullmatch(path):

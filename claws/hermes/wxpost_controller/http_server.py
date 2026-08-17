@@ -58,6 +58,9 @@ SOURCE_CONTENT_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)/content$
 SOURCE_DESCRIPTION_PATH = re.compile(
     r"^/workspaces/([^/]+)/sources/([^/]+)/description-suggestion$"
 )
+SOURCE_SYNC_MEETING_MEDIA_PATH = re.compile(
+    r"^/workspaces/([^/]+)/sources/sync-meeting-media$"
+)
 SOURCE_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)$")
 SOURCES_CHECKSUMS_PATH = re.compile(r"^/workspaces/([^/]+)/sources/checksums$")
 UPLOADS_PATH = re.compile(r"^/workspaces/([^/]+)/uploads$")
@@ -390,6 +393,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        sync_match = SOURCE_SYNC_MEETING_MEDIA_PATH.fullmatch(parsed.path)
+        if sync_match is not None:
+            self._run_controller(
+                lambda: self.server.controller.sync_meeting_media(sync_match.group(1))
+            )
+            return
         description_match = SOURCE_DESCRIPTION_PATH.fullmatch(parsed.path)
         if description_match is not None:
             payload = self._read_json_body()
