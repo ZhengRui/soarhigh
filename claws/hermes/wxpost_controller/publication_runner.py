@@ -196,7 +196,6 @@ class PublicationService:
         )
         if result is False:
             return
-        self._store.set_steps(operation_id, steps)
         self._store.complete_operation(operation_id, result=result)
 
     def _perform_step(
@@ -281,7 +280,13 @@ class PublicationService:
         )
         try:
             with urlopen(request, timeout=90) as response:
-                return json.loads(response.read())
+                raw = response.read()
         except HTTPError as exc:
             code, message = _parse_backend_error(exc)
             raise PublicationBackendError(code, message) from exc
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise PublicationBackendError(
+                "backend_error", "backend response was not valid JSON"
+            ) from exc
