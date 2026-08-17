@@ -46,6 +46,7 @@ from wxpost_controller.core import (  # noqa: E402
 from wxpost_controller.errors import (  # noqa: E402
     DraftOperationInProgress,
     DraftStoreUnavailable,
+    PublicationOperationNotFound,
 )
 from wxpost_controller.http_server import build_server  # noqa: E402
 
@@ -701,6 +702,148 @@ def test_http_draft_generate_submits_and_returns_the_running_operation(
         with pytest.raises(urllib.error.HTTPError) as caught:
             urllib.request.urlopen(bare, timeout=5)
         assert caught.value.code == 422
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_publication_sync_submits_and_returns_the_running_operation(
+    tmp_path: Path,
+) -> None:
+    operation_id = "publish-0123456789abcdef0123456789abcdef"
+    plan = {"wxpostId": "wxpost-uuid", "items": []}
+
+    class PublicationService:
+        def submit(self, workspace_id: str, **kwargs):
+            assert workspace_id == "wxpost-stream"
+            assert kwargs["operation_id"] == operation_id
+            assert kwargs["plan"] == plan
+            return {
+                "workspaceId": workspace_id,
+                "operationId": operation_id,
+                "state": "running",
+            }
+
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.publication_service = PublicationService()  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    url = f"{base_url}/workspaces/wxpost-stream/publication/sync"
+    try:
+        status, payload = _json_request(
+            url,
+            method="POST",
+            payload={"operationId": operation_id, "plan": plan},
+        )
+        assert status == 200
+        assert payload == {
+            "workspaceId": "wxpost-stream",
+            "operationId": operation_id,
+            "state": "running",
+        }
+
+        # Both fields are required — the submit contract mirrors draft/generate.
+        status, missing = _json_request(
+            url,
+            method="POST",
+            payload={"operationId": operation_id},
+        )
+        assert status == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert missing["error"]["code"] == "invalid_request"
+
+        status, rejected = _json_request(
+            url,
+            method="POST",
+            payload={"operationId": operation_id, "plan": plan, "bogus": True},
+        )
+        assert status == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert rejected["error"]["code"] == "invalid_request"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_publication_operations_current_reports_the_running_operation(
+    tmp_path: Path,
+) -> None:
+    operation_id = "publish-0123456789abcdef0123456789abcdef"
+
+    class PublicationService:
+        def current(self, workspace_id: str):
+            assert workspace_id == "wxpost-stream"
+            return {"running": {"operationId": operation_id, "steps": []}}
+
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.publication_service = PublicationService()  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        status, payload = _json_request(
+            f"{base_url}/workspaces/wxpost-stream/publication/operations/current"
+        )
+        assert status == 200
+        assert payload == {"running": {"operationId": operation_id, "steps": []}}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_http_publication_operation_lookup_and_not_found(tmp_path: Path) -> None:
+    operation_id = "publish-0123456789abcdef0123456789abcdef"
+
+    class PublicationService:
+        def operation(self, workspace_id: str, requested_id: str):
+            assert workspace_id == "wxpost-stream"
+            if requested_id != operation_id:
+                raise PublicationOperationNotFound(
+                    "Publication operation does not exist"
+                )
+            return {
+                "workspaceId": workspace_id,
+                "operationId": requested_id,
+                "state": "completed",
+                "result": {"state": "published"},
+                "error": None,
+                "steps": [],
+            }
+
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token=TOKEN,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.publication_service = PublicationService()  # type: ignore[assignment]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        status, payload = _json_request(
+            f"{base_url}/workspaces/wxpost-stream/publication/operations/{operation_id}"
+        )
+        assert status == 200
+        assert payload["state"] == "completed"
+
+        status, missing = _json_request(
+            f"{base_url}/workspaces/wxpost-stream/publication/operations/unknown-op"
+        )
+        assert status == HTTPStatus.NOT_FOUND
+        assert missing["error"]["code"] == "publication_operation_not_found"
     finally:
         server.shutdown()
         server.server_close()

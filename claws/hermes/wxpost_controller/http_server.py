@@ -30,6 +30,7 @@ from .errors import (
     DraftStoreUnavailable,
     HermesTurnFailed,
     HermesUnavailable,
+    PublicationOperationNotFound,
 )
 from .hermes_editorial import (
     HermesEditorialClient,
@@ -41,6 +42,8 @@ from .hermes_session import (
     HermesDraftService,
     HermesSessionClient,
 )
+from .publication_runner import PublicationService
+from .publication_store import PublicationStore
 
 WORKSPACE_PATH = re.compile(r"^/workspaces/([^/]+)$")
 WORKSPACES_PATH = "/workspaces"
@@ -65,6 +68,13 @@ DRAFT_OPERATION_INTERRUPT_PATH = re.compile(
 DRAFT_SAVE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/save$")
 DRAFT_GENERATE_PATH = re.compile(r"^/workspaces/([^/]+)/draft/generate$")
 DRAFT_CHAT_PATH = re.compile(r"^/workspaces/([^/]+)/draft/chat$")
+PUBLICATION_SYNC_PATH = re.compile(r"^/workspaces/([^/]+)/publication/sync$")
+PUBLICATION_OPERATIONS_CURRENT_PATH = re.compile(
+    r"^/workspaces/([^/]+)/publication/operations/current$"
+)
+PUBLICATION_OPERATION_PATH = re.compile(
+    r"^/workspaces/([^/]+)/publication/operations/([^/]+)$"
+)
 VOICE_TONE_SUGGESTION_PATH = re.compile(r"^/workspaces/([^/]+)/voice-tone/suggestion$")
 SESSION_RETIRE_PATH = "/sessions/retire"
 MAX_REQUEST_BYTES = 1_000_000
@@ -75,6 +85,7 @@ class ControllerHTTPServer(ThreadingHTTPServer):
     description_service: HermesDescriptionService
     draft_service: HermesDraftService
     editorial_client: HermesEditorialClient
+    publication_service: PublicationService
     bearer_token: str
 
 
@@ -137,6 +148,25 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 lambda: self.server.draft_service.operation(
                     draft_operation_match.group(1),
                     draft_operation_match.group(2),
+                ),
+                cache_control="private, no-store",
+            )
+            return
+        publication_current_match = PUBLICATION_OPERATIONS_CURRENT_PATH.fullmatch(path)
+        if publication_current_match is not None:
+            self._run_controller(
+                lambda: self.server.publication_service.current(
+                    publication_current_match.group(1)
+                ),
+                cache_control="private, no-store",
+            )
+            return
+        publication_operation_match = PUBLICATION_OPERATION_PATH.fullmatch(path)
+        if publication_operation_match is not None:
+            self._run_controller(
+                lambda: self.server.publication_service.operation(
+                    publication_operation_match.group(1),
+                    publication_operation_match.group(2),
                 ),
                 cache_control="private, no-store",
             )
@@ -424,6 +454,38 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         payload.get("expectedDraftVersion"),
                     ),
                     operation_id=cast(str, payload.get("operationId")),
+                )
+            )
+            return
+
+        publication_sync_match = PUBLICATION_SYNC_PATH.fullmatch(parsed.path)
+        if publication_sync_match is not None:
+            payload = self._read_json_body()
+            if payload is None or not self._accept_fields(
+                payload,
+                {"operationId", "plan"},
+                "publication sync",
+            ):
+                return
+            missing_fields = {"operationId", "plan"} - set(payload)
+            if missing_fields:
+                self._send_json(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    error_response(
+                        InvalidRequest(
+                            "missing publication sync fields: "
+                            + ", ".join(sorted(missing_fields))
+                        )
+                    ),
+                )
+                return
+            # Async submit, same contract as draft/generate: the operation
+            # record exists before this responds and the client polls it.
+            self._run_controller(
+                lambda: self.server.publication_service.submit(
+                    publication_sync_match.group(1),
+                    operation_id=cast(str, payload.get("operationId")),
+                    plan=cast(dict[str, Any], payload.get("plan")),
                 )
             )
             return
@@ -733,7 +795,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 ),
             ):
                 status = HTTPStatus.CONFLICT
-            elif isinstance(exc, (WorkspaceNotFound, DraftOperationNotFound)):
+            elif isinstance(
+                exc,
+                (
+                    WorkspaceNotFound,
+                    DraftOperationNotFound,
+                    PublicationOperationNotFound,
+                ),
+            ):
                 status = HTTPStatus.NOT_FOUND
             elif isinstance(
                 exc,
@@ -835,6 +904,13 @@ def build_server(
     server.draft_service = HermesDraftService(
         controller=server.controller,
         session_client=session_client,
+    )
+    publication_store = PublicationStore(server.controller.workspace_root)
+    publication_store.fail_interrupted_operations()
+    server.publication_service = PublicationService(
+        publication_store,
+        api_base_url=os.environ.get("SOARHIGH_API_BASE_URL", ""),
+        service_token=os.environ.get("WXPOST_SERVICE_TOKEN", ""),
     )
     server.description_service = HermesDescriptionService(
         controller=server.controller,

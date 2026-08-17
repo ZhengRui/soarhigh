@@ -31,3 +31,9 @@ class DraftTurnInterrupted(WorkspaceError):
     """The member stopped the Draft turn before it saved anything."""
 
     code = "draft_turn_interrupted"
+
+
+class PublicationOperationNotFound(WorkspaceError):
+    """The opaque publication operation identifier does not resolve."""
+
+    code = "publication_operation_not_found"
