@@ -272,3 +272,64 @@ async def test_missing_draft_is_rejected() -> None:
 
     assert raised.value.code == "draft_required"
     assert raised.value.status == 422
+
+
+@pytest.mark.asyncio
+async def test_invalid_draft_document_is_rejected() -> None:
+    async def load_context(workspace_id: str) -> dict:
+        return {
+            "workspaceId": workspace_id,
+            "manifest": {"manifestVersion": 4, "sources": []},
+            "draft": {"draftVersion": 2, "document": {"title": "missing required fields"}},
+        }
+
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.prepare_publication_submit(
+            "wxpost-abc",
+            _request(),
+            load_context=load_context,
+        )
+
+    assert raised.value.code == "invalid_draft"
+    assert raised.value.status == 422
+
+
+@pytest.mark.asyncio
+async def test_retrying_completed_revision_with_abandoned_assets_is_adopted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resubmit at (current revision - 1) with matching draft version and an
+
+    already-completed bundle succeeds by adopting the current row, provided
+    the prior attempt left abandoned assets behind (a signal the previous
+    submit got far enough to make progress but did not finish cleanly).
+    """
+    context = _context()
+    document = publication.ArticleDocument.model_validate(context["draft"]["document"])
+    media_shas = [
+        (
+            source["id"],
+            source["contentSha256"],
+        )
+        for source in context["manifest"]["sources"]
+    ]
+    bundle_sha256 = publication._bundle_sha256_from_pairs(document, media_shas)
+
+    monkeypatch.setattr(
+        publication,
+        "get_wxpost_by_workspace_id",
+        lambda workspace_id: _row(revision=4, draft_version=2, draft_sha256=bundle_sha256),
+    )
+    monkeypatch.setattr(publication, "has_abandoned_wxpost_assets", lambda wxpost_id: True)
+
+    async def load_context(workspace_id: str) -> dict:
+        return context
+
+    plan = await publication.prepare_publication_submit(
+        "wxpost-abc",
+        _request(public_revision=3),
+        load_context=load_context,
+    )
+
+    assert plan.wxpost_id == str(WXPOST_ID)
+    assert plan.bundle_sha256 == bundle_sha256

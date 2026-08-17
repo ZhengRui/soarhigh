@@ -124,9 +124,24 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 - **/posts/wxposts/draft-previews/{token}** - GET: Return canonical render input
   only while the signed Draft version remains current; its nested media route
   serves only media referenced by that exact Draft
-- **/posts/wxposts/workspaces/{id}/publication/sync** - POST: Explicitly and
-  version-safely synchronize the saved Draft, included assets, and canonical
-  render to one stable public WxPost
+- **/posts/wxposts/workspaces/{id}/publication/sync** - POST: Validate the
+  saved Draft, hand the ordered submit plan to the Controller's async
+  publication runner, and return `202` with an `operationId` immediately
+  (asset copy/variant materialization and finalize happen out-of-band; the
+  synchronous byte-upload pipeline that used to block this request has been
+  retired)
+- **/posts/wxposts/workspaces/{id}/publication/operations/{operationId}** -
+  GET: Poll one publication operation's status (`running`/`succeeded`/`failed`)
+  and, once resolved, its result
+- **/posts/wxposts/workspaces/{id}/publication/operations/current** - GET:
+  Poll the workspace's in-flight publication operation, if any (used to
+  resume polling after a page reload)
+- **/posts/wxposts/workspaces/{id}/publication/assets/ensure** - POST
+  (service token): Idempotently materialize one public asset and its WeChat
+  variant for the Controller's runner
+- **/posts/wxposts/workspaces/{id}/publication/finalize** - POST (service
+  token): Finalize a publication once the runner has ensured every asset in
+  the submit plan
 - **/posts/wxposts/workspaces/{id}** - PATCH/DELETE: Save or delete a versioned
   workspace
 - **/posts/wxposts/workspaces/{id}/...** - Authenticated proxy for the
@@ -571,20 +586,16 @@ Validation recorded on 2026-08-06:
   PNG whose legacy OSS metadata says JPEG without routing its bytes back
   through Backend or weakening content-integrity checks.
 
-The real Supabase/OSS publication lifecycle has an opt-in destructive smoke
-test at `app/services/tests/test_wxpost_publication_live.py`. It creates only a
-uniquely named temporary WxPost, verifies initial publication, idempotent retry,
-stale-asset cleanup, and final deletion, then cleans up in `finally`. It is
-excluded from normal test runs and requires all four guards below to match the
-loaded backend target exactly:
-
-```bash
-WXPOST_PUBLICATION_LIVE_TEST=1 \
-WXPOST_PUBLICATION_LIVE_ALLOW_MUTATION=yes \
-WXPOST_PUBLICATION_LIVE_SUPABASE_URL="$SUPABASE_URL" \
-WXPOST_PUBLICATION_LIVE_OSS_BUCKET="$ALICLOUD_OSS_BUCKET" \
-  pytest -m live app/services/tests/test_wxpost_publication_live.py
-```
+Publication is now an async operation: `POST .../publication/sync` only
+validates the Draft and hands an ordered submit plan to the Controller's
+runner (`202` + `operationId`), which calls the service-token `assets/ensure`
+and `finalize` routes above per item; the frontend polls
+`.../publication/operations/{operationId}` (or `.../operations/current` after
+a reload) for progress. The opt-in destructive live smoke test that used to
+exercise the old synchronous `synchronize_workspace_publication` pipeline
+end-to-end (`app/services/tests/test_wxpost_publication_live.py`) was retired
+with that pipeline; there is currently no live OSS/Supabase smoke test for the
+async ensure/finalize path.
 
 ### Current Implementation Details
 
