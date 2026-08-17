@@ -402,7 +402,18 @@ async def _copy_original_asset(
                 pass
             raise _map_oss_error(error) from error
 
-    return mark_wxpost_asset_ready(UUID(asset["id"]), etag=etag)
+    try:
+        return mark_wxpost_asset_ready(UUID(asset["id"]), etag=etag)
+    except Exception as error:
+        try:
+            mark_wxpost_asset_failed(UUID(asset["id"]))
+        except Exception:
+            pass
+        raise PublicationError(
+            "asset_upload_failed",
+            f"Material {item.source_id} could not be uploaded to public storage.",
+            status=503,
+        ) from error
 
 
 async def _ensure_wechat_variant(asset: dict, item: WxPostPublicationSubmitItem) -> bool:
@@ -473,6 +484,14 @@ async def ensure_publication_asset(
     ready asset by content hash when one already exists; otherwise performs
     an OSS server-side copy from the meeting-library original.
     """
+
+    owner = get_wxpost_by_id(wxpost_id)
+    if owner is None or owner.get("source_workspace_id") != workspace_id:
+        raise PublicationError(
+            "wxpost_not_found",
+            "The public WxPost shell no longer exists.",
+            status=404,
+        )
 
     asset = get_ready_wxpost_asset(wxpost_id, content_sha256=item.content_sha256, kind=item.kind)
     if asset is None:
