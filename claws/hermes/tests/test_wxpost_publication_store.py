@@ -86,6 +86,30 @@ def test_fail_operation_rejects_extra_keys(tmp_path: Path) -> None:
         )
 
 
+def test_fail_operation_rejects_missing_message(tmp_path: Path) -> None:
+    store = PublicationStore(tmp_path)
+    operation_id = "pub-aabbccddeeff00112233445566778899"
+    _start(store, operation_id)
+
+    with pytest.raises(HermesTurnFailed):
+        store.fail_operation(operation_id, error={"code": "backend_error"})
+
+    assert store.get_operation("wxpost-test", operation_id)["state"] == "running"
+
+
+def test_fail_operation_rejects_wrong_typed_code(tmp_path: Path) -> None:
+    store = PublicationStore(tmp_path)
+    operation_id = "pub-99887766554433221100ffeeddccbbaa"
+    _start(store, operation_id)
+
+    with pytest.raises(HermesTurnFailed):
+        store.fail_operation(
+            operation_id, error={"code": 500, "message": "nope"}
+        )
+
+    assert store.get_operation("wxpost-test", operation_id)["state"] == "running"
+
+
 def test_complete_operation_requires_state_key(tmp_path: Path) -> None:
     store = PublicationStore(tmp_path)
     operation_id = "pub-22222222222222222222222222222222"
@@ -181,6 +205,78 @@ def test_running_operation_returns_none_when_workspace_is_idle(
     store = PublicationStore(tmp_path)
 
     assert store.running_operation("wxpost-test") is None
+
+
+def test_set_steps_rejects_step_missing_required_field(tmp_path: Path) -> None:
+    store = PublicationStore(tmp_path)
+    operation_id = "pub-bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc"
+    _start(store, operation_id)
+    malformed_step = {
+        # missing "label"
+        "activityId": "publish-1",
+        "completed": True,
+        "failed": False,
+    }
+
+    with pytest.raises(HermesTurnFailed):
+        store.set_steps(operation_id, [malformed_step])
+
+    assert store.get_operation("wxpost-test", operation_id)["steps"] == []
+
+
+def test_set_steps_rejects_wrong_typed_required_field(tmp_path: Path) -> None:
+    store = PublicationStore(tmp_path)
+    operation_id = "pub-cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+    _start(store, operation_id)
+    malformed_step = {
+        "activityId": "publish-1",
+        "label": "Publishing to WeChat",
+        "completed": "true",  # must be bool, not str
+        "failed": False,
+    }
+
+    with pytest.raises(HermesTurnFailed):
+        store.set_steps(operation_id, [malformed_step])
+
+    assert store.get_operation("wxpost-test", operation_id)["steps"] == []
+
+
+def test_set_steps_rejects_wrong_typed_optional_tool_name(tmp_path: Path) -> None:
+    store = PublicationStore(tmp_path)
+    operation_id = "pub-dededededededededededededededede0"
+    _start(store, operation_id)
+    malformed_step = {
+        "activityId": "publish-1",
+        "label": "Publishing to WeChat",
+        "completed": False,
+        "failed": False,
+        "toolName": 123,  # must be str
+    }
+
+    with pytest.raises(HermesTurnFailed):
+        store.set_steps(operation_id, [malformed_step])
+
+    assert store.get_operation("wxpost-test", operation_id)["steps"] == []
+
+
+def test_set_steps_rejects_wrong_typed_operation_names_entries(
+    tmp_path: Path,
+) -> None:
+    store = PublicationStore(tmp_path)
+    operation_id = "pub-efefefefefefefefefefefefefefefef"
+    _start(store, operation_id)
+    malformed_step = {
+        "activityId": "publish-1",
+        "label": "Publishing to WeChat",
+        "completed": False,
+        "failed": False,
+        "operationNames": ["a", 5],  # every entry must be str
+    }
+
+    with pytest.raises(HermesTurnFailed):
+        store.set_steps(operation_id, [malformed_step])
+
+    assert store.get_operation("wxpost-test", operation_id)["steps"] == []
 
 
 def test_plan_round_trip(tmp_path: Path) -> None:
