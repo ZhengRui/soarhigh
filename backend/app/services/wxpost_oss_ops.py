@@ -131,7 +131,8 @@ def copy_public_object(
     bucket = bucket_factory()
 
     try:
-        result = bucket.copy_object(source_key, target_key)
+        # oss2 signature: copy_object(source_bucket_name, source_key, target_key)
+        result = bucket.copy_object(ALICLOUD_OSS_BUCKET, source_key, target_key)
     except Exception as e:
         logger.exception("OSS copy_object failed for %r -> %r", source_key, target_key)
         raise OssOpsError(

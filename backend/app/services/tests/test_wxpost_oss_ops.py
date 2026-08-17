@@ -57,8 +57,8 @@ class FakeBucket:
 
         return FakeObjectMeta(size)
 
-    def copy_object(self, source_key: str, target_key: str) -> Any:
-        """Mock copy_object records the copy and returns etag."""
+    def copy_object(self, source_bucket_name: str, source_key: str, target_key: str) -> Any:
+        """Mock copy_object (real oss2 signature) records the copy and returns etag."""
         self.copied.append((source_key, target_key))
 
         class FakeCopyResult:
@@ -101,7 +101,7 @@ class FailingBucket:
             raise RuntimeError("OSS head_object failed")
         return FakeObjectMeta(100)
 
-    def copy_object(self, source_key: str, target_key: str) -> Any:
+    def copy_object(self, source_bucket_name: str, source_key: str, target_key: str) -> Any:
         if self.fail_on == "copy":
             raise RuntimeError("OSS copy_object failed")
         return type("FakeCopyResult", (), {"etag": "AB" * 16})()
