@@ -92,6 +92,7 @@ async def test_real_publication_storage_lifecycle() -> None:
                     "mimeType": "image/png",
                     "workspaceReady": True,
                     "contentSha256": hashlib.sha256(media_bytes).hexdigest(),
+                    "origin": {"type": "meeting-library", "fileKey": f"public/meetings/{workspace_id}/M01.png"},
                 }
             ],
         },

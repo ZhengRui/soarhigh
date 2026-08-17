@@ -87,6 +87,7 @@ def _context(*, manifest_version: int = 4, draft_version: int = 2) -> dict:
                     "mimeType": "image/jpeg",
                     "workspaceReady": True,
                     "contentSha256": hashlib.sha256(b"public image bytes").hexdigest(),
+                    "origin": {"type": "meeting-library", "fileKey": "public/meetings/2026/M01.jpg"},
                 }
             ],
         },
@@ -345,6 +346,7 @@ async def test_sync_spools_media_without_retaining_all_source_bytes(
             "mimeType": "image/jpeg",
             "workspaceReady": True,
             "contentSha256": hashlib.sha256(b"second image").hexdigest(),
+            "origin": {"type": "meeting-library", "fileKey": "public/meetings/2026/M02.jpg"},
         }
     )
     context["draft"]["document"]["media"].append(

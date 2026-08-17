@@ -54,6 +54,8 @@ from ..db.wxpost import (
 from ..models.wxpost import (
     ArticleDocument,
     WxPostPublicationStatus,
+    WxPostPublicationSubmitItem,
+    WxPostPublicationSubmitPlan,
     WxPostPublicationSyncRequest,
 )
 from .wxpost_document import validate_and_parse
@@ -140,10 +142,10 @@ def public_asset_url(object_key: str) -> str:
     return f"https://{ALICLOUD_OSS_BUCKET}.{endpoint}/" f"{quote(object_key, safe='/')}"
 
 
-def _bundle_sha256(document: ArticleDocument, media: list[ResolvedMedia]) -> str:
+def _bundle_sha256_from_pairs(document: ArticleDocument, media_shas: list[tuple[str, str]]) -> str:
     payload = {
         "document": document.model_dump(by_alias=True, mode="json"),
-        "media": [{"id": item.source_id, "sha256": item.sha256} for item in media],
+        "media": [{"id": source_id, "sha256": sha256} for source_id, sha256 in media_shas],
     }
     encoded = json.dumps(
         payload,
@@ -152,6 +154,10 @@ def _bundle_sha256(document: ArticleDocument, media: list[ResolvedMedia]) -> str
         separators=(",", ":"),
     ).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _bundle_sha256(document: ArticleDocument, media: list[ResolvedMedia]) -> str:
+    return _bundle_sha256_from_pairs(document, [(item.source_id, item.sha256) for item in media])
 
 
 def _asset_request_hash(media: ResolvedMedia) -> str:
@@ -473,14 +479,22 @@ async def delete_public_wxpost(
     return workspace_id if isinstance(workspace_id, str) else None
 
 
-async def synchronize_workspace_publication(
+@dataclass(frozen=True)
+class _PreparedSubmit:
+    plan: WxPostPublicationSubmitPlan
+    document: ArticleDocument
+    current: dict[str, Any] | None
+    current_ready: bool
+    retrying_completed_revision: bool
+    owner: dict[str, Any]
+
+
+async def _prepare_submit(
     workspace_id: str,
     request: WxPostPublicationSyncRequest,
     *,
     load_context: LoadContext,
-    load_source: LoadSource,
-    compile_render: CompileRender,
-) -> WxPostPublicationStatus:
+) -> _PreparedSubmit:
     context = await load_context(workspace_id)
     manifest = context.get("manifest")
     draft = context.get("draft")
@@ -537,46 +551,155 @@ async def synchronize_workspace_publication(
         for source in manifest.get("sources", [])
         if isinstance(source, dict) and isinstance(source.get("id"), str)
     }
+
+    parsed_source = validate_and_parse(document)
+    body_media_ids = {media_id for directive in parsed_source.directives for media_id in directive.media_ids}
+
+    items: list[WxPostPublicationSubmitItem] = []
+    media_shas: list[tuple[str, str]] = []
+    for media in sorted(
+        (media for media in document.media if media.include),
+        key=lambda media: media.order,
+    ):
+        source = sources.get(media.id)
+        if source is None or source.get("workspaceReady") is not True or source.get("kind") != media.kind.value:
+            raise PublicationError(
+                "missing_publication_media",
+                f"Material {media.id} is not available for public synchronization.",
+                status=422,
+            )
+        content_sha256 = source.get("contentSha256")
+        if not isinstance(content_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", content_sha256) is None:
+            raise PublicationError(
+                "missing_publication_media",
+                f"Material {media.id} has no valid content version.",
+                status=422,
+            )
+        origin = source.get("origin")
+        file_key = origin.get("fileKey") if isinstance(origin, dict) else None
+        if not isinstance(origin, dict) or origin.get("type") != "meeting-library" or not isinstance(file_key, str):
+            raise PublicationError(
+                "upload_origin_unsupported",
+                f"Material {media.id} was uploaded directly; direct-upload publishing arrives in the next release.",
+                status=422,
+            )
+
+        size_bytes = int(source.get("sizeBytes") or 0)
+        is_cover = media.id == (document.cover_media_id or "")
+        needs_wechat_variant = (media.id in body_media_ids and media.kind.value == "image") or (
+            is_cover and media.kind.value == "image" and size_bytes > WECHAT_COVER_HARD_MAX_BYTES
+        )
+        items.append(
+            WxPostPublicationSubmitItem(
+                source_id=media.id,
+                kind=media.kind.value,
+                filename=str(source.get("filename") or media.id),
+                mime_type=str(source.get("mimeType") or ""),
+                size_bytes=size_bytes,
+                content_sha256=content_sha256,
+                meeting_file_key=file_key,
+                needs_wechat_variant=needs_wechat_variant,
+            )
+        )
+        media_shas.append((media.id, content_sha256))
+
+    bundle_sha256 = _bundle_sha256_from_pairs(document, media_shas)
+
+    if current_ready:
+        assert current is not None
+        if retrying_completed_revision and current.get("source_draft_sha256") != bundle_sha256:
+            raise PublicationError(
+                "version_conflict",
+                "The public WxPost changed elsewhere.",
+                status=409,
+            )
+
+    owner = current or create_publication_shell(
+        workspace_id=workspace_id,
+        draft_version=draft_version,
+        draft_sha256=bundle_sha256,
+        document=document,
+    )
+    if current is None:
+        owner_matches = (
+            owner.get("source_draft_version") == draft_version and owner.get("source_draft_sha256") == bundle_sha256
+        )
+        if owner.get("status") == "ready" and owner.get("is_public"):
+            if not owner_matches:
+                raise PublicationError(
+                    "version_conflict",
+                    "The public WxPost changed elsewhere.",
+                    status=409,
+                )
+        if not owner_matches:
+            raise PublicationError(
+                "version_conflict",
+                "The public WxPost is being synchronized elsewhere.",
+                status=409,
+            )
+
+    plan = WxPostPublicationSubmitPlan(
+        wxpost_id=str(owner["id"]),
+        draft_version=draft_version,
+        manifest_version=manifest_version,
+        bundle_sha256=bundle_sha256,
+        items=items,
+    )
+    return _PreparedSubmit(
+        plan=plan,
+        document=document,
+        current=current,
+        current_ready=current_ready,
+        retrying_completed_revision=retrying_completed_revision,
+        owner=owner,
+    )
+
+
+async def prepare_publication_submit(
+    workspace_id: str,
+    request: WxPostPublicationSyncRequest,
+    *,
+    load_context: LoadContext,
+) -> WxPostPublicationSubmitPlan:
+    """Validate a workspace Draft and adopt its publication shell, returning the ordered work plan."""
+
+    prepared = await _prepare_submit(workspace_id, request, load_context=load_context)
+    return prepared.plan
+
+
+async def synchronize_workspace_publication(
+    workspace_id: str,
+    request: WxPostPublicationSyncRequest,
+    *,
+    load_context: LoadContext,
+    load_source: LoadSource,
+    compile_render: CompileRender,
+) -> WxPostPublicationStatus:
+    prepared = await _prepare_submit(workspace_id, request, load_context=load_context)
+
     with TemporaryDirectory(prefix="wxpost-publication-") as spool_directory:
         resolved: list[ResolvedMedia] = []
-        for item in sorted(
-            (media for media in document.media if media.include),
-            key=lambda media: media.order,
-        ):
-            source = sources.get(item.id)
-            if source is None or source.get("workspaceReady") is not True or source.get("kind") != item.kind.value:
-                raise PublicationError(
-                    "missing_publication_media",
-                    f"Material {item.id} is not available for public synchronization.",
-                    status=422,
-                )
-            content_sha256 = source.get("contentSha256")
-            if not isinstance(content_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", content_sha256) is None:
-                raise PublicationError(
-                    "missing_publication_media",
-                    f"Material {item.id} has no valid content version.",
-                    status=422,
-                )
+        for item in prepared.plan.items:
             content, response_mime = await load_source(
                 workspace_id,
-                item.id,
-                content_sha256,
+                item.source_id,
+                item.content_sha256,
             )
             source_content_sha256 = hashlib.sha256(content).hexdigest()
-            if source_content_sha256 != content_sha256:
+            if source_content_sha256 != item.content_sha256:
                 raise PublicationError(
                     "missing_publication_media",
-                    f"Material {item.id} content does not match its version.",
+                    f"Material {item.source_id} content does not match its version.",
                     status=422,
                 )
-            mime_type = str(source.get("mimeType") or response_mime)
-            content_path = Path(spool_directory, item.id)
+            mime_type = item.mime_type or response_mime
+            content_path = Path(spool_directory, item.source_id)
             content_path.write_bytes(content)
             resolved.append(
                 ResolvedMedia(
-                    source_id=item.id,
-                    kind=item.kind.value,
-                    filename=str(source.get("filename") or item.id),
+                    source_id=item.source_id,
+                    kind=item.kind,
+                    filename=item.filename,
                     mime_type=mime_type,
                     content_path=content_path,
                     size_bytes=len(content),
@@ -588,11 +711,12 @@ async def synchronize_workspace_publication(
 
         return await _synchronize_resolved_publication(
             workspace_id,
-            document=document,
-            draft_version=draft_version,
-            current=current,
-            current_ready=current_ready,
-            retrying_completed_revision=retrying_completed_revision,
+            document=prepared.document,
+            draft_version=prepared.plan.draft_version,
+            current=prepared.current,
+            current_ready=prepared.current_ready,
+            retrying_completed_revision=prepared.retrying_completed_revision,
+            owner=prepared.owner,
             resolved=resolved,
             compile_render=compile_render,
         )
@@ -606,6 +730,7 @@ async def _synchronize_resolved_publication(
     current: dict[str, Any] | None,
     current_ready: bool,
     retrying_completed_revision: bool,
+    owner: dict[str, Any],
     resolved: list[ResolvedMedia],
     compile_render: CompileRender,
 ) -> WxPostPublicationStatus:
@@ -622,33 +747,14 @@ async def _synchronize_resolved_publication(
             )
         same_bundle = current.get("source_draft_sha256") == bundle_sha256
         same_draft = current.get("source_draft_version") == draft_version
-
-    owner = current or create_publication_shell(
-        workspace_id=workspace_id,
-        draft_version=draft_version,
-        draft_sha256=bundle_sha256,
-        document=document,
-    )
-    if current is None:
+    elif current is None:
         owner_matches = (
             owner.get("source_draft_version") == draft_version and owner.get("source_draft_sha256") == bundle_sha256
         )
-        if owner.get("status") == "ready" and owner.get("is_public"):
-            if owner_matches:
-                same_bundle = True
-                same_draft = True
-            else:
-                raise PublicationError(
-                    "version_conflict",
-                    "The public WxPost changed elsewhere.",
-                    status=409,
-                )
-        if not owner_matches:
-            raise PublicationError(
-                "version_conflict",
-                "The public WxPost is being synchronized elsewhere.",
-                status=409,
-            )
+        if owner_matches and owner.get("status") == "ready" and owner.get("is_public"):
+            same_bundle = True
+            same_draft = True
+
     wxpost_id = UUID(owner["id"])
     public_urls: dict[str, str] = {}
     public_assets: dict[str, dict] = {}

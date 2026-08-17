@@ -376,6 +376,25 @@ class WxPostPublicationSyncRequest(WireModel):
     expected_public_revision: int | None = Field(default=None, ge=1, strict=True)
 
 
+class WxPostPublicationSubmitItem(WireModel):
+    source_id: str
+    kind: Literal["image", "video"]
+    filename: str
+    mime_type: str
+    size_bytes: int
+    content_sha256: str
+    meeting_file_key: str
+    needs_wechat_variant: bool
+
+
+class WxPostPublicationSubmitPlan(WireModel):
+    wxpost_id: str
+    draft_version: int
+    manifest_version: int
+    bundle_sha256: str
+    items: list[WxPostPublicationSubmitItem]
+
+
 class WxPostPublicationDeleteRequest(WireModel):
     expected_public_revision: int = Field(ge=1, strict=True)
 
