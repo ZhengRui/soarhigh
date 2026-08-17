@@ -65,6 +65,7 @@ from .wxpost_image_variants import (
     ImageVariantError,
     render_wechat_body_variant,
 )
+from .wxpost_oss_ops import OssOpsError, copy_public_object, generate_wechat_variant
 
 LoadContext = Callable[[str], Awaitable[dict[str, Any]]]
 LoadSource = Callable[[str, str, str], Awaitable[tuple[bytes, str]]]
@@ -160,19 +161,36 @@ def _bundle_sha256(document: ArticleDocument, media: list[ResolvedMedia]) -> str
     return _bundle_sha256_from_pairs(document, [(item.source_id, item.sha256) for item in media])
 
 
-def _asset_request_hash(media: ResolvedMedia) -> str:
+def _request_hash(
+    *,
+    filename: str,
+    kind: str,
+    mime_type: str,
+    sha256: str,
+    size_bytes: int,
+) -> str:
     value = json.dumps(
         {
-            "filename": media.filename,
-            "kind": media.kind,
-            "mimeType": media.mime_type,
-            "sha256": media.sha256,
-            "sizeBytes": media.size_bytes,
+            "filename": filename,
+            "kind": kind,
+            "mimeType": mime_type,
+            "sha256": sha256,
+            "sizeBytes": size_bytes,
         },
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
     return hashlib.sha256(value).hexdigest()
+
+
+def _asset_request_hash(media: ResolvedMedia) -> str:
+    return _request_hash(
+        filename=media.filename,
+        kind=media.kind,
+        mime_type=media.mime_type,
+        sha256=media.sha256,
+        size_bytes=media.size_bytes,
+    )
 
 
 def _upload_asset(wxpost_id: UUID, workspace_id: str, media: ResolvedMedia) -> str:
@@ -289,6 +307,186 @@ def _ensure_wechat_body_variant(asset: dict, media: ResolvedMedia) -> dict:
             f"{label} could not be prepared for WeChat delivery.",
             status=503,
         ) from error
+
+
+def _map_oss_error(error: OssOpsError) -> PublicationError:
+    if error.code == "asset_unavailable":
+        status = 503
+    elif error.code in ("asset_changed", "asset_copy_unverifiable"):
+        status = 409
+    else:
+        status = 422
+    return PublicationError(error.code, str(error), status=status)
+
+
+async def _copy_original_asset(
+    wxpost_id: UUID,
+    workspace_id: str,
+    item: WxPostPublicationSubmitItem,
+) -> dict:
+    """Server-side copy one meeting-library original into public storage.
+
+    Unlike ``_upload_asset``, ``content_md5`` (NOT NULL on ``wxpost_assets``)
+    is only knowable after the copy completes, since it is derived from the
+    copy's returned etag rather than from locally-hashed bytes. So the
+    sequence here is copy-first, insert-second: we copy into a freshly
+    generated object key, then create the pending row with that key and its
+    now-known ``content_md5``. On the rare idempotent-conflict path — a
+    concurrent or earlier attempt already owns this (workspace, source,
+    sha256) under a *different* object key — the fresh copy target is
+    orphaned (harmless; nothing references it) and we redo the copy against
+    the row's real key before marking it ready.
+    """
+
+    asset_id = uuid4()
+    extension = _extension(item.mime_type)
+    object_key = f"{_PUBLIC_MEDIA_PREFIX}/{wxpost_id}/assets/{asset_id}/original.{extension}"
+
+    try:
+        etag = await asyncio.to_thread(
+            copy_public_object,
+            item.meeting_file_key,
+            object_key,
+            expected_size=item.size_bytes,
+        )
+    except OssOpsError as error:
+        raise _map_oss_error(error) from error
+
+    idempotency_source = f"{workspace_id}:{item.source_id}:{item.content_sha256}"
+    asset = create_pending_wxpost_asset(
+        {
+            "id": str(asset_id),
+            "wxpost_id": str(wxpost_id),
+            "status": "pending",
+            "kind": item.kind,
+            "object_key": object_key,
+            "original_filename": item.filename,
+            "mime_type": item.mime_type,
+            "size_bytes": item.size_bytes,
+            "content_sha256": item.content_sha256,
+            "content_md5": base64.b64encode(bytes.fromhex(etag)).decode(),
+            "upload_idempotency_key_hash": hashlib.sha256(idempotency_source.encode()).hexdigest(),
+            "upload_request_hash": _request_hash(
+                filename=item.filename,
+                kind=item.kind,
+                mime_type=item.mime_type,
+                sha256=item.content_sha256,
+                size_bytes=item.size_bytes,
+            ),
+            "source_type": "workspace",
+            "source_metadata": {
+                "workspaceId": workspace_id,
+                "sourceId": item.source_id,
+            },
+        }
+    )
+    if asset.get("status") == "ready":
+        return asset
+    if asset.get("status") in {"failed", "abandoned"}:
+        asset = retry_inactive_wxpost_asset(UUID(asset["id"]))
+        if asset.get("status") == "ready":
+            return asset
+
+    if asset["object_key"] != object_key:
+        try:
+            etag = await asyncio.to_thread(
+                copy_public_object,
+                item.meeting_file_key,
+                asset["object_key"],
+                expected_size=item.size_bytes,
+            )
+        except OssOpsError as error:
+            try:
+                mark_wxpost_asset_failed(UUID(asset["id"]))
+            except Exception:
+                pass
+            raise _map_oss_error(error) from error
+
+    return mark_wxpost_asset_ready(UUID(asset["id"]), etag=etag)
+
+
+async def _ensure_wechat_variant(asset: dict, item: WxPostPublicationSubmitItem) -> bool:
+    """Idempotently materialize the WeChat body variant for one ready asset."""
+
+    existing = get_wxpost_asset_variant(UUID(asset["id"]), profile=WECHAT_BODY_PROFILE)
+    if existing is not None and existing.get("status") == "ready":
+        return True
+
+    asset_directory = str(asset["object_key"]).rsplit("/original.", 1)[0]
+    try:
+        rendered = await asyncio.to_thread(
+            generate_wechat_variant,
+            asset["object_key"],
+            asset_directory,
+            mime_type=item.mime_type,
+        )
+    except OssOpsError as error:
+        raise _map_oss_error(error) from error
+
+    variant = create_pending_wxpost_asset_variant(
+        {
+            "id": str(uuid4()),
+            "asset_id": asset["id"],
+            "profile": WECHAT_BODY_PROFILE,
+            "status": "pending",
+            "object_key": rendered.object_key,
+            "mime_type": rendered.mime_type,
+            "size_bytes": rendered.size_bytes,
+            "content_sha256": rendered.sha256,
+        }
+    )
+    if variant.get("status") == "ready":
+        return True
+    if variant.get("status") == "failed":
+        variant = retry_failed_wxpost_asset_variant(UUID(variant["id"]))
+        if variant.get("status") == "ready":
+            return True
+
+    # generate_wechat_variant already wrote the winning candidate to OSS
+    # server-side (via the ladder's sys/saveas step) — there is no local
+    # put_object here, so the etag we record is the downloaded variant
+    # bytes' MD5 rather than an OSS copy/put response etag.
+    etag = hashlib.md5(rendered.content).hexdigest().upper()
+    try:
+        mark_wxpost_asset_variant_ready(UUID(variant["id"]), etag=etag)
+    except Exception as error:
+        try:
+            mark_wxpost_asset_variant_failed(UUID(variant["id"]))
+        except Exception:
+            pass
+        raise PublicationError(
+            "asset_variant_upload_failed",
+            f"Material {item.source_id} could not be prepared for WeChat delivery.",
+            status=503,
+        ) from error
+    return True
+
+
+async def ensure_publication_asset(
+    workspace_id: str,
+    wxpost_id: UUID,
+    item: WxPostPublicationSubmitItem,
+) -> dict[str, Any]:
+    """Idempotently materialize one public asset (and its WeChat variant).
+
+    Called once per media item by the async publication runner. Reuses a
+    ready asset by content hash when one already exists; otherwise performs
+    an OSS server-side copy from the meeting-library original.
+    """
+
+    asset = get_ready_wxpost_asset(wxpost_id, content_sha256=item.content_sha256, kind=item.kind)
+    if asset is None:
+        asset = await _copy_original_asset(wxpost_id, workspace_id, item)
+
+    variant_ready = False
+    if item.needs_wechat_variant:
+        variant_ready = await _ensure_wechat_variant(asset, item)
+
+    return {
+        "source_id": item.source_id,
+        "public_url": public_asset_url(asset["object_key"]),
+        "variant_ready": variant_ready,
+    }
 
 
 def _delete_asset_objects(assets: list[dict]) -> None:
@@ -802,11 +1000,50 @@ async def _synchronize_resolved_publication(
             media,
         )
 
+    return await _finalize_publication_record(
+        workspace_id,
+        wxpost_id=wxpost_id,
+        document=document,
+        draft_version=draft_version,
+        bundle_sha256=bundle_sha256,
+        same_bundle=same_bundle,
+        same_draft=same_draft,
+        owner=owner,
+        public_urls=public_urls,
+        keep_content_sha256={media.sha256 for media in resolved},
+        compile_render=compile_render,
+    )
+
+
+async def _finalize_publication_record(
+    workspace_id: str,
+    *,
+    wxpost_id: UUID,
+    document: ArticleDocument,
+    draft_version: int,
+    bundle_sha256: str,
+    same_bundle: bool,
+    same_draft: bool,
+    owner: dict[str, Any],
+    public_urls: dict[str, str],
+    keep_content_sha256: set[str],
+    compile_render: CompileRender,
+) -> WxPostPublicationStatus:
+    """Shared tail: rewrite public media URLs, compile, finalize the row, sweep.
+
+    Shared by the legacy synchronous sync path (which uploads assets and
+    ensures variants just above this call) and ``finalize_publication``
+    (whose assets and variants were already made ready by prior
+    ``ensure_publication_asset`` calls) — the two differ only in how
+    ``public_urls``/``keep_content_sha256``/``same_bundle``/``same_draft``
+    were derived, not in how the public row gets finalized.
+    """
+
     if same_bundle and same_draft:
         await asyncio.to_thread(
             _remove_unreferenced_assets,
             wxpost_id,
-            keep_content_sha256={media.sha256 for media in resolved},
+            keep_content_sha256=keep_content_sha256,
         )
         return publication_status(
             workspace_id,
@@ -866,10 +1103,123 @@ async def _synchronize_resolved_publication(
     await asyncio.to_thread(
         _remove_unreferenced_assets,
         wxpost_id,
-        keep_content_sha256={media.sha256 for media in resolved},
+        keep_content_sha256=keep_content_sha256,
     )
     return publication_status(
         workspace_id,
         current_draft_version=draft_version,
         row=row,
+    )
+
+
+async def finalize_publication(
+    workspace_id: str,
+    wxpost_id: UUID,
+    *,
+    expected_manifest_version: int,
+    expected_draft_version: int,
+    bundle_sha256: str,
+    load_context: LoadContext,
+    compile_render: CompileRender,
+) -> WxPostPublicationStatus:
+    """Finalize a publication whose assets were already ensured out-of-band.
+
+    Called once, after every ``ensure_publication_asset`` call for the
+    submit plan has succeeded. Re-loads the workspace context to guard
+    against drift since the plan was prepared, confirms every included
+    media item is now backed by a ready public asset, then reuses the same
+    finalize tail as the synchronous sync path.
+    """
+
+    context = await load_context(workspace_id)
+    manifest = context.get("manifest")
+    draft = context.get("draft")
+    if not isinstance(manifest, dict) or not isinstance(draft, dict):
+        raise PublicationError(
+            "draft_required",
+            "Save a Draft before finalizing the public WxPost.",
+            status=422,
+        )
+    manifest_version = manifest.get("manifestVersion")
+    draft_version = draft.get("draftVersion")
+    if manifest_version != expected_manifest_version or draft_version != expected_draft_version:
+        raise PublicationError(
+            "version_conflict",
+            "This workspace or Draft changed elsewhere.",
+            status=409,
+        )
+    try:
+        document = ArticleDocument.model_validate(draft.get("document"))
+    except ValidationError as error:
+        raise PublicationError(
+            "invalid_draft",
+            "The saved Draft is not valid for public synchronization.",
+            status=422,
+        ) from error
+
+    owner = get_wxpost_by_id(wxpost_id)
+    if owner is None or owner.get("source_workspace_id") != workspace_id:
+        raise PublicationError(
+            "wxpost_not_found",
+            "The public WxPost shell no longer exists.",
+            status=404,
+        )
+
+    current = get_wxpost_by_workspace_id(workspace_id)
+    current_ready = bool(current and current.get("status") == "ready" and current.get("is_public"))
+
+    sources = {
+        source.get("id"): source
+        for source in manifest.get("sources", [])
+        if isinstance(source, dict) and isinstance(source.get("id"), str)
+    }
+    ready_assets = get_ready_wxpost_assets(wxpost_id)
+    assets_by_sha256 = {
+        str(asset["content_sha256"]): asset for asset in ready_assets if isinstance(asset.get("content_sha256"), str)
+    }
+
+    public_urls: dict[str, str] = {}
+    keep_content_sha256: set[str] = set()
+    for media in sorted(
+        (media for media in document.media if media.include),
+        key=lambda media: media.order,
+    ):
+        source = sources.get(media.id)
+        content_sha256 = source.get("contentSha256") if isinstance(source, dict) else None
+        asset = assets_by_sha256.get(content_sha256) if isinstance(content_sha256, str) else None
+        if asset is None:
+            raise PublicationError(
+                "missing_publication_media",
+                f"Material {media.id} is not backed by a ready public asset.",
+                status=409,
+            )
+        public_urls[media.id] = public_asset_url(asset["object_key"])
+        keep_content_sha256.add(content_sha256)
+
+    same_bundle = False
+    same_draft = False
+    if current_ready:
+        assert current is not None
+        same_bundle = current.get("source_draft_sha256") == bundle_sha256
+        same_draft = current.get("source_draft_version") == draft_version
+    elif current is None:
+        owner_matches = (
+            owner.get("source_draft_version") == draft_version and owner.get("source_draft_sha256") == bundle_sha256
+        )
+        if owner_matches and owner.get("status") == "ready" and owner.get("is_public"):
+            same_bundle = True
+            same_draft = True
+
+    return await _finalize_publication_record(
+        workspace_id,
+        wxpost_id=UUID(owner["id"]),
+        document=document,
+        draft_version=draft_version,
+        bundle_sha256=bundle_sha256,
+        same_bundle=same_bundle,
+        same_draft=same_draft,
+        owner=owner,
+        public_urls=public_urls,
+        keep_content_sha256=keep_content_sha256,
+        compile_render=compile_render,
     )

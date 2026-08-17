@@ -395,6 +395,24 @@ class WxPostPublicationSubmitPlan(WireModel):
     items: list[WxPostPublicationSubmitItem]
 
 
+class WxPostPublicationEnsureRequest(WireModel):
+    wxpost_id: UUID
+    item: WxPostPublicationSubmitItem
+
+
+class WxPostPublicationEnsureResult(WireModel):
+    source_id: str
+    public_url: str
+    variant_ready: bool
+
+
+class WxPostPublicationFinalizeRequest(WireModel):
+    wxpost_id: UUID
+    expected_manifest_version: int = Field(ge=1, strict=True)
+    expected_draft_version: int = Field(ge=1, strict=True)
+    bundle_sha256: str
+
+
 class WxPostPublicationDeleteRequest(WireModel):
     expected_public_revision: int = Field(ge=1, strict=True)
 

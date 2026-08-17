@@ -45,6 +45,9 @@ from ...models.wxpost import (
     WxPostMutationResult,
     WxPostPublicationDeleteRequest,
     WxPostPublicationDeleteResult,
+    WxPostPublicationEnsureRequest,
+    WxPostPublicationEnsureResult,
+    WxPostPublicationFinalizeRequest,
     WxPostPublicationStatus,
     WxPostPublicationSyncRequest,
     WxPostPublicDetail,
@@ -67,6 +70,8 @@ from ...services.wxpost_editing import apply_draft_edits
 from ...services.wxpost_publication import (
     PublicationError,
     delete_public_wxpost,
+    ensure_publication_asset,
+    finalize_publication,
     publication_status,
     synchronize_workspace_publication,
 )
@@ -820,6 +825,49 @@ async def r_get_wxpost_workspace_publication_for_service(
         current_draft_version=current_draft_version,
         row=get_wxpost_by_workspace_id(workspace_id),
     )
+
+
+@r.post(
+    "/posts/wxposts/workspaces/{workspace_id}/publication/assets/ensure",
+    response_model=WxPostPublicationEnsureResult,
+    dependencies=[Depends(require_wxpost_service)],
+)
+async def r_ensure_wxpost_publication_asset(
+    request: WxPostPublicationEnsureRequest,
+    workspace_id: str = Path(..., min_length=1),
+) -> WxPostPublicationEnsureResult | JSONResponse:
+    """Idempotently materialize one public asset (+ WeChat variant) for the runner."""
+
+    try:
+        result = await ensure_publication_asset(workspace_id, request.wxpost_id, request.item)
+    except PublicationError as error:
+        return _publication_error(error)
+    return WxPostPublicationEnsureResult(**result)
+
+
+@r.post(
+    "/posts/wxposts/workspaces/{workspace_id}/publication/finalize",
+    response_model=WxPostPublicationStatus,
+    dependencies=[Depends(require_wxpost_service)],
+)
+async def r_finalize_wxpost_publication(
+    request: WxPostPublicationFinalizeRequest,
+    workspace_id: str = Path(..., min_length=1),
+) -> WxPostPublicationStatus | JSONResponse:
+    """Finalize a publication after the runner has ensured all its assets."""
+
+    try:
+        return await finalize_publication(
+            workspace_id,
+            request.wxpost_id,
+            expected_manifest_version=request.expected_manifest_version,
+            expected_draft_version=request.expected_draft_version,
+            bundle_sha256=request.bundle_sha256,
+            load_context=_load_workspace_context,
+            compile_render=_compile_trusted_render,
+        )
+    except PublicationError as error:
+        return _publication_error(error)
 
 
 @r.post(
