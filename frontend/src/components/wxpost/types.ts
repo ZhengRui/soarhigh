@@ -28,12 +28,17 @@ export const WXPOST_TYPEFACES = [
   'humanist-mix',
 ] as const;
 export const WXPOST_PREVIEW_SIZES = ['mobile-390', 'desktop-760'] as const;
+export const WXPOST_RENDER_MODES = ['canonical', 'mini'] as const;
 
 export type WxPostLayout = (typeof WXPOST_LAYOUTS)[number];
 export type WxPostPalette = (typeof WXPOST_PALETTES)[number];
 export type WxPostAppearance = (typeof WXPOST_APPEARANCES)[number];
 export type WxPostTypeface = (typeof WXPOST_TYPEFACES)[number];
 export type WxPostPreviewSize = (typeof WXPOST_PREVIEW_SIZES)[number];
+/** Which renderer (canonical vs. WeChat-sized mini) produced a given HTML
+ * export. Shared by the preview toggle, the publish request, and the
+ * WeChat draft status so a reload can restore which one a projection used. */
+export type WxPostRenderMode = (typeof WXPOST_RENDER_MODES)[number];
 
 export interface WxPostPresentation {
   layout: WxPostLayout;
@@ -115,6 +120,7 @@ export interface WxPostWechatDraftStatus {
   state: 'not-created' | 'creating' | 'ready' | 'uncertain';
   sourcePublicRevision: number | null;
   presentation: WxPostPresentation | null;
+  renderMode: WxPostRenderMode | null;
   readbackChanged: boolean | null;
   needsUpdate: boolean;
   message: string | null;

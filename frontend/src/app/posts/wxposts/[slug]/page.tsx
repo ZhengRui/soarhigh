@@ -140,6 +140,12 @@ function PublicWxPost({
     (node) => node.kind === 'directive' && node.name === 'video'
   );
   const publishPresentation = wechatPresentation ?? selectedPresentation;
+  // Mini always renders light (WeChat has no dark mode); the snapshotted
+  // presentation's appearance can still say "dark" from the canonical
+  // toggle, so the confirm dialog must not claim a dark publish that Mini
+  // will never actually produce.
+  const publishAppearance =
+    renderMode === 'mini' ? 'light' : publishPresentation.appearance;
 
   useEffect(() => {
     if (!canDelete) return;
@@ -157,11 +163,16 @@ function PublicWxPost({
   function openWechatDialog() {
     setWechatOpen(true);
     setWechatError(null);
-    setWechatPresentation(
-      wechatStatus?.state === 'uncertain' && wechatStatus.presentation
-        ? wechatStatus.presentation
-        : selectedPresentation
-    );
+    if (wechatStatus?.state === 'uncertain' && wechatStatus.presentation) {
+      setWechatPresentation(wechatStatus.presentation);
+      // An uncertain projection must be retried with the renderer it was
+      // originally claimed under (renderMode is part of projection
+      // identity), or the resend hashes differently and the retry looks
+      // like a stale Revision instead of a recoverable draft.
+      if (wechatStatus.renderMode) setRenderMode(wechatStatus.renderMode);
+    } else {
+      setWechatPresentation(selectedPresentation);
+    }
   }
 
   async function openWechatPreview() {
@@ -432,6 +443,10 @@ function PublicWxPost({
                 Retry searches the Official Account draft box for the exact
                 Revision {detail.article_revision} content without creating a
                 second draft.
+                <span className='mt-2 block font-medium'>
+                  Publishing the {renderMode === 'mini' ? 'Mini' : 'Canonical'}{' '}
+                  rendering.
+                </span>
               </span>
               <button
                 type='button'
@@ -448,8 +463,8 @@ function PublicWxPost({
           ) : (
             <span className='block'>
               Revision {detail.article_revision} · {publishPresentation.layout}{' '}
-              · {publishPresentation.palette} · {publishPresentation.appearance}{' '}
-              · {publishPresentation.typeface}. This creates or updates a draft
+              · {publishPresentation.palette} · {publishAppearance} ·{' '}
+              {publishPresentation.typeface}. This creates or updates a draft
               only; it does not publish or send the article.
               <span className='mt-2 block font-medium'>
                 Publishing the {renderMode === 'mini' ? 'Mini' : 'Canonical'}{' '}

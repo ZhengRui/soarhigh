@@ -669,6 +669,7 @@ test('retries and explicitly resets an uncertain WeChat creation', async ({
               appearance: 'dark',
               typeface: 'modern-sans',
             },
+            renderMode: 'mini',
             readbackChanged: null,
             needsUpdate: false,
             message: 'The previous creation result is uncertain.',
@@ -692,9 +693,22 @@ test('retries and explicitly resets an uncertain WeChat creation', async ({
   await expect(page.getByTestId('publish-wechat-draft')).toBeVisible();
   await expect.poll(() => statusRequests).toBeGreaterThan(0);
   await page.waitForTimeout(50);
+  // The preview toggle defaults to Canonical; the uncertain projection was
+  // originally claimed under Mini (per the mocked status above), so opening
+  // the recovery dialog must restore Mini before any retry is sent -- a
+  // resend under the wrong mode hashes differently and looks like a stale
+  // Revision instead of a recoverable draft.
+  await expect(
+    presentationOption(page, 'render-mode', 'canonical')
+  ).toHaveAttribute('aria-pressed', 'true');
   await page.getByTestId('publish-wechat-draft').click();
   const recoveryDialog = page.getByTestId('publish-wechat-draft-dialog');
   await expect(recoveryDialog).toContainText('Recover WeChat Draft?');
+  await expect(recoveryDialog).toContainText('Publishing the Mini rendering.');
+  await expect(presentationOption(page, 'render-mode', 'mini')).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
   await recoveryDialog.getByRole('button', { name: 'Retry Recovery' }).click();
   await expect(recoveryDialog.getByRole('alert')).toContainText(
     'could not be uniquely recovered'
@@ -709,7 +723,7 @@ test('retries and explicitly resets an uncertain WeChat creation', async ({
       typeface: 'modern-sans',
     },
     confirmed: true,
-    renderMode: 'canonical',
+    renderMode: 'mini',
   });
 
   await recoveryDialog

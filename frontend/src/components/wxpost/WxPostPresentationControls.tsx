@@ -7,12 +7,14 @@ import {
   WXPOST_LAYOUTS,
   WXPOST_PALETTES,
   WXPOST_PREVIEW_SIZES,
+  WXPOST_RENDER_MODES,
   WXPOST_TYPEFACES,
   type WxPostAppearance,
   type WxPostLayout,
   type WxPostPalette,
   type WxPostPresentation,
   type WxPostPreviewSize,
+  type WxPostRenderMode,
   type WxPostTypeface,
 } from './types';
 
@@ -20,7 +22,10 @@ export interface WxPostPresentationSelection extends WxPostPresentation {
   previewSize: WxPostPreviewSize;
 }
 
-export type WxPostRenderMode = 'canonical' | 'mini';
+// Re-exported for existing importers; the canonical definition lives in
+// ./types alongside the other wire-shaped presentation types (it is also
+// used by WxPostWechatDraftStatus, outside this component's scope).
+export type { WxPostRenderMode } from './types';
 
 export interface WxPostRenderModeControl {
   renderMode: WxPostRenderMode;
@@ -29,7 +34,7 @@ export interface WxPostRenderModeControl {
   charCounts: { canonical: number; mini: number };
 }
 
-const RENDER_MODES = ['canonical', 'mini'] as const;
+const RENDER_MODES = WXPOST_RENDER_MODES;
 const RENDER_MODE_LABELS: Record<WxPostRenderMode, string> = {
   canonical: 'Canonical',
   mini: 'Mini',

@@ -1,8 +1,8 @@
 import { requestTemplate, responseHandlerTemplate } from './requestTemplate';
 
-import type { WxPostRenderMode } from '@/components/wxpost/WxPostPresentationControls';
 import type {
   WxPostPresentation,
+  WxPostRenderMode,
   WxPostWechatDraftResult,
   WxPostWechatDraftStatus,
 } from '@/components/wxpost/types';

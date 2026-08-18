@@ -1066,6 +1066,42 @@ def test_member_reads_the_wechat_projection_status_from_the_public_revision(
     assert response.json()["state"] == "ready"
     assert response.json()["sourcePublicRevision"] == 2
     assert response.json()["needsUpdate"] is True
+    # A projection claimed before renderMode existed has no such key stored
+    # alongside its presentation; the status must still report a mode so the
+    # dialog has something concrete to restore.
+    assert response.json()["renderMode"] == "canonical"
+
+
+def test_member_reads_the_stored_mini_render_mode_from_an_uncertain_projection(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """renderMode rides inside the stored `presentation` JSONB (see
+    _split_stored_presentation); the status endpoint must echo it back so a
+    reloaded page can restore Mini before retrying an uncertain publish."""
+
+    article = json.loads(WXPOST_FIXTURE.read_text())
+    row = _public_row(article)
+    monkeypatch.setattr(wxpost_route, "get_wxpost_by_id", lambda wxpost_id: row)
+    monkeypatch.setattr(
+        wxpost_route.wxpost_wechat_store,
+        "get_projection",
+        lambda workspace_id: {
+            "state": "uncertain",
+            "wechat_media_id": None,
+            "source_public_revision": 3,
+            "presentation": {**article["presentation"], "renderMode": "mini"},
+            "readback_changed": None,
+            "last_error": "The previous WeChat draft creation result is uncertain.",
+        },
+    )
+
+    response = client.get(f"/posts/wxposts/{row['id']}/wechat-draft")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "uncertain"
+    assert response.json()["renderMode"] == "mini"
+    assert response.json()["presentation"] == article["presentation"]
 
 
 def test_member_publishes_server_compiled_revision_with_selected_presentation(

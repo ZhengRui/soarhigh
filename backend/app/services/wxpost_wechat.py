@@ -21,7 +21,13 @@ from ..config import (
 )
 from ..db import wxpost_wechat as store
 from ..db.wxpost import get_ready_wxpost_assets
-from ..models.wxpost import Presentation, WxPostRenderDocument, WxPostWechatDraftResult, WxPostWechatDraftStatus
+from ..models.wxpost import (
+    Presentation,
+    WxPostRenderDocument,
+    WxPostRenderMode,
+    WxPostWechatDraftResult,
+    WxPostWechatDraftStatus,
+)
 from .wxpost_image_variants import (
     WECHAT_BODY_HARD_MAX_BYTES,
     WECHAT_BODY_PROFILE,
@@ -274,15 +280,31 @@ class WechatGatewayClient:
         return [item for item in items if isinstance(item, dict)]
 
 
+def _split_stored_presentation(data: dict) -> tuple[Presentation, WxPostRenderMode]:
+    """The `presentation` JSONB column also carries `renderMode` (stashed
+    there at claim time so it survives a reload / uncertain-recovery flow
+    without a schema migration). Strip it before validating the rest as a
+    strict `Presentation` -- WireModel forbids unknown fields."""
+
+    render_mode = data.get("renderMode")
+    presentation_data = {key: value for key, value in data.items() if key != "renderMode"}
+    resolved_mode: WxPostRenderMode = render_mode if render_mode in ("canonical", "mini") else "canonical"
+    return Presentation.model_validate(presentation_data), resolved_mode
+
+
 def wechat_status(row: dict, projection: dict | None) -> WxPostWechatDraftStatus:
     if not projection:
         return WxPostWechatDraftStatus(state="not-created")
-    presentation = Presentation.model_validate(projection["presentation"]) if projection.get("presentation") else None
+    presentation: Presentation | None = None
+    render_mode: WxPostRenderMode | None = None
+    if projection.get("presentation"):
+        presentation, render_mode = _split_stored_presentation(projection["presentation"])
     state = projection.get("state", "idle")
     return WxPostWechatDraftStatus(
         state="not-created" if state == "idle" else state,
         source_public_revision=projection.get("source_public_revision"),
         presentation=presentation,
+        render_mode=render_mode,
         readback_changed=projection.get("readback_changed"),
         needs_update=projection.get("source_public_revision") != row["article_revision"],
         message=projection.get("last_error"),
@@ -496,8 +518,19 @@ def _replace_article_header(match: re.Match[str]) -> str:
     return f'{match.group("article")}<div style="{rule_style}"></div>'
 
 
-def _sanitize_wechat_html(rendered_html: str, presentation: Presentation) -> str:
-    rendered_html = _map_wechat_appearance(rendered_html, presentation)
+def _sanitize_wechat_html(
+    rendered_html: str,
+    presentation: Presentation,
+    render_mode: WxPostRenderMode = "canonical",
+) -> str:
+    # Mini is light-only by construction (it never emits `presentation`'s
+    # dark tokens), so the dark->light token map has nothing legitimate to
+    # rewrite. Running it anyway is actively harmful: some palettes' dark
+    # token *values* collide with light token *values* mini does emit (e.g.
+    # minimal-mono's light "soft" #f5f5f5 is also a dark-token key that maps
+    # to #171717), which would silently repaint mini's real light surfaces.
+    if render_mode != "mini":
+        rendered_html = _map_wechat_appearance(rendered_html, presentation)
 
     def transform_style(tag: str) -> str:
         def replace_style(match: re.Match[str]) -> str:
@@ -631,7 +664,7 @@ async def publish_wechat_draft(
     render_document: WxPostRenderDocument,
     presentation: Presentation,
     canonical_html: str,
-    render_mode: str = "canonical",
+    render_mode: WxPostRenderMode = "canonical",
     api: WechatDraftApi | None = None,
 ) -> WxPostWechatDraftResult:
     validate_wechat_projection(render_document)
@@ -639,7 +672,7 @@ async def publish_wechat_draft(
     if not isinstance(workspace_id, str) or not workspace_id:
         raise WechatDraftError("Only workspace-backed Public Revisions can be published to WeChat.", status_code=422)
 
-    platform_html = _sanitize_wechat_html(canonical_html, presentation)
+    platform_html = _sanitize_wechat_html(canonical_html, presentation, render_mode)
     media_by_url = {str(item.source_url): item for item in render_document.media if item.kind == "image"}
     body_urls = list(dict.fromkeys(html_module.unescape(url) for url in IMG_SRC_RE.findall(platform_html)))
     unknown = [url for url in body_urls if url not in media_by_url]
@@ -706,11 +739,16 @@ async def publish_wechat_draft(
     }
     projection_sha256 = _sha256(json.dumps(projection_payload, sort_keys=True, separators=(",", ":")))
     operation_id = uuid4()
+    # renderMode rides alongside the Presentation fields in the stored
+    # `presentation` JSONB (no schema migration needed) so a reload or an
+    # uncertain-projection retry can recover which renderer the original
+    # claim used -- see wechat_status/_split_stored_presentation.
+    stored_presentation = {**projection_payload["presentation"], "renderMode": render_mode}
     claim = store.claim_projection(
         workspace_id=workspace_id,
         wxpost_id=UUID(str(row["id"])),
         revision=row["article_revision"],
-        presentation=projection_payload["presentation"],
+        presentation=stored_presentation,
         projection_sha256=projection_sha256,
         operation_id=operation_id,
     )
@@ -783,7 +821,8 @@ async def publish_wechat_draft(
                 state="ready",
                 action="unchanged",
                 source_public_revision=projection.get("source_public_revision"),
-                presentation=Presentation.model_validate(projection["presentation"]),
+                presentation=_split_stored_presentation(projection["presentation"])[0],
+                render_mode=render_mode,
                 readback_changed=readback_sha != submitted_sha,
                 needs_update=False,
                 preview_url=readback.get("url"),
@@ -818,6 +857,7 @@ async def publish_wechat_draft(
                 render_document=render_document,
                 presentation=presentation,
                 canonical_html=canonical_html,
+                render_mode=render_mode,
                 api=api,
             )
         readback_content = existing_readback.get("content")
@@ -846,7 +886,8 @@ async def publish_wechat_draft(
             state="ready",
             action="unchanged",
             source_public_revision=projection.get("source_public_revision"),
-            presentation=Presentation.model_validate(projection["presentation"]),
+            presentation=_split_stored_presentation(projection["presentation"])[0],
+            render_mode=render_mode,
             readback_changed=readback_changed,
             needs_update=False,
             preview_url=existing_readback.get("url"),
@@ -949,6 +990,7 @@ async def publish_wechat_draft(
             action=action,
             source_public_revision=row["article_revision"],
             presentation=presentation,
+            render_mode=render_mode,
             readback_changed=ready["readback_changed"],
             needs_update=False,
             preview_url=preview_url,

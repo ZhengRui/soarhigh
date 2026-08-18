@@ -11,6 +11,11 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, StringConstraints
 
 TrimmedText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
+# Shared with app.services.wxpost_wechat and app.api.routes.wxpost so the
+# canonical/mini renderer choice carries one type across the wire model, the
+# trusted-render dispatch, and the WeChat sanitizer/projection layer.
+WxPostRenderMode = Literal["canonical", "mini"]
+
 
 def _to_camel(value: str) -> str:
     head, *tail = value.split("_")
@@ -438,7 +443,7 @@ class WxPostWechatDraftRequest(WireModel):
     expected_public_revision: int = Field(ge=1, strict=True)
     presentation: Presentation
     confirmed: Literal[True]
-    render_mode: Literal["canonical", "mini"] = "canonical"
+    render_mode: WxPostRenderMode = "canonical"
 
 
 class WxPostWechatUncertainResetRequest(WireModel):
@@ -450,6 +455,7 @@ class WxPostWechatDraftStatus(WireModel):
     state: Literal["not-created", "creating", "ready", "uncertain"]
     source_public_revision: int | None = Field(default=None, ge=1)
     presentation: Presentation | None = None
+    render_mode: WxPostRenderMode | None = None
     readback_changed: bool | None = None
     needs_update: bool = False
     message: str | None = None

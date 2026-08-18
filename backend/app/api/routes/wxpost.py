@@ -51,6 +51,7 @@ from ...models.wxpost import (
     WxPostPublicationStatus,
     WxPostPublicationSyncRequest,
     WxPostPublicDetail,
+    WxPostRenderMode,
     WxPostUpdateRequest,
     WxPostValidationFailure,
     WxPostValidationSuccess,
@@ -227,7 +228,7 @@ async def require_wxpost_service(
 async def _compile_trusted_render(
     render_document: dict[str, Any],
     presentation_override: dict[str, Any] | None = None,
-    render_mode: str = "canonical",
+    render_mode: WxPostRenderMode = "canonical",
 ) -> str:
     if not WXPOST_PUBLIC_BASE_URL or not WXPOST_SERVICE_TOKEN:
         raise HTTPException(

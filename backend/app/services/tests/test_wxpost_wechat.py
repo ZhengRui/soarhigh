@@ -9,7 +9,7 @@ from uuid import UUID
 import httpx
 import pytest
 
-from app.models.wxpost import Presentation, WxPostRenderDocument
+from app.models.wxpost import Presentation, WxPostRenderDocument, WxPostRenderMode
 from app.services import wxpost_wechat
 
 WXPOST_ID = UUID("00000000-0000-4000-8000-000000000888")
@@ -336,7 +336,7 @@ async def _publish(
         f'<p contenteditable="true"><a href="{IMAGE_URL}">Source</a>'
         f'<img src="{IMAGE_URL}"></p></article>'
     ),
-    render_mode: str = "canonical",
+    render_mode: WxPostRenderMode = "canonical",
 ):
     document = render_document or _render_document()
     return await wxpost_wechat.publish_wechat_draft(
@@ -619,7 +619,11 @@ async def test_render_mode_defaults_to_canonical_and_mini_forms_a_distinct_proje
     mini_sha256 = projection_store["row"]["projection_sha256"]
 
     assert result.action == "created"
+    assert result.render_mode == "mini"
     assert mini_sha256 != default_sha256
+    # Persisted alongside the presentation JSONB so a reload can recover it
+    # (see _split_stored_presentation / wechat_status).
+    assert projection_store["row"]["presentation"]["renderMode"] == "mini"
 
 
 async def test_publish_rejects_an_image_without_a_ready_public_asset(
@@ -1209,6 +1213,41 @@ def test_platform_sanitizer_maps_dark_palette_to_platform_adaptive_light_tokens(
     base_text = wxpost_wechat.WECHAT_BASE_TEXT_BY_PALETTE[palette]
     expected_styles = ";".join(f"color:{token}" for token in light_tokens if token != base_text)
     assert f'<section style="{expected_styles}">' in sanitized
+
+
+def test_platform_sanitizer_skips_dark_token_mapping_for_mini_render_mode() -> None:
+    """Mini is light-only by construction, so `presentation.appearance ==
+    "dark"` never reflects what mini actually emitted. For minimal-mono, the
+    dark->light token table's *keys* collide with real light token *values*
+    mini renders (the light "soft" surface #f5f5f5 is also a dark-token key
+    mapping to #171717), so running the mapping unconditionally would
+    repaint a real light soft-surface background onto near-black -- and any
+    text sitting on it (also often #171717 in the light palette) becomes
+    invisible text-on-same-background."""
+
+    presentation = Presentation.model_validate(
+        {
+            "layout": "brand-default",
+            "palette": "minimal-mono",
+            "appearance": "dark",
+            "typeface": "modern-sans",
+        }
+    )
+    html = (
+        f'<article style="padding:{wxpost_wechat.CANONICAL_ROOT_PADDING}">'
+        '<div style="background:#f5f5f5">Soft surface</div></article>'
+    )
+
+    canonical = wxpost_wechat._sanitize_wechat_html(html, presentation, "canonical")
+    mini = wxpost_wechat._sanitize_wechat_html(html, presentation, "mini")
+
+    # Canonical is real dark-rendered HTML: the mapping correctly rewrites
+    # the dark #f5f5f5 token to its light equivalent, #171717.
+    assert '<div style="background:#171717">' in canonical
+    # Mini never emitted a dark token here -- #f5f5f5 is simply its light
+    # "soft" background -- so it must survive unmapped.
+    assert '<div style="background:#f5f5f5">' in mini
+    assert "#171717" not in mini
 
 
 async def test_gateway_client_requires_its_independent_configuration(
