@@ -794,6 +794,153 @@ def test_finalize_publishes_and_rewrites_media_on_the_real_publish_path(
     assert swept == [{content_sha256}]
 
 
+def test_finalize_first_publish_abandons_pending_assets_before_the_status_flip(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A member can abandon a browser upload mid-publish (close the tab, or
+    remove/replace the material) and later publish a different plan; the
+    ensure steps only ever touch the current plan's rows, so an earlier
+    attempt's presign-created row can be left permanently pending. On a
+    first publish (status "assembling" -> "ready") the DB trigger
+    ``block_wxpost_finalize_with_pending_assets`` rejects that transition
+    while any pending row exists, so the service must sweep them first.
+    This asserts the sweep happens, and happens before the status-flip
+    call, on the first-publish path only."""
+
+    async def load_context(workspace_id: str) -> dict:
+        return _context()
+
+    content_sha256 = hashlib.sha256(b"public image bytes").hexdigest()
+    ready_asset = {
+        "id": "00000000-0000-4000-8000-000000000999",
+        "object_key": f"public/wxposts/{WXPOST_ID}/assets/M01/original.jpg",
+        "content_sha256": content_sha256,
+    }
+    bundle_sha256 = "d" * 64
+    owner = {
+        "id": str(WXPOST_ID),
+        "slug": "a-public-field-note",
+        "status": "assembling",
+        "is_public": False,
+        "article_revision": 1,
+        "source_workspace_id": WORKSPACE_ID,
+        "source_draft_version": 2,
+        "source_draft_sha256": bundle_sha256,
+        "finalize_request_hash": None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    monkeypatch.setattr(wxpost_route, "_load_workspace_context", load_context)
+    monkeypatch.setattr(wxpost_publication, "get_wxpost_by_id", lambda wxpost_id: owner)
+    monkeypatch.setattr(wxpost_publication, "get_wxpost_by_workspace_id", lambda workspace_id: owner)
+    monkeypatch.setattr(wxpost_publication, "get_ready_wxpost_assets", lambda wxpost_id: [ready_asset])
+
+    async def fake_compile(render_document: dict) -> str:
+        return "<article>compiled</article>"
+
+    monkeypatch.setattr(wxpost_route, "_compile_trusted_render", fake_compile)
+
+    call_order: list[str] = []
+
+    def fake_abandon_pending(wxpost_id: UUID) -> None:
+        assert wxpost_id == WXPOST_ID
+        call_order.append("abandon_pending")
+
+    def fake_finalize(wxpost_id, **kwargs):
+        call_order.append("status_flip")
+        return {
+            **owner,
+            "status": "ready",
+            "is_public": True,
+            "article_revision": kwargs["next_revision"],
+            "source_draft_version": kwargs["draft_version"],
+            "source_draft_sha256": kwargs["draft_sha256"],
+        }
+
+    monkeypatch.setattr(wxpost_publication, "abandon_pending_wxpost_assets", fake_abandon_pending)
+    monkeypatch.setattr(wxpost_publication, "finalize_workspace_publication", fake_finalize)
+    monkeypatch.setattr(
+        wxpost_publication,
+        "_remove_unreferenced_assets",
+        lambda *args, **kwargs: None,
+    )
+
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/finalize",
+        json=_finalize_body(bundle_sha256=bundle_sha256),
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    assert call_order == ["abandon_pending", "status_flip"]
+
+
+def test_finalize_update_path_does_not_abandon_pending_assets(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a re-publish of an already-ready WxPost (status stays "ready", it
+    never transitions from "assembling"), the DB trigger that blocks
+    pending assets never fires — so the finalize tail must not sweep
+    pending rows on this path; doing so would abandon rows that a
+    concurrent presign call for the *next* publish is still relying on."""
+
+    async def load_context(workspace_id: str) -> dict:
+        return _context()
+
+    content_sha256 = hashlib.sha256(b"public image bytes").hexdigest()
+    ready_asset = {
+        "id": "00000000-0000-4000-8000-000000000999",
+        "object_key": f"public/wxposts/{WXPOST_ID}/assets/M01/original.jpg",
+        "content_sha256": content_sha256,
+    }
+    bundle_sha256 = "c" * 64
+    owner = _owner_row(draft_sha256="stale-hash")
+
+    monkeypatch.setattr(wxpost_route, "_load_workspace_context", load_context)
+    monkeypatch.setattr(wxpost_publication, "get_wxpost_by_id", lambda wxpost_id: owner)
+    monkeypatch.setattr(wxpost_publication, "get_wxpost_by_workspace_id", lambda workspace_id: owner)
+    monkeypatch.setattr(wxpost_publication, "get_ready_wxpost_assets", lambda wxpost_id: [ready_asset])
+
+    async def fake_compile(render_document: dict) -> str:
+        return "<article>compiled</article>"
+
+    monkeypatch.setattr(wxpost_route, "_compile_trusted_render", fake_compile)
+
+    def fake_abandon_pending(wxpost_id: UUID) -> None:
+        pytest.fail("update-path finalize abandoned pending assets")
+
+    def fake_finalize(wxpost_id, **kwargs):
+        return {
+            **owner,
+            "status": "ready",
+            "is_public": True,
+            "article_revision": kwargs["next_revision"],
+            "source_draft_version": kwargs["draft_version"],
+            "source_draft_sha256": kwargs["draft_sha256"],
+        }
+
+    monkeypatch.setattr(wxpost_publication, "abandon_pending_wxpost_assets", fake_abandon_pending)
+    monkeypatch.setattr(wxpost_publication, "finalize_workspace_publication", fake_finalize)
+    monkeypatch.setattr(
+        wxpost_publication,
+        "_remove_unreferenced_assets",
+        lambda *args, **kwargs: None,
+    )
+
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/finalize",
+        json=_finalize_body(bundle_sha256=bundle_sha256),
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "up-to-date"
+    assert body["publicRevision"] == 4
+
+
 def test_finalize_conflict_adopts_a_concurrent_finalize_that_already_landed(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

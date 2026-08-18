@@ -194,10 +194,16 @@ export function useWxPostPublication({
     setPending(true);
     try {
       // Upload-origin materials must land in public storage before the async
-      // publication runs. Skip the presign round-trip entirely when every
-      // included material is meeting-library (the common case).
+      // publication runs. Gate on origin alone, NOT `included`: the server
+      // builds its plan from the saved Draft's media, not from the
+      // workspace's current `included` flags, so a material a member
+      // excluded after saving the Draft can still be part of the plan the
+      // server publishes. Skipping presign in that case would leave the
+      // ensure step failing `upload_not_prepared` forever. The server plan
+      // is the sole authority here; if it turns out to need no uploads
+      // after all, the presign call just returns an empty uploads list.
       const hasUploadMaterials = sources.some(
-        (source) => source.included && source.origin.type !== 'meeting-library'
+        (source) => source.origin.type !== 'meeting-library'
       );
       if (hasUploadMaterials) {
         const { uploads } = await getPublicationUploadUrls(workspaceId, {

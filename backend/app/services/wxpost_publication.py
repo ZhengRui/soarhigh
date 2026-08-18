@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -27,6 +28,7 @@ from ..db.wxpost import (
     WxPostAssetConflictError,
     WxPostNotFoundError,
     WxPostRevisionConflictError,
+    abandon_pending_wxpost_assets,
     abandon_unreferenced_wxpost_assets,
     article_document_from_row,
     begin_wxpost_deletion,
@@ -348,8 +350,11 @@ async def _verify_uploaded_asset(
             ) from error
         raise _map_oss_error(error) from error
 
-    expected_etag = base64.b64decode(str(asset.get("content_md5") or "")).hex().upper()
-    if object_etag.upper() != expected_etag or object_size != item.size_bytes:
+    try:
+        expected_etag = base64.b64decode(str(asset.get("content_md5") or ""), validate=True).hex().upper()
+    except (binascii.Error, ValueError):
+        expected_etag = None
+    if expected_etag is None or object_etag.upper() != expected_etag or object_size != item.size_bytes:
         try:
             mark_wxpost_asset_failed(UUID(asset["id"]))
         except Exception:
@@ -467,9 +472,15 @@ async def ensure_publication_asset(
 ) -> dict[str, Any]:
     """Idempotently materialize one public asset (and its WeChat variant).
 
-    Called once per media item by the async publication runner. Reuses a
-    ready asset by content hash when one already exists; otherwise performs
-    an OSS server-side copy from the meeting-library original.
+    Called once per media item by the async publication runner. Meeting-
+    library items reuse a ready asset by content hash when one already
+    exists, otherwise perform an OSS server-side copy from the meeting
+    media original. Upload-origin items ALWAYS resolve through their own
+    presign-created row (verify-only, see ``_verify_uploaded_asset``) — the
+    ready-by-sha shortcut is deliberately skipped for them, because taking
+    it for a duplicate-bytes item would leave that item's own presign row
+    stranded pending forever, which blocks finalize (see
+    ``abandon_pending_wxpost_assets``).
     """
 
     owner = get_wxpost_by_id(wxpost_id)
@@ -1025,6 +1036,16 @@ async def _finalize_publication_record(
     try:
         owner_status = str(owner.get("status"))
         first_publish = owner_status == "assembling" and not owner.get("finalize_request_hash")
+        if owner_status == "assembling":
+            # A member can abandon a browser upload mid-publish (close the tab,
+            # or remove/replace the material) and later publish a different
+            # plan; the ensure steps above only ever touch the current plan's
+            # rows, so an earlier attempt's presign-created row can be left
+            # permanently pending. By this point every row the current plan
+            # needs is already ready, so anything still pending is stale by
+            # construction — abandon it now, before the assembling->ready flip
+            # the DB trigger would otherwise block while pending rows exist.
+            abandon_pending_wxpost_assets(wxpost_id)
         row = finalize_workspace_publication(
             wxpost_id,
             workspace_id=workspace_id,

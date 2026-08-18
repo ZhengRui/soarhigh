@@ -401,6 +401,24 @@ def delete_wxpost_assets(asset_ids: list[str]) -> None:
     supabase.table("wxpost_assets").delete().in_("id", asset_ids).execute()
 
 
+def abandon_pending_wxpost_assets(wxpost_id: UUID) -> None:
+    """Mark every still-pending asset row of one WxPost as abandoned.
+
+    Used to sweep stranded presign-created rows (an upload the member never
+    finished, or a material later removed/replaced) immediately before a
+    first-publish assembling->ready transition, since the DB trigger
+    ``block_wxpost_finalize_with_pending_assets`` rejects that transition
+    while any pending row exists.
+    """
+
+    supabase.table("wxpost_assets").update(
+        {
+            "status": "abandoned",
+            "abandoned_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("wxpost_id", str(wxpost_id)).eq("status", "pending").execute()
+
+
 def has_abandoned_wxpost_assets(wxpost_id: UUID) -> bool:
     response = (
         supabase.table("wxpost_assets").select("id").eq("wxpost_id", str(wxpost_id)).eq("status", "abandoned").execute()

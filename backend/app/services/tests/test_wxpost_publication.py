@@ -546,6 +546,33 @@ async def test_upload_item_size_mismatch_is_asset_changed(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_upload_item_malformed_content_md5_is_asset_changed(monkeypatch) -> None:
+    """A row whose stored content_md5 is not valid base64 (which should never
+    happen, but the OSS-returned etag is untrusted input to decode against)
+    must fail closed exactly like an etag mismatch, not raise an unhandled
+    binascii/ValueError out of the publication pipeline."""
+
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row())
+    monkeypatch.setattr(publication, "get_ready_wxpost_asset", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        publication,
+        "get_wxpost_asset_by_idempotency_hash",
+        lambda *args, **kwargs: {**_pending_upload_row(), "content_md5": "AB!"},
+    )
+    monkeypatch.setattr(publication, "head_public_object", lambda key: (19, UPLOAD_MD5_HEX.upper()))
+
+    failed: list[UUID] = []
+    monkeypatch.setattr(publication, "mark_wxpost_asset_failed", lambda asset_id: failed.append(asset_id))
+
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.ensure_publication_asset(WORKSPACE_ID, WXPOST_ID, UPLOAD_ITEM)
+
+    assert raised.value.code == "asset_changed"
+    assert raised.value.status == 409
+    assert failed == [UUID(_pending_upload_row()["id"])]
+
+
+@pytest.mark.asyncio
 async def test_upload_item_ready_row_short_circuits(monkeypatch) -> None:
     ready_row = {**_pending_upload_row(), "status": "ready"}
     monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row())
