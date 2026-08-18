@@ -120,7 +120,7 @@ test('preserves the attached Draft selection in assistant history', async ({
   );
 });
 
-test('waits for and reconciles a Draft saved after its event stream disconnects', async ({
+test('waits for and reconciles a Draft saved after its chat submission disconnects', async ({
   page,
 }) => {
   const workspace = await createAndGenerateDraft(page);
@@ -130,9 +130,11 @@ test('waits for and reconciles a Draft saved after its event stream disconnects'
   await chatInput.fill('Make the title more concise.');
   await chatInput.press('Enter');
 
-  await expect(
-    page.getByText('Reconnecting to the Draft operation')
-  ).toBeVisible();
+  // The submit's response was lost, but the operation was admitted
+  // server-side: the assistant falls back to polling it rather than
+  // surfacing an error, so it stays in its normal pending (Stop-button)
+  // state until the operation resolves.
+  await expect(page.getByTestId('stop-draft-chat')).toBeVisible();
   await expect(page.getByText('Draft · v2')).toBeVisible();
   await expect(page.getByTestId('draft-chat-history')).toContainText(
     'I revised the saved draft and kept the request focused.'
@@ -159,125 +161,60 @@ test('waits for and reconciles a Draft saved after its event stream disconnects'
 test('shows only milestones delivered by the live Draft chat stream', async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    const originalFetch = window.fetch.bind(window);
-    let draftChatRequests = 0;
-    window.fetch = async (input, init) => {
-      const url =
-        typeof input === 'string'
-          ? input
-          : input instanceof URL
-            ? input.href
-            : input.url;
-      if (!url.endsWith('/draft/chat')) return originalFetch(input, init);
-      draftChatRequests += 1;
-      const encoder = new TextEncoder();
-      const event = (name: string, data: Record<string, unknown>) =>
-        encoder.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
-      const events =
-        draftChatRequests === 1
-          ? ([
-              ['progress', { stage: 'request_started' }],
-              [
-                'progress',
-                {
-                  stage: 'activity_started',
-                  activityId: 'search-1',
-                  label: 'Searching the web for current club news',
-                },
-              ],
-              [
-                'progress',
-                {
-                  stage: 'activity_completed',
-                  activityId: 'search-1',
-                  label: 'Searching the web for current club news',
-                },
-              ],
-              [
-                'progress',
-                {
-                  stage: 'activity_started',
-                  activityId: 'read-1',
-                  label: 'Reading https://example.com/article',
-                },
-              ],
-              [
-                'progress',
-                {
-                  stage: 'activity_completed',
-                  activityId: 'read-1',
-                  label: 'Reading https://example.com/article',
-                },
-              ],
-              [
-                'complete',
-                {
-                  workspaceId: 'wxpost-stream-test',
-                  reply: 'I found the current club news.',
-                  context: {},
-                  draftChanged: false,
-                },
-              ],
-            ] as const)
-          : draftChatRequests === 2
-            ? ([
-                ['progress', { stage: 'request_started' }],
-                [
-                  'complete',
-                  {
-                    workspaceId: 'wxpost-stream-test',
-                    reply: 'I am the SoarHigh Club AI Assistant.',
-                    context: {},
-                    draftChanged: false,
-                  },
-                ],
-              ] as const)
-            : ([
-                ['progress', { stage: 'request_started' }],
-                [
-                  'progress',
-                  {
-                    stage: 'activity_started',
-                    activityId: 'context-1',
-                    label: 'Reading the saved Draft and media',
-                  },
-                ],
-                [
-                  'progress',
-                  {
-                    stage: 'activity_failed',
-                    activityId: 'context-1',
-                    label: 'Reading the saved Draft and media',
-                  },
-                ],
-                [
-                  'error',
-                  {
-                    code: 'hermes_turn_failed',
-                    message: 'Hermes could not revise the draft',
-                  },
-                ],
-              ] as const);
-      return new Response(
-        new ReadableStream({
-          start(controller) {
-            events.forEach(([name, data], index) => {
-              window.setTimeout(() => {
-                controller.enqueue(event(name, data));
-                if (index === events.length - 1) controller.close();
-              }, index * 250);
-            });
-          },
-        }),
+  const workspace = await createAndGenerateDraft(page);
+  // Each entry drives one submitted draft/chat turn's polled operation: the
+  // steps shown while it is still 'running' (at least one running poll, via
+  // runningPolls: 1, so the live progress panel is observably populated
+  // before the turn resolves), then its terminal outcome.
+  workspace.scriptedDraftChatTurns = [
+    {
+      steps: [
         {
-          status: 200,
-          headers: { 'Content-Type': 'text/event-stream' },
-        }
-      );
-    };
-  });
-  await createAndGenerateDraft(page);
+          activityId: 'search-1',
+          label: 'Searching the web for current club news',
+          completed: true,
+          failed: false,
+        },
+        {
+          activityId: 'read-1',
+          label: 'Reading https://example.com/article',
+          completed: true,
+          failed: false,
+        },
+      ],
+      runningPolls: 1,
+      outcome: {
+        kind: 'completed',
+        reply: 'I found the current club news.',
+        draftChanged: false,
+      },
+    },
+    {
+      steps: [],
+      runningPolls: 1,
+      outcome: {
+        kind: 'completed',
+        reply: 'I am the SoarHigh Club AI Assistant.',
+        draftChanged: false,
+      },
+    },
+    {
+      steps: [
+        {
+          activityId: 'context-1',
+          label: 'Reading the saved Draft and media',
+          completed: false,
+          failed: true,
+        },
+      ],
+      runningPolls: 1,
+      outcome: {
+        kind: 'failed',
+        code: 'hermes_turn_failed',
+        message: 'Hermes could not revise the draft',
+      },
+    },
+  ];
 
   const chatInput = page.getByPlaceholder('Ask about or revise the Draft…');
   await chatInput.fill('Search for current club news.');

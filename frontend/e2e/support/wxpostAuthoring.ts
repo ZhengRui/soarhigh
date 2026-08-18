@@ -1,4 +1,4 @@
-import { expect, type Page, type Route } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { parse as parseYaml } from 'yaml';
 
 import type {
@@ -140,28 +140,21 @@ export type WorkspaceMock = {
       text: string;
       selectedText?: string;
       turnId?: string;
+      steps?: WorkspaceDraftProgressActivity[];
     }>
   >;
-  draftOperations: Map<
-    string,
-    {
-      workspaceId: string;
-      operationId: string;
-      state: 'running' | 'completed' | 'failed';
-      result: {
-        reply: string;
-        draftChanged: boolean;
-        draftVersion: number;
-        steps: Array<{
-          activityId: string;
-          label: string;
-          completed: boolean;
-          failed: boolean;
-        }>;
-      } | null;
-      error: { code: string; message: string } | null;
-    }
-  >;
+  // Mirrors the real Controller's async submit-and-poll contract for
+  // draft/generate and draft/chat: POST admits the operation and returns an
+  // ack; GET .../draft/operations/{id} is polled until it resolves. Modeled
+  // like publicationOperations below — remainingRunningPolls counts down on
+  // each poll (or is held open by a timer) before the pre-computed
+  // finalResult/finalError becomes visible.
+  draftOperations: Map<string, DraftOperationRecord>;
+  // One-shot queue consumed in order by POST .../draft/chat, ahead of the
+  // default success path: lets a test script exactly what the live progress
+  // (steps while running) and the terminal outcome of the next N chat turns
+  // look like, without hand-rolling the wire format.
+  scriptedDraftChatTurns: ScriptedDraftChatTurn[];
   publications: Map<string, WorkspacePublicationStatus>;
   publicationOperations: Map<string, PublicationOperationRecord>;
   // Applies to the next POST .../publication/sync submit: how many GET
@@ -189,26 +182,33 @@ type PublicationOperationRecord = {
   finalError: { code: string; message: string } | null;
 };
 
-export type DraftDocument = WxPostArticleDocument;
+type DraftOperationResult = {
+  reply: string;
+  draftChanged: boolean;
+  draftVersion: number;
+  steps: WorkspaceDraftProgressActivity[];
+};
 
-async function fulfillDraftChatStream(
-  route: Route,
-  progress: Array<Record<string, unknown>>,
-  result: Record<string, unknown>
-) {
-  const event = (name: string, data: Record<string, unknown>) =>
-    `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
-  await route.fulfill({
-    status: 200,
-    contentType: 'text/event-stream; charset=utf-8',
-    headers: { 'Cache-Control': 'private, no-store' },
-    body: [
-      ...progress.map((item) => event('progress', item)),
-      ': keep-alive\n\n',
-      event('complete', result),
-    ].join(''),
-  });
-}
+type DraftOperationRecord = {
+  workspaceId: string;
+  operationId: string;
+  // Live progress shown by every 'running' poll until remainingRunningPolls
+  // reaches 0, at which point finalResult/finalError becomes visible.
+  steps: WorkspaceDraftProgressActivity[];
+  remainingRunningPolls: number;
+  finalResult: DraftOperationResult | null;
+  finalError: { code: string; message: string; versionKind?: string } | null;
+};
+
+export type ScriptedDraftChatTurn = {
+  steps: WorkspaceDraftProgressActivity[];
+  runningPolls: number;
+  outcome:
+    | { kind: 'completed'; reply: string; draftChanged?: boolean }
+    | { kind: 'failed'; code: string; message: string };
+};
+
+export type DraftDocument = WxPostArticleDocument;
 
 function syncDraftMediaReferences(
   mock: WorkspaceMock,
@@ -338,6 +338,7 @@ export async function mockWxPostWorkspaceApi(
     referencedSourceIds: new Set(),
     draftMessages: new Map(),
     draftOperations: new Map(),
+    scriptedDraftChatTurns: [],
     publications: new Map(),
     publicationOperations: new Map(),
     publicationOperationRunningPolls: 0,
@@ -466,7 +467,7 @@ export async function mockWxPostWorkspaceApi(
           [...mock.draftOperations.values()].some(
             (operation) =>
               operation.workspaceId === workspaceId &&
-              operation.state === 'running'
+              operation.remainingRunningPolls > 0
           )
         ) {
           await route.fulfill({
@@ -486,7 +487,11 @@ export async function mockWxPostWorkspaceApi(
       if (parts[0] === 'publication') {
         const currentDraftVersion = context.draft?.draftVersion ?? null;
         const existing = mock.publications.get(workspaceId);
-        if (method === 'GET' && parts[1] === 'operations' && parts[2] === 'current') {
+        if (
+          method === 'GET' &&
+          parts[1] === 'operations' &&
+          parts[2] === 'current'
+        ) {
           const running = [...mock.publicationOperations.values()].find(
             (operation) =>
               operation.workspaceId === workspaceId &&
@@ -723,10 +728,57 @@ export async function mockWxPostWorkspaceApi(
       ) {
         const operation = mock.draftOperations.get(parts[2]);
         if (!operation || operation.workspaceId !== workspaceId) {
-          await route.fulfill({ status: 404, json: { detail: 'Not found' } });
+          await route.fulfill({
+            status: 404,
+            json: {
+              error: {
+                code: 'draft_operation_not_found',
+                message: 'Draft operation does not exist',
+              },
+            },
+          });
           return;
         }
-        await route.fulfill({ status: 200, json: operation });
+        if (operation.remainingRunningPolls > 0) {
+          operation.remainingRunningPolls -= 1;
+          await route.fulfill({
+            status: 200,
+            json: {
+              workspaceId,
+              operationId: operation.operationId,
+              state: 'running',
+              result: null,
+              error: null,
+              steps: operation.steps,
+            },
+          });
+          return;
+        }
+        if (operation.finalError) {
+          await route.fulfill({
+            status: 200,
+            json: {
+              workspaceId,
+              operationId: operation.operationId,
+              state: 'failed',
+              result: null,
+              error: operation.finalError,
+              steps: operation.steps,
+            },
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          json: {
+            workspaceId,
+            operationId: operation.operationId,
+            state: 'completed',
+            result: operation.finalResult,
+            error: null,
+            steps: operation.steps,
+          },
+        });
         return;
       }
       if (method === 'POST' && parts[0] === 'draft' && parts[1] === 'save') {
@@ -795,6 +847,7 @@ export async function mockWxPostWorkspaceApi(
         const input = request.postDataJSON() as {
           expectedManifestVersion: number;
           expectedDraftVersion: number;
+          operationId: string;
         };
         const actualDraftVersion = context.draft?.draftVersion ?? 0;
         if (
@@ -830,23 +883,34 @@ export async function mockWxPostWorkspaceApi(
           sourceManifestVersion: context.manifest.manifestVersion,
           sha256: `draft-${nextVersion}`,
         };
+        // The submit only validates and admits the operation; the write
+        // above already happened (the mock's default running-poll count is
+        // 0, i.e. resolves on the very first poll), mirroring the async
+        // draft/chat and publication/sync contract.
+        mock.draftOperations.set(input.operationId, {
+          workspaceId,
+          operationId: input.operationId,
+          steps: [],
+          remainingRunningPolls: 0,
+          finalResult: {
+            reply: `Generated draft version ${nextVersion}.`,
+            draftChanged: true,
+            draftVersion: nextVersion,
+            steps: [],
+          },
+          finalError: null,
+        });
         await route.fulfill({
-          status: 200,
+          status: 202,
           json: {
             workspaceId,
-            reply: `Generated draft version ${nextVersion}.`,
-            context,
-            draftChanged: true,
+            operationId: input.operationId,
+            state: 'running',
           },
         });
         return;
       }
       if (method === 'POST' && parts[0] === 'draft' && parts[1] === 'chat') {
-        if (mock.draftChatDelayMs > 0) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, mock.draftChatDelayMs)
-          );
-        }
         if (mock.failNextDraftChat) {
           mock.failNextDraftChat = false;
           await route.fulfill({
@@ -883,9 +947,10 @@ export async function mockWxPostWorkspaceApi(
           });
           return;
         }
-        if (mock.answerNextDraftChat) {
-          mock.answerNextDraftChat = false;
-          const reply = 'The saved Draft has four main sections.';
+        const appendMessages = (
+          reply: string,
+          steps?: WorkspaceDraftProgressActivity[]
+        ) => {
           const messages = mock.draftMessages.get(workspaceId) ?? [];
           mock.draftMessages.set(workspaceId, [
             ...messages,
@@ -896,30 +961,122 @@ export async function mockWxPostWorkspaceApi(
                 ? { selectedText: input.selectedText }
                 : {}),
             },
-            { role: 'assistant', text: reply },
+            {
+              role: 'assistant',
+              text: reply,
+              turnId: input.operationId,
+              ...(steps?.length ? { steps } : {}),
+            },
           ]);
-          await fulfillDraftChatStream(route, [{ stage: 'request_started' }], {
+        };
+
+        if (mock.answerNextDraftChat) {
+          mock.answerNextDraftChat = false;
+          const reply = 'The saved Draft has four main sections.';
+          appendMessages(reply);
+          mock.draftOperations.set(input.operationId, {
             workspaceId,
-            reply,
-            context,
-            draftChanged: false,
+            operationId: input.operationId,
+            steps: [],
+            remainingRunningPolls: 0,
+            finalResult: {
+              reply,
+              draftChanged: false,
+              draftVersion: actualDraftVersion,
+              steps: [],
+            },
+            finalError: null,
+          });
+          await route.fulfill({
+            status: 202,
+            json: {
+              workspaceId,
+              operationId: input.operationId,
+              state: 'running',
+            },
           });
           return;
         }
+
+        const scriptedTurn = mock.scriptedDraftChatTurns.shift();
+        if (scriptedTurn) {
+          if (scriptedTurn.outcome.kind === 'completed') {
+            appendMessages(scriptedTurn.outcome.reply, scriptedTurn.steps);
+            mock.draftOperations.set(input.operationId, {
+              workspaceId,
+              operationId: input.operationId,
+              steps: scriptedTurn.steps,
+              remainingRunningPolls: scriptedTurn.runningPolls,
+              finalResult: {
+                reply: scriptedTurn.outcome.reply,
+                draftChanged: scriptedTurn.outcome.draftChanged ?? false,
+                draftVersion: actualDraftVersion,
+                steps: scriptedTurn.steps,
+              },
+              finalError: null,
+            });
+          } else {
+            mock.draftOperations.set(input.operationId, {
+              workspaceId,
+              operationId: input.operationId,
+              steps: scriptedTurn.steps,
+              remainingRunningPolls: scriptedTurn.runningPolls,
+              finalResult: null,
+              finalError: {
+                code: scriptedTurn.outcome.code,
+                message: scriptedTurn.outcome.message,
+              },
+            });
+          }
+          await route.fulfill({
+            status: 202,
+            json: {
+              workspaceId,
+              operationId: input.operationId,
+              state: 'running',
+            },
+          });
+          return;
+        }
+
+        // Default success path: revises the saved Draft's title and reports
+        // the same four-activity trail the real Draft Assistant reports for
+        // a title edit.
         const nextVersion = actualDraftVersion + 1;
         const nextDocument = {
           ...(context.draft?.document as unknown as DraftDocument),
           title: `Hermes revision v${nextVersion}`,
         };
         const reply = 'I revised the saved draft and kept the request focused.';
-        mock.draftOperations.set(input.operationId, {
-          workspaceId,
-          operationId: input.operationId,
-          state: 'running',
-          result: null,
-          error: null,
-        });
-        const completeDraftChat = () => {
+        const steps: WorkspaceDraftProgressActivity[] = [
+          {
+            activityId: 'context-1',
+            label: 'Reading the saved Draft and media',
+            completed: true,
+            failed: false,
+          },
+          {
+            activityId: 'skill-1',
+            label: 'Loading the writing guidance',
+            completed: true,
+            failed: false,
+          },
+          {
+            activityId: 'save-1',
+            label: 'Updating the Draft title',
+            toolName: 'wxpost_edit_draft',
+            operationNames: ['replaceMetadata'],
+            completed: true,
+            failed: false,
+          },
+          {
+            activityId: 'verify-1',
+            label: 'Verifying the saved Draft',
+            completed: true,
+            failed: false,
+          },
+        ];
+        const commitDraftRevision = () => {
           context.draft = {
             draftVersion: nextVersion,
             document: nextDocument,
@@ -930,96 +1087,52 @@ export async function mockWxPostWorkspaceApi(
             sourceManifestVersion: context.manifest.manifestVersion,
             sha256: `draft-${nextVersion}`,
           };
-          const messages = mock.draftMessages.get(workspaceId) ?? [];
-          mock.draftMessages.set(workspaceId, [
-            ...messages,
-            {
-              role: 'user',
-              text: input.message,
-              ...(input.selectedText
-                ? { selectedText: input.selectedText }
-                : {}),
-            },
-            { role: 'assistant', text: reply, turnId: input.operationId },
-          ]);
-          mock.draftOperations.set(input.operationId, {
-            workspaceId,
-            operationId: input.operationId,
-            state: 'completed',
-            result: {
-              reply,
-              draftChanged: true,
-              draftVersion: nextVersion,
-              steps: [],
-            },
-            error: null,
-          });
         };
+        const operation: DraftOperationRecord = {
+          workspaceId,
+          operationId: input.operationId,
+          steps: [],
+          remainingRunningPolls: 0,
+          finalResult: {
+            reply,
+            draftChanged: true,
+            draftVersion: nextVersion,
+            steps,
+          },
+          finalError: null,
+        };
+        mock.draftOperations.set(input.operationId, operation);
+        const resolveDraftChat = () => {
+          commitDraftRevision();
+          appendMessages(reply, steps);
+          operation.remainingRunningPolls = 0;
+        };
+
         if (mock.disconnectNextDraftChatBeforeCompletion) {
           mock.disconnectNextDraftChatBeforeCompletion = false;
-          await route.abort('connectionrefused');
+          operation.remainingRunningPolls = Number.MAX_SAFE_INTEGER;
           setTimeout(
-            completeDraftChat,
+            resolveDraftChat,
             mock.draftChatCompletionDelayAfterDisconnectMs
           );
+          await route.abort('connectionrefused');
           return;
         }
-        completeDraftChat();
-        await fulfillDraftChatStream(
-          route,
-          [
-            { stage: 'request_started' },
-            {
-              stage: 'activity_started',
-              activityId: 'context-1',
-              label: 'Reading the saved Draft and media',
-            },
-            {
-              stage: 'activity_completed',
-              activityId: 'context-1',
-              label: 'Reading the saved Draft and media',
-            },
-            {
-              stage: 'activity_started',
-              activityId: 'skill-1',
-              label: 'Loading the writing guidance',
-            },
-            {
-              stage: 'activity_completed',
-              activityId: 'skill-1',
-              label: 'Loading the writing guidance',
-            },
-            {
-              stage: 'activity_started',
-              activityId: 'save-1',
-              label: `Saving Draft v${nextVersion}`,
-              toolName: 'wxpost_edit_draft',
-            },
-            {
-              stage: 'activity_completed',
-              activityId: 'save-1',
-              label: 'Updating the Draft title',
-              toolName: 'wxpost_edit_draft',
-              operationNames: ['replaceMetadata'],
-            },
-            {
-              stage: 'activity_started',
-              activityId: 'verify-1',
-              label: 'Verifying the saved Draft',
-            },
-            {
-              stage: 'activity_completed',
-              activityId: 'verify-1',
-              label: 'Verifying the saved Draft',
-            },
-          ],
-          {
+
+        if (mock.draftChatDelayMs > 0) {
+          operation.remainingRunningPolls = Number.MAX_SAFE_INTEGER;
+          setTimeout(resolveDraftChat, mock.draftChatDelayMs);
+        } else {
+          resolveDraftChat();
+        }
+        await route.fulfill({
+          status: 202,
+          json: {
             workspaceId,
-            reply,
-            context,
-            draftChanged: true,
-          }
-        );
+            operationId: input.operationId,
+            state: 'running',
+          },
+        });
         return;
       }
       if (
