@@ -47,9 +47,11 @@ from ...models.wxpost import (
     WxPostPublicationDeleteResult,
     WxPostPublicationEnsureRequest,
     WxPostPublicationEnsureResult,
+    WxPostPublicationExpectedVersions,
     WxPostPublicationFinalizeRequest,
     WxPostPublicationStatus,
     WxPostPublicationSyncRequest,
+    WxPostPublicationUploadUrlsResult,
     WxPostPublicDetail,
     WxPostRenderMode,
     WxPostUpdateRequest,
@@ -74,6 +76,7 @@ from ...services.wxpost_publication import (
     ensure_publication_asset,
     finalize_publication,
     prepare_publication_submit,
+    prepare_publication_uploads,
     publication_status,
 )
 from ...services.wxpost_wechat import (
@@ -1052,6 +1055,61 @@ async def r_sync_wxpost_workspace_publication(
             headers=response_headers,
         )
     return JSONResponse(status_code=202, content={"operationId": request.operation_id})
+
+
+async def _fetch_workspace_checksums(workspace_id: str, source_ids: list[str]) -> dict[str, str]:
+    upstream = await _request_workspace_controller(
+        "POST",
+        f"/workspaces/{quote(workspace_id, safe='')}/sources/checksums",
+        body=json.dumps({"sourceIds": source_ids}).encode(),
+        content_type="application/json",
+    )
+    if upstream.status_code != 200:
+        detail: str | None = None
+        try:
+            payload = upstream.json()
+            error = payload.get("error") if isinstance(payload, dict) else None
+            if isinstance(error, dict) and isinstance(error.get("message"), str):
+                detail = error["message"]
+        except Exception:
+            detail = None
+        if upstream.status_code == 422:
+            raise PublicationError(
+                "asset_changed",
+                detail or "A workspace material no longer matches its manifest.",
+                status=409,
+            )
+        raise PublicationError(
+            "asset_unavailable",
+            "The workspace material checksums are unavailable.",
+            status=503,
+        )
+    payload = upstream.json()
+    checksums = payload.get("checksums") if isinstance(payload, dict) else None
+    return checksums if isinstance(checksums, dict) else {}
+
+
+@r.post(
+    "/posts/wxposts/workspaces/{workspace_id}/publication/upload-urls",
+    response_model=WxPostPublicationUploadUrlsResult,
+)
+async def r_get_wxpost_publication_upload_urls(
+    request: WxPostPublicationExpectedVersions,
+    workspace_id: str = Path(..., min_length=1),
+    user: User = Depends(get_current_user),
+) -> WxPostPublicationUploadUrlsResult | Response:
+    """Presign direct browser PUTs for the plan's upload-origin materials."""
+
+    del user
+    try:
+        return await prepare_publication_uploads(
+            workspace_id,
+            request,
+            load_context=_load_workspace_context,
+            fetch_checksums=_fetch_workspace_checksums,
+        )
+    except PublicationError as error:
+        return _publication_error(error)
 
 
 @r.post(

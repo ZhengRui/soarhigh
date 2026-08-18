@@ -56,10 +56,18 @@ from ..models.wxpost import (
     WxPostPublicationStatus,
     WxPostPublicationSubmitItem,
     WxPostPublicationSubmitPlan,
+    WxPostPublicationUploadUrlItem,
+    WxPostPublicationUploadUrlsResult,
 )
 from .wxpost_document import validate_and_parse
 from .wxpost_image_variants import WECHAT_BODY_PROFILE, WECHAT_COVER_HARD_MAX_BYTES
-from .wxpost_oss_ops import OssOpsError, copy_public_object, generate_wechat_variant, head_public_object
+from .wxpost_oss_ops import (
+    OssOpsError,
+    copy_public_object,
+    generate_wechat_variant,
+    head_public_object,
+    sign_public_put_url,
+)
 
 LoadContext = Callable[[str], Awaitable[dict[str, Any]]]
 CompileRender = Callable[[dict[str, Any]], Awaitable[str]]
@@ -772,6 +780,117 @@ async def prepare_publication_submit(
         bundle_sha256=bundle_sha256,
         items=items,
     )
+
+
+FetchChecksums = Callable[[str, list[str]], Awaitable[dict[str, str]]]
+
+
+async def prepare_publication_uploads(
+    workspace_id: str,
+    request: WxPostPublicationExpectedVersions,
+    *,
+    load_context: LoadContext,
+    fetch_checksums: FetchChecksums,
+) -> WxPostPublicationUploadUrlsResult:
+    """Presign browser PUT URLs for the plan's upload-origin items.
+
+    Runs the same validation as a submit, then creates-or-recovers the
+    pending asset row for each upload-origin item so the row's minted
+    object key can be signed. Items whose row is already ready need no
+    upload and are omitted. This is the sole creator of upload-origin
+    rows — the ensure step only verifies what landed at the signed key.
+    """
+
+    plan = await prepare_publication_submit(workspace_id, request, load_context=load_context)
+    upload_items = [item for item in plan.items if item.origin == "upload"]
+    if not upload_items:
+        return WxPostPublicationUploadUrlsResult(uploads=[])
+
+    checksums = await fetch_checksums(workspace_id, [item.source_id for item in upload_items])
+    wxpost_id = UUID(plan.wxpost_id)
+    uploads: list[WxPostPublicationUploadUrlItem] = []
+    for item in upload_items:
+        md5_hex = checksums.get(item.source_id)
+        if not isinstance(md5_hex, str) or re.fullmatch(r"[0-9a-f]{32}", md5_hex) is None:
+            raise PublicationError(
+                "asset_unavailable",
+                f"Material {item.source_id} has no valid workspace checksum.",
+                status=503,
+            )
+        content_md5 = base64.b64encode(bytes.fromhex(md5_hex)).decode()
+        asset = _prepare_upload_asset_row(wxpost_id, workspace_id, item, content_md5)
+        if asset.get("status") == "ready":
+            continue
+        put_url = await asyncio.to_thread(
+            sign_public_put_url,
+            asset["object_key"],
+            content_md5=content_md5,
+            content_type=item.mime_type,
+        )
+        uploads.append(
+            WxPostPublicationUploadUrlItem(
+                source_id=item.source_id,
+                content_sha256=item.content_sha256,
+                put_url=put_url,
+                headers={"Content-MD5": content_md5, "Content-Type": item.mime_type},
+            )
+        )
+    return WxPostPublicationUploadUrlsResult(uploads=uploads)
+
+
+def _prepare_upload_asset_row(
+    wxpost_id: UUID,
+    workspace_id: str,
+    item: WxPostPublicationSubmitItem,
+    content_md5: str,
+) -> dict:
+    asset_id = uuid4()
+    extension = _extension(item.mime_type)
+    object_key = f"{_PUBLIC_MEDIA_PREFIX}/{wxpost_id}/assets/{asset_id}/original.{extension}"
+    idempotency_source = f"{workspace_id}:{item.source_id}:{item.content_sha256}"
+    try:
+        asset = create_pending_wxpost_asset(
+            {
+                "id": str(asset_id),
+                "wxpost_id": str(wxpost_id),
+                "status": "pending",
+                "kind": item.kind,
+                "object_key": object_key,
+                "original_filename": item.filename,
+                "mime_type": item.mime_type,
+                "size_bytes": item.size_bytes,
+                "content_sha256": item.content_sha256,
+                "content_md5": content_md5,
+                "upload_idempotency_key_hash": hashlib.sha256(idempotency_source.encode()).hexdigest(),
+                "upload_request_hash": _request_hash(
+                    filename=item.filename,
+                    kind=item.kind,
+                    mime_type=item.mime_type,
+                    sha256=item.content_sha256,
+                    size_bytes=item.size_bytes,
+                ),
+                "source_type": "workspace",
+                "source_metadata": {
+                    "workspaceId": workspace_id,
+                    "sourceId": item.source_id,
+                },
+            }
+        )
+    except WxPostAssetConflictError as error:
+        raise PublicationError(
+            "asset_changed",
+            f"Material {item.source_id} conflicts with a prior publish attempt.",
+            status=409,
+        ) from error
+    if asset.get("status") in {"failed", "abandoned"}:
+        asset = retry_inactive_wxpost_asset(UUID(asset["id"]))
+    if asset.get("status") == "pending" and asset.get("content_md5") != content_md5:
+        raise PublicationError(
+            "asset_changed",
+            f"Material {item.source_id} changed since a prior publish attempt.",
+            status=409,
+        )
+    return asset
 
 
 async def _finalize_publication_record(

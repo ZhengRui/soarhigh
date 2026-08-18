@@ -12,7 +12,12 @@ import app.api.routes.wxpost as wxpost_route
 import app.services.wxpost_publication as wxpost_publication
 from app.api.serv import app
 from app.models.users import User
-from app.models.wxpost import WxPostWechatDraftResult
+from app.models.wxpost import (
+    WxPostPublicationUploadUrlItem,
+    WxPostPublicationUploadUrlsResult,
+    WxPostWechatDraftResult,
+)
+from app.services.wxpost_publication import PublicationError
 
 WXPOST_FIXTURE = Path(__file__).parent / "fixtures" / "wxpost-meeting-recap-v1.json"
 
@@ -589,6 +594,100 @@ def test_member_can_delete_a_public_wxpost_revision(
         "workspaceId": "wxpost-abc",
     }
     assert calls == [(wxpost_id, 3)]
+
+
+def test_upload_urls_route_returns_uploads(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_prepare(workspace_id, request, *, load_context, fetch_checksums):
+        assert workspace_id == "wxpost-abc"
+        return WxPostPublicationUploadUrlsResult(
+            uploads=[
+                WxPostPublicationUploadUrlItem(
+                    source_id="M02",
+                    content_sha256="c" * 64,
+                    put_url="https://signed.invalid/k.jpg",
+                    headers={"Content-MD5": "AA==", "Content-Type": "image/jpeg"},
+                )
+            ]
+        )
+
+    monkeypatch.setattr(wxpost_route, "prepare_publication_uploads", fake_prepare)
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/upload-urls",
+        headers={"Authorization": "Bearer member-token"},
+        json={"expectedManifestVersion": 4, "expectedDraftVersion": 2},
+    )
+    assert response.status_code == 200
+    assert response.json()["uploads"][0]["sourceId"] == "M02"
+
+
+def test_upload_urls_route_maps_publication_errors(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_prepare(workspace_id, request, *, load_context, fetch_checksums):
+        raise PublicationError("version_conflict", "changed", status=409)
+
+    monkeypatch.setattr(wxpost_route, "prepare_publication_uploads", fake_prepare)
+    response = client.post(
+        "/posts/wxposts/workspaces/wxpost-abc/publication/upload-urls",
+        headers={"Authorization": "Bearer member-token"},
+        json={"expectedManifestVersion": 4, "expectedDraftVersion": 2},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "version_conflict"
+
+
+async def test_fetch_workspace_checksums_returns_the_checksum_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_request_workspace_controller(method, path, *, body=None, content_type=None, **kwargs):
+        assert method == "POST"
+        assert path == "/workspaces/wxpost-abc/sources/checksums"
+        assert json.loads(body) == {"sourceIds": ["M02"]}
+        return httpx.Response(200, json={"checksums": {"M02": "a" * 32}})
+
+    monkeypatch.setattr(wxpost_route, "_request_workspace_controller", fake_request_workspace_controller)
+
+    checksums = await wxpost_route._fetch_workspace_checksums("wxpost-abc", ["M02"])
+
+    assert checksums == {"M02": "a" * 32}
+
+
+async def test_fetch_workspace_checksums_maps_a_controller_conflict_to_asset_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_request_workspace_controller(method, path, *, body=None, content_type=None, **kwargs):
+        return httpx.Response(
+            422,
+            json={"error": {"code": "manifest_conflict", "message": "manifest changed"}},
+        )
+
+    monkeypatch.setattr(wxpost_route, "_request_workspace_controller", fake_request_workspace_controller)
+
+    with pytest.raises(PublicationError) as raised:
+        await wxpost_route._fetch_workspace_checksums("wxpost-abc", ["M02"])
+
+    assert raised.value.code == "asset_changed"
+    assert raised.value.status == 409
+    assert "manifest changed" in str(raised.value)
+
+
+async def test_fetch_workspace_checksums_maps_an_upstream_failure_to_asset_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_request_workspace_controller(method, path, *, body=None, content_type=None, **kwargs):
+        return httpx.Response(503, json={})
+
+    monkeypatch.setattr(wxpost_route, "_request_workspace_controller", fake_request_workspace_controller)
+
+    with pytest.raises(PublicationError) as raised:
+        await wxpost_route._fetch_workspace_checksums("wxpost-abc", ["M02"])
+
+    assert raised.value.code == "asset_unavailable"
+    assert raised.value.status == 503
 
 
 def test_voice_tone_suggestion_uses_the_controller_boundary(
