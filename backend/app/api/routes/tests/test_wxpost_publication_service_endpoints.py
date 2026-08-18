@@ -758,6 +758,7 @@ def test_finalize_publishes_and_rewrites_media_on_the_real_publish_path(
         }
 
     monkeypatch.setattr(wxpost_publication, "finalize_workspace_publication", fake_finalize)
+    monkeypatch.setattr(wxpost_publication, "abandon_pending_wxpost_assets", lambda wxpost_id: None)
 
     swept: list[set[str]] = []
     monkeypatch.setattr(
@@ -998,6 +999,7 @@ def test_finalize_conflict_adopts_a_concurrent_finalize_that_already_landed(
         "finalize_workspace_publication",
         lambda *args, **kwargs: (_ for _ in ()).throw(wxpost_publication.WxPostRevisionConflictError()),
     )
+    monkeypatch.setattr(wxpost_publication, "abandon_pending_wxpost_assets", lambda wxpost_id: None)
     monkeypatch.setattr(
         wxpost_publication,
         "_remove_unreferenced_assets",
@@ -1074,6 +1076,7 @@ def test_finalize_conflict_reports_version_conflict_when_latest_does_not_match(
         "finalize_workspace_publication",
         lambda *args, **kwargs: (_ for _ in ()).throw(wxpost_publication.WxPostRevisionConflictError()),
     )
+    monkeypatch.setattr(wxpost_publication, "abandon_pending_wxpost_assets", lambda wxpost_id: None)
 
     response = client.post(
         "/posts/wxposts/workspaces/wxpost-abc/publication/finalize",
