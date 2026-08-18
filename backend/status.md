@@ -124,6 +124,11 @@ This backend application serves as the API for the SoarHigh Toastmasters Club pl
 - **/posts/wxposts/draft-previews/{token}** - GET: Return canonical render input
   only while the signed Draft version remains current; its nested media route
   serves only media referenced by that exact Draft
+- **/posts/wxposts/workspaces/{id}/publication/upload-urls** - POST: Presign
+  one browser→OSS PUT per included upload-origin material whose bytes are not
+  already in public storage, using MD5s the Controller attests from the
+  workspace's own bytes; the frontend PUTs directly to OSS with the signed
+  `Content-MD5` header before submitting the sync below
 - **/posts/wxposts/workspaces/{id}/publication/sync** - POST: Validate the
   saved Draft, hand the ordered submit plan to the Controller's async
   publication runner, and return `202` with an `operationId` immediately
@@ -596,6 +601,21 @@ exercise the old synchronous `synchronize_workspace_publication` pipeline
 end-to-end (`app/services/tests/test_wxpost_publication_live.py`) was retired
 with that pipeline; there is currently no live OSS/Supabase smoke test for the
 async ensure/finalize path.
+
+Upload-origin materials (images/video the member added directly, not copied
+from a meeting's media library) are fully publishable, via a publish-time
+presigned upload preamble rather than routing bytes through Backend. Before
+submitting the sync above, the frontend computes whether any included source
+is non-meeting-library and, if so, calls `publication/upload-urls`; the
+Controller's `POST /workspaces/{id}/sources/checksums` route attests each
+pending source's MD5 from the workspace's own bytes, Backend signs one OSS PUT
+per material still missing from public storage, and the browser PUTs directly
+to OSS with that signed `Content-MD5` before the sync submit runs. The ensure
+step then verifies (never re-uploads) each browser-put original: a missing
+prepared-upload row raises `upload_not_prepared`, and a HEAD miss against the
+signed OSS key raises `upload_missing`, both `422` and retryable by simply
+retrying the publish. The `upload_origin_unsupported` error this pipeline used
+to return no longer exists.
 
 The WeChat variant reconciliation backfill
 (`reconcile_publication_wechat_variants`, driven by

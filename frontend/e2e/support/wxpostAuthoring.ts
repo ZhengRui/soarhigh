@@ -171,6 +171,19 @@ export type WorkspaceMock = {
   // distinct from conflictNextPublication's version_conflict, and from
   // failNextPublicationOperation's async operation failure).
   failNextPublicationSubmit: { code: string; message: string } | null;
+  // Upload-urls presign contract: what the next POST publication/upload-urls
+  // returns. Each entry's putUrl must point at https://mock-oss.invalid/…
+  publicationUploadUrls: Array<{
+    sourceId: string;
+    contentSha256: string;
+    putUrl: string;
+    headers: Record<string, string>;
+  }>;
+  // Records every presign call and every OSS PUT the page performs, in order.
+  publicationUploadUrlCalls: number;
+  publicationUploadPuts: string[];
+  // When true, the next OSS PUT responds 403 once, then resets.
+  failNextPublicationUpload: boolean;
 };
 
 type PublicationOperationRecord = {
@@ -345,6 +358,10 @@ export async function mockWxPostWorkspaceApi(
     publicationOperationSteps: [],
     failNextPublicationOperation: null,
     failNextPublicationSubmit: null,
+    publicationUploadUrls: [],
+    publicationUploadUrlCalls: 0,
+    publicationUploadPuts: [],
+    failNextPublicationUpload: false,
   };
 
   const createWorkspaceContext = (
@@ -371,6 +388,17 @@ export async function mockWxPostWorkspaceApi(
       },
       draft: null,
     }) as const;
+
+  await page.route('https://mock-oss.invalid/**', async (route) => {
+    const url = route.request().url();
+    mock.publicationUploadPuts.push(url);
+    if (mock.failNextPublicationUpload) {
+      mock.failNextPublicationUpload = false;
+      await route.fulfill({ status: 403, body: 'SignatureDoesNotMatch' });
+      return;
+    }
+    await route.fulfill({ status: 200, body: '' });
+  });
 
   await page.route(/\/posts\/wxposts\/validate$/, async (route) => {
     mock.draftValidationRequests += 1;
@@ -487,6 +515,14 @@ export async function mockWxPostWorkspaceApi(
       if (parts[0] === 'publication') {
         const currentDraftVersion = context.draft?.draftVersion ?? null;
         const existing = mock.publications.get(workspaceId);
+        if (method === 'POST' && parts[1] === 'upload-urls') {
+          mock.publicationUploadUrlCalls += 1;
+          await route.fulfill({
+            status: 200,
+            json: { uploads: mock.publicationUploadUrls },
+          });
+          return;
+        }
         if (
           method === 'GET' &&
           parts[1] === 'operations' &&

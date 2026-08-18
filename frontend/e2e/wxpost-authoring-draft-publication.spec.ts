@@ -1,7 +1,41 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 import { createAndGenerateDraft } from './support/wxpostDraft';
 import { openAuthoringPage } from './support/wxpostAuthoring';
+
+const MOCK_PUT_URL =
+  'https://mock-oss.invalid/public/wxposts/x/assets/y/original.jpg';
+const UPLOAD_SOURCE_ID = 'M04';
+// Matches the fixed 'b'.repeat(64) contentSha256 the workspace mock assigns
+// to every source created by POST .../uploads, regardless of origin.
+const UPLOAD_SOURCE_SHA = 'b'.repeat(64);
+
+// Builds a workspace whose one non-library material is included in the
+// saved Draft: uploads a file (immediate mutation), marks it included
+// (working-copy only), saves Materials (PATCH, bumps manifestVersion), then
+// generates the Draft. Mirrors the real authoring flow end to end instead of
+// poking the mock's internal state directly, so the frontend's own
+// manifestVersion/sources bookkeeping stays authoritative.
+async function createDraftWithIncludedUpload(page: Page) {
+  const workspace = await openAuthoringPage(page);
+  await page.getByTestId('create-workspace').click();
+  await expect(page.getByTestId('materials-stage')).toBeVisible();
+
+  await page.getByTestId('material-file-input').setInputFiles({
+    name: 'promo.jpg',
+    mimeType: 'image/jpeg',
+    buffer: Buffer.from('promo-bytes'),
+  });
+  await expect(page.getByTestId(`material-${UPLOAD_SOURCE_ID}`)).toBeVisible();
+  await page.getByTestId(`include-${UPLOAD_SOURCE_ID}`).click();
+  await page.getByTestId('save-materials').click();
+  await expect(page.getByTestId('save-materials')).toBeDisabled();
+  await expect(page.getByTestId('generate-draft')).toBeEnabled();
+  await page.getByTestId('generate-draft').click();
+  await expect(page.getByTestId('draft-workbench')).toBeVisible();
+
+  return { workspace, sourceId: UPLOAD_SOURCE_ID };
+}
 
 test('publishes only the saved Draft and exposes a stable public link', async ({
   page,
@@ -281,4 +315,112 @@ test('does not misreport a failed public status check as unpublished', async ({
   await expect(
     page.getByText('Public status temporarily unavailable')
   ).toBeVisible();
+});
+
+test('uploads a pending upload-origin material to public storage before publishing', async ({
+  page,
+}) => {
+  const { workspace, sourceId } = await createDraftWithIncludedUpload(page);
+  workspace.publicationUploadUrls = [
+    {
+      sourceId,
+      contentSha256: UPLOAD_SOURCE_SHA,
+      putUrl: MOCK_PUT_URL,
+      headers: { 'Content-MD5': 'AA==', 'Content-Type': 'image/jpeg' },
+    },
+  ];
+
+  await page.getByTestId('sync-public-wxpost').click();
+  await page
+    .getByTestId('publication-confirm-dialog')
+    .getByRole('button', { name: 'Publish WxPost' })
+    .click();
+
+  await expect(
+    page.getByText('Public WxPost published successfully!', { exact: true })
+  ).toBeVisible();
+  expect(workspace.publicationUploadUrlCalls).toBe(1);
+  expect(workspace.publicationUploadPuts).toEqual([MOCK_PUT_URL]);
+});
+
+test('aborts the publish before submitting when an OSS upload fails, and lets the member retry', async ({
+  page,
+}) => {
+  const { workspace, sourceId } = await createDraftWithIncludedUpload(page);
+  workspace.publicationUploadUrls = [
+    {
+      sourceId,
+      contentSha256: UPLOAD_SOURCE_SHA,
+      putUrl: MOCK_PUT_URL,
+      headers: { 'Content-MD5': 'AA==', 'Content-Type': 'image/jpeg' },
+    },
+  ];
+  workspace.failNextPublicationUpload = true;
+
+  await page.getByTestId('sync-public-wxpost').click();
+  await page
+    .getByTestId('publication-confirm-dialog')
+    .getByRole('button', { name: 'Publish WxPost' })
+    .click();
+
+  await expect(
+    page.getByText(
+      'Uploading materials to public storage failed. Retry the publish.'
+    )
+  ).toBeVisible();
+  expect(workspace.publicationOperations.size).toBe(0);
+  expect(workspace.publicationUploadPuts).toHaveLength(1);
+  await expect(page.getByTestId('publication-status')).toHaveText(
+    'Not published · Draft v1'
+  );
+
+  await page.getByTestId('sync-public-wxpost').click();
+  await page
+    .getByTestId('publication-confirm-dialog')
+    .getByRole('button', { name: 'Publish WxPost' })
+    .click();
+
+  await expect(
+    page.getByText('Public WxPost published successfully!', { exact: true })
+  ).toBeVisible();
+  expect(workspace.publicationUploadPuts).toHaveLength(2);
+});
+
+test('makes no presign call when every included material is meeting-library', async ({
+  page,
+}) => {
+  const workspace = await createAndGenerateDraft(page);
+
+  await page.getByTestId('sync-public-wxpost').click();
+  await page
+    .getByTestId('publication-confirm-dialog')
+    .getByRole('button', { name: 'Publish WxPost' })
+    .click();
+
+  await expect(
+    page.getByText('Public WxPost published successfully!', { exact: true })
+  ).toBeVisible();
+  expect(workspace.publicationUploadUrlCalls).toBe(0);
+  expect(workspace.publicationUploadPuts).toHaveLength(0);
+});
+
+test('goes straight to submit when the presign call reports nothing pending', async ({
+  page,
+}) => {
+  // workspace.publicationUploadUrls stays at its default [] — the presign
+  // step still runs (the material is included and not meeting-library), but
+  // reports every byte already in public storage, so there is nothing to PUT.
+  const { workspace } = await createDraftWithIncludedUpload(page);
+
+  await page.getByTestId('sync-public-wxpost').click();
+  await page
+    .getByTestId('publication-confirm-dialog')
+    .getByRole('button', { name: 'Publish WxPost' })
+    .click();
+
+  await expect(
+    page.getByText('Public WxPost published successfully!', { exact: true })
+  ).toBeVisible();
+  expect(workspace.publicationUploadUrlCalls).toBe(1);
+  expect(workspace.publicationUploadPuts).toHaveLength(0);
 });
