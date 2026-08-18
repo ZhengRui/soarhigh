@@ -22,10 +22,11 @@ from urllib.request import Request, urlopen
 from pydantic import BaseModel, ValidationError
 
 from .contracts import (
+    MANIFEST_SCHEMA_VERSION,
     BootstrapWorkspaceRequest,
     DirectUploadOrigin,
-    DraftGalleryBlock,
     DraftEnvelope,
+    DraftGalleryBlock,
     DraftImageBlock,
     DraftMarkdownBlock,
     DraftMediaChanges,
@@ -34,7 +35,6 @@ from .contracts import (
     DraftSectionBlock,
     DraftVideoBlock,
     EditDraftRequest,
-    MANIFEST_SCHEMA_VERSION,
     MeetingLibraryOrigin,
     MeetingMediaReference,
     SaveDraftRequest,
@@ -45,9 +45,9 @@ from .contracts import (
     SourceManifest,
     SourceRecord,
     SourceUpdate,
-    UploadSourceRequest,
     UpdateSourcesRequest,
     UpdateWorkspaceRequest,
+    UploadSourceRequest,
     WorkspaceReport,
 )
 from .source_metadata import (
@@ -734,6 +734,45 @@ class WorkspaceController:
             if actual_sha256 != source.content_sha256:
                 raise InvalidWorkspace(f"source file hash is invalid: {source.id}")
         return data, source.mime_type, actual_sha256
+
+    def source_checksums(
+        self,
+        workspace_id: str,
+        *,
+        source_ids: list[str],
+    ) -> dict[str, Any]:
+        """Return the MD5 of each ready source's workspace file.
+
+        Re-verifies size and sha256 against the manifest in the same pass, so
+        an MD5 is never attested for bytes that no longer match the manifest.
+        """
+        if not source_ids or len(source_ids) > 64:
+            raise InvalidRequest("sourceIds must contain between 1 and 64 entries")
+        if any(not isinstance(s, str) or not s.strip() for s in source_ids):
+            raise InvalidRequest("sourceIds must be non-empty strings")
+        workspace = self._resolve_workspace(workspace_id)
+        checksums: dict[str, str] = {}
+        with self._workspace_lock(workspace):
+            manifest = self._read_manifest(workspace, workspace_id)
+            for source_id in source_ids:
+                source = self._find_source(manifest, source_id)
+                if not source.workspace_ready:
+                    raise InvalidRequest(
+                        f"source is not available in the workspace: {source.id}"
+                    )
+                source_path = self._ready_source_path(workspace, source)
+                try:
+                    data = source_path.read_bytes()
+                except OSError as exc:
+                    raise InvalidWorkspace(
+                        f"cannot read source file {source.id}: {exc}"
+                    ) from exc
+                if len(data) != source.size_bytes:
+                    raise InvalidWorkspace(f"source file size is invalid: {source.id}")
+                if hashlib.sha256(data).hexdigest() != source.content_sha256:
+                    raise InvalidWorkspace(f"source file hash is invalid: {source.id}")
+                checksums[source.id] = hashlib.md5(data).hexdigest()
+        return {"checksums": checksums}
 
     def get_source_description_context(
         self,

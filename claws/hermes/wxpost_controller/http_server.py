@@ -59,6 +59,7 @@ SOURCE_DESCRIPTION_PATH = re.compile(
     r"^/workspaces/([^/]+)/sources/([^/]+)/description-suggestion$"
 )
 SOURCE_PATH = re.compile(r"^/workspaces/([^/]+)/sources/([^/]+)$")
+SOURCES_CHECKSUMS_PATH = re.compile(r"^/workspaces/([^/]+)/sources/checksums$")
 UPLOADS_PATH = re.compile(r"^/workspaces/([^/]+)/uploads$")
 DRAFT_CONVERSATION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/conversation$")
 DRAFT_OPERATION_PATH = re.compile(r"^/workspaces/([^/]+)/draft/operations/([^/]+)$")
@@ -362,6 +363,33 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 )
             )
             return
+        checksums_match = SOURCES_CHECKSUMS_PATH.fullmatch(parsed.path)
+        if checksums_match is not None:
+            payload = self._read_json_body()
+            if payload is None or not self._accept_fields(
+                payload,
+                {"sourceIds"},
+                "source checksums",
+            ):
+                return
+            source_ids = payload.get("sourceIds")
+            if not isinstance(source_ids, list) or not all(
+                isinstance(s, str) for s in source_ids
+            ):
+                self._send_error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    "invalid_request",
+                    "sourceIds must be a list of strings",
+                )
+                return
+            self._run_controller(
+                lambda: self.server.controller.source_checksums(
+                    checksums_match.group(1),
+                    source_ids=source_ids,
+                )
+            )
+            return
+
         description_match = SOURCE_DESCRIPTION_PATH.fullmatch(parsed.path)
         if description_match is not None:
             payload = self._read_json_body()

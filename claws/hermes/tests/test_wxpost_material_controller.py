@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import threading
+import urllib.error
+import urllib.request
 from collections.abc import Generator
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from wxpost_controller.core import (
     InvalidRequest,
     InvalidWorkspace,
@@ -20,6 +22,7 @@ from wxpost_controller.core import (
     WorkspaceAlreadyExists,
     WorkspaceController,
 )
+from wxpost_controller.http_server import build_server
 
 MEETING_ID = "meeting-462"
 SECOND_MEETING_ID = "meeting-461"
@@ -1197,3 +1200,147 @@ def test_upload_manifest_failure_never_leaves_an_invalid_workspace(
     else:
         assert context["manifest"]["sources"] == []
         assert not source_path.exists()
+
+
+def test_source_checksums_returns_md5_for_ready_sources(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, [], {})
+    _bootstrap(controller)
+    data = b"public image bytes"
+    uploaded = controller.upload_source(
+        "material-workspace",
+        expected_manifest_version=1,
+        origin="web-upload",
+        filename="notes.txt",
+        mime_type="text/plain",
+        data=data,
+    )
+    source_id = uploaded["sources"][0]["id"]
+
+    result = controller.source_checksums("material-workspace", source_ids=[source_id])
+
+    assert result == {"checksums": {source_id: hashlib.md5(data).hexdigest()}}
+
+
+def test_source_checksums_rejects_unknown_source(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, [], {})
+    _bootstrap(controller)
+
+    with pytest.raises(InvalidRequest):
+        controller.source_checksums("material-workspace", source_ids=["M99"])
+
+
+def test_source_checksums_rejects_not_ready_source(tmp_path: Path) -> None:
+    media = [
+        _media(
+            "meetings/462/photo.jpg",
+            "photo.jpg",
+            size=5,
+            uploaded_at="2026-07-20T09:00:00Z",
+        )
+    ]
+    controller = _controller(tmp_path, media, {})
+    _bootstrap(controller)
+
+    with pytest.raises(InvalidRequest):
+        controller.source_checksums("material-workspace", source_ids=["M01"])
+
+
+def test_source_checksums_rejects_corrupted_file(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, [], {})
+    _bootstrap(controller)
+    uploaded = controller.upload_source(
+        "material-workspace",
+        expected_manifest_version=1,
+        origin="web-upload",
+        filename="cover.jpg",
+        mime_type="image/jpeg",
+        data=RED_PNG,
+    )
+    source_id = uploaded["sources"][0]["id"]
+    source_path = tmp_path / "inbox/material-workspace/sources/M01.jpg"
+    source_path.write_bytes(b"tampered bytes!!!!")
+
+    with pytest.raises(InvalidWorkspace):
+        controller.source_checksums("material-workspace", source_ids=[source_id])
+
+
+def test_source_checksums_bounds_id_count(tmp_path: Path) -> None:
+    controller = _controller(tmp_path, [], {})
+    _bootstrap(controller)
+
+    with pytest.raises(InvalidRequest):
+        controller.source_checksums("material-workspace", source_ids=[])
+    with pytest.raises(InvalidRequest):
+        controller.source_checksums("material-workspace", source_ids=["M01"] * 65)
+
+
+def _checksums_json_request(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    token: str = "contract-token",
+) -> tuple[int, dict[str, Any]]:
+    body = None if payload is None else json.dumps(payload).encode()
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def test_http_source_checksums_returns_md5_and_rejects_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    controller = _controller(tmp_path, [], {})
+    _bootstrap(controller)
+    data = b"public image bytes"
+    uploaded = controller.upload_source(
+        "material-workspace",
+        expected_manifest_version=1,
+        origin="web-upload",
+        filename="notes.txt",
+        mime_type="text/plain",
+        data=data,
+    )
+    source_id = uploaded["sources"][0]["id"]
+
+    server = build_server(
+        workspace_root=str(tmp_path),
+        bearer_token="contract-token",
+        host="127.0.0.1",
+        port=0,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    url = f"{base_url}/workspaces/material-workspace/sources/checksums"
+    try:
+        status, body = _checksums_json_request(
+            url,
+            method="POST",
+            payload={"sourceIds": [source_id]},
+        )
+        assert status == 200
+        assert body == {"checksums": {source_id: hashlib.md5(data).hexdigest()}}
+
+        status, rejected = _checksums_json_request(
+            url,
+            method="POST",
+            payload={"sourceIds": [source_id], "x": 1},
+        )
+        assert status == HTTPStatus.UNPROCESSABLE_ENTITY
+        assert rejected["error"]["code"] == "invalid_request"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
