@@ -38,6 +38,7 @@ from ..db.wxpost import (
     finalize_workspace_publication,
     get_ready_wxpost_asset,
     get_ready_wxpost_assets,
+    get_wxpost_asset_by_idempotency_hash,
     get_wxpost_asset_variant,
     get_wxpost_asset_variants,
     get_wxpost_by_id,
@@ -305,6 +306,74 @@ async def _copy_original_asset(
         ) from error
 
 
+async def _verify_uploaded_asset(
+    wxpost_id: UUID,
+    workspace_id: str,
+    item: WxPostPublicationSubmitItem,
+) -> dict:
+    """Verify one browser-uploaded original landed intact at its signed key.
+
+    The presign step is the sole creator of the pending row (with the
+    controller-attested content_md5), so this step is read-only lookup +
+    head verification: etag must equal the stored MD5 and the size must
+    match the plan item. No object is ever written here.
+    """
+
+    idempotency_source = f"{workspace_id}:{item.source_id}:{item.content_sha256}"
+    asset = get_wxpost_asset_by_idempotency_hash(
+        wxpost_id,
+        hashlib.sha256(idempotency_source.encode()).hexdigest(),
+    )
+    if asset is None:
+        raise PublicationError(
+            "upload_not_prepared",
+            f"Material {item.source_id} has no prepared upload; retry the publish.",
+            status=422,
+        )
+    if asset.get("status") == "ready":
+        return asset
+    if asset.get("status") in {"failed", "abandoned"}:
+        asset = retry_inactive_wxpost_asset(UUID(asset["id"]))
+        if asset.get("status") == "ready":
+            return asset
+
+    try:
+        object_size, object_etag = await asyncio.to_thread(head_public_object, asset["object_key"])
+    except OssOpsError as error:
+        if error.code == "asset_missing":
+            raise PublicationError(
+                "upload_missing",
+                f"Material {item.source_id} was not uploaded to public storage; retry the publish.",
+                status=422,
+            ) from error
+        raise _map_oss_error(error) from error
+
+    expected_etag = base64.b64decode(str(asset.get("content_md5") or "")).hex().upper()
+    if object_etag.upper() != expected_etag or object_size != item.size_bytes:
+        try:
+            mark_wxpost_asset_failed(UUID(asset["id"]))
+        except Exception:
+            pass
+        raise PublicationError(
+            "asset_changed",
+            f"Material {item.source_id} could not be verified in public storage.",
+            status=409,
+        )
+
+    try:
+        return mark_wxpost_asset_ready(UUID(asset["id"]), etag=object_etag)
+    except Exception as error:
+        try:
+            mark_wxpost_asset_failed(UUID(asset["id"]))
+        except Exception:
+            pass
+        raise PublicationError(
+            "asset_upload_failed",
+            f"Material {item.source_id} could not be uploaded to public storage.",
+            status=503,
+        ) from error
+
+
 def _materialize_wechat_variant(asset: dict, *, mime_type: str, source_id: str) -> bool:
     """Idempotently materialize the WeChat body variant for one ready asset via the OSS ladder.
 
@@ -411,9 +480,15 @@ async def ensure_publication_asset(
             status=404,
         )
 
-    asset = get_ready_wxpost_asset(wxpost_id, content_sha256=item.content_sha256, kind=item.kind)
-    if asset is None:
-        asset = await _copy_original_asset(wxpost_id, workspace_id, item)
+    asset: dict[str, Any]
+    if item.origin == "upload":
+        # Upload items always resolve through their own presign-created row —
+        # the ready-by-sha shortcut would strand a duplicate-bytes item's
+        # pending row, and finalize blocks while pending rows exist.
+        asset = await _verify_uploaded_asset(wxpost_id, workspace_id, item)
+    else:
+        ready_asset = get_ready_wxpost_asset(wxpost_id, content_sha256=item.content_sha256, kind=item.kind)
+        asset = ready_asset if ready_asset is not None else await _copy_original_asset(wxpost_id, workspace_id, item)
 
     variant_ready = False
     if item.needs_wechat_variant:

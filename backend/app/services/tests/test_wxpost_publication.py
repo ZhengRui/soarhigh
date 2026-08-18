@@ -1,3 +1,4 @@
+import base64
 import hashlib
 from datetime import datetime, timezone
 from uuid import UUID
@@ -8,6 +9,7 @@ import app.services.wxpost_publication as publication
 from app.services.wxpost_oss_ops import OssOpsError, VariantObject
 
 WXPOST_ID = UUID("00000000-0000-4000-8000-000000000777")
+WORKSPACE_ID = "wxpost-abc"
 
 
 def _document() -> dict:
@@ -399,3 +401,237 @@ async def test_public_delete_hides_row_before_removing_assets(
 
     assert workspace_id == "wxpost-abc"
     assert calls == ["hide", "assets", "row"]
+
+
+UPLOAD_ITEM = publication.WxPostPublicationSubmitItem(
+    source_id="M02",
+    kind="image",
+    filename="second.jpg",
+    mime_type="image/jpeg",
+    size_bytes=19,
+    content_sha256=hashlib.sha256(b"second image bytes").hexdigest(),
+    origin="upload",
+    meeting_file_key=None,
+    needs_wechat_variant=False,
+)
+UPLOAD_MD5_HEX = hashlib.md5(b"second image bytes").hexdigest()
+UPLOAD_CONTENT_MD5 = base64.b64encode(bytes.fromhex(UPLOAD_MD5_HEX)).decode()
+
+
+def _pending_upload_row() -> dict:
+    return {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "status": "pending",
+        "object_key": "public/wxposts/x/assets/y/original.jpg",
+        "content_md5": UPLOAD_CONTENT_MD5,
+    }
+
+
+def _expected_idempotency_hash() -> str:
+    idempotency_source = f"{WORKSPACE_ID}:{UPLOAD_ITEM.source_id}:{UPLOAD_ITEM.content_sha256}"
+    return hashlib.sha256(idempotency_source.encode()).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_upload_item_verifies_and_marks_ready(monkeypatch) -> None:
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row())
+    monkeypatch.setattr(publication, "get_ready_wxpost_asset", lambda *args, **kwargs: None)
+
+    lookups: list[tuple[UUID, str]] = []
+
+    def fake_lookup(wxpost_id: UUID, idempotency_key_hash: str) -> dict:
+        lookups.append((wxpost_id, idempotency_key_hash))
+        return _pending_upload_row()
+
+    monkeypatch.setattr(publication, "get_wxpost_asset_by_idempotency_hash", fake_lookup)
+    monkeypatch.setattr(publication, "head_public_object", lambda key: (19, UPLOAD_MD5_HEX.upper()))
+
+    marked_ready: list[tuple[UUID, str]] = []
+
+    def fake_mark_ready(asset_id: UUID, *, etag: str) -> dict:
+        marked_ready.append((asset_id, etag))
+        return {**_pending_upload_row(), "status": "ready"}
+
+    monkeypatch.setattr(publication, "mark_wxpost_asset_ready", fake_mark_ready)
+
+    result = await publication.ensure_publication_asset(WORKSPACE_ID, WXPOST_ID, UPLOAD_ITEM)
+
+    assert result["public_url"] == publication.public_asset_url(_pending_upload_row()["object_key"])
+    assert marked_ready == [(UUID(_pending_upload_row()["id"]), UPLOAD_MD5_HEX.upper())]
+    assert lookups == [(WXPOST_ID, _expected_idempotency_hash())]
+
+
+@pytest.mark.asyncio
+async def test_upload_item_without_row_is_upload_not_prepared(monkeypatch) -> None:
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row())
+    monkeypatch.setattr(publication, "get_ready_wxpost_asset", lambda *args, **kwargs: None)
+    monkeypatch.setattr(publication, "get_wxpost_asset_by_idempotency_hash", lambda *args, **kwargs: None)
+
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.ensure_publication_asset(WORKSPACE_ID, WXPOST_ID, UPLOAD_ITEM)
+
+    assert raised.value.code == "upload_not_prepared"
+    assert raised.value.status == 422
+
+
+@pytest.mark.asyncio
+async def test_upload_item_missing_object_is_upload_missing(monkeypatch) -> None:
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row())
+    monkeypatch.setattr(publication, "get_ready_wxpost_asset", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        publication,
+        "get_wxpost_asset_by_idempotency_hash",
+        lambda *args, **kwargs: _pending_upload_row(),
+    )
+
+    def fake_head(key: str) -> tuple[int, str]:
+        raise OssOpsError("asset_missing", "gone")
+
+    monkeypatch.setattr(publication, "head_public_object", fake_head)
+    monkeypatch.setattr(
+        publication,
+        "mark_wxpost_asset_failed",
+        lambda *args, **kwargs: pytest.fail("upload_missing still marked the asset failed"),
+    )
+
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.ensure_publication_asset(WORKSPACE_ID, WXPOST_ID, UPLOAD_ITEM)
+
+    assert raised.value.code == "upload_missing"
+    assert raised.value.status == 422
+
+
+@pytest.mark.asyncio
+async def test_upload_item_etag_mismatch_is_asset_changed(monkeypatch) -> None:
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row())
+    monkeypatch.setattr(publication, "get_ready_wxpost_asset", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        publication,
+        "get_wxpost_asset_by_idempotency_hash",
+        lambda *args, **kwargs: _pending_upload_row(),
+    )
+    monkeypatch.setattr(publication, "head_public_object", lambda key: (19, "AB" * 16))
+
+    failed: list[UUID] = []
+    monkeypatch.setattr(publication, "mark_wxpost_asset_failed", lambda asset_id: failed.append(asset_id))
+
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.ensure_publication_asset(WORKSPACE_ID, WXPOST_ID, UPLOAD_ITEM)
+
+    assert raised.value.code == "asset_changed"
+    assert raised.value.status == 409
+    assert failed == [UUID(_pending_upload_row()["id"])]
+
+
+@pytest.mark.asyncio
+async def test_upload_item_size_mismatch_is_asset_changed(monkeypatch) -> None:
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row())
+    monkeypatch.setattr(publication, "get_ready_wxpost_asset", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        publication,
+        "get_wxpost_asset_by_idempotency_hash",
+        lambda *args, **kwargs: _pending_upload_row(),
+    )
+    monkeypatch.setattr(publication, "head_public_object", lambda key: (20, UPLOAD_MD5_HEX.upper()))
+
+    failed: list[UUID] = []
+    monkeypatch.setattr(publication, "mark_wxpost_asset_failed", lambda asset_id: failed.append(asset_id))
+
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.ensure_publication_asset(WORKSPACE_ID, WXPOST_ID, UPLOAD_ITEM)
+
+    assert raised.value.code == "asset_changed"
+    assert raised.value.status == 409
+    assert failed == [UUID(_pending_upload_row()["id"])]
+
+
+@pytest.mark.asyncio
+async def test_upload_item_ready_row_short_circuits(monkeypatch) -> None:
+    ready_row = {**_pending_upload_row(), "status": "ready"}
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row())
+    monkeypatch.setattr(publication, "get_ready_wxpost_asset", lambda *args, **kwargs: None)
+    monkeypatch.setattr(publication, "get_wxpost_asset_by_idempotency_hash", lambda *args, **kwargs: ready_row)
+    monkeypatch.setattr(
+        publication,
+        "head_public_object",
+        lambda *args, **kwargs: pytest.fail("ready row short-circuit still called head"),
+    )
+
+    result = await publication.ensure_publication_asset(WORKSPACE_ID, WXPOST_ID, UPLOAD_ITEM)
+
+    assert result["public_url"] == publication.public_asset_url(ready_row["object_key"])
+
+
+@pytest.mark.asyncio
+async def test_upload_item_inactive_row_is_retried(monkeypatch) -> None:
+    failed_row = {**_pending_upload_row(), "status": "failed"}
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row())
+    monkeypatch.setattr(publication, "get_ready_wxpost_asset", lambda *args, **kwargs: None)
+    monkeypatch.setattr(publication, "get_wxpost_asset_by_idempotency_hash", lambda *args, **kwargs: failed_row)
+
+    retried: list[UUID] = []
+
+    def fake_retry(asset_id: UUID) -> dict:
+        retried.append(asset_id)
+        return _pending_upload_row()
+
+    monkeypatch.setattr(publication, "retry_inactive_wxpost_asset", fake_retry)
+    monkeypatch.setattr(publication, "head_public_object", lambda key: (19, UPLOAD_MD5_HEX.upper()))
+
+    marked_ready: list[tuple[UUID, str]] = []
+
+    def fake_mark_ready(asset_id: UUID, *, etag: str) -> dict:
+        marked_ready.append((asset_id, etag))
+        return {**_pending_upload_row(), "status": "ready"}
+
+    monkeypatch.setattr(publication, "mark_wxpost_asset_ready", fake_mark_ready)
+
+    result = await publication.ensure_publication_asset(WORKSPACE_ID, WXPOST_ID, UPLOAD_ITEM)
+
+    assert retried == [UUID(failed_row["id"])]
+    assert marked_ready == [(UUID(_pending_upload_row()["id"]), UPLOAD_MD5_HEX.upper())]
+    assert result["public_url"] == publication.public_asset_url(_pending_upload_row()["object_key"])
+
+
+@pytest.mark.asyncio
+async def test_upload_item_does_not_use_the_ready_by_sha_shortcut_for_a_pending_row(monkeypatch) -> None:
+    """An upload item's own presign-created row may still be pending even
+    though another asset with the same content sha is already ready (two
+    materials sharing identical bytes). The ready-by-sha shortcut must never
+    be consulted for upload items -- it would return the other asset and
+    strand this item's own pending row forever, and finalize blocks while
+    pending rows exist. Verify the full head-then-ready path runs instead."""
+
+    monkeypatch.setattr(publication, "get_wxpost_by_id", lambda wxpost_id: _row())
+    monkeypatch.setattr(
+        publication,
+        "get_ready_wxpost_asset",
+        lambda *args, **kwargs: pytest.fail("upload item dispatch consulted the ready-by-sha shortcut"),
+    )
+    monkeypatch.setattr(
+        publication,
+        "get_wxpost_asset_by_idempotency_hash",
+        lambda *args, **kwargs: _pending_upload_row(),
+    )
+
+    headed: list[str] = []
+
+    def fake_head(key: str) -> tuple[int, str]:
+        headed.append(key)
+        return 19, UPLOAD_MD5_HEX.upper()
+
+    monkeypatch.setattr(publication, "head_public_object", fake_head)
+
+    marked_ready: list[tuple[UUID, str]] = []
+
+    def fake_mark_ready(asset_id: UUID, *, etag: str) -> dict:
+        marked_ready.append((asset_id, etag))
+        return {**_pending_upload_row(), "status": "ready"}
+
+    monkeypatch.setattr(publication, "mark_wxpost_asset_ready", fake_mark_ready)
+
+    result = await publication.ensure_publication_asset(WORKSPACE_ID, WXPOST_ID, UPLOAD_ITEM)
+
+    assert headed == [_pending_upload_row()["object_key"]]
+    assert marked_ready == [(UUID(_pending_upload_row()["id"]), UPLOAD_MD5_HEX.upper())]
+    assert result["public_url"] == publication.public_asset_url(_pending_upload_row()["object_key"])

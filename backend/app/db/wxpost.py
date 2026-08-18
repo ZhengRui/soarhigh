@@ -314,6 +314,17 @@ def create_pending_wxpost_asset(values: dict) -> dict:
     return response.data[0]
 
 
+def get_wxpost_asset_by_idempotency_hash(wxpost_id: UUID, idempotency_key_hash: str) -> dict | None:
+    response = (
+        supabase.table("wxpost_assets")
+        .select("*")
+        .eq("wxpost_id", str(wxpost_id))
+        .eq("upload_idempotency_key_hash", idempotency_key_hash)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
 def mark_wxpost_asset_ready(asset_id: UUID, *, etag: str) -> dict:
     response = (
         supabase.table("wxpost_assets")
