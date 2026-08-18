@@ -10,7 +10,9 @@ from uuid import UUID
 import pytest
 
 import app.services.wxpost_publication as publication
+from app.db.wxpost import WxPostAssetConflictError
 from app.models.wxpost import WxPostPublicationExpectedVersions
+from app.services.wxpost_oss_ops import OssOpsError
 
 WXPOST_ID = UUID("00000000-0000-4000-8000-000000000001")
 
@@ -223,6 +225,19 @@ async def test_mixed_plan_signs_only_upload_items(monkeypatch: pytest.MonkeyPatc
     assert row_key.startswith(f"public/wxposts/{WXPOST_ID}/assets/")
     assert row_key.endswith("/original.jpg")
     assert signed == [(row_key, CONTENT_MD5, "image/jpeg")]
+    assert row["kind"] == "image"
+    assert row["original_filename"] == "round-table.jpg"
+    assert row["mime_type"] == "image/jpeg"
+    assert row["size_bytes"] == 19
+    assert row["content_sha256"] == upload.content_sha256
+    assert row["wxpost_id"] == str(WXPOST_ID)
+    assert row["upload_request_hash"] == publication._request_hash(
+        filename="round-table.jpg",
+        kind="image",
+        mime_type="image/jpeg",
+        sha256=upload.content_sha256,
+        size_bytes=19,
+    )
 
 
 @pytest.mark.asyncio
@@ -303,6 +318,7 @@ async def test_inactive_row_is_retried_then_signed(monkeypatch: pytest.MonkeyPat
     )
     assert retried == ["11111111-1111-4111-8111-111111111111"]
     assert len(result.uploads) == 1
+    assert result.uploads[0].put_url.endswith("public/wxposts/x/assets/y/original.jpg")
 
 
 @pytest.mark.asyncio
@@ -344,3 +360,51 @@ async def test_invalid_checksum_payload_is_asset_unavailable() -> None:
         )
     assert raised.value.code == "asset_unavailable"
     assert raised.value.status == 503
+
+
+@pytest.mark.asyncio
+async def test_sign_failure_is_mapped_to_publication_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        publication,
+        "create_pending_wxpost_asset",
+        lambda values: {**values, "status": "pending"},
+    )
+
+    def sign(key: str, *, content_md5: str, content_type: str) -> str:
+        raise OssOpsError("asset_unavailable", "boom")
+
+    monkeypatch.setattr(publication, "sign_public_put_url", sign)
+
+    async def load_context(workspace_id: str) -> dict:
+        return _mixed_context()
+
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.prepare_publication_uploads(
+            "wxpost-abc",
+            _request(),
+            load_context=load_context,
+            fetch_checksums=_fetch_checksums,
+        )
+    assert raised.value.code == "asset_unavailable"
+    assert raised.value.status == 503
+
+
+@pytest.mark.asyncio
+async def test_asset_row_creation_conflict_is_asset_changed(monkeypatch: pytest.MonkeyPatch) -> None:
+    def create_pending(values: dict) -> dict:
+        raise WxPostAssetConflictError()
+
+    monkeypatch.setattr(publication, "create_pending_wxpost_asset", create_pending)
+
+    async def load_context(workspace_id: str) -> dict:
+        return _mixed_context()
+
+    with pytest.raises(publication.PublicationError) as raised:
+        await publication.prepare_publication_uploads(
+            "wxpost-abc",
+            _request(),
+            load_context=load_context,
+            fetch_checksums=_fetch_checksums,
+        )
+    assert raised.value.code == "asset_changed"
+    assert raised.value.status == 409

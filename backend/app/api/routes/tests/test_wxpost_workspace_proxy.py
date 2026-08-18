@@ -690,6 +690,21 @@ async def test_fetch_workspace_checksums_maps_an_upstream_failure_to_asset_unava
     assert raised.value.status == 503
 
 
+async def test_fetch_workspace_checksums_maps_a_non_json_200_to_asset_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_request_workspace_controller(method, path, *, body=None, content_type=None, **kwargs):
+        return httpx.Response(200, content=b"not json")
+
+    monkeypatch.setattr(wxpost_route, "_request_workspace_controller", fake_request_workspace_controller)
+
+    with pytest.raises(PublicationError) as raised:
+        await wxpost_route._fetch_workspace_checksums("wxpost-abc", ["M02"])
+
+    assert raised.value.code == "asset_unavailable"
+    assert raised.value.status == 503
+
+
 def test_voice_tone_suggestion_uses_the_controller_boundary(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

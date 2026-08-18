@@ -821,12 +821,15 @@ async def prepare_publication_uploads(
         asset = _prepare_upload_asset_row(wxpost_id, workspace_id, item, content_md5)
         if asset.get("status") == "ready":
             continue
-        put_url = await asyncio.to_thread(
-            sign_public_put_url,
-            asset["object_key"],
-            content_md5=content_md5,
-            content_type=item.mime_type,
-        )
+        try:
+            put_url = await asyncio.to_thread(
+                sign_public_put_url,
+                asset["object_key"],
+                content_md5=content_md5,
+                content_type=item.mime_type,
+            )
+        except OssOpsError as error:
+            raise _map_oss_error(error) from error
         uploads.append(
             WxPostPublicationUploadUrlItem(
                 source_id=item.source_id,

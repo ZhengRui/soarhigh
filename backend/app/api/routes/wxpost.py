@@ -1084,7 +1084,14 @@ async def _fetch_workspace_checksums(workspace_id: str, source_ids: list[str]) -
             "The workspace material checksums are unavailable.",
             status=503,
         )
-    payload = upstream.json()
+    try:
+        payload = upstream.json()
+    except ValueError as error:
+        raise PublicationError(
+            "asset_unavailable",
+            "The workspace material checksums are unavailable.",
+            status=503,
+        ) from error
     checksums = payload.get("checksums") if isinstance(payload, dict) else None
     return checksums if isinstance(checksums, dict) else {}
 
