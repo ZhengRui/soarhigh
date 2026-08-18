@@ -227,6 +227,7 @@ async def require_wxpost_service(
 async def _compile_trusted_render(
     render_document: dict[str, Any],
     presentation_override: dict[str, Any] | None = None,
+    render_mode: str = "canonical",
 ) -> str:
     if not WXPOST_PUBLIC_BASE_URL or not WXPOST_SERVICE_TOKEN:
         raise HTTPException(
@@ -259,6 +260,7 @@ async def _compile_trusted_render(
                         "assetUrls": asset_urls,
                         "publisherName": WXPOST_PUBLISHER_NAME,
                     },
+                    "renderMode": render_mode,
                 },
             )
     except httpx.HTTPError as error:
@@ -1118,7 +1120,9 @@ async def r_publish_wxpost_wechat_draft(
     render_document = validate_and_parse(document).render_document(document)
     presentation_payload = request.presentation.model_dump(by_alias=True, mode="json")
     canonical_html = await _compile_trusted_render(
-        render_document.model_dump(by_alias=True, mode="json"), presentation_payload
+        render_document.model_dump(by_alias=True, mode="json"),
+        presentation_payload,
+        render_mode=request.render_mode,
     )
     try:
         return await publish_wechat_draft(
@@ -1126,6 +1130,7 @@ async def r_publish_wxpost_wechat_draft(
             render_document=render_document,
             presentation=request.presentation,
             canonical_html=canonical_html,
+            render_mode=request.render_mode,
         )
     except WechatDraftError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error

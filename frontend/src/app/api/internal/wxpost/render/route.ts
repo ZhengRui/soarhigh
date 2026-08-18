@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 
 import { compileWxPost } from '@/components/wxpost/renderer/compiler';
+import { compileWxPostForWechat } from '@/components/wxpost/renderer/wechatMiniEmitter';
 import {
   WXPOST_APPEARANCES,
   WXPOST_LAYOUTS,
@@ -8,6 +9,9 @@ import {
   WXPOST_TYPEFACES,
   type WxPostCompileRequest,
 } from '@/components/wxpost/types';
+
+const RENDER_MODES = ['canonical', 'mini'] as const;
+type RenderMode = (typeof RENDER_MODES)[number];
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,6 +63,10 @@ function isCompileRequest(value: unknown): value is WxPostCompileRequest {
   );
 }
 
+function isRenderMode(value: unknown): value is RenderMode {
+  return RENDER_MODES.includes(value as RenderMode);
+}
+
 function jsonError(status: number, message: string) {
   return Response.json(
     { error: { code: 'render_failed', message } },
@@ -94,12 +102,23 @@ export async function POST(request: Request) {
   } catch {
     return jsonError(400, 'WxPost render request must be valid JSON.');
   }
+  const requestedRenderMode = isRecord(payload)
+    ? payload.renderMode
+    : undefined;
+  if (requestedRenderMode !== undefined && !isRenderMode(requestedRenderMode)) {
+    return jsonError(422, 'WxPost render request does not match the contract.');
+  }
   if (!isCompileRequest(payload)) {
     return jsonError(422, 'WxPost render request does not match the contract.');
   }
+  const renderMode: RenderMode = requestedRenderMode ?? 'canonical';
 
   try {
-    return Response.json(compileWxPost(payload), {
+    const result =
+      renderMode === 'mini'
+        ? compileWxPostForWechat(payload)
+        : compileWxPost(payload);
+    return Response.json(result, {
       headers: { 'Cache-Control': 'no-store' },
     });
   } catch {

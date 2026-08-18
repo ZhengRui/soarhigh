@@ -193,7 +193,8 @@ function PublicWxPost({
       const result = await publishWxPostWechatDraft(
         detail.id,
         detail.article_revision,
-        publishPresentation
+        publishPresentation,
+        renderMode
       );
       setWechatStatus(result);
       setWechatOpen(false);
@@ -450,6 +451,10 @@ function PublicWxPost({
               · {publishPresentation.palette} · {publishPresentation.appearance}{' '}
               · {publishPresentation.typeface}. This creates or updates a draft
               only; it does not publish or send the article.
+              <span className='mt-2 block font-medium'>
+                Publishing the {renderMode === 'mini' ? 'Mini' : 'Canonical'}{' '}
+                rendering.
+              </span>
             </span>
           )}
           {hasVideo && (

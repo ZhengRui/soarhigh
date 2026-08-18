@@ -1075,11 +1075,11 @@ def test_member_publishes_server_compiled_revision_with_selected_presentation(
     article = json.loads(WXPOST_FIXTURE.read_text())
     row = _public_row(article)
     monkeypatch.setattr(wxpost_route, "get_wxpost_by_id", lambda wxpost_id: row)
-    compiled: list[tuple[dict, dict]] = []
+    compiled: list[tuple[dict, dict, str]] = []
     published: list[dict] = []
 
-    async def compile_render(render_document: dict, presentation: dict) -> str:
-        compiled.append((render_document, presentation))
+    async def compile_render(render_document: dict, presentation: dict, render_mode: str = "canonical") -> str:
+        compiled.append((render_document, presentation, render_mode))
         return "<p>trusted canonical HTML</p>"
 
     async def publish(**values) -> WxPostWechatDraftResult:
@@ -1114,8 +1114,77 @@ def test_member_publishes_server_compiled_revision_with_selected_presentation(
     assert response.status_code == 200
     assert response.json()["action"] == "created"
     assert compiled[0][1] == selected
+    assert compiled[0][2] == "canonical"
     assert published[0]["canonical_html"] == "<p>trusted canonical HTML</p>"
     assert published[0]["row"] is row
+    assert published[0]["render_mode"] == "canonical"
+
+
+def test_member_publishes_the_mini_rendering_when_selected_in_the_preview_toggle(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    article = json.loads(WXPOST_FIXTURE.read_text())
+    row = _public_row(article)
+    monkeypatch.setattr(wxpost_route, "get_wxpost_by_id", lambda wxpost_id: row)
+    compiled: list[tuple[dict, dict, str]] = []
+    published: list[dict] = []
+
+    async def compile_render(render_document: dict, presentation: dict, render_mode: str = "canonical") -> str:
+        compiled.append((render_document, presentation, render_mode))
+        return "<p>trusted mini HTML</p>"
+
+    async def publish(**values) -> WxPostWechatDraftResult:
+        published.append(values)
+        return WxPostWechatDraftResult.model_validate(
+            {
+                "state": "ready",
+                "action": "created",
+                "sourcePublicRevision": 3,
+                "presentation": values["presentation"],
+                "readbackChanged": False,
+                "needsUpdate": False,
+                "message": None,
+                "previewUrl": "https://mp.weixin.qq.com/s/test-preview",
+            }
+        )
+
+    monkeypatch.setattr(wxpost_route, "_compile_trusted_render", compile_render)
+    monkeypatch.setattr(wxpost_route, "publish_wechat_draft", publish)
+
+    response = client.post(
+        f"/posts/wxposts/{row['id']}/wechat-draft",
+        json={
+            "expectedPublicRevision": 3,
+            "presentation": article["presentation"],
+            "confirmed": True,
+            "renderMode": "mini",
+        },
+    )
+
+    assert response.status_code == 200
+    assert compiled[0][2] == "mini"
+    assert published[0]["canonical_html"] == "<p>trusted mini HTML</p>"
+    assert published[0]["render_mode"] == "mini"
+
+
+def test_wechat_publish_rejects_an_invalid_render_mode(client: TestClient) -> None:
+    response = client.post(
+        "/posts/wxposts/00000000-0000-4000-8000-000000000236/wechat-draft",
+        json={
+            "expectedPublicRevision": 3,
+            "presentation": {
+                "layout": "brand-default",
+                "palette": "paper-neutral",
+                "appearance": "light",
+                "typeface": "modern-sans",
+            },
+            "confirmed": True,
+            "renderMode": "ultra",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_wechat_publish_requires_literal_user_confirmation(

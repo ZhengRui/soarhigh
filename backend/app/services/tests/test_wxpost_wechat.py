@@ -336,6 +336,7 @@ async def _publish(
         f'<p contenteditable="true"><a href="{IMAGE_URL}">Source</a>'
         f'<img src="{IMAGE_URL}"></p></article>'
     ),
+    render_mode: str = "canonical",
 ):
     document = render_document or _render_document()
     return await wxpost_wechat.publish_wechat_draft(
@@ -347,6 +348,7 @@ async def _publish(
         render_document=document,
         presentation=Presentation.model_validate(document.presentation.model_dump()),
         canonical_html=html,
+        render_mode=render_mode,
         api=api,
     )
 
@@ -595,6 +597,29 @@ async def test_create_uploads_media_replaces_oss_url_and_reads_back(projection_s
     assert projection_store["row"]["wechat_media_id"] == "wechat-draft-id"
     assert projection_store["add_started_calls"] == 1
     assert projection_store["row"]["add_started_at"] is None
+
+
+async def test_render_mode_defaults_to_canonical_and_mini_forms_a_distinct_projection(
+    projection_store: dict,
+) -> None:
+    """The projection payload records `renderMode`, so the mini rendering
+    claims its own projection independent of the canonical one, and an
+    unspecified render_mode behaves exactly like an explicit "canonical"."""
+
+    await _publish(FakeWechatApi())
+    default_sha256 = projection_store["row"]["projection_sha256"]
+    projection_store.clear()
+
+    await _publish(FakeWechatApi(), render_mode="canonical")
+    explicit_canonical_sha256 = projection_store["row"]["projection_sha256"]
+    assert explicit_canonical_sha256 == default_sha256
+    projection_store.clear()
+
+    result = await _publish(FakeWechatApi(), render_mode="mini")
+    mini_sha256 = projection_store["row"]["projection_sha256"]
+
+    assert result.action == "created"
+    assert mini_sha256 != default_sha256
 
 
 async def test_publish_rejects_an_image_without_a_ready_public_asset(

@@ -102,7 +102,13 @@ async def test_trusted_renderer_receives_the_normalized_document_and_context(
             "assetUrls": {"M01": "https://assets.example/m01.jpg"},
             "publisherName": "SoarHigh",
         },
+        "renderMode": "canonical",
     }
+
+    await wxpost_route._compile_trusted_render(render_document, render_mode="mini")
+
+    assert len(requests) == 2
+    assert json.loads(requests[1].content)["renderMode"] == "mini"
 
 
 @pytest.mark.asyncio

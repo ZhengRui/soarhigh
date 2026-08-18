@@ -5,6 +5,7 @@ import { expect, test } from '@playwright/test';
 import { POST } from '../src/app/api/internal/wxpost/render/route';
 import { WXPOST_FIXTURES } from '../src/components/wxpost/fixtures';
 import { compileWxPost } from '../src/components/wxpost/renderer/compiler';
+import { compileWxPostForWechat } from '../src/components/wxpost/renderer/wechatMiniEmitter';
 import {
   isWxPostOptionalDirectiveTextPath,
   WXPOST_DIRECTIVE_REGISTRY,
@@ -302,6 +303,58 @@ test('trusted route returns byte-identical HTML and fails closed', async () => {
       })
     );
     expect(oversized.status).toBe(413);
+  } finally {
+    if (originalToken === undefined) delete process.env.WXPOST_SERVICE_TOKEN;
+    else process.env.WXPOST_SERVICE_TOKEN = originalToken;
+  }
+});
+
+test('trusted route dispatches renderMode to the mini emitter and rejects unknown modes', async () => {
+  const originalToken = process.env.WXPOST_SERVICE_TOKEN;
+  process.env.WXPOST_SERVICE_TOKEN = 'renderer-test-token';
+  try {
+    const input = request();
+    const localMini = compileWxPostForWechat(input);
+    const localCanonical = compileWxPost(input);
+
+    const mini = await POST(
+      new Request('http://localhost/api/internal/wxpost/render', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer renderer-test-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ...input, renderMode: 'mini' }),
+      })
+    );
+    expect(mini.status).toBe(200);
+    const minified = await mini.json();
+    expect(minified).toEqual(localMini);
+    expect(minified.html).not.toEqual(localCanonical.html);
+
+    const defaulted = await POST(
+      new Request('http://localhost/api/internal/wxpost/render', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer renderer-test-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(input),
+      })
+    );
+    expect(await defaulted.json()).toEqual(localCanonical);
+
+    const invalidMode = await POST(
+      new Request('http://localhost/api/internal/wxpost/render', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer renderer-test-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ...input, renderMode: 'ultra' }),
+      })
+    );
+    expect(invalidMode.status).toBe(422);
   } finally {
     if (originalToken === undefined) delete process.env.WXPOST_SERVICE_TOKEN;
     else process.env.WXPOST_SERVICE_TOKEN = originalToken;

@@ -631,6 +631,7 @@ async def publish_wechat_draft(
     render_document: WxPostRenderDocument,
     presentation: Presentation,
     canonical_html: str,
+    render_mode: str = "canonical",
     api: WechatDraftApi | None = None,
 ) -> WxPostWechatDraftResult:
     validate_wechat_projection(render_document)
@@ -694,6 +695,7 @@ async def publish_wechat_draft(
         "revision": row["article_revision"],
         "presentation": presentation.model_dump(by_alias=True, mode="json"),
         "renderVersion": render_document.render_version,
+        "renderMode": render_mode,
         "wechatProjectionVersion": WECHAT_PROJECTION_VERSION,
         "author": _article_author(render_document),
         "platformHtmlSha256": _sha256(platform_html),

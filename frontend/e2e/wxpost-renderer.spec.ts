@@ -419,6 +419,7 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
   await expect(dialog).toContainText('Revision 3');
   await expect(dialog).toContainText('dark');
   await expect(dialog).toContainText('does not publish or send the article');
+  await expect(dialog).toContainText('Publishing the Canonical rendering.');
   await expect(dialog).not.toContainText(
     'Dark appearance and horizontal Gallery behavior'
   );
@@ -458,6 +459,7 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
       typeface: 'editorial-serif',
     },
     confirmed: true,
+    renderMode: 'canonical',
   });
 
   await wechatButton.click();
@@ -493,6 +495,97 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
   ).toBeVisible();
   await expect(previewButton).toBeEnabled();
   expect(statusRequests).toBe(statusRequestsBeforeOpen);
+});
+
+test('publishes the Mini rendering to WeChat Drafts when selected in the preview toggle', async ({
+  page,
+}) => {
+  const publishable = structuredClone(WXPOST_FIXTURES['meeting-recap']);
+  publishable.body = publishable.body.filter(
+    (node) => node.kind !== 'directive' || node.name !== 'video'
+  );
+  publishable.media = publishable.media.filter(
+    (media) => media.kind !== 'video'
+  );
+  await page.route(/\/posts\/wxposts\/meeting-recap$/, async (route) => {
+    if (route.request().resourceType() === 'document') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      json: {
+        id: '00000000-0000-4000-8000-meeting-reca',
+        slug: 'meeting-recap',
+        is_public: true,
+        article_revision: 3,
+        context_label: WXPOST_FIXTURE_CONTEXT_LABELS['meeting-recap'],
+        created_at: '2026-07-18T12:00:00+00:00',
+        updated_at: '2026-07-19T12:00:00+00:00',
+        render_document: publishable,
+      },
+    });
+  });
+  await page.addInitScript(() => {
+    window.localStorage.setItem('token', 'member-token');
+  });
+  await page.route(/\/whoami$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: { uid: 'member-123', username: 'member', full_name: 'Test Member' },
+    });
+  });
+  let requestBody: Record<string, unknown> | null = null;
+  await page.route(
+    /\/posts\/wxposts\/([^/?]+)\/wechat-draft$/,
+    async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          json: {
+            state: 'not-created',
+            sourcePublicRevision: null,
+            presentation: null,
+            readbackChanged: null,
+            needsUpdate: false,
+            message: null,
+          },
+        });
+        return;
+      }
+      requestBody = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        status: 200,
+        json: {
+          state: 'ready',
+          action: 'created',
+          sourcePublicRevision: 3,
+          presentation: requestBody.presentation,
+          readbackChanged: false,
+          needsUpdate: false,
+          message: null,
+          previewUrl: 'https://mp.weixin.qq.com/s/test-preview',
+        },
+      });
+    }
+  );
+
+  await openFixture(page, 'meeting-recap');
+  await presentationOption(page, 'render-mode', 'mini').click();
+  await page.getByTestId('publish-wechat-draft').click();
+  const dialog = page.getByTestId('publish-wechat-draft-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Publishing the Mini rendering.');
+  await dialog
+    .getByRole('button', { name: 'Publish to WeChat Drafts' })
+    .evaluate((button) => {
+      window.localStorage.setItem('token', 'member-token');
+      (button as HTMLButtonElement).click();
+    });
+  await expect(dialog).toHaveCount(0);
+
+  expect(requestBody).not.toBeNull();
+  expect(requestBody!.renderMode).toBe('mini');
 });
 
 test('retries and explicitly resets an uncertain WeChat creation', async ({
@@ -616,6 +709,7 @@ test('retries and explicitly resets an uncertain WeChat creation', async ({
       typeface: 'modern-sans',
     },
     confirmed: true,
+    renderMode: 'canonical',
   });
 
   await recoveryDialog

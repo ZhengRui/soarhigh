@@ -438,6 +438,7 @@ class WxPostWechatDraftRequest(WireModel):
     expected_public_revision: int = Field(ge=1, strict=True)
     presentation: Presentation
     confirmed: Literal[True]
+    render_mode: Literal["canonical", "mini"] = "canonical"
 
 
 class WxPostWechatUncertainResetRequest(WireModel):

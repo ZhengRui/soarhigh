@@ -1,5 +1,6 @@
 import { requestTemplate, responseHandlerTemplate } from './requestTemplate';
 
+import type { WxPostRenderMode } from '@/components/wxpost/WxPostPresentationControls';
 import type {
   WxPostPresentation,
   WxPostWechatDraftResult,
@@ -66,7 +67,8 @@ export const publishWxPostWechatDraft = requestTemplate(
   (
     wxpostId: string,
     expectedPublicRevision: number,
-    presentation: WxPostPresentation
+    presentation: WxPostPresentation,
+    renderMode: WxPostRenderMode
   ) => ({
     url: `${apiEndpoint}/posts/wxposts/${encodeURIComponent(wxpostId)}/wechat-draft`,
     method: 'POST',
@@ -78,6 +80,7 @@ export const publishWxPostWechatDraft = requestTemplate(
       expectedPublicRevision,
       presentation,
       confirmed: true,
+      renderMode,
     }),
   }),
   wechatResponseHandler,
@@ -86,7 +89,8 @@ export const publishWxPostWechatDraft = requestTemplate(
 ) as (
   wxpostId: string,
   expectedPublicRevision: number,
-  presentation: WxPostPresentation
+  presentation: WxPostPresentation,
+  renderMode: WxPostRenderMode
 ) => Promise<WxPostWechatDraftResult>;
 
 export const getWxPostWechatPreview = requestTemplate(
