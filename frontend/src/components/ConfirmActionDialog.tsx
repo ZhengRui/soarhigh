@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom';
 
 export function ConfirmActionDialog({
   title,
+  titleAccessory,
   children,
   error,
   pending,
@@ -18,6 +19,7 @@ export function ConfirmActionDialog({
   onConfirm,
 }: {
   title: string;
+  titleAccessory?: ReactNode;
   children: ReactNode;
   error: string | null;
   pending: boolean;
@@ -49,9 +51,12 @@ export function ConfirmActionDialog({
       }}
     >
       <div className='w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl'>
-        <h2 id={titleId} className='m-0 text-lg font-bold text-slate-900'>
-          {title}
-        </h2>
+        <div className='flex items-start justify-between gap-3'>
+          <h2 id={titleId} className='m-0 text-lg font-bold text-slate-900'>
+            {title}
+          </h2>
+          {titleAccessory}
+        </div>
         <p className='mb-0 mt-3 text-sm leading-6 text-slate-600'>{children}</p>
         {error && (
           <p className='mb-0 mt-3 text-sm text-red-700' role='alert'>

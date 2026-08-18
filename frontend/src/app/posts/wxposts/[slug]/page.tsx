@@ -431,6 +431,14 @@ function PublicWxPost({
           pendingLabel={
             wechatStatus?.state === 'uncertain' ? 'Recovering…' : 'Publishing…'
           }
+          titleAccessory={
+            <span
+              className='mt-0.5 inline-flex shrink-0 items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-slate-600'
+              data-testid='wechat-render-mode-pill'
+            >
+              {renderMode === 'mini' ? 'Mini' : 'Canonical'}
+            </span>
+          }
           confirmTone='success'
           dismissOnBackdrop
           testId='publish-wechat-draft-dialog'
@@ -443,10 +451,6 @@ function PublicWxPost({
                 Retry searches the Official Account draft box for the exact
                 Revision {detail.article_revision} content without creating a
                 second draft.
-                <span className='mt-2 block font-medium'>
-                  Publishing the {renderMode === 'mini' ? 'Mini' : 'Canonical'}{' '}
-                  rendering.
-                </span>
               </span>
               <button
                 type='button'
@@ -466,10 +470,6 @@ function PublicWxPost({
               · {publishPresentation.palette} · {publishAppearance} ·{' '}
               {publishPresentation.typeface}. This creates or updates a draft
               only; it does not publish or send the article.
-              <span className='mt-2 block font-medium'>
-                Publishing the {renderMode === 'mini' ? 'Mini' : 'Canonical'}{' '}
-                rendering.
-              </span>
             </span>
           )}
           {hasVideo && (

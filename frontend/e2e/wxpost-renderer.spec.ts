@@ -419,7 +419,9 @@ test('publishes the selected Public Revision presentation to one WeChat draft', 
   await expect(dialog).toContainText('Revision 3');
   await expect(dialog).toContainText('dark');
   await expect(dialog).toContainText('does not publish or send the article');
-  await expect(dialog).toContainText('Publishing the Canonical rendering.');
+  await expect(dialog.getByTestId('wechat-render-mode-pill')).toHaveText(
+    'Canonical'
+  );
   await expect(dialog).not.toContainText(
     'Dark appearance and horizontal Gallery behavior'
   );
@@ -575,7 +577,9 @@ test('publishes the Mini rendering to WeChat Drafts when selected in the preview
   await page.getByTestId('publish-wechat-draft').click();
   const dialog = page.getByTestId('publish-wechat-draft-dialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText('Publishing the Mini rendering.');
+  await expect(dialog.getByTestId('wechat-render-mode-pill')).toHaveText(
+    'Mini'
+  );
   await dialog
     .getByRole('button', { name: 'Publish to WeChat Drafts' })
     .evaluate((button) => {
@@ -704,7 +708,9 @@ test('retries and explicitly resets an uncertain WeChat creation', async ({
   await page.getByTestId('publish-wechat-draft').click();
   const recoveryDialog = page.getByTestId('publish-wechat-draft-dialog');
   await expect(recoveryDialog).toContainText('Recover WeChat Draft?');
-  await expect(recoveryDialog).toContainText('Publishing the Mini rendering.');
+  await expect(
+    recoveryDialog.getByTestId('wechat-render-mode-pill')
+  ).toHaveText('Mini');
   await expect(presentationOption(page, 'render-mode', 'mini')).toHaveAttribute(
     'aria-pressed',
     'true'
