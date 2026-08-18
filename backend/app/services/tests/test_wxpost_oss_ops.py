@@ -12,6 +12,7 @@ from app.services.wxpost_oss_ops import (
     copy_public_object,
     generate_wechat_variant,
     head_public_object,
+    sign_public_put_url,
 )
 
 
@@ -212,4 +213,61 @@ def test_generate_wechat_variant_raises_asset_unavailable_on_get_failure() -> No
     bucket.head_object = lambda key: FakeObjectMeta(800 * 1024)  # type: ignore[method-assign]
     with pytest.raises(OssOpsError) as err:
         generate_wechat_variant("src.jpg", "dir", mime_type="image/jpeg", bucket_factory=lambda: bucket)
+    assert err.value.code == "asset_unavailable"
+
+
+class MissingKeyBucket:
+    """head_object raises a 404-status error, like oss2.exceptions.NotFound."""
+
+    def head_object(self, key: str) -> Any:
+        error = RuntimeError("not found")
+        error.status = 404  # type: ignore[attr-defined]
+        raise error
+
+
+class SigningBucket:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, int, dict[str, str]]] = []
+
+    def sign_url(self, method: str, key: str, expires: int, headers: dict[str, str]) -> str:
+        self.calls.append((method, key, expires, headers))
+        return f"https://signed.invalid/{key}"
+
+
+def test_head_public_object_maps_404_to_asset_missing() -> None:
+    with pytest.raises(OssOpsError) as err:
+        head_public_object("gone.jpg", bucket_factory=MissingKeyBucket)
+    assert err.value.code == "asset_missing"
+
+
+def test_sign_public_put_url_binds_md5_and_content_type() -> None:
+    bucket = SigningBucket()
+    url = sign_public_put_url(
+        "public/wxposts/x/assets/y/original.jpg",
+        content_md5="q1MKE+RmcQ2+5nvUVx4Oow==",
+        content_type="image/jpeg",
+        bucket_factory=lambda: bucket,
+    )
+    assert url == "https://signed.invalid/public/wxposts/x/assets/y/original.jpg"
+    method, key, expires, headers = bucket.calls[0]
+    assert method == "PUT"
+    assert expires == 3600
+    assert headers == {
+        "Content-MD5": "q1MKE+RmcQ2+5nvUVx4Oow==",
+        "Content-Type": "image/jpeg",
+    }
+
+
+def test_sign_public_put_url_raises_asset_unavailable_on_failure() -> None:
+    class FailingSigner:
+        def sign_url(self, method: str, key: str, expires: int, headers: dict[str, str]) -> str:
+            raise RuntimeError("boom")
+
+    with pytest.raises(OssOpsError) as err:
+        sign_public_put_url(
+            "k.jpg",
+            content_md5="AA==",
+            content_type="image/jpeg",
+            bucket_factory=FailingSigner,
+        )
     assert err.value.code == "asset_unavailable"

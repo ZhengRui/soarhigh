@@ -88,6 +88,11 @@ def head_public_object(
     try:
         meta = bucket.head_object(key)
     except Exception as e:
+        if getattr(e, "status", None) == 404:
+            raise OssOpsError(
+                "asset_missing",
+                "The public storage object does not exist.",
+            ) from e
         logger.exception("OSS head_object failed for key %r", key)
         raise OssOpsError(
             "asset_unavailable",
@@ -148,6 +153,35 @@ def copy_public_object(
         )
 
     return etag
+
+
+def sign_public_put_url(
+    key: str,
+    *,
+    content_md5: str,
+    content_type: str,
+    expires_seconds: int = 3600,
+    bucket_factory: Callable[[], Any] = _default_bucket_factory,
+) -> str:
+    """Presign a PUT for one exact key, binding Content-MD5 + Content-Type.
+
+    OSS verifies the signed headers on upload, so a PUT with different bytes
+    (different MD5) or a different content type is rejected at the door.
+    """
+    bucket = bucket_factory()
+    try:
+        return bucket.sign_url(
+            "PUT",
+            key,
+            expires_seconds,
+            headers={"Content-MD5": content_md5, "Content-Type": content_type},
+        )
+    except Exception as e:
+        logger.exception("OSS sign_url failed for key %r", key)
+        raise OssOpsError(
+            "asset_unavailable",
+            "The public storage signing failed.",
+        ) from e
 
 
 def _is_single_part_etag(etag: str) -> bool:
