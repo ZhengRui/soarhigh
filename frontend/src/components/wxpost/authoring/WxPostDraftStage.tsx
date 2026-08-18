@@ -346,6 +346,7 @@ export function WxPostDraftStage({
     active,
     workspaceId,
     manifestVersion: context.manifest.manifestVersion,
+    sources: context.manifest.sources,
     savedDraft,
     dirty,
     onConflict: () => showVersionConflict('publication'),
@@ -559,6 +560,7 @@ export function WxPostDraftStage({
           loadError={publication.loadError}
           dirty={dirty}
           pending={publication.pending}
+          uploading={publication.uploading}
           currentDraftVersion={savedDraft.draftVersion}
           onSync={publication.sync}
         />

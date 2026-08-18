@@ -17,6 +17,7 @@ export function WxPostPublicationControls({
   loadError,
   dirty,
   pending,
+  uploading,
   currentDraftVersion,
   onSync,
 }: {
@@ -25,6 +26,7 @@ export function WxPostPublicationControls({
   loadError: boolean;
   dirty: boolean;
   pending: boolean;
+  uploading: { done: number; total: number } | null;
   currentDraftVersion: number;
   onSync: () => Promise<void>;
 }) {
@@ -164,7 +166,9 @@ export function WxPostPublicationControls({
                     <Loader2 className='animate-spin' aria-hidden='true' />
                   )}
                   {pending
-                    ? 'Synchronizing…'
+                    ? uploading
+                      ? `Uploading images (${uploading.done + 1}/${uploading.total})…`
+                      : 'Synchronizing…'
                     : update
                       ? 'Update Public WxPost'
                       : 'Publish WxPost'}

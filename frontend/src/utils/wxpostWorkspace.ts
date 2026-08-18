@@ -354,6 +354,7 @@ export function publicationErrorStatus(code: string | null | undefined) {
   ) {
     return 503;
   }
+  if (code === 'upload_not_prepared' || code === 'upload_missing') return 422;
   return 502;
 }
 
@@ -484,6 +485,55 @@ export function submitWorkspacePublicationSync(
       body: JSON.stringify(input),
     }
   );
+}
+
+export interface PublicationUploadUrlItem {
+  sourceId: string;
+  contentSha256: string;
+  putUrl: string;
+  headers: Record<string, string>;
+}
+
+// Presign step for upload-origin materials: runs the same validation as the
+// sync submit and returns a PUT URL per material whose bytes are not already
+// in public storage. Empty uploads means nothing to do before submitting.
+export function getPublicationUploadUrls(
+  workspaceId: string,
+  input: {
+    expectedManifestVersion: number;
+    expectedDraftVersion: number;
+    expectedPublicRevision: number | null;
+  }
+) {
+  return requestJson<{ uploads: PublicationUploadUrlItem[] }>(
+    `${workspacePath(workspaceId)}/publication/upload-urls`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+// Direct PUT to OSS with the signed headers — Content-MD5 is bound into the
+// signature, so OSS rejects any byte mismatch. No member auth header here.
+export async function uploadPublicationAsset(
+  item: PublicationUploadUrlItem,
+  blob: Blob,
+  signal?: AbortSignal
+) {
+  const response = await fetch(item.putUrl, {
+    method: 'PUT',
+    headers: item.headers,
+    body: blob,
+    signal,
+  });
+  if (!response.ok) {
+    throw new WorkspaceApiError(
+      response.status,
+      'Uploading materials to public storage failed. Retry the publish.'
+    );
+  }
 }
 
 export function getWorkspacePublicationOperation(
@@ -644,8 +694,7 @@ export async function pollWorkspacePublicationOperation(
       const errorCode = operation.error?.code ?? 'operation_failed';
       throw new WorkspaceApiError(
         publicationErrorStatus(errorCode),
-        operation.error?.message ??
-          'The publication could not complete.',
+        operation.error?.message ?? 'The publication could not complete.',
         errorCode
       );
     }

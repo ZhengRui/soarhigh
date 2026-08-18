@@ -5,13 +5,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 
 import {
+  getPublicationUploadUrls,
   getRunningPublicationOperation,
   getWorkspacePublication,
+  getWorkspaceSourceContent,
   pollWorkspacePublicationOperation,
   submitWorkspacePublicationSync,
+  uploadPublicationAsset,
   WorkspaceApiError,
   type WorkspaceContext,
   type WorkspacePublicationStatus,
+  type WorkspaceSource,
 } from '@/utils/wxpostWorkspace';
 
 function errorMessage(error: unknown, fallback: string) {
@@ -22,6 +26,7 @@ export function useWxPostPublication({
   active,
   workspaceId,
   manifestVersion,
+  sources,
   savedDraft,
   dirty,
   onConflict,
@@ -29,6 +34,7 @@ export function useWxPostPublication({
   active: boolean;
   workspaceId: string;
   manifestVersion: number;
+  sources: WorkspaceSource[];
   savedDraft: WorkspaceContext['draft'];
   dirty: boolean;
   onConflict: () => void;
@@ -38,6 +44,10 @@ export function useWxPostPublication({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [pending, setPending] = useState(false);
+  const [uploading, setUploading] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   // The operation the currently attached poll is watching, whether started
   // by this tab's own submit or reattached to one already running
   // server-side. Aborting it only stops this tab from watching — the
@@ -183,6 +193,31 @@ export function useWxPostPublication({
     pollControllerRef.current = controller;
     setPending(true);
     try {
+      // Upload-origin materials must land in public storage before the async
+      // publication runs. Skip the presign round-trip entirely when every
+      // included material is meeting-library (the common case).
+      const hasUploadMaterials = sources.some(
+        (source) => source.included && source.origin.type !== 'meeting-library'
+      );
+      if (hasUploadMaterials) {
+        const { uploads } = await getPublicationUploadUrls(workspaceId, {
+          expectedManifestVersion: manifestVersion,
+          expectedDraftVersion: savedDraft.draftVersion,
+          expectedPublicRevision: status.publicRevision,
+        });
+        for (let index = 0; index < uploads.length; index += 1) {
+          setUploading({ done: index, total: uploads.length });
+          const upload = uploads[index];
+          const blob = await getWorkspaceSourceContent(
+            workspaceId,
+            upload.sourceId,
+            upload.contentSha256,
+            controller.signal
+          );
+          await uploadPublicationAsset(upload, blob, controller.signal);
+        }
+        setUploading(null);
+      }
       await submitWorkspacePublicationSync(workspaceId, {
         operationId,
         expectedManifestVersion: manifestVersion,
@@ -206,9 +241,18 @@ export function useWxPostPublication({
       if (pollControllerRef.current === controller) {
         pollControllerRef.current = null;
       }
+      setUploading(null);
       setPending(false);
     }
-  }, [dirty, manifestVersion, savedDraft, status, watchOperation, workspaceId]);
+  }, [
+    dirty,
+    manifestVersion,
+    savedDraft,
+    sources,
+    status,
+    watchOperation,
+    workspaceId,
+  ]);
 
-  return { status, loading, loadError, pending, sync };
+  return { status, loading, loadError, pending, uploading, sync };
 }
