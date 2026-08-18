@@ -258,6 +258,20 @@ def test_sign_public_put_url_binds_md5_and_content_type() -> None:
     }
 
 
+def test_sign_public_put_url_upgrades_http_to_https() -> None:
+    class HttpSigner:
+        def sign_url(self, method: str, key: str, expires: int, headers: dict[str, str]) -> str:
+            return f"http://soarhigh.oss-cn-shenzhen.aliyuncs.com/{key}?signature=abc"
+
+    url = sign_public_put_url(
+        "public/wxposts/x/assets/y/original.jpg",
+        content_md5="AA==",
+        content_type="image/jpeg",
+        bucket_factory=HttpSigner,
+    )
+    assert url == ("https://soarhigh.oss-cn-shenzhen.aliyuncs.com/public/wxposts/x/assets/y/original.jpg?signature=abc")
+
+
 def test_sign_public_put_url_raises_asset_unavailable_on_failure() -> None:
     class FailingSigner:
         def sign_url(self, method: str, key: str, expires: int, headers: dict[str, str]) -> str:

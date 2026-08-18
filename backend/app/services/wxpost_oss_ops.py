@@ -170,7 +170,7 @@ def sign_public_put_url(
     """
     bucket = bucket_factory()
     try:
-        return bucket.sign_url(
+        url = bucket.sign_url(
             "PUT",
             key,
             expires_seconds,
@@ -182,6 +182,13 @@ def sign_public_put_url(
             "asset_unavailable",
             "The public storage signing failed.",
         ) from e
+    # oss2 emits http:// when the configured endpoint has no scheme, and an
+    # https page blocks the PUT as mixed content. The OSS signature does not
+    # cover the scheme, so upgrading is safe (same trick as alicloud.ts for
+    # meeting media uploads).
+    if url.startswith("http://"):
+        url = "https://" + url[len("http://") :]
+    return url
 
 
 def _is_single_part_etag(etag: str) -> bool:
