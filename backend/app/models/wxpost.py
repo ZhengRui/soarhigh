@@ -7,7 +7,15 @@ from enum import Enum
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 TrimmedText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -375,11 +383,14 @@ class WxPostPublicDetail(WxPostPersistenceModel):
     render_document: WxPostRenderDocument
 
 
-class WxPostPublicationSyncRequest(WireModel):
-    operation_id: str = Field(pattern=r"^publish-[0-9a-f]{32}$")
+class WxPostPublicationExpectedVersions(WireModel):
     expected_manifest_version: int = Field(ge=1, strict=True)
     expected_draft_version: int = Field(ge=1, strict=True)
     expected_public_revision: int | None = Field(default=None, ge=1, strict=True)
+
+
+class WxPostPublicationSyncRequest(WxPostPublicationExpectedVersions):
+    operation_id: str = Field(pattern=r"^publish-[0-9a-f]{32}$")
 
 
 class WxPostPublicationSubmitItem(WireModel):
@@ -389,8 +400,17 @@ class WxPostPublicationSubmitItem(WireModel):
     mime_type: str
     size_bytes: int
     content_sha256: str
-    meeting_file_key: str
+    origin: Literal["meeting-library", "upload"]
+    meeting_file_key: str | None = None
     needs_wechat_variant: bool
+
+    @model_validator(mode="after")
+    def _origin_pairing(self) -> "WxPostPublicationSubmitItem":
+        if self.origin == "meeting-library" and not self.meeting_file_key:
+            raise ValueError("meeting-library items require meetingFileKey")
+        if self.origin == "upload" and self.meeting_file_key is not None:
+            raise ValueError("upload items must not carry meetingFileKey")
+        return self
 
 
 class WxPostPublicationSubmitPlan(WireModel):
@@ -410,6 +430,17 @@ class WxPostPublicationEnsureResult(WireModel):
     source_id: str
     public_url: str
     variant_ready: bool
+
+
+class WxPostPublicationUploadUrlItem(WireModel):
+    source_id: str
+    content_sha256: str
+    put_url: str
+    headers: dict[str, str]
+
+
+class WxPostPublicationUploadUrlsResult(WireModel):
+    uploads: list[WxPostPublicationUploadUrlItem]
 
 
 class WxPostPublicationFinalizeRequest(WireModel):

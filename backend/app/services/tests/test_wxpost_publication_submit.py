@@ -177,6 +177,7 @@ async def test_happy_path_returns_ordered_items_with_variant_flags_and_shell() -
     m01, m02 = plan.items
     # M01 is only the cover, and its size stays under the hard-max threshold.
     assert m01.needs_wechat_variant is False
+    assert m01.origin == "meeting-library"
     assert m01.meeting_file_key == "public/meetings/2026/M01.jpg"
     assert m01.kind == "image"
     assert m01.mime_type == "image/jpeg"
@@ -239,7 +240,7 @@ async def test_missing_size_bytes_is_rejected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_upload_origin_source_is_rejected() -> None:
+async def test_upload_origin_sources_become_upload_items() -> None:
     context = _context(
         sources=[
             _source(source_id="M01", content=b"public image bytes", size_bytes=19),
@@ -255,16 +256,44 @@ async def test_upload_origin_source_is_rejected() -> None:
     async def load_context(workspace_id: str) -> dict:
         return context
 
-    with pytest.raises(publication.PublicationError) as raised:
-        await publication.prepare_publication_submit(
-            "wxpost-abc",
-            _request(),
-            load_context=load_context,
-        )
+    plan = await publication.prepare_publication_submit(
+        "wxpost-abc",
+        _request(),
+        load_context=load_context,
+    )
 
-    assert raised.value.code == "upload_origin_unsupported"
-    assert raised.value.status == 422
-    assert "M02" in str(raised.value)
+    m01, m02 = plan.items
+    assert m01.origin == "meeting-library"
+    assert m01.meeting_file_key == "public/meetings/2026/M01.jpg"
+    assert m02.origin == "upload"
+    assert m02.meeting_file_key is None
+
+
+@pytest.mark.asyncio
+async def test_feishu_origin_sources_become_upload_items() -> None:
+    context = _context(
+        sources=[
+            _source(source_id="M01", content=b"public image bytes", size_bytes=19),
+            _source(
+                source_id="M02",
+                content=b"second image bytes",
+                size_bytes=19,
+                origin={"type": "feishu-upload", "messageId": "om_1"},
+            ),
+        ]
+    )
+
+    async def load_context(workspace_id: str) -> dict:
+        return context
+
+    plan = await publication.prepare_publication_submit(
+        "wxpost-abc",
+        _request(),
+        load_context=load_context,
+    )
+
+    assert plan.items[1].origin == "upload"
+    assert plan.items[1].meeting_file_key is None
 
 
 @pytest.mark.asyncio

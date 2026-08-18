@@ -85,6 +85,7 @@ def _ensure_item(**overrides: Any) -> dict[str, Any]:
         "mimeType": "image/jpeg",
         "sizeBytes": 1024,
         "contentSha256": hashlib.sha256(b"public image bytes").hexdigest(),
+        "origin": "meeting-library",
         "meetingFileKey": "public/meetings/2026/M01.jpg",
         "needsWechatVariant": False,
     }
@@ -1036,6 +1037,7 @@ def test_sync_route_validates_the_draft_and_forwards_the_plan_to_the_controller(
             "mimeType": "image/jpeg",
             "sizeBytes": 1024,
             "contentSha256": hashlib.sha256(b"public image bytes").hexdigest(),
+            "origin": "meeting-library",
             "meetingFileKey": "public/meetings/2026/M01.jpg",
             "needsWechatVariant": True,
         }
@@ -1060,11 +1062,16 @@ def test_sync_route_rejects_a_malformed_operation_id(member_client: TestClient) 
     assert response.status_code == 422
 
 
-def test_sync_route_rejects_upload_origin_material_before_forwarding_to_the_controller(
+def test_sync_route_forwards_upload_origin_material_to_the_controller(
     member_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(wxpost_publication, "get_wxpost_by_workspace_id", lambda workspace_id: None)
+    """Upload-origin sources (web-upload/feishu-upload) are no longer
+    rejected at sync time — they become "upload" plan items, carrying no
+    meetingFileKey, and are forwarded to the controller like any other
+    item."""
+
+    _stub_new_workspace_shell(monkeypatch)
 
     context = _context()
     context["manifest"]["sources"][0]["origin"] = {"type": "web-upload"}
@@ -1073,19 +1080,37 @@ def test_sync_route_rejects_upload_origin_material_before_forwarding_to_the_cont
         return context
 
     monkeypatch.setattr(wxpost_route, "_load_workspace_context", load_context)
-    monkeypatch.setattr(
-        wxpost_route,
-        "_request_workspace_controller",
-        lambda *args, **kwargs: pytest.fail("upload-origin rejection still forwarded to the controller"),
-    )
+
+    captured: list[dict[str, Any]] = []
+
+    async def fake_request_workspace_controller(
+        method: str,
+        path: str,
+        *,
+        body: bytes | None = None,
+        content_type: str | None = None,
+        expected_manifest_version: str | None = None,
+        timeout: int = 30,
+    ) -> httpx.Response:
+        captured.append({"method": method, "path": path, "body": body, "content_type": content_type})
+        return httpx.Response(
+            200,
+            json={"workspaceId": WORKSPACE_ID, "operationId": OPERATION_ID, "state": "running"},
+        )
+
+    monkeypatch.setattr(wxpost_route, "_request_workspace_controller", fake_request_workspace_controller)
 
     response = member_client.post(
         f"/posts/wxposts/workspaces/{WORKSPACE_ID}/publication/sync",
         json=_sync_body(),
     )
 
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "upload_origin_unsupported"
+    assert response.status_code == 202
+    assert len(captured) == 1
+    forwarded = json.loads(captured[0]["body"])
+    item = forwarded["plan"]["items"][0]
+    assert item["origin"] == "upload"
+    assert item["meetingFileKey"] is None
 
 
 def test_sync_route_passes_through_a_controller_conflict_error_envelope(

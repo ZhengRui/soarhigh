@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote, unquote, urlsplit
 from uuid import UUID, uuid4
 
@@ -52,10 +52,10 @@ from ..db.wxpost import (
 )
 from ..models.wxpost import (
     ArticleDocument,
+    WxPostPublicationExpectedVersions,
     WxPostPublicationStatus,
     WxPostPublicationSubmitItem,
     WxPostPublicationSubmitPlan,
-    WxPostPublicationSyncRequest,
 )
 from .wxpost_document import validate_and_parse
 from .wxpost_image_variants import WECHAT_BODY_PROFILE, WECHAT_COVER_HARD_MAX_BYTES
@@ -193,6 +193,7 @@ async def _copy_original_asset(
     orphaned at) a key nobody ends up using.
     """
 
+    assert item.meeting_file_key is not None  # guaranteed by the origin validator
     prefix = f"{ALICLOUD_OSS_MEETING_MEDIA_PREFIX}/"
     if not item.meeting_file_key.startswith(prefix):
         raise PublicationError(
@@ -595,7 +596,7 @@ async def delete_public_wxpost(
 
 async def prepare_publication_submit(
     workspace_id: str,
-    request: WxPostPublicationSyncRequest,
+    request: WxPostPublicationExpectedVersions,
     *,
     load_context: LoadContext,
 ) -> WxPostPublicationSubmitPlan:
@@ -682,13 +683,25 @@ async def prepare_publication_submit(
                 status=422,
             )
         origin = source.get("origin")
-        file_key = origin.get("fileKey") if isinstance(origin, dict) else None
-        if not isinstance(origin, dict) or origin.get("type") != "meeting-library" or not isinstance(file_key, str):
+        origin_type = origin.get("type") if isinstance(origin, dict) else None
+        if not isinstance(origin_type, str) or not origin_type:
             raise PublicationError(
-                "upload_origin_unsupported",
-                f"Material {media.id} was uploaded directly; direct-upload publishing arrives in the next release.",
+                "missing_publication_media",
+                f"Material {media.id} has no valid origin.",
                 status=422,
             )
+        if origin_type == "meeting-library":
+            file_key = origin.get("fileKey") if isinstance(origin, dict) else None
+            if not isinstance(file_key, str) or not file_key:
+                raise PublicationError(
+                    "missing_publication_media",
+                    f"Material {media.id} has no valid source key.",
+                    status=422,
+                )
+            item_origin: Literal["meeting-library", "upload"] = "meeting-library"
+        else:
+            file_key = None
+            item_origin = "upload"
 
         raw_size_bytes = source.get("sizeBytes")
         if not isinstance(raw_size_bytes, int) or isinstance(raw_size_bytes, bool) or raw_size_bytes <= 0:
@@ -710,6 +723,7 @@ async def prepare_publication_submit(
                 mime_type=str(source.get("mimeType") or ""),
                 size_bytes=size_bytes,
                 content_sha256=content_sha256,
+                origin=item_origin,
                 meeting_file_key=file_key,
                 needs_wechat_variant=needs_wechat_variant,
             )
